@@ -55,6 +55,14 @@ async function deactivateUnit(id) {
   const { error } = await supabase.from('item_units').update({ active: false }).eq('id', id);
   if (error) throw error;
 }
+// insert several borrow/issue lines in one go (one slip)
+async function createMany(rows) {
+  const { error } = await supabase.from('borrow_issuance').insert(rows);
+  if (error) throw error;
+}
+const newId = () => (crypto?.randomUUID ? crypto.randomUUID()
+  : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+      const r = Math.random()*16|0; return (c === 'x' ? r : (r&0x3|0x8)).toString(16); }));
 
 const fmt = (ts) => ts ? new Date(ts).toLocaleString('en-PH',
   { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
@@ -140,57 +148,76 @@ function Picker({ label, value, onChange, options, placeholder }) {
     <//>`;
 }
 
-// ---------- New borrow / issuance form ----------
+// ---------- New borrow / issuance slip (multiple items) ----------
 function NewTransaction({ mode, sites, employees, items, units, outUnitIds, defaultSite, onSaved, toast }) {
   const isBorrow = mode === 'borrow';
   const [employeeId, setEmployeeId] = useState('');
-  const [itemId, setItemId]   = useState('');
-  const [unitId, setUnitId]   = useState('');
   const [siteId, setSiteId]   = useState(defaultSite || '');
-  const [qty, setQty]         = useState('1');
   const [issuedBy, setIssuedBy] = useState('');
   const [project, setProject]   = useState('');
   const [notes, setNotes]       = useState('');
   const [pin, setPin]           = useState('');
   const [saving, setSaving]     = useState(false);
+  // current line being added
+  const [itemId, setItemId]     = useState('');
+  const [unitId, setUnitId]     = useState('');
+  const [qty, setQty]           = useState('1');
+  // the slip's list of items
+  const [cart, setCart]         = useState([]);
 
   useEffect(() => { setSiteId(defaultSite || ''); }, [defaultSite]);
 
-  // Borrow tab shows only Tools; Issue tab shows only Materials.
   const itemOpts = items.filter(i => isBorrow ? i.track_type !== 'issue' : i.track_type === 'issue');
-
-  // Units for the selected tool (only the ones not currently out).
   const itemUnits = (units || []).filter(u => u.item_id === itemId);
   const hasUnits  = isBorrow && itemUnits.length > 0;
-  const availableUnits = itemUnits.filter(u => !outUnitIds.has(u.id));
+  // available = not out AND not already added to this slip
+  const inCart = new Set(cart.map(c => c.unitId).filter(Boolean));
+  const availableUnits = itemUnits.filter(u => !outUnitIds.has(u.id) && !inCart.has(u.id));
 
   const pickItem = (v) => { setItemId(v); setUnitId(''); };
 
-  const reset = () => { setEmployeeId(''); setItemId(''); setUnitId(''); setQty('1');
-    setIssuedBy(''); setProject(''); setNotes(''); setPin(''); };
+  const itemName = (id) => (items.find(i => i.id === id)?.name) || 'Item';
+  const unitCode = (id) => (units.find(u => u.id === id)?.unit_code) || '';
+
+  const addLine = () => {
+    if (!itemId) { toast('Pick an item first', true); return; }
+    if (hasUnits && !unitId) { toast('Pick a unit code', true); return; }
+    setCart([...cart, {
+      itemId, unitId: unitId || null,
+      qty: hasUnits ? 1 : (Number(qty) || 1),
+      label: itemName(itemId) + (unitId ? ' · ' + unitCode(unitId) : (Number(qty) > 1 ? ' ×' + qty : '')),
+    }]);
+    setItemId(''); setUnitId(''); setQty('1');
+  };
+  const removeLine = (idx) => setCart(cart.filter((_, i) => i !== idx));
+
+  const reset = () => { setEmployeeId(''); setIssuedBy(''); setProject(''); setNotes(''); setPin('');
+    setItemId(''); setUnitId(''); setQty('1'); setCart([]); };
 
   const submit = async () => {
-    if (!employeeId || !itemId) { toast('Pick a person and an item', true); return; }
-    if (hasUnits && !unitId) { toast('Pick a unit code', true); return; }
-    if (!pin) { toast('Enter your passcode', true); return; }
+    if (!employeeId) { toast('Pick a person', true); return; }
+    if (!cart.length) { toast('Add at least one item', true); return; }
+    if (!pin) { toast('Enter the passcode', true); return; }
     setSaving(true);
     try {
       const ok = await verifyPin(employeeId, pin);
       if (!ok) { toast('Wrong passcode (or none set for this person)', true); setSaving(false); return; }
-      // NOTE: no borrowed_at sent — the DB stamps server time on insert.
-      await createTransaction({
+      const batch_id = newId();   // links all items on this slip
+      const rows = cart.map(c => ({
         txn_type: mode,
         employee_id: employeeId,
-        item_id: itemId,
-        unit_id: unitId || null,
+        item_id: c.itemId,
+        unit_id: c.unitId,
         site_id: siteId || null,
-        quantity: hasUnits ? 1 : (Number(qty) || 1),
+        quantity: c.qty,
         status: isBorrow ? 'out' : 'issued',
         issued_by: issuedBy || null,
         project_vessel: project || null,
         notes: notes || null,
-      });
-      toast(isBorrow ? 'Tool borrowed out' : 'Material issued');
+        batch_id,
+      }));
+      await createMany(rows);
+      toast(`${isBorrow ? 'Borrowed' : 'Issued'} ${rows.length} item${rows.length>1?'s':''}`);
       reset();
       onSaved();
     } catch (e) {
@@ -204,19 +231,33 @@ function NewTransaction({ mode, sites, employees, items, units, outUnitIds, defa
         placeholder="Select employee…"
         options=${employees.map(e => ({ id:e.id, label:`${e.name}${e.id? ' · '+e.id:''}` }))} />
 
-      <${Picker} label=${isBorrow ? 'Tool' : 'Material'} value=${itemId} onChange=${pickItem}
-        placeholder=${isBorrow ? 'Select tool…' : 'Select material…'}
-        options=${itemOpts.map(i => ({ id:i.id, label:`${i.name}${i.item_code? ' · '+i.item_code:''}` }))} />
+      <div style="border:1px dashed var(--line);border-radius:10px;padding:12px;margin-bottom:14px">
+        <${Picker} label=${isBorrow ? 'Tool' : 'Material'} value=${itemId} onChange=${pickItem}
+          placeholder=${isBorrow ? 'Select tool…' : 'Select material…'}
+          options=${itemOpts.map(i => ({ id:i.id, label:`${i.name}${i.item_code? ' · '+i.item_code:''}` }))} />
 
-      ${hasUnits && html`
-        <${Picker} label="Unit code" value=${unitId} onChange=${setUnitId}
-          placeholder=${availableUnits.length ? 'Select unit…' : 'No units available'}
-          options=${availableUnits.map(u => ({ id:u.id, label:u.unit_code }))} />`}
+        ${hasUnits && html`
+          <${Picker} label="Unit code" value=${unitId} onChange=${setUnitId}
+            placeholder=${availableUnits.length ? 'Select unit…' : 'No units available'}
+            options=${availableUnits.map(u => ({ id:u.id, label:u.unit_code }))} />`}
 
-      ${!hasUnits && html`
-        <${Field} label="Quantity">
-          <input type="number" min="1" value=${qty} onInput=${e => setQty(e.target.value)} />
-        <//>`}
+        ${!hasUnits && html`
+          <${Field} label="Quantity">
+            <input type="number" min="1" value=${qty} onInput=${e => setQty(e.target.value)} />
+          <//>`}
+
+        <button class="btn ghost" onClick=${addLine}>+ Add to slip</button>
+      </div>
+
+      ${cart.length > 0 && html`
+        <div class="card" style="margin:0 0 14px;background:var(--panel-2)">
+          <label>Items on this slip (${cart.length})</label>
+          ${cart.map((c, idx) => html`
+            <div class="row" key=${idx}>
+              <div class="name">${c.label}</div>
+              <button class="ret" onClick=${() => removeLine(idx)}>✕</button>
+            </div>`)}
+        </div>`}
 
       <${Field} label=${isBorrow ? 'Released by' : 'Issued by'}>
         <input value=${issuedBy} onInput=${e => setIssuedBy(e.target.value)} placeholder="Warehouse staff name" />
@@ -235,8 +276,8 @@ function NewTransaction({ mode, sites, employees, items, units, outUnitIds, defa
           value=${pin} onInput=${e => setPin(e.target.value)} placeholder="Enter passcode to confirm" />
       <//>
 
-      <button class="btn" disabled=${saving} onClick=${submit}>
-        ${saving ? 'Saving…' : (isBorrow ? 'Borrow Out' : 'Issue Material')}
+      <button class="btn" disabled=${saving || !cart.length} onClick=${submit}>
+        ${saving ? 'Saving…' : (isBorrow ? `Borrow Out (${cart.length})` : `Issue (${cart.length})`)}
       </button>
     </div>`;
 }
