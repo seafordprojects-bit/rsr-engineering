@@ -482,19 +482,27 @@ function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onAddUni
     finally { setSaving(false); }
   };
 
-  // ----- add MORE codes to an existing tool, continuing from where it ended -----
+  // ----- add MORE equipment to an existing tool, continuing its own prefix -----
   const generateMore = async (itemId, myUnits) => {
-    const p = prefix.trim(), c = parseInt(count || '0', 10), d = parseInt(digits || '3', 10);
-    if (!p) { toast('Enter a prefix (e.g. TL)', true); return; }
+    const c = parseInt(count || '0', 10);
     if (!c || c < 1) { toast('Enter how many', true); return; }
-    const startN = nextStart(myUnits, p, d);             // continue the sequence
+    let p, d;
+    if (myUnits.length) {                          // continue the tool's existing prefix
+      const sample = myUnits[0].unit_code;
+      p = sample.replace(/\d+$/, '');
+      d = (sample.match(/\d+$/)?.[0].length) || 3;
+    } else {                                        // no codes yet → need a prefix once
+      p = prefix.trim(); d = 3;
+      if (!p) { toast('Enter a prefix (e.g. TL)', true); return; }
+    }
+    const startN = nextStart(myUnits, p, d);
     const existing = new Set((units || []).map(u => u.unit_code));
     const codes = makeCodes(p, startN, c, d).filter(cc => !existing.has(cc));
     if (!codes.length) { toast('Those codes already exist', true); return; }
     try {
       await onAddUnits(itemId, codes);
-      toast(`Added ${codes.length} code${codes.length>1?'s':''} (${codes[0]}…)`);
-      setPrefix(''); setCount('');
+      toast(`Added ${codes.length} (${codes[0]}…)`);
+      setCount(''); setPrefix('');
     } catch (e) { toast('Error: ' + e.message, true); }
   };
 
@@ -562,12 +570,14 @@ function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onAddUni
                 </div>`)}
 
               <div style="border-top:1px solid var(--line);margin-top:8px;padding-top:10px">
-                <label>Add more codes (continues the sequence)</label>
+                <label>Add more equipment</label>
+                ${myUnits.length === 0 && html`
+                  <input value=${prefix} onInput=${e => setPrefix(e.target.value)} placeholder="Prefix e.g. TL" style="margin-bottom:8px" />`}
                 <div style="display:flex;gap:8px">
-                  <input value=${prefix} onInput=${e => setPrefix(e.target.value)} placeholder=${myUnits[0] ? 'Prefix e.g. ' + (myUnits[0].unit_code.replace(/[0-9]+$/,'')) : 'Prefix e.g. TL'} style="flex:1.4" />
                   <input type="number" value=${count} onInput=${e => setCount(e.target.value)} placeholder="How many" style="flex:1" />
+                  <button class="btn" style="flex:1" onClick=${() => generateMore(i.id, myUnits)}>Add Equipment</button>
                 </div>
-                <button class="btn" style="margin-top:8px" onClick=${() => generateMore(i.id, myUnits)}>Add Codes</button>
+                ${myUnits.length > 0 && html`<div class="note" style="margin-top:6px">Continues from <span class="mono">${(() => { const s = myUnits[0].unit_code; const p = s.replace(/\d+$/,''); const d = (s.match(/\d+$/)?.[0].length)||3; return p + String(nextStart(myUnits, p, d)).padStart(d,'0'); })()}</span></div>`}
               </div>
 
               <div style="display:flex;gap:8px;margin-top:12px">
