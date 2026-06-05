@@ -431,68 +431,71 @@ function StockSummary({ rows, outCounts }) {
     </div>`;
 }
 
-// ---------- Manage equipment (add / list / remove + unit codes) ----------
+// ---------- Manage equipment (add tool + codes in one step) ----------
 function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onAddUnits, onRemoveUnit, onChanged, toast }) {
+  const isTool = fixedType !== 'issue';
   const [name, setName] = useState('');
-  const [code, setCode] = useState('');
-  const [unit, setUnit] = useState('pcs');
   const [qty, setQty]   = useState('');
   const [siteId, setSiteId] = useState(defaultSite || '');
   const [saving, setSaving] = useState(false);
-  const [openId, setOpenId] = useState(null);   // which tool is expanded for unit codes
+  const [openId, setOpenId] = useState(null);   // which tool is expanded
   const [newCode, setNewCode] = useState('');
-  // auto-generate sequence
+  // code generation (used by both the add form and the per-tool "add more")
   const [prefix, setPrefix] = useState('');
-  const [start, setStart]   = useState('1');
   const [count, setCount]   = useState('');
   const [digits, setDigits] = useState('3');
   useEffect(() => { setSiteId(defaultSite || ''); }, [defaultSite]);
 
-  const preview = (() => {
-    const p = prefix.trim(); const s = parseInt(start || '1', 10);
-    const c = parseInt(count || '0', 10); const d = parseInt(digits || '3', 10);
-    if (!p || !c) return '';
-    const code = (n) => p + String(n).padStart(d, '0');
-    return c === 1 ? code(s) : `${code(s)} … ${code(s + c - 1)}  (${c} codes)`;
-  })();
-
-  const generate = async (itemId) => {
-    const p = prefix.trim();
-    const s = parseInt(start || '1', 10);
-    const c = parseInt(count || '0', 10);
-    const d = parseInt(digits || '3', 10);
-    if (!p) { toast('Enter a prefix (e.g. TL)', true); return; }
-    if (!c || c < 1) { toast('Enter how many', true); return; }
-    const existing = new Set((units || []).map(u => u.unit_code));
-    const codes = [];
-    for (let n = s; n < s + c; n++) {
-      const cc = p + String(n).padStart(d, '0');
-      if (!existing.has(cc)) codes.push(cc);
-    }
-    if (!codes.length) { toast('Those codes already exist', true); return; }
-    try {
-      await onAddUnits(itemId, codes);
-      toast(`Added ${codes.length} code${codes.length>1?'s':''}`);
-      setPrefix(''); setCount('');
-    } catch (e) { toast('Error: ' + e.message, true); }
+  // next number to use for a prefix, given existing codes (so it continues the sequence)
+  const nextStart = (someUnits, p, d) => {
+    let max = 0;
+    someUnits.forEach(u => {
+      const c = u.unit_code || '';
+      if (c.startsWith(p)) {
+        const n = parseInt(c.slice(p.length), 10);
+        if (!isNaN(n) && n > max) max = n;
+      }
+    });
+    return max + 1;
+  };
+  const makeCodes = (p, startN, c, d) => {
+    const out = [];
+    for (let n = startN; n < startN + c; n++) out.push(p + String(n).padStart(d, '0'));
+    return out;
   };
 
+  // ----- add a new tool/material, optionally with a code sequence in one go -----
   const submit = async () => {
-    if (!name.trim()) { toast('Enter an equipment name', true); return; }
+    if (!name.trim()) { toast('Enter a name', true); return; }
+    const p = prefix.trim(), c = parseInt(count || '0', 10), d = parseInt(digits || '3', 10);
     setSaving(true);
     try {
-      const item = await addItem({
-        name: name.trim(),
-        item_code: code.trim() || null,
-        unit: unit.trim() || 'pcs',
-        track_type: fixedType,
-      });
-      if (qty && siteId) await setStock(item.id, siteId, qty);  // optional one-step starting stock
-      toast('Equipment added');
-      setName(''); setCode(''); setQty('');
+      const item = await addItem({ name: name.trim(), item_code: null, unit: 'pcs', track_type: fixedType });
+      if (qty && siteId) await setStock(item.id, siteId, qty);
+      if (isTool && p && c > 0) {                        // new tool → codes start at 1
+        await onAddUnits(item.id, makeCodes(p, 1, c, d));
+      }
+      toast(isTool ? (p && c > 0 ? `Tool added with ${c} codes` : 'Tool added') : 'Material added');
+      setName(''); setPrefix(''); setCount(''); setQty('');
       onChanged();
     } catch (e) { toast('Error: ' + e.message, true); }
     finally { setSaving(false); }
+  };
+
+  // ----- add MORE codes to an existing tool, continuing from where it ended -----
+  const generateMore = async (itemId, myUnits) => {
+    const p = prefix.trim(), c = parseInt(count || '0', 10), d = parseInt(digits || '3', 10);
+    if (!p) { toast('Enter a prefix (e.g. TL)', true); return; }
+    if (!c || c < 1) { toast('Enter how many', true); return; }
+    const startN = nextStart(myUnits, p, d);             // continue the sequence
+    const existing = new Set((units || []).map(u => u.unit_code));
+    const codes = makeCodes(p, startN, c, d).filter(cc => !existing.has(cc));
+    if (!codes.length) { toast('Those codes already exist', true); return; }
+    try {
+      await onAddUnits(itemId, codes);
+      toast(`Added ${codes.length} code${codes.length>1?'s':''} (${codes[0]}…)`);
+      setPrefix(''); setCount('');
+    } catch (e) { toast('Error: ' + e.message, true); }
   };
 
   const remove = async (i) => {
@@ -507,33 +510,47 @@ function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onAddUni
     catch (e) { toast('Error: ' + e.message, true); }
   };
 
-  const isTool = fixedType !== 'issue';
+  // live preview for the ADD form (new tool starts at 1)
+  const addPreview = (() => {
+    const p = prefix.trim(), c = parseInt(count || '0', 10), d = parseInt(digits || '3', 10);
+    if (!isTool || !p || !c) return '';
+    const code = (n) => p + String(n).padStart(d, '0');
+    return c === 1 ? code(1) : `${code(1)} … ${code(c)}  (${c} codes)`;
+  })();
 
   return html`
     <div class="card">
-      <${Field} label=${fixedType === 'issue' ? 'Material name' : 'Tool / equipment name'}>
-        <input value=${name} onInput=${e => setName(e.target.value)} placeholder=${fixedType === 'issue' ? 'e.g. Welding Rod' : 'e.g. Angle Grinder'} />
+      <${Field} label=${isTool ? 'Tool / equipment name' : 'Material name'}>
+        <input value=${name} onInput=${e => setName(e.target.value)} placeholder=${isTool ? 'e.g. Trouble Light' : 'e.g. Welding Rod'} />
       <//>
-      <${Field} label="Code (optional)">
-        <input value=${code} onInput=${e => setCode(e.target.value)} placeholder=${fixedType === 'issue' ? 'MAT-001' : 'TOOL-001'} />
-      <//>
+
+      ${isTool && html`
+        <label>Codes (optional — auto-generated)</label>
+        <div style="display:flex;gap:8px">
+          <input value=${prefix} onInput=${e => setPrefix(e.target.value)} placeholder="Prefix e.g. TL" style="flex:1.4" />
+          <input type="number" value=${count} onInput=${e => setCount(e.target.value)} placeholder="How many" style="flex:1" />
+          <input type="number" value=${digits} onInput=${e => setDigits(e.target.value)} placeholder="Digits" style="width:80px" />
+        </div>
+        ${addPreview && html`<div class="note" style="margin:6px 0 12px">Will create: <span class="mono">${addPreview}</span></div>`}
+      `}
+
       <${Field} label="Starting qty at this location (optional)">
         <input type="number" min="0" value=${qty} onInput=${e => setQty(e.target.value)} placeholder="0" />
       <//>
-      <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Adding…' : (fixedType === 'issue' ? 'Add Material' : 'Add Tool')}</button>
+      <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Adding…' : (isTool ? 'Add Tool' : 'Add Material')}</button>
     </div>
 
     <div class="card">
-      <label>${fixedType === 'issue' ? 'Materials' : 'Tools'} (${items.length})</label>
+      <label>${isTool ? 'Tools' : 'Materials'} (${items.length})</label>
       ${items.length ? items.map(i => {
         const myUnits = (units || []).filter(u => u.item_id === i.id);
         const expanded = openId === i.id;
         return html`
         <div key=${i.id} style="border-bottom:1px solid var(--line)">
           <div class="row" style="border-bottom:none">
-            <div onClick=${isTool ? (() => setOpenId(expanded ? null : i.id)) : null} style=${isTool ? 'cursor:pointer' : ''}>
-              <div class="name">${i.name} ${isTool ? html`<span class="mono" style="color:var(--ink-dim);font-weight:400">${myUnits.length ? '· ' + myUnits.length + ' unit' + (myUnits.length>1?'s':'') : '· tap to add codes'}</span>` : ''}</div>
-              <div class="sub">${isTool ? 'Tool' : 'Material'}${i.item_code ? ' · ' + i.item_code : ''}</div>
+            <div onClick=${isTool ? (() => { setOpenId(expanded ? null : i.id); setPrefix(''); setCount(''); }) : null} style=${isTool ? 'cursor:pointer' : ''}>
+              <div class="name">${i.name} ${isTool ? html`<span class="mono" style="color:var(--ink-dim);font-weight:400">${myUnits.length ? '· ' + myUnits.length + ' code' + (myUnits.length>1?'s':'') : '· tap to add codes'}</span>` : ''}</div>
+              <div class="sub">${isTool ? 'Tool' : 'Material'}</div>
             </div>
             <button class="ret" onClick=${() => remove(i)}>Remove</button>
           </div>
@@ -546,17 +563,15 @@ function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onAddUni
                 </div>`)}
 
               <div style="border-top:1px solid var(--line);margin-top:8px;padding-top:10px">
-                <label>Auto-generate a sequence</label>
+                <label>Add more codes (continues the sequence)</label>
                 <div style="display:flex;gap:8px">
-                  <input value=${prefix} onInput=${e => setPrefix(e.target.value)} placeholder="Prefix e.g. TL" style="flex:1.4" />
-                  <input type="number" value=${start} onInput=${e => setStart(e.target.value)} placeholder="Start" style="flex:1" />
+                  <input value=${prefix} onInput=${e => setPrefix(e.target.value)} placeholder=${myUnits[0] ? 'Prefix e.g. ' + (myUnits[0].unit_code.replace(/[0-9]+$/,'')) : 'Prefix e.g. TL'} style="flex:1.4" />
                   <input type="number" value=${count} onInput=${e => setCount(e.target.value)} placeholder="How many" style="flex:1" />
                 </div>
                 <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
                   <input type="number" value=${digits} onInput=${e => setDigits(e.target.value)} placeholder="Digits" style="width:90px" />
-                  <button class="btn" style="flex:1" onClick=${() => generate(i.id)}>Generate</button>
+                  <button class="btn" style="flex:1" onClick=${() => generateMore(i.id, myUnits)}>Add Codes</button>
                 </div>
-                ${preview && html`<div class="note" style="margin-top:6px">Will create: <span class="mono">${preview}</span></div>`}
               </div>
 
               <div style="display:flex;gap:8px;margin-top:12px">
