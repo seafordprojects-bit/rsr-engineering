@@ -90,6 +90,9 @@ function NewTransaction({ mode, sites, employees, items, defaultSite, onSaved, t
 
   useEffect(() => { setSiteId(defaultSite || ''); }, [defaultSite]);
 
+  // Borrow tab shows only Tools; Issue tab shows only Materials.
+  const itemOpts = items.filter(i => isBorrow ? i.track_type !== 'issue' : i.track_type === 'issue');
+
   const reset = () => { setEmployeeId(''); setItemId(''); setQty('1');
     setIssuedBy(''); setProject(''); setDue(''); setNotes(''); };
 
@@ -120,13 +123,13 @@ function NewTransaction({ mode, sites, employees, items, defaultSite, onSaved, t
 
   return html`
     <div class="card">
-      <${Picker} label="Borrower / Receiver" value=${employeeId} onChange=${setEmployeeId}
+      <${Picker} label=${isBorrow ? 'Borrower' : 'Receiver'} value=${employeeId} onChange=${setEmployeeId}
         placeholder="Select employee…"
         options=${employees.map(e => ({ id:e.id, label:`${e.name}${e.id? ' · '+e.id:''}` }))} />
 
-      <${Picker} label="Item" value=${itemId} onChange=${setItemId}
-        placeholder="Select item…"
-        options=${items.map(i => ({ id:i.id, label:`${i.name}${i.item_code? ' · '+i.item_code:''}` }))} />
+      <${Picker} label=${isBorrow ? 'Tool' : 'Material'} value=${itemId} onChange=${setItemId}
+        placeholder=${isBorrow ? 'Select tool…' : 'Select material…'}
+        options=${itemOpts.map(i => ({ id:i.id, label:`${i.name}${i.item_code? ' · '+i.item_code:''}` }))} />
 
       <div class="two">
         <${Field} label="Quantity">
