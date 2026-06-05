@@ -76,7 +76,7 @@ function NewTransaction({ mode, sites, employees, items, defaultSite, onSaved, t
     <div class="card">
       <${Picker} label="Borrower / Receiver" value=${employeeId} onChange=${setEmployeeId}
         placeholder="Select employee…"
-        options=${employees.map(e => ({ id:e.id, label:`${e.full_name}${e.emp_code? ' · '+e.emp_code:''}` }))} />
+        options=${employees.map(e => ({ id:e.id, label:`${e.name}${e.id? ' · '+e.id:''}` }))} />
 
       <${Picker} label="Item" value=${itemId} onChange=${setItemId}
         placeholder="Select item…"
@@ -123,7 +123,7 @@ function ActiveBorrows({ rows, onReturn }) {
           <div>
             <div class="name">${r.items?.name || 'Item'} ${r.quantity > 1 ? `×${r.quantity}` : ''}</div>
             <div class="sub">
-              ${r.employees?.full_name || '—'}
+              ${r.employees?.name || '—'}
               ${r.project_vessel ? ' · ' + r.project_vessel : ''}<br/>
               <span class="mono">out ${fmt(r.borrowed_at)}${r.due_at ? ' · due ' + fmt(r.due_at) : ''}</span>
             </div>
