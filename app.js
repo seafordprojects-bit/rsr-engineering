@@ -59,6 +59,8 @@ async function deactivateItem(id) {              // soft-delete: keeps borrow hi
 
 const ST_ROW = 'display:grid;grid-template-columns:1fr 58px 44px 58px;gap:8px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);';
 const ST_NUM = 'text-align:right;font-family:"JetBrains Mono",monospace;font-weight:700;';
+const LOC    = 'flex:1;padding:13px;border-radius:10px;border:1px solid var(--line);background:var(--panel);color:var(--ink-dim);font-weight:800;letter-spacing:.5px;cursor:pointer;';
+const LOC_ON = 'flex:1;padding:13px;border-radius:10px;border:1px solid var(--hivis);background:var(--hivis);color:var(--hivis-ink);font-weight:800;letter-spacing:.5px;cursor:pointer;';
 
 // ---------- reusable bits ----------
 function Field({ label, children }) {
@@ -131,13 +133,9 @@ function NewTransaction({ mode, sites, employees, items, defaultSite, onSaved, t
         placeholder=${isBorrow ? 'Select tool…' : 'Select material…'}
         options=${itemOpts.map(i => ({ id:i.id, label:`${i.name}${i.item_code? ' · '+i.item_code:''}` }))} />
 
-      <div class="two">
-        <${Field} label="Quantity">
-          <input type="number" min="1" value=${qty} onInput=${e => setQty(e.target.value)} />
-        <//>
-        <${Picker} label="Site" value=${siteId} onChange=${setSiteId}
-          placeholder="Site…" options=${sites.map(s => ({ id:s.id, label:s.name }))} />
-      </div>
+      <${Field} label="Quantity">
+        <input type="number" min="1" value=${qty} onInput=${e => setQty(e.target.value)} />
+      <//>
 
       <${Field} label=${isBorrow ? 'Released by' : 'Issued by'}>
         <input value=${issuedBy} onInput=${e => setIssuedBy(e.target.value)} placeholder="Warehouse staff name" />
@@ -202,13 +200,9 @@ function SetStock({ items, sites, defaultSite, onSaved, toast }) {
     <div class="card">
       <${Picker} label="Item" value=${itemId} onChange=${setItemId} placeholder="Select item…"
         options=${items.map(i => ({ id:i.id, label:`${i.name}${i.item_code? ' · '+i.item_code:''}` }))} />
-      <div class="two">
-        <${Picker} label="Site" value=${siteId} onChange=${setSiteId} placeholder="Site…"
-          options=${sites.map(s => ({ id:s.id, label:s.name }))} />
-        <${Field} label="Qty owned">
-          <input type="number" min="0" value=${qty} onInput=${e => setQty(e.target.value)} placeholder="0" />
-        <//>
-      </div>
+      <${Field} label="Qty owned (at this location)">
+        <input type="number" min="0" value=${qty} onInput=${e => setQty(e.target.value)} placeholder="0" />
+      <//>
       <button class="btn ghost" disabled=${saving} onClick=${submit}>${saving ? 'Saving…' : 'Set Stock'}</button>
     </div>`;
 }
@@ -297,13 +291,9 @@ function ManageItems({ items, sites, defaultSite, onChanged, toast }) {
           </select>
         <//>
       </div>
-      <div class="two">
-        <${Field} label="Starting qty (optional)">
-          <input type="number" min="0" value=${qty} onInput=${e => setQty(e.target.value)} placeholder="0" />
-        <//>
-        <${Picker} label="At site" value=${siteId} onChange=${setSiteId} placeholder="Site…"
-          options=${sites.map(s => ({ id:s.id, label:s.name }))} />
-      </div>
+      <${Field} label="Starting qty at this location (optional)">
+        <input type="number" min="0" value=${qty} onInput=${e => setQty(e.target.value)} placeholder="0" />
+      <//>
       <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Adding…' : 'Add Equipment'}</button>
     </div>
 
@@ -355,6 +345,7 @@ function App() {
     try {
       const [s, e, i] = await Promise.all([getSites(), getEmployees(), getItems()]);
       setSites(s); setEmployees(e); setItems(i);
+      if (s.length) setSiteFilter(s[0].id);     // start on the first location, no "All"
     } catch (err) {
       setFatal(err.message);   // usually a missing anon key or RLS — see banner
     }
@@ -374,11 +365,9 @@ function App() {
     <header class="app">
       <div class="wrap">
         <div class="brand"><b>RSR</b><span class="tag">BORROW · ISSUE</span></div>
-        <div class="site-row">
-          <select value=${siteFilter} onChange=${e => setSiteFilter(e.target.value)}>
-            <option value="">All sites</option>
-            ${sites.map(s => html`<option value=${s.id}>${s.name}</option>`)}
-          </select>
+        <div class="site-row" style="display:flex;gap:8px">
+          ${sites.map(s => html`<button key=${s.id} style=${siteFilter===s.id ? LOC_ON : LOC}
+            onClick=${() => setSiteFilter(s.id)}>${s.name}</button>`)}
         </div>
       </div>
     </header>
