@@ -8,9 +8,25 @@ import { html, render } from 'htm/preact';
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import {
   supabase,
-  getSites, getEmployees, getItems, getOpenBorrows,
+  getSites, getEmployees, getItems,
   createTransaction, returnItem,
 } from './supabase.js';
+
+// Local copy of open-borrows (adds employee_id so Return can verify the borrower's passcode).
+async function getOpenBorrows(siteId) {
+  let q = supabase
+    .from('borrow_issuance')
+    .select('id, quantity, borrowed_at, due_at, project_vessel, issued_by, employee_id, ' +
+            'items(item_code, name, unit), employees(name)')
+    .eq('txn_type', 'borrow')
+    .eq('status', 'out')
+    .order('borrowed_at', { ascending: false })
+    .limit(100);
+  if (siteId) q = q.eq('site_id', siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data;
+}
 
 const fmt = (ts) => ts ? new Date(ts).toLocaleString('en-PH',
   { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
@@ -69,6 +85,12 @@ async function getRecentIssuances(siteId) {
   if (error) throw error;
   return data;
 }
+// verify an employee's passcode server-side (the PIN never leaves the database)
+async function verifyPin(empId, pin) {
+  const { data, error } = await supabase.rpc('verify_pin', { emp_id: empId, pin_input: pin });
+  if (error) throw error;
+  return data === true;
+}
 
 const ST_ROW = 'display:grid;grid-template-columns:1fr 58px 44px 58px;gap:8px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);';
 const ST_NUM = 'text-align:right;font-family:"JetBrains Mono",monospace;font-weight:700;';
@@ -101,6 +123,7 @@ function NewTransaction({ mode, sites, employees, items, defaultSite, onSaved, t
   const [project, setProject]   = useState('');
   const [due, setDue]           = useState('');
   const [notes, setNotes]       = useState('');
+  const [pin, setPin]           = useState('');
   const [saving, setSaving]     = useState(false);
 
   useEffect(() => { setSiteId(defaultSite || ''); }, [defaultSite]);
@@ -109,12 +132,15 @@ function NewTransaction({ mode, sites, employees, items, defaultSite, onSaved, t
   const itemOpts = items.filter(i => isBorrow ? i.track_type !== 'issue' : i.track_type === 'issue');
 
   const reset = () => { setEmployeeId(''); setItemId(''); setQty('1');
-    setIssuedBy(''); setProject(''); setDue(''); setNotes(''); };
+    setIssuedBy(''); setProject(''); setDue(''); setNotes(''); setPin(''); };
 
   const submit = async () => {
-    if (!employeeId || !itemId) { toast('Pick an employee and an item', true); return; }
+    if (!employeeId || !itemId) { toast('Pick a person and an item', true); return; }
+    if (!pin) { toast('Enter your passcode', true); return; }
     setSaving(true);
     try {
+      const ok = await verifyPin(employeeId, pin);
+      if (!ok) { toast('Wrong passcode (or none set for this person)', true); setSaving(false); return; }
       // NOTE: no borrowed_at sent — the DB stamps server time on insert.
       await createTransaction({
         txn_type: mode,
@@ -165,6 +191,11 @@ function NewTransaction({ mode, sites, employees, items, defaultSite, onSaved, t
 
       <${Field} label="Notes">
         <textarea rows="2" value=${notes} onInput=${e => setNotes(e.target.value)}></textarea>
+      <//>
+
+      <${Field} label=${isBorrow ? 'Borrower passcode (sign here)' : 'Receiver passcode (sign here)'}>
+        <input type="password" inputmode="numeric" autocomplete="off"
+          value=${pin} onInput=${e => setPin(e.target.value)} placeholder="Enter passcode to confirm" />
       <//>
 
       <button class="btn" disabled=${saving} onClick=${submit}>
@@ -390,10 +421,14 @@ function App() {
   useEffect(() => { loadStock(); }, [loadStock]);
 
   const doReturn = async (r) => {
-    const cond = prompt(`Return "${r.items?.name}". Condition? (optional)`, 'OK');
-    if (cond === null) return;
-    try { await returnItem(r.id, cond); flash('Returned'); loadOpen(); }
-    catch (e) { flash('Error: ' + e.message, true); }
+    const pin = prompt(`Return "${r.items?.name}". Enter ${r.employees?.name || 'borrower'}'s passcode to confirm:`);
+    if (pin === null) return;
+    try {
+      const ok = await verifyPin(r.employee_id, pin);
+      if (!ok) { flash('Wrong passcode', true); return; }
+      await returnItem(r.id, 'Returned');
+      flash('Returned'); loadOpen();
+    } catch (e) { flash('Error: ' + e.message, true); }
   };
 
   const chooseLocation = (site) => {            // set once for this device
