@@ -38,7 +38,7 @@ async function getOpenBorrows(siteId) {
 // individual tool units (Grinder -> GR-001, GR-002) for a location
 async function getUnits(siteId) {
   let q = supabase.from('item_units')
-    .select('id, unit_code, item_id')
+    .select('id, unit_code, item_id, status, defect, repair_eta')
     .eq('active', true)
     .order('unit_code')
     .limit(3000);
@@ -46,6 +46,16 @@ async function getUnits(siteId) {
   const { data, error } = await q;
   if (error) throw error;
   return data;
+}
+async function sendToRepair(unitId, defect, eta) {
+  const { error } = await supabase.from('item_units')
+    .update({ status: 'repair', defect: defect || null, repair_eta: eta || null }).eq('id', unitId);
+  if (error) throw error;
+}
+async function markRepaired(unitId) {
+  const { error } = await supabase.from('item_units')
+    .update({ status: 'available', defect: null, repair_eta: null }).eq('id', unitId);
+  if (error) throw error;
 }
 async function addUnit(fields) {
   const { error } = await supabase.from('item_units').insert(fields);
@@ -181,7 +191,7 @@ function NewTransaction({ mode, sites, employees, items, units, outUnitIds, defa
   const hasUnits  = isBorrow && itemUnits.length > 0;
   // available = not out AND not already added to this slip
   const inCart = new Set(cart.map(c => c.unitId).filter(Boolean));
-  const availableUnits = itemUnits.filter(u => !outUnitIds.has(u.id) && !inCart.has(u.id));
+  const availableUnits = itemUnits.filter(u => u.status !== 'repair' && !outUnitIds.has(u.id) && !inCart.has(u.id));
 
   const pickItem = (v) => { setItemId(v); setUnitId(''); };
 
@@ -321,15 +331,16 @@ function ToolStore({ items, units, outUnitIds, stockRows, outCounts }) {
   (stockRows || []).forEach(r => { if (r.items) qtyMap[r.items.id] = (qtyMap[r.items.id] || 0) + Number(r.qty_owned || 0); });
   const list = (items || []).map(i => {
     const myUnits = (units || []).filter(u => u.item_id === i.id);
-    let owned, out;
+    let owned, out, repair = 0;
     if (myUnits.length) {                 // coded tool → owned = number of codes
       owned = myUnits.length;
       out = myUnits.filter(u => outUnitIds.has(u.id)).length;
+      repair = myUnits.filter(u => u.status === 'repair').length;
     } else {                              // uncoded tool → manual qty fallback
       owned = qtyMap[i.id] || 0;
       out = outCounts[i.id] || 0;
     }
-    return { id: i.id, name: i.name, owned, out, avail: owned - out };
+    return { id: i.id, name: i.name, owned, out, repair, avail: owned - out - repair };
   }).sort((a, b) => a.name.localeCompare(b.name));
 
   if (!list.length) return html`<div class="card"><div class="empty">No tools registered yet. Add them in Register Tools.</div></div>`;
@@ -343,11 +354,66 @@ function ToolStore({ items, units, outUnitIds, stockRows, outCounts }) {
       </div>
       ${list.map(r => html`
         <div style=${ST_ROW} key=${r.id}>
-          <span class="name">${r.name}</span>
+          <span class="name">${r.name}${r.repair > 0 ? html`<span class="sub" style="color:var(--warn)"> · ${r.repair} in repair</span>` : ''}</span>
           <span style=${ST_NUM}>${r.owned}</span>
           <span style=${ST_NUM + (r.out > 0 ? 'color:var(--hivis)' : 'color:var(--ink-dim)')}>${r.out}</span>
           <span style=${ST_NUM + (r.avail <= 0 ? 'color:var(--warn)' : '')}>${r.avail}</span>
         </div>`)}
+    </div>`;
+}
+
+// ---------- For Repair: tag defective units, mark them repaired ----------
+function ForRepair({ items, units, outUnitIds, onSendRepair, onRepaired, toast }) {
+  const [itemId, setItemId] = useState('');
+  const [unitId, setUnitId] = useState('');
+  const [defect, setDefect] = useState('');
+  const [eta, setEta] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const itemName = (id) => (items.find(i => i.id === id)?.name) || 'Tool';
+  const itemUnits = (units || []).filter(u => u.item_id === itemId);
+  const available = itemUnits.filter(u => u.status !== 'repair' && !outUnitIds.has(u.id));
+  const inRepair = (units || []).filter(u => u.status === 'repair');
+  const pickItem = (v) => { setItemId(v); setUnitId(''); };
+
+  const submit = async () => {
+    if (!unitId) { toast('Pick a unit', true); return; }
+    setSaving(true);
+    try {
+      await onSendRepair(unitId, defect, eta);
+      toast('Sent to repair');
+      setItemId(''); setUnitId(''); setDefect(''); setEta('');
+    } catch (e) { toast('Error: ' + e.message, true); }
+    finally { setSaving(false); }
+  };
+
+  return html`
+    <div class="card">
+      <${Picker} label="Tool" value=${itemId} onChange=${pickItem} placeholder="Select tool…"
+        options=${items.map(i => ({ id:i.id, label:i.name }))} />
+      ${itemId && html`
+        <${Picker} label="Unit code" value=${unitId} onChange=${setUnitId}
+          placeholder=${available.length ? 'Select unit…' : 'No available units'}
+          options=${available.map(u => ({ id:u.id, label:u.unit_code }))} />`}
+      <${Field} label="Defect description">
+        <textarea rows="2" value=${defect} onInput=${e => setDefect(e.target.value)} placeholder="What's wrong with it?"></textarea>
+      <//>
+      <${Field} label="Expected ready (optional)">
+        <input value=${eta} onInput=${e => setEta(e.target.value)} placeholder="e.g. next week" />
+      <//>
+      <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Saving…' : 'Send to Repair'}</button>
+    </div>
+
+    <div class="card">
+      <label>In repair (${inRepair.length})</label>
+      ${inRepair.length ? inRepair.map(u => html`
+        <div class="row" key=${u.id}>
+          <div>
+            <div class="name">${itemName(u.item_id)} · <span class="mono" style="color:var(--warn)">${u.unit_code}</span></div>
+            <div class="sub">${u.defect || 'no note'}${u.repair_eta ? ' · ready ' + u.repair_eta : ''}</div>
+          </div>
+          <button class="ret" onClick=${() => onRepaired(u.id)}>Repaired</button>
+        </div>`) : html`<div class="empty">Nothing in repair.</div>`}
     </div>`;
 }
 
@@ -708,6 +774,8 @@ function App() {
     loadUnits();
   };
   const removeUnitById = async (id) => { await deactivateUnit(id); loadUnits(); };
+  const repairUnit = async (id, defect, eta) => { await sendToRepair(id, defect, eta); loadUnits(); };
+  const unrepairUnit = async (id) => { await markRepaired(id); loadUnits(); };
   const removeItemFull = async (item) => {
     try { await deleteUnitsForItem(item.id); }   // free its codes (skips if borrow history blocks it)
     catch (_) { /* referenced by past borrows — leave codes, just hide the tool */ }
@@ -786,6 +854,7 @@ function App() {
           <button class=${tab==='active'?'on':''} onClick=${() => setTab('active')}>${isBorrow ? `Return Slip (${open.length})` : `Recent (${issues.length})`}</button>
           <button class=${tab==='stock'?'on':''}  onClick=${() => setTab('stock')}>${isBorrow ? 'In Store' : 'Stock'}</button>
           <button class=${tab==='items'?'on':''}  onClick=${() => setTab('items')}>${isBorrow ? 'Register Tools' : 'Items'}</button>
+          ${isBorrow && html`<button class=${tab==='repair'?'on':''} onClick=${() => setTab('repair')}>Repair</button>`}
         </div>
 
         ${tab==='form' && html`<${NewTransaction} mode=${mode}
@@ -809,6 +878,9 @@ function App() {
         ${tab==='items' && html`<${ManageItems} items=${sectionItems} units=${unitsRows} outUnitIds=${outUnitIds} fixedType=${isBorrow ? 'borrow' : 'issue'}
           defaultSite=${siteFilter} onAddUnit=${addUnitFor} onAddUnits=${addUnitsFor} onRemoveUnit=${removeUnitById} onRemoveItem=${removeItemFull}
           onChanged=${() => { loadItems(); loadStock(); }} toast=${flash} />`}
+
+        ${tab==='repair' && isBorrow && html`<${ForRepair} items=${sectionItems} units=${unitsRows} outUnitIds=${outUnitIds}
+          onSendRepair=${repairUnit} onRepaired=${unrepairUnit} toast=${flash} />`}
         `;
       })()}
 
