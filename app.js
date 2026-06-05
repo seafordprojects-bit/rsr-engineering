@@ -60,6 +60,11 @@ async function createMany(rows) {
   const { error } = await supabase.from('borrow_issuance').insert(rows);
   if (error) throw error;
 }
+// insert several unit codes at once (auto-generated sequence)
+async function addUnits(rows) {
+  const { error } = await supabase.from('item_units').insert(rows);
+  if (error) throw error;
+}
 const newId = () => (crypto?.randomUUID ? crypto.randomUUID()
   : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
       const r = Math.random()*16|0; return (c === 'x' ? r : (r&0x3|0x8)).toString(16); }));
@@ -424,7 +429,7 @@ function StockSummary({ rows, outCounts }) {
 }
 
 // ---------- Manage equipment (add / list / remove + unit codes) ----------
-function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onRemoveUnit, onChanged, toast }) {
+function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onAddUnits, onRemoveUnit, onChanged, toast }) {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [unit, setUnit] = useState('pcs');
@@ -433,7 +438,41 @@ function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onRemove
   const [saving, setSaving] = useState(false);
   const [openId, setOpenId] = useState(null);   // which tool is expanded for unit codes
   const [newCode, setNewCode] = useState('');
+  // auto-generate sequence
+  const [prefix, setPrefix] = useState('');
+  const [start, setStart]   = useState('1');
+  const [count, setCount]   = useState('');
+  const [digits, setDigits] = useState('3');
   useEffect(() => { setSiteId(defaultSite || ''); }, [defaultSite]);
+
+  const preview = (() => {
+    const p = prefix.trim(); const s = parseInt(start || '1', 10);
+    const c = parseInt(count || '0', 10); const d = parseInt(digits || '3', 10);
+    if (!p || !c) return '';
+    const code = (n) => p + String(n).padStart(d, '0');
+    return c === 1 ? code(s) : `${code(s)} … ${code(s + c - 1)}  (${c} codes)`;
+  })();
+
+  const generate = async (itemId) => {
+    const p = prefix.trim();
+    const s = parseInt(start || '1', 10);
+    const c = parseInt(count || '0', 10);
+    const d = parseInt(digits || '3', 10);
+    if (!p) { toast('Enter a prefix (e.g. TL)', true); return; }
+    if (!c || c < 1) { toast('Enter how many', true); return; }
+    const existing = new Set((units || []).map(u => u.unit_code));
+    const codes = [];
+    for (let n = s; n < s + c; n++) {
+      const cc = p + String(n).padStart(d, '0');
+      if (!existing.has(cc)) codes.push(cc);
+    }
+    if (!codes.length) { toast('Those codes already exist', true); return; }
+    try {
+      await onAddUnits(itemId, codes);
+      toast(`Added ${codes.length} code${codes.length>1?'s':''}`);
+      setPrefix(''); setCount('');
+    } catch (e) { toast('Error: ' + e.message, true); }
+  };
 
   const submit = async () => {
     if (!name.trim()) { toast('Enter an equipment name', true); return; }
@@ -502,8 +541,23 @@ function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onRemove
                   <span class="mono">${u.unit_code}</span>
                   <button onClick=${() => onRemoveUnit(u.id)} style="background:none;border:none;color:var(--warn);cursor:pointer;font-size:13px">remove</button>
                 </div>`)}
-              <div style="display:flex;gap:8px;margin-top:6px">
-                <input value=${newCode} onInput=${e => setNewCode(e.target.value)} placeholder="e.g. GR-001" style="flex:1" />
+
+              <div style="border-top:1px solid var(--line);margin-top:8px;padding-top:10px">
+                <label>Auto-generate a sequence</label>
+                <div style="display:flex;gap:8px">
+                  <input value=${prefix} onInput=${e => setPrefix(e.target.value)} placeholder="Prefix e.g. TL" style="flex:1.4" />
+                  <input type="number" value=${start} onInput=${e => setStart(e.target.value)} placeholder="Start" style="flex:1" />
+                  <input type="number" value=${count} onInput=${e => setCount(e.target.value)} placeholder="How many" style="flex:1" />
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+                  <input type="number" value=${digits} onInput=${e => setDigits(e.target.value)} placeholder="Digits" style="width:90px" />
+                  <button class="btn" style="flex:1" onClick=${() => generate(i.id)}>Generate</button>
+                </div>
+                ${preview && html`<div class="note" style="margin-top:6px">Will create: <span class="mono">${preview}</span></div>`}
+              </div>
+
+              <div style="display:flex;gap:8px;margin-top:12px">
+                <input value=${newCode} onInput=${e => setNewCode(e.target.value)} placeholder="or add one: GR-001" style="flex:1" />
                 <button class="ret" onClick=${() => addCode(i.id)}>+ Code</button>
               </div>
             </div>`}
@@ -579,6 +633,10 @@ function App() {
 
   const addUnitFor = async (itemId, code) => {
     await addUnit({ item_id: itemId, site_id: siteFilter || null, unit_code: code });
+    loadUnits();
+  };
+  const addUnitsFor = async (itemId, codes) => {
+    await addUnits(codes.map(c => ({ item_id: itemId, site_id: siteFilter || null, unit_code: c })));
     loadUnits();
   };
   const removeUnitById = async (id) => { await deactivateUnit(id); loadUnits(); };
@@ -672,7 +730,7 @@ function App() {
         </div>`}
 
         ${tab==='items' && html`<${ManageItems} items=${sectionItems} units=${unitsRows} fixedType=${isBorrow ? 'borrow' : 'issue'}
-          defaultSite=${siteFilter} onAddUnit=${addUnitFor} onRemoveUnit=${removeUnitById}
+          defaultSite=${siteFilter} onAddUnit=${addUnitFor} onAddUnits=${addUnitsFor} onRemoveUnit=${removeUnitById}
           onChanged=${() => { loadItems(); loadStock(); }} toast=${flash} />`}
         `;
       })()}
