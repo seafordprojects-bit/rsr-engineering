@@ -19,7 +19,7 @@ const fmt = (ts) => ts ? new Date(ts).toLocaleString('en-PH',
 async function getStock(siteId) {
   let q = supabase
     .from('site_inventory')
-    .select('qty_owned, site_id, items(id, item_code, name, unit)')
+    .select('qty_owned, site_id, items(id, item_code, name, unit, track_type)')
     .limit(1000);                                  // bounded
   if (siteId) q = q.eq('site_id', siteId);
   const { data, error } = await q;
@@ -55,6 +55,19 @@ async function addItem(fields) {
 async function deactivateItem(id) {              // soft-delete: keeps borrow history intact
   const { error } = await supabase.from('items').update({ active: false }).eq('id', id);
   if (error) throw error;
+}
+// recent material issuances (consumed, no return) for the Issue section
+async function getRecentIssuances(siteId) {
+  let q = supabase
+    .from('borrow_issuance')
+    .select('id, quantity, borrowed_at, project_vessel, issued_by, items(name, unit), employees(name)')
+    .eq('txn_type', 'issuance')
+    .order('borrowed_at', { ascending: false })
+    .limit(100);
+  if (siteId) q = q.eq('site_id', siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data;
 }
 
 const ST_ROW = 'display:grid;grid-template-columns:1fr 58px 44px 58px;gap:8px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);';
@@ -180,6 +193,25 @@ function ActiveBorrows({ rows, onReturn }) {
     </div>`;
 }
 
+// ---------- Recent issuances (materials, read-only) ----------
+function RecentIssuances({ rows }) {
+  if (!rows.length) return html`<div class="card"><div class="empty">No materials issued yet.</div></div>`;
+  return html`
+    <div class="card">
+      ${rows.map(r => html`
+        <div class="row" key=${r.id}>
+          <div>
+            <div class="name">${r.items?.name || 'Material'} ${r.quantity > 1 ? `×${r.quantity}` : ''}</div>
+            <div class="sub">
+              ${r.employees?.name || '—'}
+              ${r.project_vessel ? ' · ' + r.project_vessel : ''}<br/>
+              <span class="mono">issued ${fmt(r.borrowed_at)}</span>
+            </div>
+          </div>
+        </div>`)}
+    </div>`;
+}
+
 // ---------- Set stock (enter how many a site owns) ----------
 function SetStock({ items, sites, defaultSite, onSaved, toast }) {
   const [itemId, setItemId] = useState('');
@@ -241,10 +273,9 @@ function StockSummary({ rows, outCounts }) {
 }
 
 // ---------- Manage equipment (add / list / remove) ----------
-function ManageItems({ items, sites, defaultSite, onChanged, toast }) {
+function ManageItems({ items, fixedType, defaultSite, onChanged, toast }) {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
-  const [type, setType] = useState('borrow');
   const [unit, setUnit] = useState('pcs');
   const [qty, setQty]   = useState('');
   const [siteId, setSiteId] = useState(defaultSite || '');
@@ -259,7 +290,7 @@ function ManageItems({ items, sites, defaultSite, onChanged, toast }) {
         name: name.trim(),
         item_code: code.trim() || null,
         unit: unit.trim() || 'pcs',
-        track_type: type,
+        track_type: fixedType,
       });
       if (qty && siteId) await setStock(item.id, siteId, qty);  // optional one-step starting stock
       toast('Equipment added');
@@ -277,28 +308,20 @@ function ManageItems({ items, sites, defaultSite, onChanged, toast }) {
 
   return html`
     <div class="card">
-      <${Field} label="Equipment name">
-        <input value=${name} onInput=${e => setName(e.target.value)} placeholder="e.g. Angle Grinder" />
+      <${Field} label=${fixedType === 'issue' ? 'Material name' : 'Tool / equipment name'}>
+        <input value=${name} onInput=${e => setName(e.target.value)} placeholder=${fixedType === 'issue' ? 'e.g. Welding Rod' : 'e.g. Angle Grinder'} />
       <//>
-      <div class="two">
-        <${Field} label="Code (optional)">
-          <input value=${code} onInput=${e => setCode(e.target.value)} placeholder="TOOL-001" />
-        <//>
-        <${Field} label="Type">
-          <select value=${type} onChange=${e => setType(e.target.value)}>
-            <option value="borrow">Tool (borrowed)</option>
-            <option value="issue">Material (consumed)</option>
-          </select>
-        <//>
-      </div>
+      <${Field} label="Code (optional)">
+        <input value=${code} onInput=${e => setCode(e.target.value)} placeholder=${fixedType === 'issue' ? 'MAT-001' : 'TOOL-001'} />
+      <//>
       <${Field} label="Starting qty at this location (optional)">
         <input type="number" min="0" value=${qty} onInput=${e => setQty(e.target.value)} placeholder="0" />
       <//>
-      <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Adding…' : 'Add Equipment'}</button>
+      <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Adding…' : (fixedType === 'issue' ? 'Add Material' : 'Add Tool')}</button>
     </div>
 
     <div class="card">
-      <label>Current equipment (${items.length})</label>
+      <label>${fixedType === 'issue' ? 'Materials' : 'Tools'} (${items.length})</label>
       ${items.length ? items.map(i => html`
         <div class="row" key=${i.id}>
           <div>
@@ -312,12 +335,14 @@ function ManageItems({ items, sites, defaultSite, onChanged, toast }) {
 
 // ---------- App shell ----------
 function App() {
-  const [tab, setTab] = useState('borrow');     // borrow | issue | active
+  const [section, setSection] = useState('borrow'); // borrow | issue  (top level)
+  const [tab, setTab] = useState('form');           // form | active | stock | items (sub level)
   const [sites, setSites] = useState([]);
   const [employees, setEmployees] = useState([]);
   const [items, setItems] = useState([]);
   const [siteFilter, setSiteFilter] = useState('');
   const [open, setOpen] = useState([]);
+  const [issues, setIssues] = useState([]);
   const [stockRows, setStockRows] = useState([]);
   const [outCounts, setOutCounts] = useState({});
   const [toast, setToast] = useState(null);
@@ -327,6 +352,11 @@ function App() {
 
   const loadOpen = useCallback(async () => {
     try { setOpen(await getOpenBorrows(siteFilter)); }
+    catch (e) { flash('Load failed: ' + e.message, true); }
+  }, [siteFilter]);
+
+  const loadIssues = useCallback(async () => {
+    try { setIssues(await getRecentIssuances(siteFilter)); }
     catch (e) { flash('Load failed: ' + e.message, true); }
   }, [siteFilter]);
 
@@ -352,6 +382,7 @@ function App() {
   })(); }, []);
 
   useEffect(() => { loadOpen(); }, [loadOpen]);
+  useEffect(() => { loadIssues(); }, [loadIssues]);
   useEffect(() => { loadStock(); }, [loadStock]);
 
   const doReturn = async (r) => {
@@ -379,34 +410,45 @@ function App() {
         and that you ran <span class="mono">schema.sql</span>.
       </div>`}
 
-      <div class="tabs" style="flex-wrap:wrap">
-        <button class=${tab==='borrow'?'on':''} onClick=${() => setTab('borrow')}>Borrow</button>
-        <button class=${tab==='issue'?'on':''}  onClick=${() => setTab('issue')}>Issue</button>
-        <button class=${tab==='active'?'on':''} onClick=${() => setTab('active')}>Active (${open.length})</button>
-        <button class=${tab==='stock'?'on':''}  onClick=${() => setTab('stock')}>Stock</button>
-        <button class=${tab==='items'?'on':''}  onClick=${() => setTab('items')}>Items</button>
+      <div class="tabs" style="margin-bottom:10px">
+        <button class=${section==='borrow'?'on':''} onClick=${() => { setSection('borrow'); setTab('form'); }}>BORROW</button>
+        <button class=${section==='issue'?'on':''}  onClick=${() => { setSection('issue');  setTab('form'); }}>ISSUE</button>
       </div>
 
-      ${tab==='borrow' && html`<${NewTransaction} mode="borrow"
-        sites=${sites} employees=${employees} items=${items}
-        defaultSite=${siteFilter} onSaved=${loadOpen} toast=${flash} />`}
+      ${(() => {
+        const isBorrow = section === 'borrow';
+        const mode = isBorrow ? 'borrow' : 'issuance';
+        const sectionItems = items.filter(i => isBorrow ? i.track_type !== 'issue' : i.track_type === 'issue');
+        const sectionStock = stockRows.filter(r => isBorrow ? r.items?.track_type !== 'issue' : r.items?.track_type === 'issue');
+        const reloadForm = isBorrow ? loadOpen : loadIssues;
+        return html`
+        <div class="tabs" style="flex-wrap:wrap">
+          <button class=${tab==='form'?'on':''}   onClick=${() => setTab('form')}>${isBorrow ? 'Borrow' : 'Issue'}</button>
+          <button class=${tab==='active'?'on':''} onClick=${() => setTab('active')}>${isBorrow ? `Active (${open.length})` : `Recent (${issues.length})`}</button>
+          <button class=${tab==='stock'?'on':''}  onClick=${() => setTab('stock')}>Stock</button>
+          <button class=${tab==='items'?'on':''}  onClick=${() => setTab('items')}>Items</button>
+        </div>
 
-      ${tab==='issue' && html`<${NewTransaction} mode="issuance"
-        sites=${sites} employees=${employees} items=${items}
-        defaultSite=${siteFilter} onSaved=${loadOpen} toast=${flash} />`}
+        ${tab==='form' && html`<${NewTransaction} mode=${mode}
+          sites=${sites} employees=${employees} items=${sectionItems}
+          defaultSite=${siteFilter} onSaved=${reloadForm} toast=${flash} />`}
 
-      ${tab==='active' && html`<${ActiveBorrows} rows=${open} onReturn=${doReturn} />`}
+        ${tab==='active' && (isBorrow
+          ? html`<${ActiveBorrows} rows=${open} onReturn=${doReturn} />`
+          : html`<${RecentIssuances} rows=${issues} />`)}
 
-      ${tab==='stock' && html`<div>
-        <${SetStock} items=${items} sites=${sites} defaultSite=${siteFilter}
-          onSaved=${loadStock} toast=${flash} />
-        <${StockSummary} rows=${stockRows} outCounts=${outCounts} />
-      </div>`}
+        ${tab==='stock' && html`<div>
+          <${SetStock} items=${sectionItems} sites=${sites} defaultSite=${siteFilter}
+            onSaved=${loadStock} toast=${flash} />
+          <${StockSummary} rows=${sectionStock} outCounts=${outCounts} />
+        </div>`}
 
-      ${tab==='items' && html`<${ManageItems} items=${items} sites=${sites}
-        defaultSite=${siteFilter} onChanged=${() => { loadItems(); loadStock(); }} toast=${flash} />`}
+        ${tab==='items' && html`<${ManageItems} items=${sectionItems} fixedType=${isBorrow ? 'borrow' : 'issue'}
+          defaultSite=${siteFilter} onChanged=${() => { loadItems(); loadStock(); }} toast=${flash} />`}
+        `;
+      })()}
 
-      <p class="note">Tip: add your tools & equipment in the <b>Items</b> tab — they appear in every dropdown automatically.</p>
+      <p class="note">Tip: add your ${section==='issue' ? 'materials' : 'tools'} in the <b>Items</b> tab — they appear in the dropdowns automatically.</p>
     </div>
 
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
