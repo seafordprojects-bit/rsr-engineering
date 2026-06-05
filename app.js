@@ -289,22 +289,60 @@ function NewTransaction({ mode, sites, employees, items, units, outUnitIds, defa
     </div>`;
 }
 
-// ---------- Active borrows list ----------
+// ---------- Active borrows, grouped by who holds them ----------
 function ActiveBorrows({ rows, onReturn }) {
   if (!rows.length) return html`<div class="card"><div class="empty">No tools currently out.</div></div>`;
+  const groups = {};
+  rows.forEach(r => { const k = r.employees?.name || '—'; (groups[k] = groups[k] || []).push(r); });
+  const code = (r) => r.item_units?.unit_code || r.items?.item_code || '';
+  return html`
+    ${Object.entries(groups).map(([name, list]) => html`
+      <div class="card" key=${name}>
+        <label>${name} — ${list.length} item${list.length>1?'s':''} out</label>
+        ${list.map(r => html`
+          <div class="row" key=${r.id}>
+            <div>
+              <div class="name">${r.items?.name || 'Item'} ${code(r) ? html`<span class="mono" style="color:var(--hivis)">· ${code(r)}</span>` : (r.quantity > 1 ? `×${r.quantity}` : '')}</div>
+              <div class="sub">${r.project_vessel ? r.project_vessel + ' · ' : ''}<span class="mono">out ${fmt(r.borrowed_at)}</span></div>
+            </div>
+            <button class="ret" onClick=${() => onReturn(r)}>Return</button>
+          </div>`)}
+      </div>`)}
+  `;
+}
+
+// ---------- In Store: tool counts derived automatically from registered codes ----------
+function ToolStore({ items, units, outUnitIds, stockRows, outCounts }) {
+  const qtyMap = {};
+  (stockRows || []).forEach(r => { if (r.items) qtyMap[r.items.id] = (qtyMap[r.items.id] || 0) + Number(r.qty_owned || 0); });
+  const list = (items || []).map(i => {
+    const myUnits = (units || []).filter(u => u.item_id === i.id);
+    let owned, out;
+    if (myUnits.length) {                 // coded tool → owned = number of codes
+      owned = myUnits.length;
+      out = myUnits.filter(u => outUnitIds.has(u.id)).length;
+    } else {                              // uncoded tool → manual qty fallback
+      owned = qtyMap[i.id] || 0;
+      out = outCounts[i.id] || 0;
+    }
+    return { id: i.id, name: i.name, owned, out, avail: owned - out };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+
+  if (!list.length) return html`<div class="card"><div class="empty">No tools registered yet. Add them in Register Tools.</div></div>`;
   return html`
     <div class="card">
-      ${rows.map(r => html`
-        <div class="row" key=${r.id}>
-          <div>
-            <div class="name">${r.items?.name || 'Item'} ${r.item_units?.unit_code ? html`<span class="mono" style="color:var(--hivis)">· ${r.item_units.unit_code}</span>` : (r.items?.item_code ? html`<span class="mono" style="color:var(--hivis)">· ${r.items.item_code}</span>` : (r.quantity > 1 ? `×${r.quantity}` : ''))}</div>
-            <div class="sub">
-              ${r.employees?.name || '—'}
-              ${r.project_vessel ? ' · ' + r.project_vessel : ''}<br/>
-              <span class="mono">out ${fmt(r.borrowed_at)}</span>
-            </div>
-          </div>
-          <button class="ret" onClick=${() => onReturn(r)}>Return</button>
+      <div style=${ST_ROW}>
+        <span style="font-size:11px;font-weight:800;letter-spacing:.5px;color:var(--ink-dim)">TOOL</span>
+        <span style=${ST_NUM + 'font-size:11px;color:var(--ink-dim)'}>OWNED</span>
+        <span style=${ST_NUM + 'font-size:11px;color:var(--ink-dim)'}>OUT</span>
+        <span style=${ST_NUM + 'font-size:11px;color:var(--ink-dim)'}>AVAIL</span>
+      </div>
+      ${list.map(r => html`
+        <div style=${ST_ROW} key=${r.id}>
+          <span class="name">${r.name}</span>
+          <span style=${ST_NUM}>${r.owned}</span>
+          <span style=${ST_NUM + (r.out > 0 ? 'color:var(--hivis)' : 'color:var(--ink-dim)')}>${r.out}</span>
+          <span style=${ST_NUM + (r.avail <= 0 ? 'color:var(--warn)' : '')}>${r.avail}</span>
         </div>`)}
     </div>`;
 }
@@ -579,11 +617,6 @@ function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onAddUni
                 </div>
                 ${myUnits.length > 0 && html`<div class="note" style="margin-top:6px">Continues from <span class="mono">${(() => { const s = myUnits[0].unit_code; const p = s.replace(/\d+$/,''); const d = (s.match(/\d+$/)?.[0].length)||3; return p + String(nextStart(myUnits, p, d)).padStart(d,'0'); })()}</span></div>`}
               </div>
-
-              <div style="display:flex;gap:8px;margin-top:12px">
-                <input value=${newCode} onInput=${e => setNewCode(e.target.value)} placeholder="or add one: GR-001" style="flex:1" />
-                <button class="ret" onClick=${() => addCode(i.id)}>+ Code</button>
-              </div>
             </div>`}
         </div>`;
       }) : html`<div class="empty">No equipment yet. Add some above.</div>`}
@@ -747,11 +780,14 @@ function App() {
           ? html`<${ActiveBorrows} rows=${open} onReturn=${doReturn} />`
           : html`<${RecentIssuances} rows=${issues} />`)}
 
-        ${tab==='stock' && html`<div>
-          <${SetStock} items=${sectionItems} sites=${sites} defaultSite=${siteFilter}
-            onSaved=${loadStock} toast=${flash} />
-          <${StockSummary} rows=${sectionStock} outCounts=${outCounts} />
-        </div>`}
+        ${tab==='stock' && (isBorrow
+          ? html`<${ToolStore} items=${sectionItems} units=${unitsRows} outUnitIds=${outUnitIds}
+              stockRows=${sectionStock} outCounts=${outCounts} />`
+          : html`<div>
+              <${SetStock} items=${sectionItems} sites=${sites} defaultSite=${siteFilter}
+                onSaved=${loadStock} toast=${flash} />
+              <${StockSummary} rows=${sectionStock} outCounts=${outCounts} />
+            </div>`)}
 
         ${tab==='items' && html`<${ManageItems} items=${sectionItems} units=${unitsRows} fixedType=${isBorrow ? 'borrow' : 'issue'}
           defaultSite=${siteFilter} onAddUnit=${addUnitFor} onAddUnits=${addUnitsFor} onRemoveUnit=${removeUnitById}
