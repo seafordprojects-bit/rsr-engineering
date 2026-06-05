@@ -55,6 +55,10 @@ async function deactivateUnit(id) {
   const { error } = await supabase.from('item_units').update({ active: false }).eq('id', id);
   if (error) throw error;
 }
+async function deleteUnitsForItem(itemId) {     // frees the codes when a tool is removed
+  const { error } = await supabase.from('item_units').delete().eq('item_id', itemId);
+  if (error) throw error;
+}
 // insert several borrow/issue lines in one go (one slip)
 async function createMany(rows) {
   const { error } = await supabase.from('borrow_issuance').insert(rows);
@@ -470,7 +474,7 @@ function StockSummary({ rows, outCounts }) {
 }
 
 // ---------- Manage equipment (add tool + codes in one step) ----------
-function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onAddUnits, onRemoveUnit, onChanged, toast }) {
+function ManageItems({ items, units, outUnitIds, fixedType, defaultSite, onAddUnit, onAddUnits, onRemoveUnit, onRemoveItem, onChanged, toast }) {
   const isTool = fixedType !== 'issue';
   const [name, setName] = useState('');
   const [qty, setQty]   = useState('');
@@ -545,8 +549,15 @@ function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onAddUni
   };
 
   const remove = async (i) => {
-    if (!confirm(`Remove "${i.name}" from the list?`)) return;
-    try { await deactivateItem(i.id); toast('Removed'); onChanged(); }
+    const myUnits = (units || []).filter(u => u.item_id === i.id);
+    const outNow = myUnits.filter(u => (outUnitIds || new Set()).has(u.id)).length;
+    if (outNow > 0) {
+      toast(`Can't remove "${i.name}" — ${outNow} unit${outNow>1?'s are':' is'} still borrowed. Return first.`, true);
+      return;
+    }
+    const msg = `Remove "${i.name}"${myUnits.length ? ` and its ${myUnits.length} code${myUnits.length>1?'s':''}` : ''}?\n\nThis cannot be undone.`;
+    if (!confirm(msg)) return;
+    try { await onRemoveItem(i); toast('Removed'); }
     catch (e) { toast('Error: ' + e.message, true); }
   };
 
@@ -697,6 +708,12 @@ function App() {
     loadUnits();
   };
   const removeUnitById = async (id) => { await deactivateUnit(id); loadUnits(); };
+  const removeItemFull = async (item) => {
+    try { await deleteUnitsForItem(item.id); }   // free its codes (skips if borrow history blocks it)
+    catch (_) { /* referenced by past borrows — leave codes, just hide the tool */ }
+    await deactivateItem(item.id);
+    loadItems(); loadUnits(); loadStock();
+  };
 
   const doReturn = (r) => setReturning(r);     // open the return slip
 
@@ -789,8 +806,8 @@ function App() {
               <${StockSummary} rows=${sectionStock} outCounts=${outCounts} />
             </div>`)}
 
-        ${tab==='items' && html`<${ManageItems} items=${sectionItems} units=${unitsRows} fixedType=${isBorrow ? 'borrow' : 'issue'}
-          defaultSite=${siteFilter} onAddUnit=${addUnitFor} onAddUnits=${addUnitsFor} onRemoveUnit=${removeUnitById}
+        ${tab==='items' && html`<${ManageItems} items=${sectionItems} units=${unitsRows} outUnitIds=${outUnitIds} fixedType=${isBorrow ? 'borrow' : 'issue'}
+          defaultSite=${siteFilter} onAddUnit=${addUnitFor} onAddUnits=${addUnitsFor} onRemoveUnit=${removeUnitById} onRemoveItem=${removeItemFull}
           onChanged=${() => { loadItems(); loadStock(); }} toast=${flash} />`}
         `;
       })()}
