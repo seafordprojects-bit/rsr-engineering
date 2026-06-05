@@ -9,15 +9,23 @@ import { useState, useEffect, useCallback } from 'preact/hooks';
 import {
   supabase,
   getSites, getEmployees, getItems,
-  createTransaction, returnItem,
+  createTransaction,
 } from './supabase.js';
 
-// Local copy of open-borrows (adds employee_id so Return can verify the borrower's passcode).
+// Local return (records who received it; server stamps the time).
+async function returnItem(txnId, condition, receivedBy) {
+  const { error } = await supabase.rpc('mark_returned', {
+    txn_id: txnId, cond: condition || null, received: receivedBy || null,
+  });
+  if (error) throw error;
+}
+
+// Local copy of open-borrows (adds employee_id + unit so Return can verify and show the code).
 async function getOpenBorrows(siteId) {
   let q = supabase
     .from('borrow_issuance')
-    .select('id, quantity, borrowed_at, due_at, project_vessel, issued_by, employee_id, ' +
-            'items(item_code, name, unit), employees(name)')
+    .select('id, quantity, borrowed_at, due_at, project_vessel, issued_by, employee_id, unit_id, ' +
+            'items(item_code, name, unit), employees(name), item_units(unit_code)')
     .eq('txn_type', 'borrow')
     .eq('status', 'out')
     .order('borrowed_at', { ascending: false })
@@ -26,6 +34,26 @@ async function getOpenBorrows(siteId) {
   const { data, error } = await q;
   if (error) throw error;
   return data;
+}
+// individual tool units (Grinder -> GR-001, GR-002) for a location
+async function getUnits(siteId) {
+  let q = supabase.from('item_units')
+    .select('id, unit_code, item_id')
+    .eq('active', true)
+    .order('unit_code')
+    .limit(3000);
+  if (siteId) q = q.eq('site_id', siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data;
+}
+async function addUnit(fields) {
+  const { error } = await supabase.from('item_units').insert(fields);
+  if (error) throw error;
+}
+async function deactivateUnit(id) {
+  const { error } = await supabase.from('item_units').update({ active: false }).eq('id', id);
+  if (error) throw error;
 }
 
 const fmt = (ts) => ts ? new Date(ts).toLocaleString('en-PH',
@@ -113,15 +141,15 @@ function Picker({ label, value, onChange, options, placeholder }) {
 }
 
 // ---------- New borrow / issuance form ----------
-function NewTransaction({ mode, sites, employees, items, defaultSite, onSaved, toast }) {
+function NewTransaction({ mode, sites, employees, items, units, outUnitIds, defaultSite, onSaved, toast }) {
   const isBorrow = mode === 'borrow';
   const [employeeId, setEmployeeId] = useState('');
   const [itemId, setItemId]   = useState('');
+  const [unitId, setUnitId]   = useState('');
   const [siteId, setSiteId]   = useState(defaultSite || '');
   const [qty, setQty]         = useState('1');
   const [issuedBy, setIssuedBy] = useState('');
   const [project, setProject]   = useState('');
-  const [due, setDue]           = useState('');
   const [notes, setNotes]       = useState('');
   const [pin, setPin]           = useState('');
   const [saving, setSaving]     = useState(false);
@@ -131,11 +159,19 @@ function NewTransaction({ mode, sites, employees, items, defaultSite, onSaved, t
   // Borrow tab shows only Tools; Issue tab shows only Materials.
   const itemOpts = items.filter(i => isBorrow ? i.track_type !== 'issue' : i.track_type === 'issue');
 
-  const reset = () => { setEmployeeId(''); setItemId(''); setQty('1');
-    setIssuedBy(''); setProject(''); setDue(''); setNotes(''); setPin(''); };
+  // Units for the selected tool (only the ones not currently out).
+  const itemUnits = (units || []).filter(u => u.item_id === itemId);
+  const hasUnits  = isBorrow && itemUnits.length > 0;
+  const availableUnits = itemUnits.filter(u => !outUnitIds.has(u.id));
+
+  const pickItem = (v) => { setItemId(v); setUnitId(''); };
+
+  const reset = () => { setEmployeeId(''); setItemId(''); setUnitId(''); setQty('1');
+    setIssuedBy(''); setProject(''); setNotes(''); setPin(''); };
 
   const submit = async () => {
     if (!employeeId || !itemId) { toast('Pick a person and an item', true); return; }
+    if (hasUnits && !unitId) { toast('Pick a unit code', true); return; }
     if (!pin) { toast('Enter your passcode', true); return; }
     setSaving(true);
     try {
@@ -146,12 +182,12 @@ function NewTransaction({ mode, sites, employees, items, defaultSite, onSaved, t
         txn_type: mode,
         employee_id: employeeId,
         item_id: itemId,
+        unit_id: unitId || null,
         site_id: siteId || null,
-        quantity: Number(qty) || 1,
+        quantity: hasUnits ? 1 : (Number(qty) || 1),
         status: isBorrow ? 'out' : 'issued',
         issued_by: issuedBy || null,
         project_vessel: project || null,
-        due_at: isBorrow && due ? new Date(due).toISOString() : null,
         notes: notes || null,
       });
       toast(isBorrow ? 'Tool borrowed out' : 'Material issued');
@@ -168,13 +204,19 @@ function NewTransaction({ mode, sites, employees, items, defaultSite, onSaved, t
         placeholder="Select employee…"
         options=${employees.map(e => ({ id:e.id, label:`${e.name}${e.id? ' · '+e.id:''}` }))} />
 
-      <${Picker} label=${isBorrow ? 'Tool' : 'Material'} value=${itemId} onChange=${setItemId}
+      <${Picker} label=${isBorrow ? 'Tool' : 'Material'} value=${itemId} onChange=${pickItem}
         placeholder=${isBorrow ? 'Select tool…' : 'Select material…'}
         options=${itemOpts.map(i => ({ id:i.id, label:`${i.name}${i.item_code? ' · '+i.item_code:''}` }))} />
 
-      <${Field} label="Quantity">
-        <input type="number" min="1" value=${qty} onInput=${e => setQty(e.target.value)} />
-      <//>
+      ${hasUnits && html`
+        <${Picker} label="Unit code" value=${unitId} onChange=${setUnitId}
+          placeholder=${availableUnits.length ? 'Select unit…' : 'No units available'}
+          options=${availableUnits.map(u => ({ id:u.id, label:u.unit_code }))} />`}
+
+      ${!hasUnits && html`
+        <${Field} label="Quantity">
+          <input type="number" min="1" value=${qty} onInput=${e => setQty(e.target.value)} />
+        <//>`}
 
       <${Field} label=${isBorrow ? 'Released by' : 'Issued by'}>
         <input value=${issuedBy} onInput=${e => setIssuedBy(e.target.value)} placeholder="Warehouse staff name" />
@@ -183,11 +225,6 @@ function NewTransaction({ mode, sites, employees, items, defaultSite, onSaved, t
       <${Field} label="Project / Vessel">
         <input value=${project} onInput=${e => setProject(e.target.value)} placeholder="e.g. MV Seafarer drydock" />
       <//>
-
-      ${isBorrow && html`
-        <${Field} label="Expected return (optional)">
-          <input type="datetime-local" value=${due} onInput=${e => setDue(e.target.value)} />
-        <//>`}
 
       <${Field} label="Notes">
         <textarea rows="2" value=${notes} onInput=${e => setNotes(e.target.value)}></textarea>
@@ -212,11 +249,11 @@ function ActiveBorrows({ rows, onReturn }) {
       ${rows.map(r => html`
         <div class="row" key=${r.id}>
           <div>
-            <div class="name">${r.items?.name || 'Item'} ${r.quantity > 1 ? `×${r.quantity}` : ''}</div>
+            <div class="name">${r.items?.name || 'Item'} ${r.item_units?.unit_code ? html`<span class="mono" style="color:var(--hivis)">· ${r.item_units.unit_code}</span>` : (r.quantity > 1 ? `×${r.quantity}` : '')}</div>
             <div class="sub">
               ${r.employees?.name || '—'}
               ${r.project_vessel ? ' · ' + r.project_vessel : ''}<br/>
-              <span class="mono">out ${fmt(r.borrowed_at)}${r.due_at ? ' · due ' + fmt(r.due_at) : ''}</span>
+              <span class="mono">out ${fmt(r.borrowed_at)}</span>
             </div>
           </div>
           <button class="ret" onClick=${() => onReturn(r)}>Return</button>
@@ -240,6 +277,48 @@ function RecentIssuances({ rows }) {
             </div>
           </div>
         </div>`)}
+    </div>`;
+}
+
+// ---------- Return slip (mirrors the borrow slip; confirm with passcode) ----------
+function SlipLine({ label, value }) {
+  return html`<div class="row"><div>
+    <div class="sub">${label}</div>
+    <div class="name">${value}</div>
+  </div></div>`;
+}
+function ReturnSlip({ row, onConfirm, onCancel }) {
+  const [pin, setPin] = useState('');
+  const [receivedBy, setReceivedBy] = useState('');
+  const [saving, setSaving] = useState(false);
+  const go = async () => {
+    if (!pin) return;
+    setSaving(true);
+    await onConfirm(row, pin, receivedBy, () => setSaving(false));
+  };
+  return html`
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:flex-start;justify-content:center;padding:18px;z-index:40;overflow:auto">
+      <div class="card" style="max-width:460px;width:100%;margin:24px 0 0">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span class="tag">RETURN SLIP</span>
+          <button onClick=${onCancel} style="background:none;border:none;color:var(--ink-dim);font-size:22px;cursor:pointer;line-height:1">✕</button>
+        </div>
+        <${SlipLine} label="Item" value=${html`${row.items?.name || 'Item'}${row.quantity > 1 ? ` ×${row.quantity}` : ''}`} />
+        ${row.item_units?.unit_code && html`<${SlipLine} label="Unit code" value=${html`<span class="mono" style="color:var(--hivis);font-weight:700">${row.item_units.unit_code}</span>`} />`}
+        <${SlipLine} label="Borrower" value=${row.employees?.name || '—'} />
+        ${row.project_vessel && html`<${SlipLine} label="Project / Vessel" value=${row.project_vessel} />`}
+        <${SlipLine} label="Borrowed" value=${html`<span class="mono" style="font-weight:600">${fmt(row.borrowed_at)}</span>`} />
+        <div style="height:6px"></div>
+        <${Field} label="Received by (staff)">
+          <input value=${receivedBy} onInput=${e => setReceivedBy(e.target.value)} placeholder="Warehouse staff name" />
+        <//>
+        <${Field} label="Borrower passcode (sign to confirm return)">
+          <input type="password" inputmode="numeric" autocomplete="off"
+            value=${pin} onInput=${e => setPin(e.target.value)} placeholder="Enter passcode" />
+        <//>
+        <button class="btn" disabled=${saving} onClick=${go}>${saving ? 'Confirming…' : 'Confirm Return'}</button>
+        <button class="btn ghost" style="margin-top:8px" onClick=${onCancel}>Cancel</button>
+      </div>
     </div>`;
 }
 
@@ -303,14 +382,16 @@ function StockSummary({ rows, outCounts }) {
     </div>`;
 }
 
-// ---------- Manage equipment (add / list / remove) ----------
-function ManageItems({ items, fixedType, defaultSite, onChanged, toast }) {
+// ---------- Manage equipment (add / list / remove + unit codes) ----------
+function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onRemoveUnit, onChanged, toast }) {
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
   const [unit, setUnit] = useState('pcs');
   const [qty, setQty]   = useState('');
   const [siteId, setSiteId] = useState(defaultSite || '');
   const [saving, setSaving] = useState(false);
+  const [openId, setOpenId] = useState(null);   // which tool is expanded for unit codes
+  const [newCode, setNewCode] = useState('');
   useEffect(() => { setSiteId(defaultSite || ''); }, [defaultSite]);
 
   const submit = async () => {
@@ -337,6 +418,14 @@ function ManageItems({ items, fixedType, defaultSite, onChanged, toast }) {
     catch (e) { toast('Error: ' + e.message, true); }
   };
 
+  const addCode = async (itemId) => {
+    if (!newCode.trim()) { toast('Enter a unit code', true); return; }
+    try { await onAddUnit(itemId, newCode.trim()); setNewCode(''); }
+    catch (e) { toast('Error: ' + e.message, true); }
+  };
+
+  const isTool = fixedType !== 'issue';
+
   return html`
     <div class="card">
       <${Field} label=${fixedType === 'issue' ? 'Material name' : 'Tool / equipment name'}>
@@ -353,14 +442,32 @@ function ManageItems({ items, fixedType, defaultSite, onChanged, toast }) {
 
     <div class="card">
       <label>${fixedType === 'issue' ? 'Materials' : 'Tools'} (${items.length})</label>
-      ${items.length ? items.map(i => html`
-        <div class="row" key=${i.id}>
-          <div>
-            <div class="name">${i.name}</div>
-            <div class="sub">${i.track_type === 'issue' ? 'Material' : 'Tool'}${i.item_code ? ' · ' + i.item_code : ''}</div>
+      ${items.length ? items.map(i => {
+        const myUnits = (units || []).filter(u => u.item_id === i.id);
+        const expanded = openId === i.id;
+        return html`
+        <div key=${i.id} style="border-bottom:1px solid var(--line)">
+          <div class="row" style="border-bottom:none">
+            <div onClick=${isTool ? (() => setOpenId(expanded ? null : i.id)) : null} style=${isTool ? 'cursor:pointer' : ''}>
+              <div class="name">${i.name} ${isTool ? html`<span class="mono" style="color:var(--ink-dim);font-weight:400">${myUnits.length ? '· ' + myUnits.length + ' unit' + (myUnits.length>1?'s':'') : '· tap to add codes'}</span>` : ''}</div>
+              <div class="sub">${isTool ? 'Tool' : 'Material'}${i.item_code ? ' · ' + i.item_code : ''}</div>
+            </div>
+            <button class="ret" onClick=${() => remove(i)}>Remove</button>
           </div>
-          <button class="ret" onClick=${() => remove(i)}>Remove</button>
-        </div>`) : html`<div class="empty">No equipment yet. Add some above.</div>`}
+          ${isTool && expanded && html`
+            <div style="padding:4px 0 14px">
+              ${myUnits.map(u => html`
+                <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0">
+                  <span class="mono">${u.unit_code}</span>
+                  <button onClick=${() => onRemoveUnit(u.id)} style="background:none;border:none;color:var(--warn);cursor:pointer;font-size:13px">remove</button>
+                </div>`)}
+              <div style="display:flex;gap:8px;margin-top:6px">
+                <input value=${newCode} onInput=${e => setNewCode(e.target.value)} placeholder="e.g. GR-001" style="flex:1" />
+                <button class="ret" onClick=${() => addCode(i.id)}>+ Code</button>
+              </div>
+            </div>`}
+        </div>`;
+      }) : html`<div class="empty">No equipment yet. Add some above.</div>`}
     </div>`;
 }
 
@@ -376,6 +483,8 @@ function App() {
   const [issues, setIssues] = useState([]);
   const [stockRows, setStockRows] = useState([]);
   const [outCounts, setOutCounts] = useState({});
+  const [unitsRows, setUnitsRows] = useState([]);
+  const [returning, setReturning] = useState(null);  // borrow row being returned
   const [toast, setToast] = useState(null);
   const [fatal, setFatal] = useState(null);
 
@@ -402,6 +511,10 @@ function App() {
     try { setItems(await getItems()); } catch (e) { flash('Items load failed: ' + e.message, true); }
   }, []);
 
+  const loadUnits = useCallback(async () => {
+    try { setUnitsRows(await getUnits(siteFilter)); } catch (e) { flash('Units load failed: ' + e.message, true); }
+  }, [siteFilter]);
+
   useEffect(() => { (async () => {
     try {
       const [s, e, i] = await Promise.all([getSites(), getEmployees(), getItems()]);
@@ -419,16 +532,25 @@ function App() {
   useEffect(() => { loadOpen(); }, [loadOpen]);
   useEffect(() => { loadIssues(); }, [loadIssues]);
   useEffect(() => { loadStock(); }, [loadStock]);
+  useEffect(() => { loadUnits(); }, [loadUnits]);
 
-  const doReturn = async (r) => {
-    const pin = prompt(`Return "${r.items?.name}". Enter ${r.employees?.name || 'borrower'}'s passcode to confirm:`);
-    if (pin === null) return;
+  const outUnitIds = new Set(open.map(o => o.unit_id).filter(Boolean));
+
+  const addUnitFor = async (itemId, code) => {
+    await addUnit({ item_id: itemId, site_id: siteFilter || null, unit_code: code });
+    loadUnits();
+  };
+  const removeUnitById = async (id) => { await deactivateUnit(id); loadUnits(); };
+
+  const doReturn = (r) => setReturning(r);     // open the return slip
+
+  const confirmReturn = async (row, pin, receivedBy, done) => {
     try {
-      const ok = await verifyPin(r.employee_id, pin);
-      if (!ok) { flash('Wrong passcode', true); return; }
-      await returnItem(r.id, 'Returned');
-      flash('Returned'); loadOpen();
-    } catch (e) { flash('Error: ' + e.message, true); }
+      const ok = await verifyPin(row.employee_id, pin);
+      if (!ok) { flash('Wrong passcode', true); done(); return; }
+      await returnItem(row.id, 'Returned', receivedBy);
+      flash('Returned'); setReturning(null); loadOpen();
+    } catch (e) { flash('Error: ' + e.message, true); done(); }
   };
 
   const chooseLocation = (site) => {            // set once for this device
@@ -475,7 +597,7 @@ function App() {
       ${activeSite && html`<div>
 
       <div class="tabs" style="margin-bottom:10px">
-        <button class=${section==='borrow'?'on':''} onClick=${() => { setSection('borrow'); setTab('form'); }}>BORROW</button>
+        <button class=${section==='borrow'?'on':''} onClick=${() => { setSection('borrow'); setTab('form'); }}>TOOL INVENTORY</button>
         <button class=${section==='issue'?'on':''}  onClick=${() => { setSection('issue');  setTab('form'); }}>ISSUE</button>
       </div>
 
@@ -487,14 +609,15 @@ function App() {
         const reloadForm = isBorrow ? loadOpen : loadIssues;
         return html`
         <div class="tabs" style="flex-wrap:wrap">
-          <button class=${tab==='form'?'on':''}   onClick=${() => setTab('form')}>${isBorrow ? 'Borrow' : 'Issue'}</button>
-          <button class=${tab==='active'?'on':''} onClick=${() => setTab('active')}>${isBorrow ? `Active (${open.length})` : `Recent (${issues.length})`}</button>
-          <button class=${tab==='stock'?'on':''}  onClick=${() => setTab('stock')}>Stock</button>
-          <button class=${tab==='items'?'on':''}  onClick=${() => setTab('items')}>Items</button>
+          <button class=${tab==='form'?'on':''}   onClick=${() => setTab('form')}>${isBorrow ? 'Borrow Slip' : 'Issue'}</button>
+          <button class=${tab==='active'?'on':''} onClick=${() => setTab('active')}>${isBorrow ? `Return Slip (${open.length})` : `Recent (${issues.length})`}</button>
+          <button class=${tab==='stock'?'on':''}  onClick=${() => setTab('stock')}>${isBorrow ? 'In Store' : 'Stock'}</button>
+          <button class=${tab==='items'?'on':''}  onClick=${() => setTab('items')}>${isBorrow ? 'Register Tools' : 'Items'}</button>
         </div>
 
         ${tab==='form' && html`<${NewTransaction} mode=${mode}
           sites=${sites} employees=${employees} items=${sectionItems}
+          units=${unitsRows} outUnitIds=${outUnitIds}
           defaultSite=${siteFilter} onSaved=${reloadForm} toast=${flash} />`}
 
         ${tab==='active' && (isBorrow
@@ -507,14 +630,18 @@ function App() {
           <${StockSummary} rows=${sectionStock} outCounts=${outCounts} />
         </div>`}
 
-        ${tab==='items' && html`<${ManageItems} items=${sectionItems} fixedType=${isBorrow ? 'borrow' : 'issue'}
-          defaultSite=${siteFilter} onChanged=${() => { loadItems(); loadStock(); }} toast=${flash} />`}
+        ${tab==='items' && html`<${ManageItems} items=${sectionItems} units=${unitsRows} fixedType=${isBorrow ? 'borrow' : 'issue'}
+          defaultSite=${siteFilter} onAddUnit=${addUnitFor} onRemoveUnit=${removeUnitById}
+          onChanged=${() => { loadItems(); loadStock(); }} toast=${flash} />`}
         `;
       })()}
 
       <p class="note">Tip: add your ${section==='issue' ? 'materials' : 'tools'} in the <b>Items</b> tab — they appear in the dropdowns automatically.</p>
       </div>`}
     </div>
+
+    ${returning && html`<${ReturnSlip} row=${returning}
+      onConfirm=${confirmReturn} onCancel=${() => setReturning(null)} />`}
 
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
   `;
