@@ -11,7 +11,7 @@ import { createClient } from '@supabase/supabase-js';
 // (Supabase → Project Settings → API → "anon public").
 // The anon key is safe to ship in frontend code — it is NOT the secret.
 const SUPABASE_URL  = 'https://azfmpleswqixaslvcito.supabase.co';
-const SUPABASE_ANON_KEY = 'PASTE_YOUR_ANON_PUBLIC_KEY_HERE';
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImF6Zm1wbGVzd3FpeGFzbHZjaXRvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgwNDEwODMsImV4cCI6MjA5MzYxNzA4M30.JiK3xuihhqGoiiv8oUf14e-Mcggrd7gy368QgR0YYsA';
 // -------------------------------------------------------------
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
