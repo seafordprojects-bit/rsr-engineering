@@ -375,7 +375,11 @@ function App() {
     try {
       const [s, e, i] = await Promise.all([getSites(), getEmployees(), getItems()]);
       setSites(s); setEmployees(e); setItems(i);
-      if (s.length) setSiteFilter(s[0].id);     // start on the first location, no "All"
+      // Lock to the location saved on THIS device (set once on first use).
+      const saved = localStorage.getItem('rsr_location');
+      const match = saved && s.find(x => x.name === saved);
+      if (match) setSiteFilter(match.id);
+      // if none saved/invalid, leave empty → the one-time chooser shows
     } catch (err) {
       setFatal(err.message);   // usually a missing anon key or RLS — see banner
     }
@@ -392,13 +396,28 @@ function App() {
     catch (e) { flash('Error: ' + e.message, true); }
   };
 
+  const chooseLocation = (site) => {            // set once for this device
+    localStorage.setItem('rsr_location', site.name);
+    setSiteFilter(site.id);
+  };
+  const changeLocation = () => {                // rarely needed; for fixing a mistake
+    if (!confirm('Change this tablet’s location? Only do this if it was set wrong.')) return;
+    localStorage.removeItem('rsr_location');
+    setSiteFilter('');
+  };
+
+  const activeSite = sites.find(s => s.id === siteFilter);
+
   return html`
     <header class="app">
       <div class="wrap">
-        <div class="brand"><b>RSR</b><span class="tag">BORROW · ISSUE</span></div>
-        <div class="site-row" style="display:flex;gap:8px">
-          ${sites.map(s => html`<button key=${s.id} style=${siteFilter===s.id ? LOC_ON : LOC}
-            onClick=${() => setSiteFilter(s.id)}>${s.name}</button>`)}
+        <div class="brand" style="display:flex;align-items:center;justify-content:space-between">
+          <span><b>RSR</b><span class="tag">BORROW · ISSUE</span></span>
+          ${activeSite && html`<span style="display:flex;align-items:center;gap:8px">
+            <span class="tag" style="background:var(--panel-2);color:var(--ink)">📍 ${activeSite.name}</span>
+            <button onClick=${changeLocation} title="Change location"
+              style="background:none;border:none;color:var(--ink-dim);font-size:13px;cursor:pointer">change</button>
+          </span>`}
         </div>
       </div>
     </header>
@@ -409,6 +428,16 @@ function App() {
         Check that you pasted your <b>anon public key</b> in <span class="mono">supabase.js</span>
         and that you ran <span class="mono">schema.sql</span>.
       </div>`}
+
+      ${!fatal && !activeSite && sites.length > 0 && html`
+        <div class="card" style="text-align:center;margin-top:30px">
+          <h2 style="margin:6px 0 4px">Set up this tablet</h2>
+          <p class="note" style="margin-bottom:18px">Which location is this device for? This is set once and remembered on this tablet.</p>
+          ${sites.map(s => html`
+            <button key=${s.id} class="btn" style="margin-bottom:10px" onClick=${() => chooseLocation(s)}>📍 ${s.name}</button>`)}
+        </div>`}
+
+      ${activeSite && html`<div>
 
       <div class="tabs" style="margin-bottom:10px">
         <button class=${section==='borrow'?'on':''} onClick=${() => { setSection('borrow'); setTab('form'); }}>BORROW</button>
@@ -449,6 +478,7 @@ function App() {
       })()}
 
       <p class="note">Tip: add your ${section==='issue' ? 'materials' : 'tools'} in the <b>Items</b> tab — they appear in the dropdowns automatically.</p>
+      </div>`}
     </div>
 
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
