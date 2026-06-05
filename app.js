@@ -182,15 +182,17 @@ function NewTransaction({ mode, sites, employees, items, units, outUnitIds, defa
   const pickItem = (v) => { setItemId(v); setUnitId(''); };
 
   const itemName = (id) => (items.find(i => i.id === id)?.name) || 'Item';
+  const itemCode = (id) => (items.find(i => i.id === id)?.item_code) || '';
   const unitCode = (id) => (units.find(u => u.id === id)?.unit_code) || '';
 
   const addLine = () => {
     if (!itemId) { toast('Pick an item first', true); return; }
     if (hasUnits && !unitId) { toast('Pick a unit code', true); return; }
+    const codeTxt = unitId ? unitCode(unitId) : itemCode(itemId);
     setCart([...cart, {
       itemId, unitId: unitId || null,
       qty: hasUnits ? 1 : (Number(qty) || 1),
-      label: itemName(itemId) + (unitId ? ' · ' + unitCode(unitId) : (Number(qty) > 1 ? ' ×' + qty : '')),
+      label: itemName(itemId) + (codeTxt ? ' · ' + codeTxt : (Number(qty) > 1 ? ' ×' + qty : '')),
     }]);
     setItemId(''); setUnitId(''); setQty('1');
   };
@@ -295,7 +297,7 @@ function ActiveBorrows({ rows, onReturn }) {
       ${rows.map(r => html`
         <div class="row" key=${r.id}>
           <div>
-            <div class="name">${r.items?.name || 'Item'} ${r.item_units?.unit_code ? html`<span class="mono" style="color:var(--hivis)">· ${r.item_units.unit_code}</span>` : (r.quantity > 1 ? `×${r.quantity}` : '')}</div>
+            <div class="name">${r.items?.name || 'Item'} ${r.item_units?.unit_code ? html`<span class="mono" style="color:var(--hivis)">· ${r.item_units.unit_code}</span>` : (r.items?.item_code ? html`<span class="mono" style="color:var(--hivis)">· ${r.items.item_code}</span>` : (r.quantity > 1 ? `×${r.quantity}` : ''))}</div>
             <div class="sub">
               ${r.employees?.name || '—'}
               ${r.project_vessel ? ' · ' + r.project_vessel : ''}<br/>
@@ -351,6 +353,7 @@ function ReturnSlip({ row, onConfirm, onCancel }) {
         </div>
         <${SlipLine} label="Item" value=${html`${row.items?.name || 'Item'}${row.quantity > 1 ? ` ×${row.quantity}` : ''}`} />
         ${row.item_units?.unit_code && html`<${SlipLine} label="Unit code" value=${html`<span class="mono" style="color:var(--hivis);font-weight:700">${row.item_units.unit_code}</span>`} />`}
+        ${!row.item_units?.unit_code && row.items?.item_code && html`<${SlipLine} label="Code" value=${html`<span class="mono" style="color:var(--hivis);font-weight:700">${row.items.item_code}</span>`} />`}
         <${SlipLine} label="Borrower" value=${row.employees?.name || '—'} />
         ${row.project_vessel && html`<${SlipLine} label="Project / Vessel" value=${row.project_vessel} />`}
         <${SlipLine} label="Borrowed" value=${html`<span class="mono" style="font-weight:600">${fmt(row.borrowed_at)}</span>`} />
