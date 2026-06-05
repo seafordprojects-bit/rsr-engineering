@@ -7,12 +7,49 @@
 import { html, render } from 'htm/preact';
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import {
+  supabase,
   getSites, getEmployees, getItems, getOpenBorrows,
   createTransaction, returnItem,
 } from './supabase.js';
 
 const fmt = (ts) => ts ? new Date(ts).toLocaleString('en-PH',
   { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+
+// ---- stock data (kept here so supabase.js stays untouched) ----
+async function getStock(siteId) {
+  let q = supabase
+    .from('site_inventory')
+    .select('qty_owned, site_id, items(id, item_code, name, unit)')
+    .limit(1000);                                  // bounded
+  if (siteId) q = q.eq('site_id', siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data;
+}
+// how many of each item are currently OUT (for the available calc)
+async function getOutCounts(siteId) {
+  let q = supabase
+    .from('borrow_issuance')
+    .select('item_id, quantity')
+    .eq('status', 'out')
+    .limit(1000);
+  if (siteId) q = q.eq('site_id', siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  const map = {};
+  (data || []).forEach(r => { map[r.item_id] = (map[r.item_id] || 0) + Number(r.quantity || 0); });
+  return map;
+}
+async function setStock(itemId, siteId, qty) {
+  const { error } = await supabase
+    .from('site_inventory')
+    .upsert({ item_id: itemId, site_id: siteId, qty_owned: Number(qty) || 0 },
+            { onConflict: 'site_id,item_id' });
+  if (error) throw error;
+}
+
+const ST_ROW = 'display:grid;grid-template-columns:1fr 58px 44px 58px;gap:8px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);';
+const ST_NUM = 'text-align:right;font-family:"JetBrains Mono",monospace;font-weight:700;';
 
 // ---------- reusable bits ----------
 function Field({ label, children }) {
@@ -133,6 +170,70 @@ function ActiveBorrows({ rows, onReturn }) {
     </div>`;
 }
 
+// ---------- Set stock (enter how many a site owns) ----------
+function SetStock({ items, sites, defaultSite, onSaved, toast }) {
+  const [itemId, setItemId] = useState('');
+  const [siteId, setSiteId] = useState(defaultSite || '');
+  const [qty, setQty]       = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setSiteId(defaultSite || ''); }, [defaultSite]);
+
+  const submit = async () => {
+    if (!itemId || !siteId) { toast('Pick an item and a site', true); return; }
+    setSaving(true);
+    try { await setStock(itemId, siteId, qty); toast('Stock updated'); setQty(''); onSaved(); }
+    catch (e) { toast('Error: ' + e.message, true); }
+    finally { setSaving(false); }
+  };
+
+  return html`
+    <div class="card">
+      <${Picker} label="Item" value=${itemId} onChange=${setItemId} placeholder="Select item…"
+        options=${items.map(i => ({ id:i.id, label:`${i.name}${i.item_code? ' · '+i.item_code:''}` }))} />
+      <div class="two">
+        <${Picker} label="Site" value=${siteId} onChange=${setSiteId} placeholder="Site…"
+          options=${sites.map(s => ({ id:s.id, label:s.name }))} />
+        <${Field} label="Qty owned">
+          <input type="number" min="0" value=${qty} onInput=${e => setQty(e.target.value)} placeholder="0" />
+        <//>
+      </div>
+      <button class="btn ghost" disabled=${saving} onClick=${submit}>${saving ? 'Saving…' : 'Set Stock'}</button>
+    </div>`;
+}
+
+// ---------- Per-site inventory summary ----------
+function StockSummary({ rows, outCounts }) {
+  const byItem = {};
+  rows.forEach(r => {
+    const it = r.items; if (!it) return;
+    if (!byItem[it.id]) byItem[it.id] = { name: it.name, code: it.item_code, owned: 0 };
+    byItem[it.id].owned += Number(r.qty_owned || 0);   // sums across sites when "All sites"
+  });
+  const list = Object.entries(byItem).map(([id, v]) => {
+    const out = outCounts[id] || 0;
+    return { id, ...v, out, avail: v.owned - out };
+  }).sort((a, b) => a.name.localeCompare(b.name));
+
+  if (!list.length) return html`<div class="card"><div class="empty">No stock recorded yet. Use “Set Stock” above to add quantities.</div></div>`;
+
+  return html`
+    <div class="card">
+      <div style=${ST_ROW + 'border-bottom:1px solid var(--line);'}>
+        <span style="font-size:11px;font-weight:800;letter-spacing:.5px;color:var(--ink-dim)">ITEM</span>
+        <span style=${ST_NUM + 'font-size:11px;color:var(--ink-dim)'}>OWNED</span>
+        <span style=${ST_NUM + 'font-size:11px;color:var(--ink-dim)'}>OUT</span>
+        <span style=${ST_NUM + 'font-size:11px;color:var(--ink-dim)'}>AVAIL</span>
+      </div>
+      ${list.map(r => html`
+        <div style=${ST_ROW} key=${r.id}>
+          <span class="name">${r.name}${r.code ? html` <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.code}</span>` : ''}</span>
+          <span style=${ST_NUM}>${r.owned}</span>
+          <span style=${ST_NUM + (r.out > 0 ? 'color:var(--hivis)' : 'color:var(--ink-dim)')}>${r.out}</span>
+          <span style=${ST_NUM + (r.avail <= 0 ? 'color:var(--warn)' : '')}>${r.avail}</span>
+        </div>`)}
+    </div>`;
+}
+
 // ---------- App shell ----------
 function App() {
   const [tab, setTab] = useState('borrow');     // borrow | issue | active
@@ -141,6 +242,8 @@ function App() {
   const [items, setItems] = useState([]);
   const [siteFilter, setSiteFilter] = useState('');
   const [open, setOpen] = useState([]);
+  const [stockRows, setStockRows] = useState([]);
+  const [outCounts, setOutCounts] = useState({});
   const [toast, setToast] = useState(null);
   const [fatal, setFatal] = useState(null);
 
@@ -149,6 +252,13 @@ function App() {
   const loadOpen = useCallback(async () => {
     try { setOpen(await getOpenBorrows(siteFilter)); }
     catch (e) { flash('Load failed: ' + e.message, true); }
+  }, [siteFilter]);
+
+  const loadStock = useCallback(async () => {
+    try {
+      const [st, oc] = await Promise.all([getStock(siteFilter), getOutCounts(siteFilter)]);
+      setStockRows(st); setOutCounts(oc);
+    } catch (e) { flash('Stock load failed: ' + e.message, true); }
   }, [siteFilter]);
 
   useEffect(() => { (async () => {
@@ -161,6 +271,7 @@ function App() {
   })(); }, []);
 
   useEffect(() => { loadOpen(); }, [loadOpen]);
+  useEffect(() => { loadStock(); }, [loadStock]);
 
   const doReturn = async (r) => {
     const cond = prompt(`Return "${r.items?.name}". Condition? (optional)`, 'OK');
@@ -193,6 +304,7 @@ function App() {
         <button class=${tab==='borrow'?'on':''} onClick=${() => setTab('borrow')}>Borrow</button>
         <button class=${tab==='issue'?'on':''}  onClick=${() => setTab('issue')}>Issue</button>
         <button class=${tab==='active'?'on':''} onClick=${() => setTab('active')}>Active (${open.length})</button>
+        <button class=${tab==='stock'?'on':''}  onClick=${() => setTab('stock')}>Stock</button>
       </div>
 
       ${tab==='borrow' && html`<${NewTransaction} mode="borrow"
@@ -204,6 +316,12 @@ function App() {
         defaultSite=${siteFilter} onSaved=${loadOpen} toast=${flash} />`}
 
       ${tab==='active' && html`<${ActiveBorrows} rows=${open} onReturn=${doReturn} />`}
+
+      ${tab==='stock' && html`<div>
+        <${SetStock} items=${items} sites=${sites} defaultSite=${siteFilter}
+          onSaved=${loadStock} toast=${flash} />
+        <${StockSummary} rows=${stockRows} outCounts=${outCounts} />
+      </div>`}
 
       <p class="note">Tip: add real employees & items in Supabase (Table Editor) — they appear in the pickers automatically.</p>
     </div>
