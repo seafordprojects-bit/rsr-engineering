@@ -529,7 +529,6 @@ function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onAddUni
         <div style="display:flex;gap:8px">
           <input value=${prefix} onInput=${e => setPrefix(e.target.value)} placeholder="Prefix e.g. TL" style="flex:1.4" />
           <input type="number" value=${count} onInput=${e => setCount(e.target.value)} placeholder="How many" style="flex:1" />
-          <input type="number" value=${digits} onInput=${e => setDigits(e.target.value)} placeholder="Digits" style="width:80px" />
         </div>
         ${addPreview && html`<div class="note" style="margin:6px 0 12px">Will create: <span class="mono">${addPreview}</span></div>`}
       `}
@@ -568,10 +567,7 @@ function ManageItems({ items, units, fixedType, defaultSite, onAddUnit, onAddUni
                   <input value=${prefix} onInput=${e => setPrefix(e.target.value)} placeholder=${myUnits[0] ? 'Prefix e.g. ' + (myUnits[0].unit_code.replace(/[0-9]+$/,'')) : 'Prefix e.g. TL'} style="flex:1.4" />
                   <input type="number" value=${count} onInput=${e => setCount(e.target.value)} placeholder="How many" style="flex:1" />
                 </div>
-                <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-                  <input type="number" value=${digits} onInput=${e => setDigits(e.target.value)} placeholder="Digits" style="width:90px" />
-                  <button class="btn" style="flex:1" onClick=${() => generateMore(i.id, myUnits)}>Add Codes</button>
-                </div>
+                <button class="btn" style="margin-top:8px" onClick=${() => generateMore(i.id, myUnits)}>Add Codes</button>
               </div>
 
               <div style="display:flex;gap:8px;margin-top:12px">
