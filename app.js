@@ -47,6 +47,15 @@ async function setStock(itemId, siteId, qty) {
             { onConflict: 'site_id,item_id' });
   if (error) throw error;
 }
+async function addItem(fields) {
+  const { data, error } = await supabase.from('items').insert(fields).select().single();
+  if (error) throw error;
+  return data;
+}
+async function deactivateItem(id) {              // soft-delete: keeps borrow history intact
+  const { error } = await supabase.from('items').update({ active: false }).eq('id', id);
+  if (error) throw error;
+}
 
 const ST_ROW = 'display:grid;grid-template-columns:1fr 58px 44px 58px;gap:8px;align-items:center;padding:11px 0;border-bottom:1px solid var(--line);';
 const ST_NUM = 'text-align:right;font-family:"JetBrains Mono",monospace;font-weight:700;';
@@ -234,6 +243,80 @@ function StockSummary({ rows, outCounts }) {
     </div>`;
 }
 
+// ---------- Manage equipment (add / list / remove) ----------
+function ManageItems({ items, sites, defaultSite, onChanged, toast }) {
+  const [name, setName] = useState('');
+  const [code, setCode] = useState('');
+  const [type, setType] = useState('borrow');
+  const [unit, setUnit] = useState('pcs');
+  const [qty, setQty]   = useState('');
+  const [siteId, setSiteId] = useState(defaultSite || '');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => { setSiteId(defaultSite || ''); }, [defaultSite]);
+
+  const submit = async () => {
+    if (!name.trim()) { toast('Enter an equipment name', true); return; }
+    setSaving(true);
+    try {
+      const item = await addItem({
+        name: name.trim(),
+        item_code: code.trim() || null,
+        unit: unit.trim() || 'pcs',
+        track_type: type,
+      });
+      if (qty && siteId) await setStock(item.id, siteId, qty);  // optional one-step starting stock
+      toast('Equipment added');
+      setName(''); setCode(''); setQty('');
+      onChanged();
+    } catch (e) { toast('Error: ' + e.message, true); }
+    finally { setSaving(false); }
+  };
+
+  const remove = async (i) => {
+    if (!confirm(`Remove "${i.name}" from the list?`)) return;
+    try { await deactivateItem(i.id); toast('Removed'); onChanged(); }
+    catch (e) { toast('Error: ' + e.message, true); }
+  };
+
+  return html`
+    <div class="card">
+      <${Field} label="Equipment name">
+        <input value=${name} onInput=${e => setName(e.target.value)} placeholder="e.g. Angle Grinder" />
+      <//>
+      <div class="two">
+        <${Field} label="Code (optional)">
+          <input value=${code} onInput=${e => setCode(e.target.value)} placeholder="TOOL-001" />
+        <//>
+        <${Field} label="Type">
+          <select value=${type} onChange=${e => setType(e.target.value)}>
+            <option value="borrow">Tool (borrowed)</option>
+            <option value="issue">Material (consumed)</option>
+          </select>
+        <//>
+      </div>
+      <div class="two">
+        <${Field} label="Starting qty (optional)">
+          <input type="number" min="0" value=${qty} onInput=${e => setQty(e.target.value)} placeholder="0" />
+        <//>
+        <${Picker} label="At site" value=${siteId} onChange=${setSiteId} placeholder="Site…"
+          options=${sites.map(s => ({ id:s.id, label:s.name }))} />
+      </div>
+      <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Adding…' : 'Add Equipment'}</button>
+    </div>
+
+    <div class="card">
+      <label>Current equipment (${items.length})</label>
+      ${items.length ? items.map(i => html`
+        <div class="row" key=${i.id}>
+          <div>
+            <div class="name">${i.name}</div>
+            <div class="sub">${i.track_type === 'issue' ? 'Material' : 'Tool'}${i.item_code ? ' · ' + i.item_code : ''}</div>
+          </div>
+          <button class="ret" onClick=${() => remove(i)}>Remove</button>
+        </div>`) : html`<div class="empty">No equipment yet. Add some above.</div>`}
+    </div>`;
+}
+
 // ---------- App shell ----------
 function App() {
   const [tab, setTab] = useState('borrow');     // borrow | issue | active
@@ -260,6 +343,10 @@ function App() {
       setStockRows(st); setOutCounts(oc);
     } catch (e) { flash('Stock load failed: ' + e.message, true); }
   }, [siteFilter]);
+
+  const loadItems = useCallback(async () => {
+    try { setItems(await getItems()); } catch (e) { flash('Items load failed: ' + e.message, true); }
+  }, []);
 
   useEffect(() => { (async () => {
     try {
@@ -300,11 +387,12 @@ function App() {
         and that you ran <span class="mono">schema.sql</span>.
       </div>`}
 
-      <div class="tabs">
+      <div class="tabs" style="flex-wrap:wrap">
         <button class=${tab==='borrow'?'on':''} onClick=${() => setTab('borrow')}>Borrow</button>
         <button class=${tab==='issue'?'on':''}  onClick=${() => setTab('issue')}>Issue</button>
         <button class=${tab==='active'?'on':''} onClick=${() => setTab('active')}>Active (${open.length})</button>
         <button class=${tab==='stock'?'on':''}  onClick=${() => setTab('stock')}>Stock</button>
+        <button class=${tab==='items'?'on':''}  onClick=${() => setTab('items')}>Items</button>
       </div>
 
       ${tab==='borrow' && html`<${NewTransaction} mode="borrow"
@@ -323,7 +411,10 @@ function App() {
         <${StockSummary} rows=${stockRows} outCounts=${outCounts} />
       </div>`}
 
-      <p class="note">Tip: add real employees & items in Supabase (Table Editor) — they appear in the pickers automatically.</p>
+      ${tab==='items' && html`<${ManageItems} items=${items} sites=${sites}
+        defaultSite=${siteFilter} onChanged=${() => { loadItems(); loadStock(); }} toast=${flash} />`}
+
+      <p class="note">Tip: add your tools & equipment in the <b>Items</b> tab — they appear in every dropdown automatically.</p>
     </div>
 
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
