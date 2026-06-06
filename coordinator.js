@@ -10,7 +10,8 @@ import { supabase, getSites } from './supabase.js';
 // ---------- data ----------
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, name, position, pin, contact, started_on, sick_leave, vacation_leave, active').order('name').limit(2000);
+    .select('id, code, name, dept, position, phone, network, home_site, pin, started_on, sl_balance, vl_balance, is_suspended')
+    .order('name').limit(2000);
   if (error) throw error;
   return data;
 }
@@ -67,11 +68,12 @@ function Lock({ onUnlock, toast }) {
 
 // ---------- Personnel ----------
 function Personnel({ employees, onReload, toast }) {
-  const [code, setCode] = useState('');           // holds existing id when editing
+  const [code, setCode] = useState('');           // holds existing code when editing
+  const [editKey, setEditKey] = useState(null);   // holds the row uuid when editing
   const [empType, setEmpType] = useState('RSR');   // RSR = regular, PEM = pakyaw
   const [name, setName] = useState('');
   const [position, setPosition] = useState('');
-  const [contact, setContact] = useState('');
+  const [phone, setPhone] = useState('');
   const [started, setStarted] = useState('');
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
@@ -80,9 +82,9 @@ function Personnel({ employees, onReload, toast }) {
   const nextCode = (prefix) => {
     let max = 0;
     (employees || []).forEach(e => {
-      const id = e.id || '';
-      if (id.startsWith(prefix + ' ')) {
-        const n = parseInt(id.slice(prefix.length + 1), 10);
+      const c = e.code || '';
+      if (c.startsWith(prefix + ' ')) {
+        const n = parseInt(c.slice(prefix.length + 1), 10);
         if (!isNaN(n) && n > max) max = n;
       }
     });
@@ -91,17 +93,17 @@ function Personnel({ employees, onReload, toast }) {
   const autoCode = nextCode(empType);              // shown while adding
   const shownCode = editId ? code : autoCode;
 
-  const reset = () => { setCode(''); setEmpType('RSR'); setName(''); setPosition(''); setContact(''); setStarted(''); setEditId(null); };
+  const reset = () => { setCode(''); setEditKey(null); setEmpType('RSR'); setName(''); setPosition(''); setPhone(''); setStarted(''); setEditId(null); };
 
   const submit = async () => {
     if (!name.trim()) { toast('Enter a name', true); return; }
     setSaving(true);
     try {
       if (editId) {
-        await updateEmployee(editId, { name: name.trim(), position: position.trim() || null, contact: contact.trim() || null, started_on: started || null });
+        await updateEmployee(editKey, { name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null });
         toast('Employee updated');
       } else {
-        await addEmployee({ id: autoCode, name: name.trim(), position: position.trim() || null, contact: contact.trim() || null, started_on: started || null });
+        await addEmployee({ id: crypto.randomUUID(), code: autoCode, name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null, sl_balance: 0, vl_balance: 0 });
         toast('Employee added · ' + autoCode);
       }
       reset(); onReload();
@@ -109,7 +111,7 @@ function Personnel({ employees, onReload, toast }) {
     finally { setSaving(false); }
   };
 
-  const edit = (e) => { setEditId(e.id); setCode(e.id); setName(e.name || ''); setPosition(e.position || ''); setContact(e.contact || ''); setStarted(e.started_on || ''); };
+  const edit = (e) => { setEditId(e.code || e.id); setEditKey(e.id); setCode(e.code || ''); setName(e.name || ''); setPosition(e.position || ''); setPhone(e.phone || ''); setStarted(e.started_on || ''); };
 
   return html`
     <div class="card">
@@ -130,7 +132,7 @@ function Personnel({ employees, onReload, toast }) {
         <input value=${position} onInput=${e => setPosition(e.target.value)} placeholder="e.g. Fitter" />
       <//>
       <${Field} label="Contact number">
-        <input type="tel" inputmode="tel" value=${contact} onInput=${e => setContact(e.target.value)} placeholder="e.g. 0917 123 4567" />
+        <input type="tel" inputmode="tel" value=${phone} onInput=${e => setPhone(e.target.value)} placeholder="e.g. 0917 123 4567" />
       <//>
       <${Field} label="Date started working">
         <input type="date" value=${started} onInput=${e => setStarted(e.target.value)} />
@@ -144,9 +146,9 @@ function Personnel({ employees, onReload, toast }) {
       ${employees.length ? employees.map(e => html`
         <div class="row" key=${e.id}>
           <div>
-            <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.id}</span></div>
-            <div class="sub">${e.position || '—'}${e.contact ? ' · ' + e.contact : ''}${e.started_on ? ' · since ' + e.started_on : ''}</div>
-            <div class="sub" style="color:var(--ink-dim)">Sick leave: ${e.sick_leave ?? 0} · Vacation: ${e.vacation_leave ?? 0}</div>
+            <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.code || '—'}</span></div>
+            <div class="sub">${e.position || '—'}${e.phone ? ' · ' + e.phone : ''}${e.started_on ? ' · since ' + e.started_on : ''}</div>
+            <div class="sub" style="color:var(--ink-dim)">Sick leave: ${e.sl_balance ?? 0} · Vacation: ${e.vl_balance ?? 0}</div>
           </div>
           <button class="ret" onClick=${() => edit(e)}>Edit</button>
         </div>`) : html`<div class="empty">No personnel yet.</div>`}
