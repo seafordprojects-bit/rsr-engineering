@@ -21,12 +21,12 @@ async function countRows(table, build) {
 }
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, name, pin').order('name').limit(2000);
+    .select('id, name, pin, sick_leave, vacation_leave').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
-async function setEmployeePin(id, pin) {
-  const { error } = await supabase.from('employees').update({ pin: pin || null }).eq('id', id);
+async function updateEmployee(id, fields) {
+  const { error } = await supabase.from('employees').update(fields).eq('id', id);
   if (error) throw error;
 }
 
@@ -76,6 +76,8 @@ function App() {
   const [emps, setEmps] = useState([]);
   const [empSel, setEmpSel] = useState('');
   const [empPin, setEmpPin] = useState('');
+  const [empSick, setEmpSick] = useState('');
+  const [empVac, setEmpVac] = useState('');
   const [toast, setToast] = useState(null);
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
 
@@ -88,10 +90,21 @@ function App() {
   };
 
   const loadEmps = async () => { try { setEmps(await getEmployees()); } catch (_) {} };
-  const saveEmpPin = async () => {
+  const pickEmp = (id) => {
+    setEmpSel(id);
+    const e = emps.find(x => x.id === id) || {};
+    setEmpPin(e.pin || ''); setEmpSick(e.sick_leave ?? ''); setEmpVac(e.vacation_leave ?? '');
+  };
+  const saveEmp = async () => {
     if (!empSel) { flash('Pick an employee'); return; }
-    try { await setEmployeePin(empSel, empPin.trim()); flash('Passcode set'); setEmpPin(''); loadEmps(); }
-    catch (e) { flash('Error: ' + e.message); }
+    try {
+      await updateEmployee(empSel, {
+        pin: empPin.trim() || null,
+        sick_leave: empSick === '' ? 0 : Number(empSick),
+        vacation_leave: empVac === '' ? 0 : Number(empVac),
+      });
+      flash('Saved'); loadEmps();
+    } catch (e) { flash('Error: ' + e.message); }
   };
 
   useEffect(() => {
@@ -151,18 +164,23 @@ function App() {
         </div>
 
         <div class="card">
-          <div class="sectlabel" style="margin-top:0">Employee passcodes</div>
-          <p class="note" style="margin:0 0 12px">Set the PIN each worker uses to sign borrow / return slips.</p>
+          <div class="sectlabel" style="margin-top:0">Employee passcode &amp; leave</div>
+          <p class="note" style="margin:0 0 12px">Set the worker's sign-in PIN and their leave balances. The assistant can see these but can't change them.</p>
           <${Field} label="Employee">
-            <select value=${empSel} onChange=${e => { setEmpSel(e.target.value); setEmpPin(''); }}>
+            <select value=${empSel} onChange=${e => pickEmp(e.target.value)}>
               <option value="">Select employee…</option>
-              ${emps.map(e => html`<option value=${e.id}>${e.name} (${e.id})${e.pin ? ' · PIN set' : ''}</option>`)}
+              ${emps.map(e => html`<option value=${e.id}>${e.name} (${e.id})</option>`)}
             </select>
           <//>
-          <${Field} label="Passcode (PIN)">
-            <input inputmode="numeric" value=${empPin} onInput=${e => setEmpPin(e.target.value)} placeholder="e.g. 1234" />
-          <//>
-          <button class="btn" onClick=${saveEmpPin}>Set passcode</button>
+          ${empSel && html`
+            <${Field} label="Passcode (PIN)">
+              <input inputmode="numeric" value=${empPin} onInput=${e => setEmpPin(e.target.value)} placeholder="e.g. 1234" />
+            <//>
+            <div class="grid" style="margin-bottom:14px">
+              <${Field} label="Sick leave (days)"><input type="number" min="0" step="0.5" value=${empSick} onInput=${e => setEmpSick(e.target.value)} placeholder="0" /><//>
+              <${Field} label="Vacation leave (days)"><input type="number" min="0" step="0.5" value=${empVac} onInput=${e => setEmpVac(e.target.value)} placeholder="0" /><//>
+            </div>
+            <button class="btn" onClick=${saveEmp}>Save</button>`}
         </div>`}
 
       <div class="sectlabel">Live overview</div>
