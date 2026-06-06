@@ -10,7 +10,7 @@ import { supabase, getSites } from './supabase.js';
 // ---------- data ----------
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, name, position, pin, contact, active').order('name').limit(2000);
+    .select('id, name, position, pin, contact, started_on, active').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
@@ -71,21 +71,22 @@ function Personnel({ employees, onReload, toast }) {
   const [name, setName] = useState('');
   const [position, setPosition] = useState('');
   const [contact, setContact] = useState('');
+  const [started, setStarted] = useState('');
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const reset = () => { setCode(''); setName(''); setPosition(''); setContact(''); setEditId(null); };
+  const reset = () => { setCode(''); setName(''); setPosition(''); setContact(''); setStarted(''); setEditId(null); };
 
   const submit = async () => {
     if (!name.trim()) { toast('Enter a name', true); return; }
     setSaving(true);
     try {
       if (editId) {
-        await updateEmployee(editId, { name: name.trim(), position: position.trim() || null, contact: contact.trim() || null });
+        await updateEmployee(editId, { name: name.trim(), position: position.trim() || null, contact: contact.trim() || null, started_on: started || null });
         toast('Employee updated');
       } else {
         if (!code.trim()) { toast('Enter an employee code', true); setSaving(false); return; }
-        await addEmployee({ id: code.trim(), name: name.trim(), position: position.trim() || null, contact: contact.trim() || null });
+        await addEmployee({ id: code.trim(), name: name.trim(), position: position.trim() || null, contact: contact.trim() || null, started_on: started || null });
         toast('Employee added');
       }
       reset(); onReload();
@@ -93,7 +94,7 @@ function Personnel({ employees, onReload, toast }) {
     finally { setSaving(false); }
   };
 
-  const edit = (e) => { setEditId(e.id); setCode(e.id); setName(e.name || ''); setPosition(e.position || ''); setContact(e.contact || ''); };
+  const edit = (e) => { setEditId(e.id); setCode(e.id); setName(e.name || ''); setPosition(e.position || ''); setContact(e.contact || ''); setStarted(e.started_on || ''); };
 
   return html`
     <div class="card">
@@ -109,6 +110,9 @@ function Personnel({ employees, onReload, toast }) {
       <${Field} label="Contact number">
         <input type="tel" inputmode="tel" value=${contact} onInput=${e => setContact(e.target.value)} placeholder="e.g. 0917 123 4567" />
       <//>
+      <${Field} label="Date started working">
+        <input type="date" value=${started} onInput=${e => setStarted(e.target.value)} />
+      <//>
       <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Saving…' : (editId ? 'Update Employee' : 'Add Employee')}</button>
       ${editId && html`<button class="btn ghost" style="margin-top:8px" onClick=${reset}>Cancel edit</button>`}
     </div>
@@ -119,7 +123,7 @@ function Personnel({ employees, onReload, toast }) {
         <div class="row" key=${e.id}>
           <div>
             <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.id}</span></div>
-            <div class="sub">${e.position || '—'}${e.contact ? ' · ' + e.contact : ''}</div>
+            <div class="sub">${e.position || '—'}${e.contact ? ' · ' + e.contact : ''}${e.started_on ? ' · since ' + e.started_on : ''}</div>
           </div>
           <button class="ret" onClick=${() => edit(e)}>Edit</button>
         </div>`) : html`<div class="empty">No personnel yet.</div>`}
