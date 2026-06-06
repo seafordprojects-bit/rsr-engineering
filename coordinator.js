@@ -10,7 +10,7 @@ import { supabase, getSites } from './supabase.js';
 // ---------- data ----------
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, name, position, pin, active').order('name').limit(2000);
+    .select('id, name, position, pin, contact, active').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
@@ -70,22 +70,23 @@ function Personnel({ employees, onReload, toast }) {
   const [code, setCode] = useState('');
   const [name, setName] = useState('');
   const [position, setPosition] = useState('');
+  const [contact, setContact] = useState('');
   const [pin, setPin] = useState('');
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const reset = () => { setCode(''); setName(''); setPosition(''); setPin(''); setEditId(null); };
+  const reset = () => { setCode(''); setName(''); setPosition(''); setContact(''); setPin(''); setEditId(null); };
 
   const submit = async () => {
     if (!name.trim()) { toast('Enter a name', true); return; }
     setSaving(true);
     try {
       if (editId) {
-        await updateEmployee(editId, { name: name.trim(), position: position.trim() || null, pin: pin || null });
+        await updateEmployee(editId, { name: name.trim(), position: position.trim() || null, contact: contact.trim() || null, pin: pin || null });
         toast('Employee updated');
       } else {
         if (!code.trim()) { toast('Enter an employee code', true); setSaving(false); return; }
-        await addEmployee({ id: code.trim(), name: name.trim(), position: position.trim() || null, pin: pin || null });
+        await addEmployee({ id: code.trim(), name: name.trim(), position: position.trim() || null, contact: contact.trim() || null, pin: pin || null });
         toast('Employee added');
       }
       reset(); onReload();
@@ -93,7 +94,7 @@ function Personnel({ employees, onReload, toast }) {
     finally { setSaving(false); }
   };
 
-  const edit = (e) => { setEditId(e.id); setCode(e.id); setName(e.name || ''); setPosition(e.position || ''); setPin(e.pin || ''); };
+  const edit = (e) => { setEditId(e.id); setCode(e.id); setName(e.name || ''); setPosition(e.position || ''); setContact(e.contact || ''); setPin(e.pin || ''); };
 
   return html`
     <div class="card">
@@ -111,6 +112,9 @@ function Personnel({ employees, onReload, toast }) {
           <input value=${pin} onInput=${e => setPin(e.target.value)} placeholder="e.g. 1234" />
         <//>
       </div>
+      <${Field} label="Contact number">
+        <input type="tel" inputmode="tel" value=${contact} onInput=${e => setContact(e.target.value)} placeholder="e.g. 0917 123 4567" />
+      <//>
       <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Saving…' : (editId ? 'Update Employee' : 'Add Employee')}</button>
       ${editId && html`<button class="btn ghost" style="margin-top:8px" onClick=${reset}>Cancel edit</button>`}
     </div>
@@ -121,7 +125,7 @@ function Personnel({ employees, onReload, toast }) {
         <div class="row" key=${e.id}>
           <div>
             <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.id}</span></div>
-            <div class="sub">${e.position || '—'}${e.pin ? ' · PIN set' : ' · no PIN'}</div>
+            <div class="sub">${e.position || '—'}${e.contact ? ' · ' + e.contact : ''}${e.pin ? ' · PIN set' : ' · no PIN'}</div>
           </div>
           <button class="ret" onClick=${() => edit(e)}>Edit</button>
         </div>`) : html`<div class="empty">No personnel yet.</div>`}
@@ -273,8 +277,11 @@ function App() {
 
   if (!authed) return html`
     <div class="wrap">
-      <${Lock} onUnlock=${() => setAuthed(true)} toast=${flash} />
-      ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
+      <div class="card lock">
+        <div class="brand" style="justify-content:center;margin-bottom:6px"><b>RSR</b><span class="tag">COORDINATOR</span></div>
+        <p class="note" style="margin:0 0 14px">Open this from the Admin dashboard to unlock.</p>
+        <a class="btn" href="../" style="display:block;text-align:center;text-decoration:none">Go to Admin</a>
+      </div>
     </div>`;
 
   return html`
@@ -290,12 +297,10 @@ function App() {
       <div class="tabs">
         <button class=${tab==='personnel'?'on':''} onClick=${() => setTab('personnel')}>Personnel</button>
         <button class=${tab==='vessels'?'on':''}  onClick=${() => setTab('vessels')}>Vessels</button>
-        <button class=${tab==='settings'?'on':''}  onClick=${() => setTab('settings')}>Settings</button>
       </div>
 
       ${tab==='personnel' && html`<${Personnel} employees=${employees} onReload=${loadEmployees} toast=${flash} />`}
       ${tab==='vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
-      ${tab==='settings' && html`<${Settings} toast=${flash} />`}
     </div>
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
   `;
