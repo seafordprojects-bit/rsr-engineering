@@ -10,7 +10,7 @@ import { supabase, getSites } from './supabase.js';
 // ---------- data ----------
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, name, position, pin, contact, started_on, active').order('name').limit(2000);
+    .select('id, name, position, pin, contact, started_on, sick_leave, vacation_leave, active').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
@@ -67,7 +67,8 @@ function Lock({ onUnlock, toast }) {
 
 // ---------- Personnel ----------
 function Personnel({ employees, onReload, toast }) {
-  const [code, setCode] = useState('');
+  const [code, setCode] = useState('');           // holds existing id when editing
+  const [empType, setEmpType] = useState('RSR');   // RSR = regular, PEM = pakyaw
   const [name, setName] = useState('');
   const [position, setPosition] = useState('');
   const [contact, setContact] = useState('');
@@ -75,7 +76,22 @@ function Personnel({ employees, onReload, toast }) {
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const reset = () => { setCode(''); setName(''); setPosition(''); setContact(''); setStarted(''); setEditId(null); };
+  // next code in a series, e.g. "RSR 0001" → "RSR 0002"
+  const nextCode = (prefix) => {
+    let max = 0;
+    (employees || []).forEach(e => {
+      const id = e.id || '';
+      if (id.startsWith(prefix + ' ')) {
+        const n = parseInt(id.slice(prefix.length + 1), 10);
+        if (!isNaN(n) && n > max) max = n;
+      }
+    });
+    return prefix + ' ' + String(max + 1).padStart(4, '0');
+  };
+  const autoCode = nextCode(empType);              // shown while adding
+  const shownCode = editId ? code : autoCode;
+
+  const reset = () => { setCode(''); setEmpType('RSR'); setName(''); setPosition(''); setContact(''); setStarted(''); setEditId(null); };
 
   const submit = async () => {
     if (!name.trim()) { toast('Enter a name', true); return; }
@@ -85,9 +101,8 @@ function Personnel({ employees, onReload, toast }) {
         await updateEmployee(editId, { name: name.trim(), position: position.trim() || null, contact: contact.trim() || null, started_on: started || null });
         toast('Employee updated');
       } else {
-        if (!code.trim()) { toast('Enter an employee code', true); setSaving(false); return; }
-        await addEmployee({ id: code.trim(), name: name.trim(), position: position.trim() || null, contact: contact.trim() || null, started_on: started || null });
-        toast('Employee added');
+        await addEmployee({ id: autoCode, name: name.trim(), position: position.trim() || null, contact: contact.trim() || null, started_on: started || null });
+        toast('Employee added · ' + autoCode);
       }
       reset(); onReload();
     } catch (e) { toast('Error: ' + e.message, true); }
@@ -98,11 +113,18 @@ function Personnel({ employees, onReload, toast }) {
 
   return html`
     <div class="card">
-      <${Field} label="Employee code">
-        <input value=${code} disabled=${!!editId} onInput=${e => setCode(e.target.value)} placeholder="e.g. EMP-001" />
-      <//>
       <${Field} label="Full name">
         <input value=${name} onInput=${e => setName(e.target.value)} placeholder="e.g. Juan Dela Cruz" />
+      <//>
+      ${!editId && html`
+        <${Field} label="Employee type">
+          <select value=${empType} onChange=${e => setEmpType(e.target.value)}>
+            <option value="RSR">Regular (RSR)</option>
+            <option value="PEM">Pakyaw (PEM)</option>
+          </select>
+        <//>`}
+      <${Field} label="Employee code (auto)">
+        <input value=${shownCode} disabled placeholder="auto-generated" />
       <//>
       <${Field} label="Position">
         <input value=${position} onInput=${e => setPosition(e.target.value)} placeholder="e.g. Fitter" />
@@ -124,6 +146,7 @@ function Personnel({ employees, onReload, toast }) {
           <div>
             <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.id}</span></div>
             <div class="sub">${e.position || '—'}${e.contact ? ' · ' + e.contact : ''}${e.started_on ? ' · since ' + e.started_on : ''}</div>
+            <div class="sub" style="color:var(--ink-dim)">Sick leave: ${e.sick_leave ?? 0} · Vacation: ${e.vacation_leave ?? 0}</div>
           </div>
           <button class="ret" onClick=${() => edit(e)}>Edit</button>
         </div>`) : html`<div class="empty">No personnel yet.</div>`}
