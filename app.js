@@ -41,7 +41,7 @@ async function returnItem(txnId, condition, receivedBy) {
 async function getOpenBorrows(siteId) {
   let q = supabase
     .from('borrow_issuance')
-    .select('id, quantity, borrowed_at, due_at, project_vessel, issued_by, employee_id, unit_id, ' +
+    .select('id, quantity, borrowed_at, project_vessel, issued_by, employee_id, unit_id, ' +
             'items(item_code, name, unit), employees(name), item_units(unit_code)')
     .eq('txn_type', 'borrow')
     .eq('status', 'out')
