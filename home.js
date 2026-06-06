@@ -122,6 +122,7 @@ function App() {
     })();
   }, [authed]);
 
+  useEffect(() => { if (authed) loadEmps(); }, [authed]);
   useEffect(() => { if (authed && showSet) loadEmps(); }, [authed, showSet]);
 
   if (!authed) return html`<${Lock} onUnlock=${() => setAuthed(true)} toast=${flash} />
@@ -154,6 +155,15 @@ function App() {
       </div></div>
     </header>
     <div class="wrap">
+      ${(() => {
+        const needs = emps.filter(e => !e.pin).length;
+        return needs > 0 ? html`
+          <div class="card" style="border-color:var(--hivis);cursor:pointer" onClick=${() => setShowSet(true)}>
+            <div style="font-weight:800;color:var(--hivis)">⚠ ${needs} employee${needs>1?'s':''} need a passcode</div>
+            <p class="note" style="margin:4px 0 0">Newly added by the assistant. Tap to assign their kiosk PIN.</p>
+          </div>` : '';
+      })()}
+
       ${showSet && html`
         <div class="card">
           <div class="sectlabel" style="margin-top:0">Change admin PIN</div>
@@ -169,9 +179,11 @@ function App() {
           <${Field} label="Employee">
             <select value=${empSel} onChange=${e => pickEmp(e.target.value)}>
               <option value="">Select employee…</option>
-              ${emps.map(e => html`<option value=${e.id}>${e.name} (${e.id})</option>`)}
+              ${[...emps].sort((a, b) => (!!a.pin - !!b.pin) || (a.name || '').localeCompare(b.name || ''))
+                .map(e => html`<option value=${e.id}>${e.pin ? '✓' : '⚠'} ${e.name} (${e.code || '—'})</option>`)}
             </select>
           <//>
+          ${empSel && !((emps.find(x => x.id === empSel) || {}).pin) && html`<p class="note" style="color:var(--hivis);margin:-6px 0 12px">This employee has no passcode yet.</p>`}
           ${empSel && html`
             <${Field} label="Passcode (PIN)">
               <input inputmode="numeric" value=${empPin} onInput=${e => setEmpPin(e.target.value)} placeholder="e.g. 1234" />
