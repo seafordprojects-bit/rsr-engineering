@@ -21,7 +21,7 @@ async function countRows(table, build) {
 }
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, name, pin, sick_leave, vacation_leave').order('name').limit(2000);
+    .select('id, name, code, pin, sl_balance, vl_balance').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
@@ -93,15 +93,15 @@ function App() {
   const pickEmp = (id) => {
     setEmpSel(id);
     const e = emps.find(x => x.id === id) || {};
-    setEmpPin(e.pin || ''); setEmpSick(e.sick_leave ?? ''); setEmpVac(e.vacation_leave ?? '');
+    setEmpPin(e.pin || ''); setEmpSick(e.sl_balance ?? ''); setEmpVac(e.vl_balance ?? '');
   };
   const saveEmp = async () => {
     if (!empSel) { flash('Pick an employee'); return; }
     try {
       await updateEmployee(empSel, {
         pin: empPin.trim() || null,
-        sick_leave: empSick === '' ? 0 : Number(empSick),
-        vacation_leave: empVac === '' ? 0 : Number(empVac),
+        sl_balance: empSick === '' ? 0 : Number(empSick),
+        vl_balance: empVac === '' ? 0 : Number(empVac),
       });
       flash('Saved'); loadEmps();
     } catch (e) { flash('Error: ' + e.message); }
@@ -116,7 +116,7 @@ function App() {
         countRows('item_units', q => q.eq('active', true).eq('status', 'repair')),
         countRows('borrow_issuance', q => q.eq('txn_type', 'issuance').gte('borrowed_at', iso30)),
         countRows('voyages', q => q.neq('status', 'not_active')),
-        countRows('employees', q => q.eq('active', true)),
+        countRows('employees', q => q),
       ]);
       setM({ toolsOut, inRepair, issued30, vessels, people });
     })();
