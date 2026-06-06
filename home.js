@@ -60,8 +60,19 @@ function Tile({ ico, num, unit, title, href }) {
 function App() {
   const [authed, setAuthed] = useState(sessionStorage.getItem(SESSION_KEY) === '1');
   const [m, setM] = useState({});
+  const [showSet, setShowSet] = useState(false);
+  const [curPin, setCurPin] = useState('');
+  const [newPin, setNewPin] = useState('');
   const [toast, setToast] = useState(null);
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
+
+  const changePin = () => {
+    const admin = localStorage.getItem(PIN_KEY) || '1234';
+    if (curPin !== admin) { flash('Current PIN is wrong'); return; }
+    if (!newPin.trim()) { flash('Enter a new PIN'); return; }
+    localStorage.setItem(PIN_KEY, newPin.trim());
+    setCurPin(''); setNewPin(''); setShowSet(false); flash('Admin PIN changed');
+  };
 
   useEffect(() => {
     if (!authed) return;
@@ -99,11 +110,24 @@ function App() {
     <header class="app">
       <div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">ENGINEERING</span></span>
-        <button onClick=${() => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); }}
-          style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">lock</button>
+        <span style="display:flex;gap:12px;align-items:center">
+          <button onClick=${() => setShowSet(s => !s)}
+            style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">settings</button>
+          <button onClick=${() => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); }}
+            style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">lock</button>
+        </span>
       </div></div>
     </header>
     <div class="wrap">
+      ${showSet && html`
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Change admin PIN</div>
+          <${Field} label="Current PIN"><input type="password" inputmode="numeric" value=${curPin} onInput=${e => setCurPin(e.target.value)} /><//>
+          <${Field} label="New PIN"><input type="password" inputmode="numeric" value=${newPin} onInput=${e => setNewPin(e.target.value)} /><//>
+          <button class="btn" onClick=${changePin}>Save new PIN</button>
+          <p class="note" style="margin-top:10px">This is the single password for the whole admin area (dashboard + coordinator). Stored on this device.</p>
+        </div>`}
+
       <div class="sectlabel">Live overview</div>
       <div class="grid">
         ${live.map(t => html`<${Tile} ...${t} />`)}
