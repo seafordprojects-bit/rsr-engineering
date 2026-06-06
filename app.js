@@ -8,9 +8,26 @@ import { html, render } from 'htm/preact';
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import {
   supabase,
-  getSites, getEmployees, getItems,
+  getSites, getEmployees,
   createTransaction,
 } from './supabase.js';
+
+// Local items query (adds replacement price) so supabase.js stays untouched.
+async function getItems() {
+  const { data, error } = await supabase
+    .from('items')
+    .select('id, item_code, name, unit, track_type, price')
+    .eq('active', true)
+    .order('name')
+    .limit(2000);
+  if (error) throw error;
+  return data;
+}
+async function updateItemPrice(id, price) {
+  const v = (price === '' || price == null) ? null : Number(price);
+  const { error } = await supabase.from('items').update({ price: v }).eq('id', id);
+  if (error) throw error;
+}
 
 // Local return (records who received it; server stamps the time).
 async function returnItem(txnId, condition, receivedBy) {
@@ -57,6 +74,17 @@ async function markRepaired(unitId) {
     .update({ status: 'available', defect: null, repair_eta: null }).eq('id', unitId);
   if (error) throw error;
 }
+// full history for the audit view (bounded)
+async function getRecords(siteId) {
+  let q = supabase.from('borrow_issuance')
+    .select('id, txn_type, status, quantity, borrowed_at, returned_at, return_condition, issued_by, received_by, project_vessel, notes, employee_id, items(name, item_code), item_units(unit_code), employees(name)')
+    .order('borrowed_at', { ascending: false })
+    .limit(300);
+  if (siteId) q = q.eq('site_id', siteId);
+  const { data, error } = await q;
+  if (error) throw error;
+  return data;
+}
 async function addUnit(fields) {
   const { error } = await supabase.from('item_units').insert(fields);
   if (error) throw error;
@@ -85,6 +113,7 @@ const newId = () => (crypto?.randomUUID ? crypto.randomUUID()
 
 const fmt = (ts) => ts ? new Date(ts).toLocaleString('en-PH',
   { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' }) : '';
+const peso = (n) => '₱' + Number(n || 0).toLocaleString('en-PH');
 
 // ---- stock data (kept here so supabase.js stays untouched) ----
 async function getStock(siteId) {
@@ -158,12 +187,30 @@ function Field({ label, children }) {
 }
 
 function Picker({ label, value, onChange, options, placeholder }) {
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState(false);
+  const selLabel = (options.find(o => o.id === value) || {}).label || '';
+  const q = query.trim().toLowerCase();
+  const filtered = (open && q) ? options.filter(o => o.label.toLowerCase().includes(q)) : options;
   return html`
     <${Field} label=${label}>
-      <select value=${value} onChange=${e => onChange(e.target.value)}>
-        <option value="">${placeholder}</option>
-        ${options.map(o => html`<option value=${o.id}>${o.label}</option>`)}
-      </select>
+      <div style="position:relative">
+        <input
+          value=${open ? query : selLabel}
+          placeholder=${placeholder}
+          autocomplete="off"
+          onFocus=${() => { setOpen(true); setQuery(''); }}
+          onInput=${e => { setQuery(e.target.value); setOpen(true); }}
+          onBlur=${() => setTimeout(() => setOpen(false), 150)} />
+        ${open && html`
+          <div style="position:absolute;left:0;right:0;top:100%;margin-top:4px;z-index:30;background:var(--panel-2);border:1px solid var(--line);border-radius:10px;max-height:240px;overflow:auto;box-shadow:0 8px 30px rgba(0,0,0,.45)">
+            ${filtered.length ? filtered.map(o => html`
+              <div key=${o.id}
+                onMouseDown=${() => { onChange(o.id); setQuery(''); setOpen(false); }}
+                style="padding:12px;border-bottom:1px solid var(--line);cursor:pointer">${o.label}</div>`)
+            : html`<div style="padding:12px;color:var(--ink-dim)">No match</div>`}
+          </div>`}
+      </div>
     <//>`;
 }
 
@@ -198,6 +245,8 @@ function NewTransaction({ mode, sites, employees, items, units, outUnitIds, defa
   const itemName = (id) => (items.find(i => i.id === id)?.name) || 'Item';
   const itemCode = (id) => (items.find(i => i.id === id)?.item_code) || '';
   const unitCode = (id) => (units.find(u => u.id === id)?.unit_code) || '';
+  const priceOf  = (id) => Number(items.find(i => i.id === id)?.price || 0);
+  const cartValue = cart.reduce((s, c) => s + priceOf(c.itemId) * c.qty, 0);
 
   const addLine = () => {
     if (!itemId) { toast('Pick an item first', true); return; }
@@ -275,9 +324,16 @@ function NewTransaction({ mode, sites, employees, items, units, outUnitIds, defa
           <label>Items on this slip (${cart.length})</label>
           ${cart.map((c, idx) => html`
             <div class="row" key=${idx}>
-              <div class="name">${c.label}</div>
+              <div>
+                <div class="name">${c.label}</div>
+                ${isBorrow && priceOf(c.itemId) ? html`<div class="sub">${peso(priceOf(c.itemId) * c.qty)}</div>` : ''}
+              </div>
               <button class="ret" onClick=${() => removeLine(idx)}>✕</button>
             </div>`)}
+          ${isBorrow && cartValue > 0 ? html`<div class="row" style="border-bottom:none">
+            <div class="name">Total replacement value</div>
+            <div class="name mono" style="color:var(--hivis)">${peso(cartValue)}</div>
+          </div>` : ''}
         </div>`}
 
       <${Field} label=${isBorrow ? 'Released by' : 'Issued by'}>
@@ -291,6 +347,18 @@ function NewTransaction({ mode, sites, employees, items, units, outUnitIds, defa
       <${Field} label="Notes">
         <textarea rows="2" value=${notes} onInput=${e => setNotes(e.target.value)}></textarea>
       <//>
+
+      ${isBorrow && cart.length > 0 && html`
+        <div style="background:rgba(255,176,0,.08);border:1px solid var(--hivis);border-radius:10px;padding:12px;margin-bottom:14px">
+          <div style="font-weight:800;color:var(--hivis);letter-spacing:.4px;margin-bottom:6px">LIABILITY NOTICE</div>
+          <div class="note" style="line-height:1.55">
+            By signing with my passcode, I confirm that I:<br/>
+            1. Received the listed tools in good working condition.<br/>
+            2. Am responsible for their safekeeping while in my possession.<br/>
+            3. Will be charged the replacement value shown for any lost or damaged item.<br/>
+            4. Will return them promptly once the work is completed.
+          </div>
+        </div>`}
 
       <${Field} label=${isBorrow ? 'Borrower passcode (sign here)' : 'Receiver passcode (sign here)'}>
         <input type="password" inputmode="numeric" autocomplete="off"
@@ -540,14 +608,16 @@ function StockSummary({ rows, outCounts }) {
 }
 
 // ---------- Manage equipment (add tool + codes in one step) ----------
-function ManageItems({ items, units, outUnitIds, fixedType, defaultSite, onAddUnit, onAddUnits, onRemoveUnit, onRemoveItem, onChanged, toast }) {
+function ManageItems({ items, units, outUnitIds, fixedType, defaultSite, onAddUnit, onAddUnits, onRemoveUnit, onRemoveItem, onUpdatePrice, onChanged, toast }) {
   const isTool = fixedType !== 'issue';
   const [name, setName] = useState('');
   const [qty, setQty]   = useState('');
+  const [price, setPrice] = useState('');
   const [siteId, setSiteId] = useState(defaultSite || '');
   const [saving, setSaving] = useState(false);
   const [openId, setOpenId] = useState(null);   // which tool is expanded
   const [newCode, setNewCode] = useState('');
+  const [editPrice, setEditPrice] = useState('');
   // code generation (used by both the add form and the per-tool "add more")
   const [prefix, setPrefix] = useState('');
   const [count, setCount]   = useState('');
@@ -578,13 +648,13 @@ function ManageItems({ items, units, outUnitIds, fixedType, defaultSite, onAddUn
     const p = prefix.trim(), c = parseInt(count || '0', 10), d = parseInt(digits || '3', 10);
     setSaving(true);
     try {
-      const item = await addItem({ name: name.trim(), item_code: null, unit: 'pcs', track_type: fixedType });
+      const item = await addItem({ name: name.trim(), item_code: null, unit: 'pcs', track_type: fixedType, price: price ? Number(price) : null });
       if (qty && siteId) await setStock(item.id, siteId, qty);
       if (isTool && p && c > 0) {                        // new tool → codes start at 1
         await onAddUnits(item.id, makeCodes(p, 1, c, d));
       }
       toast(isTool ? (p && c > 0 ? `Tool added with ${c} codes` : 'Tool added') : 'Material added');
-      setName(''); setPrefix(''); setCount(''); setQty('');
+      setName(''); setPrefix(''); setCount(''); setQty(''); setPrice('');
       onChanged();
     } catch (e) { toast('Error: ' + e.message, true); }
     finally { setSaving(false); }
@@ -633,6 +703,11 @@ function ManageItems({ items, units, outUnitIds, fixedType, defaultSite, onAddUn
     catch (e) { toast('Error: ' + e.message, true); }
   };
 
+  const savePrice = async (itemId) => {
+    try { await onUpdatePrice(itemId, editPrice); toast('Price saved'); setEditPrice(''); }
+    catch (e) { toast('Error: ' + e.message, true); }
+  };
+
   // live preview for the ADD form (new tool starts at 1)
   const addPreview = (() => {
     const p = prefix.trim(), c = parseInt(count || '0', 10), d = parseInt(digits || '3', 10);
@@ -656,6 +731,9 @@ function ManageItems({ items, units, outUnitIds, fixedType, defaultSite, onAddUn
         ${addPreview && html`<div class="note" style="margin:6px 0 12px">Will create: <span class="mono">${addPreview}</span></div>`}
       `}
 
+      <${Field} label="Replacement price ₱ (optional)">
+        <input type="number" min="0" value=${price} onInput=${e => setPrice(e.target.value)} placeholder="0" />
+      <//>
       <${Field} label="Starting qty at this location (optional)">
         <input type="number" min="0" value=${qty} onInput=${e => setQty(e.target.value)} placeholder="0" />
       <//>
@@ -670,14 +748,22 @@ function ManageItems({ items, units, outUnitIds, fixedType, defaultSite, onAddUn
         return html`
         <div key=${i.id} style="border-bottom:1px solid var(--line)">
           <div class="row" style="border-bottom:none">
-            <div onClick=${isTool ? (() => { setOpenId(expanded ? null : i.id); setPrefix(''); setCount(''); }) : null} style=${isTool ? 'cursor:pointer' : ''}>
+            <div onClick=${isTool ? (() => { setOpenId(expanded ? null : i.id); setPrefix(''); setCount(''); setEditPrice(''); }) : null} style=${isTool ? 'cursor:pointer' : ''}>
               <div class="name">${i.name} ${isTool ? html`<span class="mono" style="color:var(--ink-dim);font-weight:400">${myUnits.length ? '· ' + myUnits.length + ' code' + (myUnits.length>1?'s':'') : '· tap to add codes'}</span>` : ''}</div>
-              <div class="sub">${isTool ? 'Tool' : 'Material'}</div>
+              <div class="sub">${isTool ? 'Tool' : 'Material'}${i.price ? ' · ' + peso(i.price) : ''}</div>
             </div>
             <button class="ret" onClick=${() => remove(i)}>Remove</button>
           </div>
           ${isTool && expanded && html`
             <div style="padding:4px 0 14px">
+              <div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:10px">
+                <div style="flex:1">
+                  <label>Replacement price ₱</label>
+                  <input type="number" min="0" value=${editPrice} onInput=${e => setEditPrice(e.target.value)} placeholder=${i.price || '0'} />
+                </div>
+                <button class="ret" onClick=${() => savePrice(i.id)}>Save ₱</button>
+              </div>
+
               ${myUnits.map(u => html`
                 <div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0">
                   <span class="mono">${u.unit_code}</span>
@@ -776,6 +862,7 @@ function App() {
   const removeUnitById = async (id) => { await deactivateUnit(id); loadUnits(); };
   const repairUnit = async (id, defect, eta) => { await sendToRepair(id, defect, eta); loadUnits(); };
   const unrepairUnit = async (id) => { await markRepaired(id); loadUnits(); };
+  const setItemPrice = async (id, price) => { await updateItemPrice(id, price); loadItems(); };
   const removeItemFull = async (item) => {
     try { await deleteUnitsForItem(item.id); }   // free its codes (skips if borrow history blocks it)
     catch (_) { /* referenced by past borrows — leave codes, just hide the tool */ }
@@ -876,7 +963,7 @@ function App() {
             </div>`)}
 
         ${tab==='items' && html`<${ManageItems} items=${sectionItems} units=${unitsRows} outUnitIds=${outUnitIds} fixedType=${isBorrow ? 'borrow' : 'issue'}
-          defaultSite=${siteFilter} onAddUnit=${addUnitFor} onAddUnits=${addUnitsFor} onRemoveUnit=${removeUnitById} onRemoveItem=${removeItemFull}
+          defaultSite=${siteFilter} onAddUnit=${addUnitFor} onAddUnits=${addUnitsFor} onRemoveUnit=${removeUnitById} onRemoveItem=${removeItemFull} onUpdatePrice=${setItemPrice}
           onChanged=${() => { loadItems(); loadStock(); }} toast=${flash} />`}
 
         ${tab==='repair' && isBorrow && html`<${ForRepair} items=${sectionItems} units=${unitsRows} outUnitIds=${outUnitIds}
