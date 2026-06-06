@@ -71,22 +71,21 @@ function Personnel({ employees, onReload, toast }) {
   const [name, setName] = useState('');
   const [position, setPosition] = useState('');
   const [contact, setContact] = useState('');
-  const [pin, setPin] = useState('');
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const reset = () => { setCode(''); setName(''); setPosition(''); setContact(''); setPin(''); setEditId(null); };
+  const reset = () => { setCode(''); setName(''); setPosition(''); setContact(''); setEditId(null); };
 
   const submit = async () => {
     if (!name.trim()) { toast('Enter a name', true); return; }
     setSaving(true);
     try {
       if (editId) {
-        await updateEmployee(editId, { name: name.trim(), position: position.trim() || null, contact: contact.trim() || null, pin: pin || null });
+        await updateEmployee(editId, { name: name.trim(), position: position.trim() || null, contact: contact.trim() || null });
         toast('Employee updated');
       } else {
         if (!code.trim()) { toast('Enter an employee code', true); setSaving(false); return; }
-        await addEmployee({ id: code.trim(), name: name.trim(), position: position.trim() || null, contact: contact.trim() || null, pin: pin || null });
+        await addEmployee({ id: code.trim(), name: name.trim(), position: position.trim() || null, contact: contact.trim() || null });
         toast('Employee added');
       }
       reset(); onReload();
@@ -94,7 +93,7 @@ function Personnel({ employees, onReload, toast }) {
     finally { setSaving(false); }
   };
 
-  const edit = (e) => { setEditId(e.id); setCode(e.id); setName(e.name || ''); setPosition(e.position || ''); setContact(e.contact || ''); setPin(e.pin || ''); };
+  const edit = (e) => { setEditId(e.id); setCode(e.id); setName(e.name || ''); setPosition(e.position || ''); setContact(e.contact || ''); };
 
   return html`
     <div class="card">
@@ -104,14 +103,9 @@ function Personnel({ employees, onReload, toast }) {
       <${Field} label="Full name">
         <input value=${name} onInput=${e => setName(e.target.value)} placeholder="e.g. Juan Dela Cruz" />
       <//>
-      <div class="two">
-        <${Field} label="Position">
-          <input value=${position} onInput=${e => setPosition(e.target.value)} placeholder="e.g. Fitter" />
-        <//>
-        <${Field} label="Passcode (PIN)">
-          <input value=${pin} onInput=${e => setPin(e.target.value)} placeholder="e.g. 1234" />
-        <//>
-      </div>
+      <${Field} label="Position">
+        <input value=${position} onInput=${e => setPosition(e.target.value)} placeholder="e.g. Fitter" />
+      <//>
       <${Field} label="Contact number">
         <input type="tel" inputmode="tel" value=${contact} onInput=${e => setContact(e.target.value)} placeholder="e.g. 0917 123 4567" />
       <//>
@@ -125,7 +119,7 @@ function Personnel({ employees, onReload, toast }) {
         <div class="row" key=${e.id}>
           <div>
             <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.id}</span></div>
-            <div class="sub">${e.position || '—'}${e.contact ? ' · ' + e.contact : ''}${e.pin ? ' · PIN set' : ' · no PIN'}</div>
+            <div class="sub">${e.position || '—'}${e.contact ? ' · ' + e.contact : ''}</div>
           </div>
           <button class="ret" onClick=${() => edit(e)}>Edit</button>
         </div>`) : html`<div class="empty">No personnel yet.</div>`}
