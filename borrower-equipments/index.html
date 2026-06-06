@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>RSR · Tool Borrow &amp; Issue</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+<!-- No build step: Preact + htm + Supabase loaded straight from CDN via import map.
+     Edit these files in GitHub's browser editor, push, and it's live. -->
+<script type="importmap">
+{
+  "imports": {
+    "preact": "https://esm.sh/preact@10.22.0",
+    "preact/hooks": "https://esm.sh/preact@10.22.0/hooks",
+    "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact",
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.0"
+  }
+}
+</script>
+
+<style>
+  :root{
+    --bg:#11161c;            /* dark slate */
+    --panel:#1a222b;
+    --panel-2:#212c37;
+    --line:#2c3946;
+    --ink:#e9eef3;
+    --ink-dim:#8da0b2;
+    --hivis:#ffb000;         /* safety amber accent */
+    --hivis-ink:#1a1200;
+    --ok:#34d17a;
+    --warn:#ff6b5e;
+    --radius:14px;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{
+    background:
+      radial-gradient(900px 500px at 80% -10%, rgba(255,176,0,.07), transparent 60%),
+      var(--bg);
+    color:var(--ink);
+    font-family:"Barlow",system-ui,sans-serif;
+    -webkit-font-smoothing:antialiased;
+    padding-bottom:40px;
+  }
+  code,.mono{font-family:"JetBrains Mono",monospace}
+
+  .wrap{max-width:560px;margin:0 auto;padding:0 16px}
+
+  header.app{
+    position:sticky;top:0;z-index:10;
+    background:rgba(17,22,28,.85);backdrop-filter:blur(10px);
+    border-bottom:1px solid var(--line);
+    padding:14px 16px;margin-bottom:18px;
+  }
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand b{font-weight:800;letter-spacing:.5px}
+  .tag{font-size:11px;color:var(--hivis-ink);background:var(--hivis);
+       padding:2px 8px;border-radius:999px;font-weight:800;letter-spacing:.5px}
+  .site-row{margin-top:10px}
+
+  label{display:block;font-size:12px;font-weight:700;text-transform:uppercase;
+        letter-spacing:.6px;color:var(--ink-dim);margin:0 0 6px}
+  select,input,textarea,button{font-family:inherit;font-size:16px}
+  select,input,textarea{
+    width:100%;background:var(--panel-2);color:var(--ink);
+    border:1px solid var(--line);border-radius:10px;padding:13px 12px;
+  }
+  select:focus,input:focus,textarea:focus{outline:2px solid var(--hivis);border-color:transparent}
+  .field{margin-bottom:14px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+
+  /* tabs */
+  .tabs{display:flex;gap:8px;margin-bottom:16px}
+  .tabs button{
+    flex:1;padding:12px;border-radius:10px;border:1px solid var(--line);
+    background:var(--panel);color:var(--ink-dim);font-weight:700;cursor:pointer;
+  }
+  .tabs button.on{background:var(--hivis);color:var(--hivis-ink);border-color:var(--hivis)}
+
+  .card{background:var(--panel);border:1px solid var(--line);
+        border-radius:var(--radius);padding:16px;margin-bottom:14px}
+
+  .btn{
+    width:100%;padding:15px;border:none;border-radius:12px;cursor:pointer;
+    background:var(--hivis);color:var(--hivis-ink);font-weight:800;letter-spacing:.4px;
+    text-transform:uppercase;
+  }
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+
+  .row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;
+       padding:13px 0;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:none}
+  .row .name{font-weight:700}
+  .row .sub{font-size:13px;color:var(--ink-dim);margin-top:2px}
+  .pill{font-size:11px;font-weight:800;padding:3px 8px;border-radius:999px;
+        background:var(--panel-2);color:var(--ink-dim);white-space:nowrap}
+  .pill.out{background:rgba(255,176,0,.15);color:var(--hivis)}
+  .ret{padding:9px 12px;border-radius:9px;border:1px solid var(--line);
+       background:var(--panel-2);color:var(--ink);font-weight:700;cursor:pointer;font-size:14px}
+
+  .empty{color:var(--ink-dim);text-align:center;padding:30px 10px}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);
+         background:var(--ok);color:#06210f;font-weight:800;padding:12px 18px;
+         border-radius:999px;box-shadow:0 8px 30px rgba(0,0,0,.4);z-index:50}
+  .toast.err{background:var(--warn);color:#2a0a06}
+  .note{font-size:12px;color:var(--ink-dim);line-height:1.5}
+  .banner{background:rgba(255,107,94,.12);border:1px solid var(--warn);color:#ffc7c0;
+          padding:12px 14px;border-radius:10px;font-size:13px;margin-bottom:14px}
+</style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="../app.js"></script>
+</body>
+</html>
