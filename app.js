@@ -960,11 +960,12 @@ function App() {
       <div class="wrap">
         <div class="brand" style="display:flex;align-items:center;justify-content:space-between">
           <span><b>RSR</b><span class="tag">BORROW · ISSUE</span></span>
-          ${activeSite && html`<span style="display:flex;align-items:center;gap:8px">
-            <span class="tag" style="background:var(--panel-2);color:var(--ink)">📍 ${activeSite.name}</span>
-            <button onClick=${changeLocation} title="Change location"
-              style="background:none;border:none;color:var(--ink-dim);font-size:13px;cursor:pointer">change</button>
-          </span>`}
+          <span style="display:flex;align-items:center;gap:10px">
+            ${activeSite && html`<span class="tag" style="background:var(--panel-2);color:var(--ink)">📍 ${activeSite.name}</span>`}
+            ${activeSite && html`<button onClick=${changeLocation} title="Change location"
+              style="background:none;border:none;color:var(--ink-dim);font-size:13px;cursor:pointer">change</button>`}
+            <a href="../" style="color:var(--ink-dim);text-decoration:none;font-size:13px;font-weight:700">⌂ Home</a>
+          </span>
         </div>
       </div>
     </header>
