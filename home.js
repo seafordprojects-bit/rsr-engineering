@@ -19,6 +19,16 @@ async function countRows(table, build) {
     return count || 0;
   } catch (_) { return null; }
 }
+async function getEmployees() {
+  const { data, error } = await supabase.from('employees')
+    .select('id, name, pin').order('name').limit(2000);
+  if (error) throw error;
+  return data;
+}
+async function setEmployeePin(id, pin) {
+  const { error } = await supabase.from('employees').update({ pin: pin || null }).eq('id', id);
+  if (error) throw error;
+}
 
 function Field({ label, children }) {
   return html`<div class="field"><label>${label}</label>${children}</div>`;
@@ -63,6 +73,9 @@ function App() {
   const [showSet, setShowSet] = useState(false);
   const [curPin, setCurPin] = useState('');
   const [newPin, setNewPin] = useState('');
+  const [emps, setEmps] = useState([]);
+  const [empSel, setEmpSel] = useState('');
+  const [empPin, setEmpPin] = useState('');
   const [toast, setToast] = useState(null);
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
 
@@ -71,7 +84,14 @@ function App() {
     if (curPin !== admin) { flash('Current PIN is wrong'); return; }
     if (!newPin.trim()) { flash('Enter a new PIN'); return; }
     localStorage.setItem(PIN_KEY, newPin.trim());
-    setCurPin(''); setNewPin(''); setShowSet(false); flash('Admin PIN changed');
+    setCurPin(''); setNewPin(''); flash('Admin PIN changed');
+  };
+
+  const loadEmps = async () => { try { setEmps(await getEmployees()); } catch (_) {} };
+  const saveEmpPin = async () => {
+    if (!empSel) { flash('Pick an employee'); return; }
+    try { await setEmployeePin(empSel, empPin.trim()); flash('Passcode set'); setEmpPin(''); loadEmps(); }
+    catch (e) { flash('Error: ' + e.message); }
   };
 
   useEffect(() => {
@@ -88,6 +108,8 @@ function App() {
       setM({ toolsOut, inRepair, issued30, vessels, people });
     })();
   }, [authed]);
+
+  useEffect(() => { if (authed && showSet) loadEmps(); }, [authed, showSet]);
 
   if (!authed) return html`<${Lock} onUnlock=${() => setAuthed(true)} toast=${flash} />
     ${toast && html`<div class="toast">${toast}</div>`}`;
@@ -125,7 +147,22 @@ function App() {
           <${Field} label="Current PIN"><input type="password" inputmode="numeric" value=${curPin} onInput=${e => setCurPin(e.target.value)} /><//>
           <${Field} label="New PIN"><input type="password" inputmode="numeric" value=${newPin} onInput=${e => setNewPin(e.target.value)} /><//>
           <button class="btn" onClick=${changePin}>Save new PIN</button>
-          <p class="note" style="margin-top:10px">This is the single password for the whole admin area (dashboard + coordinator). Stored on this device.</p>
+          <p class="note" style="margin-top:10px">This is the single admin password (dashboard + coordinator). Stored on this device.</p>
+        </div>
+
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Employee passcodes</div>
+          <p class="note" style="margin:0 0 12px">Set the PIN each worker uses to sign borrow / return slips.</p>
+          <${Field} label="Employee">
+            <select value=${empSel} onChange=${e => { setEmpSel(e.target.value); setEmpPin(''); }}>
+              <option value="">Select employee…</option>
+              ${emps.map(e => html`<option value=${e.id}>${e.name} (${e.id})${e.pin ? ' · PIN set' : ''}</option>`)}
+            </select>
+          <//>
+          <${Field} label="Passcode (PIN)">
+            <input inputmode="numeric" value=${empPin} onInput=${e => setEmpPin(e.target.value)} placeholder="e.g. 1234" />
+          <//>
+          <button class="btn" onClick=${saveEmpPin}>Set passcode</button>
         </div>`}
 
       <div class="sectlabel">Live overview</div>
