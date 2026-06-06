@@ -130,6 +130,7 @@ function Personnel({ employees, onReload, toast }) {
 const STATUS = [['drydock','Drydock'], ['afloat','Afloat repair'], ['not_active','Not active']];
 function Vessels({ voyages, sites, onReload, toast }) {
   const [vessel, setVessel] = useState('');
+  const [vcode, setVcode] = useState('');
   const [siteId, setSiteId] = useState('');
   const [status, setStatus] = useState('drydock');
   const [docking, setDocking] = useState('');
@@ -141,14 +142,14 @@ function Vessels({ voyages, sites, onReload, toast }) {
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  const reset = () => { setVessel(''); setSiteId(''); setStatus('drydock'); setDocking(''); setUndocking('');
+  const reset = () => { setVessel(''); setVcode(''); setSiteId(''); setStatus('drydock'); setDocking(''); setUndocking('');
     setDeparture(''); setAfloatStart(''); setAfloatDone(''); setNotes(''); setEditId(null); };
 
   const submit = async () => {
     if (!vessel.trim()) { toast('Enter a vessel name', true); return; }
     setSaving(true);
     const row = {
-      vessel_name: vessel.trim(), site_id: siteId || null, status,
+      vessel_name: vessel.trim(), vessel_code: vcode.trim() || null, site_id: siteId || null, status,
       docking_date: docking || null, undocking_date: undocking || null, departure_date: departure || null,
       afloat_start: afloatStart || null, afloat_done: afloatDone || null, notes: notes || null,
     };
@@ -161,7 +162,7 @@ function Vessels({ voyages, sites, onReload, toast }) {
   };
 
   const edit = (v) => {
-    setEditId(v.id); setVessel(v.vessel_name); setSiteId(v.site_id || ''); setStatus(v.status || 'drydock');
+    setEditId(v.id); setVessel(v.vessel_name); setVcode(v.vessel_code || ''); setSiteId(v.site_id || ''); setStatus(v.status || 'drydock');
     setDocking(v.docking_date || ''); setUndocking(v.undocking_date || ''); setDeparture(v.departure_date || '');
     setAfloatStart(v.afloat_start || ''); setAfloatDone(v.afloat_done || ''); setNotes(v.notes || '');
   };
@@ -176,9 +177,14 @@ function Vessels({ voyages, sites, onReload, toast }) {
 
   return html`
     <div class="card">
-      <${Field} label="Vessel name">
-        <input value=${vessel} onInput=${e => setVessel(e.target.value)} placeholder="e.g. MV SF Trinity" />
-      <//>
+      <div class="two">
+        <${Field} label="Vessel name">
+          <input value=${vessel} onInput=${e => setVessel(e.target.value)} placeholder="e.g. MV SF Trinity" />
+        <//>
+        <${Field} label="Vessel code">
+          <input value=${vcode} onInput=${e => setVcode(e.target.value)} placeholder="e.g. SFT-2026-01" />
+        <//>
+      </div>
       <div class="two">
         <${Field} label="Location">
           <select value=${siteId} onChange=${e => setSiteId(e.target.value)}>
@@ -218,7 +224,7 @@ function Vessels({ voyages, sites, onReload, toast }) {
       ${voyages.length ? voyages.map(v => html`
         <div class="row" key=${v.id}>
           <div>
-            <div class="name">${v.vessel_name} <span class="pill">${(STATUS.find(s=>s[0]===v.status)||['','?'])[1]}</span></div>
+            <div class="name">${v.vessel_name} ${v.vessel_code ? html`<span class="mono" style="color:var(--hivis);font-weight:600">${v.vessel_code}</span> ` : ''}<span class="pill">${(STATUS.find(s=>s[0]===v.status)||['','?'])[1]}</span></div>
             <div class="sub">${v.sites?.name || '—'}${v.undocking_date ? ' · undock ' + v.undocking_date : ''}${v.departure_date ? ' · departs ' + v.departure_date : ''}</div>
           </div>
           <div style="display:flex;gap:6px">
