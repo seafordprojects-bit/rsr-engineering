@@ -485,6 +485,60 @@ function ForRepair({ items, units, outUnitIds, onSendRepair, onRepaired, toast }
     </div>`;
 }
 
+// ---------- All Records (audit history) ----------
+const recCode = (r) => r.item_units?.unit_code || r.items?.item_code || '';
+const recState = (r) => r.txn_type === 'issuance' ? 'issued' : (r.status === 'returned' ? 'returned' : 'out');
+
+function Records({ rows, filter, setFilter, onOpen }) {
+  const shown = rows.filter(r => {
+    if (filter === 'out')      return r.txn_type === 'borrow' && r.status === 'out';
+    if (filter === 'returned') return r.status === 'returned';
+    if (filter === 'issued')   return r.txn_type === 'issuance';
+    return true;
+  });
+  const FILTERS = [['all','All'], ['out','Out'], ['returned','Returned'], ['issued','Issued']];
+  return html`
+    <div class="tabs" style="flex-wrap:wrap">
+      ${FILTERS.map(([f, lbl]) => html`
+        <button key=${f} class=${filter===f?'on':''} onClick=${() => setFilter(f)}>${lbl}</button>`)}
+    </div>
+    <div class="card">
+      ${shown.length ? shown.map(r => html`
+        <div class="row" key=${r.id} onClick=${() => onOpen(r)} style="cursor:pointer">
+          <div>
+            <div class="name">${r.items?.name || 'Item'} ${recCode(r) ? html`<span class="mono" style="color:var(--hivis)">· ${recCode(r)}</span>` : ''}</div>
+            <div class="sub">${r.employees?.name || r.employee_id} · ${fmt(r.borrowed_at)}</div>
+          </div>
+          <span class="pill ${recState(r)==='out' ? 'out' : ''}">${recState(r)}</span>
+        </div>`) : html`<div class="empty">No records.</div>`}
+    </div>`;
+}
+
+function RecordDetail({ row, onClose }) {
+  return html`
+    <div style="position:fixed;inset:0;background:rgba(0,0,0,.65);display:flex;align-items:flex-start;justify-content:center;padding:18px;z-index:40;overflow:auto">
+      <div class="card" style="max-width:460px;width:100%;margin:24px 0 0">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <span class="tag">RECORD</span>
+          <button onClick=${onClose} style="background:none;border:none;color:var(--ink-dim);font-size:22px;cursor:pointer;line-height:1">✕</button>
+        </div>
+        <${SlipLine} label="Item" value=${html`${row.items?.name || 'Item'}${row.quantity > 1 ? ` ×${row.quantity}` : ''}`} />
+        ${recCode(row) && html`<${SlipLine} label="Code" value=${html`<span class="mono" style="color:var(--hivis);font-weight:700">${recCode(row)}</span>`} />`}
+        <${SlipLine} label="Type" value=${row.txn_type === 'issuance' ? 'Material issued' : 'Tool borrowed'} />
+        <${SlipLine} label="Status" value=${recState(row)} />
+        <${SlipLine} label=${row.txn_type === 'issuance' ? 'Receiver' : 'Borrower'} value=${row.employees?.name || row.employee_id} />
+        ${row.project_vessel && html`<${SlipLine} label="Project / Vessel" value=${row.project_vessel} />`}
+        ${row.issued_by && html`<${SlipLine} label=${row.txn_type === 'issuance' ? 'Issued by' : 'Released by'} value=${row.issued_by} />`}
+        <${SlipLine} label=${row.txn_type === 'issuance' ? 'Issued' : 'Borrowed'} value=${html`<span class="mono" style="font-weight:600">${fmt(row.borrowed_at)}</span>`} />
+        ${row.returned_at && html`<${SlipLine} label="Returned" value=${html`<span class="mono" style="font-weight:600">${fmt(row.returned_at)}</span>`} />`}
+        ${row.received_by && html`<${SlipLine} label="Received by" value=${row.received_by} />`}
+        ${row.return_condition && html`<${SlipLine} label="Condition" value=${row.return_condition} />`}
+        ${row.notes && html`<${SlipLine} label="Notes" value=${row.notes} />`}
+        <button class="btn ghost" style="margin-top:12px" onClick=${onClose}>Close</button>
+      </div>
+    </div>`;
+}
+
 // ---------- Recent issuances (materials, read-only) ----------
 function RecentIssuances({ rows }) {
   if (!rows.length) return html`<div class="card"><div class="empty">No materials issued yet.</div></div>`;
@@ -800,6 +854,9 @@ function App() {
   const [outCounts, setOutCounts] = useState({});
   const [unitsRows, setUnitsRows] = useState([]);
   const [returning, setReturning] = useState(null);  // borrow row being returned
+  const [records, setRecords] = useState([]);
+  const [recordFilter, setRecordFilter] = useState('all');
+  const [recDetail, setRecDetail] = useState(null);
   const [toast, setToast] = useState(null);
   const [fatal, setFatal] = useState(null);
 
@@ -830,6 +887,10 @@ function App() {
     try { setUnitsRows(await getUnits(siteFilter)); } catch (e) { flash('Units load failed: ' + e.message, true); }
   }, [siteFilter]);
 
+  const loadRecords = useCallback(async () => {
+    try { setRecords(await getRecords(siteFilter)); } catch (e) { flash('Records load failed: ' + e.message, true); }
+  }, [siteFilter]);
+
   useEffect(() => { (async () => {
     try {
       const [s, e, i] = await Promise.all([getSites(), getEmployees(), getItems()]);
@@ -848,6 +909,7 @@ function App() {
   useEffect(() => { loadIssues(); }, [loadIssues]);
   useEffect(() => { loadStock(); }, [loadStock]);
   useEffect(() => { loadUnits(); }, [loadUnits]);
+  useEffect(() => { loadRecords(); }, [loadRecords]);
 
   const outUnitIds = new Set(open.map(o => o.unit_id).filter(Boolean));
 
@@ -924,12 +986,16 @@ function App() {
 
       ${activeSite && html`<div>
 
-      <div class="tabs" style="margin-bottom:10px">
+      <div class="tabs" style="margin-bottom:10px;flex-wrap:wrap">
         <button class=${section==='borrow'?'on':''} onClick=${() => { setSection('borrow'); setTab('form'); }}>TOOL INVENTORY</button>
         <button class=${section==='issue'?'on':''}  onClick=${() => { setSection('issue');  setTab('form'); }}>ISSUE</button>
+        <button class=${section==='records'?'on':''} onClick=${() => setSection('records')}>RECORDS</button>
       </div>
 
-      ${(() => {
+      ${section === 'records' && html`<${Records} rows=${records}
+        filter=${recordFilter} setFilter=${setRecordFilter} onOpen=${setRecDetail} />`}
+
+      ${section !== 'records' && (() => {
         const isBorrow = section === 'borrow';
         const mode = isBorrow ? 'borrow' : 'issuance';
         const sectionItems = items.filter(i => isBorrow ? i.track_type !== 'issue' : i.track_type === 'issue');
@@ -971,12 +1037,14 @@ function App() {
         `;
       })()}
 
-      <p class="note">Tip: add your ${section==='issue' ? 'materials' : 'tools'} in the <b>Items</b> tab — they appear in the dropdowns automatically.</p>
+      ${section !== 'records' && html`<p class="note">Tip: add your ${section==='issue' ? 'materials' : 'tools'} in the <b>Items</b> tab — they appear in the dropdowns automatically.</p>`}
       </div>`}
     </div>
 
     ${returning && html`<${ReturnSlip} row=${returning}
       onConfirm=${confirmReturn} onCancel=${() => setReturning(null)} />`}
+
+    ${recDetail && html`<${RecordDetail} row=${recDetail} onClose=${() => setRecDetail(null)} />`}
 
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
   `;
