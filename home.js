@@ -29,6 +29,15 @@ async function updateEmployee(id, fields) {
   const { error } = await supabase.from('employees').update(fields).eq('id', id);
   if (error) throw error;
 }
+async function getSetting(key) {
+  const { data } = await supabase.from('settings').select('value').eq('key', key).maybeSingle();
+  return data ? data.value : null;
+}
+async function setSetting(key, value) {
+  const { data } = await supabase.from('settings').select('id').eq('key', key).maybeSingle();
+  if (data) { const { error } = await supabase.from('settings').update({ value }).eq('key', key); if (error) throw error; }
+  else { const { error } = await supabase.from('settings').insert({ key, value }); if (error) throw error; }
+}
 
 function Field({ label, children }) {
   return html`<div class="field"><label>${label}</label>${children}</div>`;
@@ -78,6 +87,7 @@ function App() {
   const [empPin, setEmpPin] = useState('');
   const [empSick, setEmpSick] = useState('');
   const [empVac, setEmpVac] = useState('');
+  const [coordPin, setCoordPin] = useState('');
   const [toast, setToast] = useState(null);
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
 
@@ -87,6 +97,12 @@ function App() {
     if (!newPin.trim()) { flash('Enter a new PIN'); return; }
     localStorage.setItem(PIN_KEY, newPin.trim());
     setCurPin(''); setNewPin(''); flash('Admin PIN changed');
+  };
+
+  const saveCoordPin = async () => {
+    if (!coordPin.trim()) { flash('Enter a passcode'); return; }
+    try { await setSetting('coordinator_pin', coordPin.trim()); setCoordPin(''); flash('Assistant passcode set'); }
+    catch (e) { flash('Error: ' + e.message); }
   };
 
   const loadEmps = async () => { try { setEmps(await getEmployees()); } catch (_) {} };
@@ -171,6 +187,15 @@ function App() {
           <${Field} label="New PIN"><input type="password" inputmode="numeric" value=${newPin} onInput=${e => setNewPin(e.target.value)} /><//>
           <button class="btn" onClick=${changePin}>Save new PIN</button>
           <p class="note" style="margin-top:10px">This is the single admin password (dashboard + coordinator). Stored on this device.</p>
+        </div>
+
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Assistant (coordinator) passcode</div>
+          <p class="note" style="margin:0 0 12px">The passcode your assistant uses to open the coordinator page on her own device.</p>
+          <${Field} label="Set / change assistant passcode">
+            <input type="password" inputmode="numeric" value=${coordPin} onInput=${e => setCoordPin(e.target.value)} placeholder="e.g. 4321" />
+          <//>
+          <button class="btn" onClick=${saveCoordPin}>Save assistant passcode</button>
         </div>
 
         <div class="card">
