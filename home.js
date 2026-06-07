@@ -38,6 +38,29 @@ async function addSalaryChange(empId, rate, date, note) {
   if (error) throw error;
   await supabase.from('employees').update({ daily_rate: rate }).eq('id', empId);  // current rate
 }
+async function getBorrowedNow() {
+  const { data, error } = await supabase.from('borrow_issuance')
+    .select('id, quantity, borrowed_at, project_vessel, items(name, item_code, unit), employees(name), item_units(unit_code), sites(name)')
+    .eq('status', 'out').order('borrowed_at', { ascending: false }).limit(500);
+  if (error) throw error;
+  return data;
+}
+async function getRepairUnits() {
+  const { data, error } = await supabase.from('item_units')
+    .select('id, unit_code, defect, repair_eta, items(name, item_code), sites(name)')
+    .eq('status', 'repair').eq('active', true).order('unit_code').limit(500);
+  if (error) throw error;
+  return data;
+}
+async function getInventory() {
+  const { data: units, error: e1 } = await supabase.from('item_units')
+    .select('item_id, site_id, status, items(name), sites(name)').eq('active', true).limit(5000);
+  if (e1) throw e1;
+  const { data: outs, error: e2 } = await supabase.from('borrow_issuance')
+    .select('item_id, site_id').eq('status', 'out').limit(5000);
+  if (e2) throw e2;
+  return { units, outs };
+}
 async function updateEmployee(id, fields) {
   const { error } = await supabase.from('employees').update(fields).eq('id', id);
   if (error) throw error;
@@ -110,6 +133,9 @@ function App() {
   const [incDate, setIncDate] = useState('');
   const [incNote, setIncNote] = useState('');
   const [salHist, setSalHist] = useState([]);
+  const [bor, setBor] = useState(null);     // borrowed-now list
+  const [rep, setRep] = useState(null);     // repair units
+  const [inv, setInv] = useState(null);     // { units, outs }
   const [toast, setToast] = useState(null);
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
 
@@ -180,6 +206,18 @@ function App() {
   useEffect(() => { if (authed && view === 'admin') loadEmps(); }, [authed, view]);
   useEffect(() => { if (authed && showSet) loadEmps(); }, [authed, showSet]);
 
+  useEffect(() => {
+    if (!(authed && view === 'admin')) return;
+    if (adminTab === 'borrowed') (async () => {
+      try { setBor(await getBorrowedNow()); setInv(await getInventory()); }
+      catch (e) { flash('Load failed: ' + e.message); }
+    })();
+    if (adminTab === 'repair') (async () => {
+      try { setRep(await getRepairUnits()); }
+      catch (e) { flash('Load failed: ' + e.message); }
+    })();
+  }, [adminTab, authed, view]);
+
   // auto-logout the admin after 2 minutes of no activity
   useEffect(() => {
     if (!(authed && view === 'admin')) return;
@@ -220,9 +258,9 @@ function App() {
     ${toast && html`<div class="toast">${toast}</div>`}`;
 
   const live = [
-    { ico:'🔧', num:m.toolsOut,  unit:'out now',        title:'Tool Borrowing',   href:'./borrower-equipments/' },
+    { ico:'🔧', num:m.toolsOut,  unit:'out now',        title:'Tool Borrowing',   onClick:() => setAdminTab('borrowed') },
     { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', href:'./borrower-equipments/' },
-    { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      href:'./borrower-equipments/' },
+    { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  href:'./coordinator/' },
     { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
   ];
@@ -232,6 +270,94 @@ function App() {
     { ico:'📊', title:'Project Status' },
     { ico:'💰', title:'Cash Advance / Payroll' },
   ];
+
+  // ---- admin: tool borrowing monitor (out now + inventory per site) ----
+  if (adminTab === 'borrowed') {
+    const dt = (s) => s ? new Date(s).toLocaleDateString() : '—';
+    // aggregate inventory: site -> item -> { owned, repair, out }
+    const sm = {};
+    if (inv) {
+      (inv.units || []).forEach(u => {
+        const sid = u.site_id || 'none', sname = (u.sites && u.sites.name) || 'Unassigned';
+        const iid = u.item_id, iname = (u.items && u.items.name) || '—';
+        sm[sid] = sm[sid] || { name: sname, items: {} };
+        const it = sm[sid].items[iid] = sm[sid].items[iid] || { name: iname, owned: 0, repair: 0, out: 0 };
+        it.owned++; if (u.status === 'repair') it.repair++;
+      });
+      (inv.outs || []).forEach(o => {
+        const sid = o.site_id || 'none', iid = o.item_id;
+        if (sm[sid] && sm[sid].items[iid]) sm[sid].items[iid].out++;
+      });
+    }
+    const sites = Object.values(sm).sort((a, b) => a.name.localeCompare(b.name));
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">TOOL BORROWING</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="card">
+          <label>Currently borrowed${bor ? ` (${bor.length})` : ''}</label>
+          ${bor == null ? html`<div class="empty">Loading…</div>`
+            : bor.length ? bor.map(b => html`
+              <div class="row" key=${b.id} style="align-items:flex-start">
+                <div>
+                  <div class="name">${b.items ? b.items.name : '—'} ${b.item_units && b.item_units.unit_code ? html`<span class="mono" style="color:var(--ink-dim);font-weight:400">· ${b.item_units.unit_code}</span>` : ''}</div>
+                  <div class="unit">${b.employees ? b.employees.name : '—'}${b.project_vessel ? ' · ' + b.project_vessel : ''}</div>
+                  <div class="unit">${(b.sites && b.sites.name) || '—'} · ${dt(b.borrowed_at)}${b.quantity > 1 ? ' · qty ' + b.quantity : ''}</div>
+                </div>
+                <span class="badge" style="background:var(--hivis);color:#000">OUT</span>
+              </div>`)
+            : html`<div class="empty">Nothing borrowed right now.</div>`}
+        </div>
+
+        <div class="sectlabel">Inventory by site</div>
+        ${inv == null ? html`<div class="card"><div class="empty">Loading…</div></div>`
+          : sites.length ? sites.map(s => html`
+            <div class="card" key=${s.name}>
+              <label>${s.name}</label>
+              ${Object.values(s.items).sort((a, b) => a.name.localeCompare(b.name)).map(it => {
+                const avail = it.owned - it.repair - it.out;
+                return html`<div class="row">
+                  <div><div class="name">${it.name}</div>
+                    <div class="unit">${it.out ? it.out + ' out · ' : ''}${it.repair ? it.repair + ' repair · ' : ''}owned ${it.owned}</div></div>
+                  <div class=${'num' + (avail <= 0 ? ' dim' : '')} style="font-size:20px">${avail}</div>
+                </div>`;
+              })}
+            </div>`)
+          : html`<div class="card"><div class="empty">No tools registered yet.</div></div>`}
+        <p class="note" style="text-align:center">View only. The big number is available now.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  // ---- admin: tool repair monitor ----
+  if (adminTab === 'repair') {
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">TOOL REPAIR</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="card">
+          <label>In repair${rep ? ` (${rep.length})` : ''}</label>
+          ${rep == null ? html`<div class="empty">Loading…</div>`
+            : rep.length ? rep.map(u => html`
+              <div class="row" key=${u.id} style="align-items:flex-start">
+                <div>
+                  <div class="name">${u.items ? u.items.name : '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${u.unit_code}</span></div>
+                  <div class="unit">Location: ${(u.sites && u.sites.name) || 'Unassigned'}</div>
+                  ${u.defect ? html`<div class="unit">Defect: ${u.defect}</div>` : ''}
+                  ${u.repair_eta ? html`<div class="unit">ETA: ${u.repair_eta}</div>` : ''}
+                </div>
+                <span class="badge">REPAIR</span>
+              </div>`)
+            : html`<div class="empty">No tools in repair.</div>`}
+        </div>
+        <p class="note" style="text-align:center">View only.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
 
   // ---- admin: personnel roster (read-only list with details) ----
   if (adminTab === 'people') {
