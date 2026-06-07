@@ -323,7 +323,7 @@ function App() {
     <header class="app">
       <div class="wrap"><div class="brand" style="display:flex;align-items:center;justify-content:space-between">
         <span><b>RSR</b><span class="tag">COORDINATOR</span></span>
-        <a href="../" style="color:var(--ink-dim);text-decoration:none;font-size:13px;font-weight:700">⌂ Home</a>
+        <a href="../" onClick=${() => sessionStorage.removeItem('rsr_coord')} style="color:var(--ink-dim);text-decoration:none;font-size:13px;font-weight:700">⌂ Home</a>
       </div></div>
     </header>
     <div class="wrap">
