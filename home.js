@@ -170,6 +170,7 @@ function App() {
   const [empSick, setEmpSick] = useState('');
   const [empVac, setEmpVac] = useState('');
   const [coordPin, setCoordPin] = useState('');
+  const [sitePin, setSitePin] = useState('');
   const [rate, setRate] = useState('');          // current/starting daily rate
   const [incRate, setIncRate] = useState('');     // new rate for an increase
   const [incDate, setIncDate] = useState('');
@@ -197,6 +198,11 @@ function App() {
   const saveCoordPin = async () => {
     if (!coordPin.trim()) { flash('Enter a passcode'); return; }
     try { await setSetting('coordinator_pin', coordPin.trim()); setCoordPin(''); flash('Assistant passcode set'); }
+    catch (e) { flash('Error: ' + e.message); }
+  };
+  const saveSitePin = async () => {
+    if (!sitePin.trim()) { flash('Enter a passcode'); return; }
+    try { await setSetting('issuance_pin', sitePin.trim()); setSitePin(''); flash('Issuance passcode set'); }
     catch (e) { flash('Error: ' + e.message); }
   };
 
@@ -318,6 +324,11 @@ function App() {
           <div class="ico">🗂️</div>
           <h3>Coordinator</h3>
           <div class="unit">Personnel &amp; vessel schedules</div>
+        </a>
+        <a class="tile" href="./borrower-equipments/">
+          <div class="ico">📦</div>
+          <h3>Issuance</h3>
+          <div class="unit">Borrow &amp; issue tools / materials</div>
         </a>
       </div>
       <p class="note" style="text-align:center;margin-top:6px">RSR Engineering Services · Cebu</p>
@@ -636,6 +647,15 @@ function App() {
             <input type="password" inputmode="numeric" value=${coordPin} onInput=${e => setCoordPin(e.target.value)} placeholder="e.g. 4321" />
           <//>
           <button class="btn" onClick=${saveCoordPin}>Save assistant passcode</button>
+        </div>
+
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Issuance (site) passcode</div>
+          <p class="note" style="margin:0 0 12px">The passcode site personnel use to open the borrow/issue app.</p>
+          <${Field} label="Set / change issuance passcode">
+            <input type="password" inputmode="numeric" value=${sitePin} onInput=${e => setSitePin(e.target.value)} placeholder="e.g. 7777" />
+          <//>
+          <button class="btn" onClick=${saveSitePin}>Save issuance passcode</button>
         </div>
 
         <div class="card">
