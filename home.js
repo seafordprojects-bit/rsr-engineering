@@ -21,7 +21,7 @@ async function countRows(table, build) {
 }
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, name, code, pin, sl_balance, vl_balance, daily_rate').order('name').limit(2000);
+    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
@@ -243,7 +243,16 @@ function App() {
                 .map(e => html`<option value=${e.id}>${e.pin ? '✓' : '⚠'} ${e.name} (${e.code || '—'})</option>`)}
             </select>
           <//>
-          ${empSel && !((emps.find(x => x.id === empSel) || {}).pin) && html`<p class="note" style="color:var(--hivis);margin:-6px 0 12px">This employee has no passcode yet.</p>`}
+          ${empSel && (() => {
+            const e = emps.find(x => x.id === empSel) || {};
+            return html`<div class="card" style="background:var(--panel-2);margin:0 0 14px">
+              <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.code || '—'}</span></div>
+              <div class="unit">${e.position || '—'}${e.phone ? ' · ' + e.phone : ''}${e.started_on ? ' · since ' + e.started_on : ''}</div>
+              <div class="unit">Leave — Sick ${e.sl_balance ?? 0} · Vacation ${e.vl_balance ?? 0}</div>
+              <div class="unit">Daily rate — ${e.daily_rate ? '₱' + Number(e.daily_rate).toLocaleString('en-PH') : 'not set'}</div>
+              <div class="unit">Passcode — ${e.pin ? 'set ✓' : 'not set ⚠'}</div>
+            </div>`;
+          })()}
           ${empSel && html`
             <${Field} label="Passcode (PIN)">
               <input inputmode="numeric" value=${empPin} onInput=${e => setEmpPin(e.target.value)} placeholder="e.g. 1234" />
