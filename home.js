@@ -56,7 +56,7 @@ function Field({ label, children }) {
   return html`<div class="field"><label>${label}</label>${children}</div>`;
 }
 
-function Lock({ onUnlock, toast }) {
+function Lock({ onUnlock, onBack, toast }) {
   const [pin, setPin] = useState('');
   const tryUnlock = () => {
     const admin = localStorage.getItem(PIN_KEY) || '1234';
@@ -66,14 +66,15 @@ function Lock({ onUnlock, toast }) {
   return html`
     <div class="wrap">
       <div class="card lock">
-        <div class="brand" style="justify-content:center;margin-bottom:6px"><b>RSR</b><span class="tag">ENGINEERING</span></div>
-        <p class="note" style="margin:0 0 14px">Admin dashboard</p>
+        <div class="brand" style="justify-content:center;margin-bottom:6px"><b>RSR</b><span class="tag">ADMIN</span></div>
+        <p class="note" style="margin:0 0 14px">Admin login</p>
         <${Field} label="Enter admin PIN">
           <input type="password" inputmode="numeric" value=${pin}
             onInput=${e => setPin(e.target.value)} placeholder="default 1234"
             onKeyDown=${e => { if (e.key === 'Enter') tryUnlock(); }} />
         <//>
         <button class="btn" onClick=${tryUnlock}>Unlock</button>
+        ${onBack && html`<button class="btn ghost" style="margin-top:8px" onClick=${onBack}>← Back</button>`}
       </div>
     </div>`;
 }
@@ -90,6 +91,7 @@ function Tile({ ico, num, unit, title, href }) {
 }
 
 function App() {
+  const [view, setView] = useState('choose');   // 'choose' | 'admin'
   const [authed, setAuthed] = useState(sessionStorage.getItem(SESSION_KEY) === '1');
   const [m, setM] = useState({});
   const [showSet, setShowSet] = useState(false);
@@ -159,7 +161,7 @@ function App() {
   };
 
   useEffect(() => {
-    if (!authed) return;
+    if (!authed || view !== 'admin') return;
     const iso30 = new Date(Date.now() - 30 * 864e5).toISOString();
     (async () => {
       const [toolsOut, inRepair, issued30, vessels, people] = await Promise.all([
@@ -171,12 +173,36 @@ function App() {
       ]);
       setM({ toolsOut, inRepair, issued30, vessels, people });
     })();
-  }, [authed]);
+  }, [authed, view]);
 
-  useEffect(() => { if (authed) loadEmps(); }, [authed]);
+  useEffect(() => { if (authed && view === 'admin') loadEmps(); }, [authed, view]);
   useEffect(() => { if (authed && showSet) loadEmps(); }, [authed, showSet]);
 
-  if (!authed) return html`<${Lock} onUnlock=${() => setAuthed(true)} toast=${flash} />
+  // ---- front chooser: Admin | Coordinator ----
+  if (view === 'choose') return html`
+    <header class="app">
+      <div class="wrap"><div class="brand"><b>RSR</b><span class="tag">ENGINEERING</span></div></div>
+    </header>
+    <div class="wrap">
+      <div class="sectlabel">Choose your area</div>
+      <div class="grid">
+        <div class="tile" style="cursor:pointer" onClick=${() => setView('admin')}>
+          <div class="ico">🛠️</div>
+          <h3>Admin</h3>
+          <div class="unit">Dashboard, passcodes, salary, leave</div>
+        </div>
+        <a class="tile" href="./coordinator/">
+          <div class="ico">🗂️</div>
+          <h3>Coordinator</h3>
+          <div class="unit">Personnel &amp; vessel schedules</div>
+        </a>
+      </div>
+      <p class="note" style="text-align:center;margin-top:6px">RSR Engineering Services · Cebu</p>
+    </div>
+    ${toast && html`<div class="toast">${toast}</div>`}`;
+
+  // ---- admin login ----
+  if (!authed) return html`<${Lock} onUnlock=${() => setAuthed(true)} onBack=${() => setView('choose')} toast=${flash} />
     ${toast && html`<div class="toast">${toast}</div>`}`;
 
   const live = [
@@ -200,8 +226,8 @@ function App() {
         <span style="display:flex;gap:12px;align-items:center">
           <button onClick=${() => setShowSet(s => !s)}
             style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">settings</button>
-          <button onClick=${() => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); }}
-            style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">lock</button>
+          <button onClick=${() => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setView('choose'); setShowSet(false); }}
+            style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">home</button>
         </span>
       </div></div>
     </header>
