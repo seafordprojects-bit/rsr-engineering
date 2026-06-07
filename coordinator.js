@@ -23,6 +23,10 @@ async function updateEmployee(id, fields) {
   const { error } = await supabase.from('employees').update(fields).eq('id', id);
   if (error) throw error;
 }
+async function getSetting(key) {
+  const { data } = await supabase.from('settings').select('value').eq('key', key).maybeSingle();
+  return data ? data.value : null;
+}
 async function getVoyages() {
   const { data, error } = await supabase.from('voyages')
     .select('*, sites(name)').order('created_at', { ascending: false }).limit(500);
@@ -47,22 +51,27 @@ function Field({ label, children }) {
   return html`<div class="field"><label>${label}</label>${children}</div>`;
 }
 
-// ---------- PIN gate ----------
+// ---------- PIN gate (coordinator's own passcode, set by admin, stored in DB) ----------
 function Lock({ onUnlock, toast }) {
   const [pin, setPin] = useState('');
-  const tryUnlock = () => {
-    const admin = localStorage.getItem('rsr_admin_pin') || '1234';
-    if (pin === admin) { sessionStorage.setItem('rsr_admin', '1'); onUnlock(); }
-    else toast('Wrong PIN', true);
+  const [busy, setBusy] = useState(false);
+  const tryUnlock = async () => {
+    setBusy(true);
+    let saved = '1234';                       // default until the admin sets one
+    try { const v = await getSetting('coordinator_pin'); if (v) saved = v; } catch (_) {}
+    setBusy(false);
+    if (pin === saved) { sessionStorage.setItem('rsr_coord', '1'); onUnlock(); }
+    else toast('Wrong passcode', true);
   };
   return html`
     <div class="card lock">
       <div class="brand" style="justify-content:center;margin-bottom:14px"><b>RSR</b><span class="tag">COORDINATOR</span></div>
-      <${Field} label="Enter coordinator PIN">
+      <${Field} label="Enter coordinator passcode">
         <input type="password" inputmode="numeric" value=${pin}
-          onInput=${e => setPin(e.target.value)} placeholder="default 1234" />
+          onInput=${e => setPin(e.target.value)} placeholder="passcode"
+          onKeyDown=${e => { if (e.key === 'Enter') tryUnlock(); }} />
       <//>
-      <button class="btn" onClick=${tryUnlock}>Unlock</button>
+      <button class="btn" disabled=${busy} onClick=${tryUnlock}>${busy ? 'Checking…' : 'Unlock'}</button>
     </div>`;
 }
 
@@ -286,7 +295,7 @@ function Settings({ toast }) {
 
 // ---------- App ----------
 function App() {
-  const [authed, setAuthed] = useState(sessionStorage.getItem('rsr_admin') === '1');
+  const [authed, setAuthed] = useState(sessionStorage.getItem('rsr_coord') === '1');
   const [tab, setTab] = useState('personnel');
   const [employees, setEmployees] = useState([]);
   const [voyages, setVoyages] = useState([]);
@@ -306,11 +315,8 @@ function App() {
 
   if (!authed) return html`
     <div class="wrap">
-      <div class="card lock">
-        <div class="brand" style="justify-content:center;margin-bottom:6px"><b>RSR</b><span class="tag">COORDINATOR</span></div>
-        <p class="note" style="margin:0 0 14px">Open this from the Admin dashboard to unlock.</p>
-        <a class="btn" href="../" style="display:block;text-align:center;text-decoration:none">Go to Admin</a>
-      </div>
+      <${Lock} onUnlock=${() => setAuthed(true)} toast=${flash} />
+      ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
     </div>`;
 
   return html`
