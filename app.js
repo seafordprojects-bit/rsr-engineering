@@ -1025,7 +1025,7 @@ function App() {
 
       <div class="tabs" style="margin-bottom:10px;flex-wrap:wrap">
         <button class=${section==='borrow'?'on':''} onClick=${() => { setSection('borrow'); setTab('form'); }}>TOOL INVENTORY</button>
-        <button onClick=${() => { window.location.href = '../material-issuance/'; }}>ISSUE</button>
+        <button onClick=${() => { window.location.href = '/rsr-engineering/material-issuance/'; }}>ISSUE</button>
         <button class=${section==='records'?'on':''} onClick=${() => setSection('records')}>RECORDS</button>
       </div>
 
