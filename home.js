@@ -61,6 +61,13 @@ async function getInventory() {
   if (e2) throw e2;
   return { units, outs };
 }
+async function getIssued() {
+  const { data, error } = await supabase.from('borrow_issuance')
+    .select('id, quantity, borrowed_at, project_vessel, issued_by, items(name, item_code, unit), employees(name), sites(name)')
+    .eq('txn_type', 'issuance').order('borrowed_at', { ascending: false }).limit(500);
+  if (error) throw error;
+  return data;
+}
 // attendance dates are stored in PH format (MM/DD/YYYY) by the kiosk
 function todayPH() { return new Date().toLocaleDateString('en-PH', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
 function todayYmd() { const d = new Date(), z = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`; }
@@ -171,6 +178,7 @@ function App() {
   const [bor, setBor] = useState(null);     // borrowed-now list
   const [rep, setRep] = useState(null);     // repair units
   const [inv, setInv] = useState(null);     // { units, outs }
+  const [iss, setIss] = useState(null);     // issued materials list
   const [att, setAtt] = useState(null);     // today's attendance summary
   const [attRows, setAttRows] = useState(null);  // per-employee rows for the monitor
   const [attYmd, setAttYmd] = useState(todayYmd());
@@ -275,6 +283,10 @@ function App() {
       try { setRep(await getRepairUnits()); }
       catch (e) { flash('Load failed: ' + e.message); }
     })();
+    if (adminTab === 'issued') (async () => {
+      try { setIss(await getIssued()); }
+      catch (e) { flash('Load failed: ' + e.message); }
+    })();
   }, [adminTab, authed, view]);
 
   // auto-logout the admin after 2 minutes of no activity
@@ -318,7 +330,7 @@ function App() {
 
   const live = [
     { ico:'🔧', num:m.toolsOut,  unit:'out now',        title:'Tool Borrowing',   onClick:() => setAdminTab('borrowed') },
-    { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', href:'./borrower-equipments/' },
+    { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', onClick:() => setAdminTab('issued') },
     { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  href:'./coordinator/' },
     { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
@@ -386,6 +398,34 @@ function App() {
             </div>`)
           : html`<div class="card"><div class="empty">No tools registered yet.</div></div>`}
         <p class="note" style="text-align:center">View only. The big number is available now.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  // ---- admin: material issuance monitor (read-only) ----
+  if (adminTab === 'issued') {
+    const dt = (s) => s ? new Date(s).toLocaleDateString() : '—';
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">MATERIAL ISSUANCE</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="card">
+          <label>Issued materials${iss ? ` (${iss.length})` : ''}</label>
+          ${iss == null ? html`<div class="empty">Loading…</div>`
+            : iss.length ? iss.map(r => html`
+              <div class="row" key=${r.id} style="align-items:flex-start">
+                <div>
+                  <div class="name">${r.items ? r.items.name : '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.quantity || 1}${r.items && r.items.unit ? ' ' + r.items.unit : ''}</span></div>
+                  <div class="unit">To: ${r.employees ? r.employees.name : '—'}${r.issued_by ? ' · by ' + r.issued_by : ''}</div>
+                  <div class="unit">${(r.sites && r.sites.name) || '—'}${r.project_vessel ? ' · ' + r.project_vessel : ''} · ${dt(r.borrowed_at)}</div>
+                </div>
+                <span class="badge" style="background:#12B89E;color:#000">ISSUED</span>
+              </div>`)
+            : html`<div class="empty">No materials issued yet.</div>`}
+        </div>
+        <p class="note" style="text-align:center">View only. Site personnel record issuance in the borrower app.</p>
       </div>
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
