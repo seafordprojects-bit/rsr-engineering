@@ -70,6 +70,31 @@ async function getAttendance(dateStr) {
   if (error) throw error;
   return data || [];
 }
+async function getLeaves() {
+  const { data, error } = await supabase.from('leave_requests').select('*').order('created_at', { ascending: false }).limit(100);
+  if (error) throw error;
+  return data || [];
+}
+async function getApprovals() {
+  const { data, error } = await supabase.from('pending_approvals').select('*').order('created_at', { ascending: false }).limit(100);
+  if (error) throw error;
+  return data || [];
+}
+async function getStraightDuty() {
+  const { data, error } = await supabase.from('straight_duty').select('*').order('created_at', { ascending: false }).limit(50);
+  if (error) throw error;
+  return data || [];
+}
+async function getViolations() {
+  const { data, error } = await supabase.from('violations').select('*').order('count', { ascending: false }).limit(200);
+  if (error) throw error;
+  return data || [];
+}
+async function getSmsLog() {
+  const { data, error } = await supabase.from('sms_log').select('*').order('created_at', { ascending: false }).limit(100);
+  if (error) throw error;
+  return data || [];
+}
 async function updateEmployee(id, fields) {
   const { error } = await supabase.from('employees').update(fields).eq('id', id);
   if (error) throw error;
@@ -112,11 +137,12 @@ function Lock({ onUnlock, onBack, toast }) {
 }
 
 function Tile({ ico, num, unit, title, href, onClick }) {
+  const showNum = num !== undefined;
   const inner = html`
     <div class="ico">${ico}</div>
-    <div class=${'num' + (num == null ? ' dim' : '')}>${num == null ? '—' : num}</div>
-    <h3>${title}</h3>
-    <div class="unit">${unit}</div>`;
+    ${showNum ? html`<div class=${'num' + (num == null ? ' dim' : '')}>${num == null ? '—' : num}</div>` : ''}
+    <h3 style=${showNum ? '' : 'margin-top:8px'}>${title}</h3>
+    ${unit ? html`<div class="unit">${unit}</div>` : ''}`;
   if (onClick) return html`<div class="tile" style="cursor:pointer" onClick=${onClick}>${inner}</div>`;
   return href
     ? html`<a class="tile" href=${href}>${inner}</a>`
@@ -148,6 +174,7 @@ function App() {
   const [att, setAtt] = useState(null);     // today's attendance summary
   const [attRows, setAttRows] = useState(null);  // per-employee rows for the monitor
   const [attYmd, setAttYmd] = useState(todayYmd());
+  const [hrRows, setHrRows] = useState(null);   // generic rows for HR monitor tabs
   const [toast, setToast] = useState(null);
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
 
@@ -227,6 +254,13 @@ function App() {
     if (!(authed && view === 'admin' && adminTab === 'attendance')) return;
     (async () => { try { setAttRows(await getAttendance(ymdToPH(attYmd))); } catch (e) { flash('Load failed: ' + e.message); } })();
   }, [adminTab, attYmd, authed, view]);
+
+  useEffect(() => {
+    const loaders = { leaves: getLeaves, approvals: getApprovals, duty: getStraightDuty, violations: getViolations, sms: getSmsLog };
+    if (!(authed && view === 'admin' && loaders[adminTab])) return;
+    setHrRows(null);
+    (async () => { try { setHrRows(await loaders[adminTab]()); } catch (e) { flash('Load failed: ' + e.message); } })();
+  }, [adminTab, authed, view]);
 
   useEffect(() => { if (authed && view === 'admin') loadEmps(); }, [authed, view]);
   useEffect(() => { if (authed && showSet) loadEmps(); }, [authed, showSet]);
@@ -380,6 +414,86 @@ function App() {
             : html`<div class="empty">No tools in repair.</div>`}
         </div>
         <p class="note" style="text-align:center">View only.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  // ---- admin: HR monitors (read-only) ----
+  const hrTitles = { leaves:'LEAVES', approvals:'APPROVALS', duty:'STRAIGHT DUTY', violations:'VIOLATIONS', sms:'SMS LOG' };
+  if (hrTitles[adminTab]) {
+    const statusPill = (s) => {
+      const k = (s || '').toLowerCase();
+      const c = k === 'approved' ? '#12B89E' : k === 'rejected' || k === 'denied' ? '#D64045' : k === 'pending' ? 'var(--hivis)' : '#888';
+      return html`<span class="badge" style=${'background:' + c + ';color:#000'}>${s || '—'}</span>`;
+    };
+    const apprLabels = {
+      late_lunch_out:'Late Lunch Out', late_pm_out:'Late PM Break Out', late_timein:'Late Time In',
+      late_timeout:'Late Time Out', incomplete:'Incomplete Record', early_break_lunch_out:'Early Lunch Out',
+      early_break_pm_out:'Early PM Break Out', straight_duty_lunch:'Straight Duty — Lunch', straight_duty_pm:'Straight Duty — PM',
+    };
+    const body = (() => {
+      if (hrRows == null) return html`<div class="empty">Loading…</div>`;
+      if (!hrRows.length) return html`<div class="empty">Nothing here yet.</div>`;
+      if (adminTab === 'leaves') return hrRows.map(r => html`
+        <div class="row" key=${r.id} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.employee_name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.type || '—'}</span></div>
+            <div class="unit">${r.start_date || '?'} → ${r.end_date || '?'}${r.days ? ' · ' + r.days + ' day(s)' : ''}</div>
+            ${r.reason ? html`<div class="unit">${r.reason}</div>` : ''}
+            ${r.approved_by ? html`<div class="unit">By ${r.approved_by}${r.approved_via ? ' (' + r.approved_via + ')' : ''}</div>` : ''}
+          </div>
+          ${statusPill(r.status)}
+        </div>`);
+      if (adminTab === 'approvals') return hrRows.map(r => html`
+        <div class="row" key=${r.id} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.employee_name || '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">${r.employee_dept ? '· ' + r.employee_dept : ''}</span></div>
+            <div class="unit">${apprLabels[r.type] || r.type || '—'}</div>
+            ${r.details ? html`<div class="unit">${r.details}</div>` : ''}
+            <div class="unit">${r.punch_time || ''}${r.date ? ' · ' + r.date : ''}</div>
+          </div>
+          ${statusPill(r.status)}
+        </div>`);
+      if (adminTab === 'duty') return hrRows.map(r => html`
+        <div class="row" key=${r.id} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.employee_name}</div>
+            <div class="unit">${r.break_type === 'lunch' ? '🍽️' : '☕'} ${r.break_label || ''}${r.date ? ' · ' + r.date : ''}</div>
+            ${r.reason ? html`<div class="unit">${r.reason}</div>` : ''}
+          </div>
+          ${statusPill(r.status)}
+        </div>`);
+      if (adminTab === 'violations') return hrRows.map(r => {
+        const hist = Array.isArray(r.history) ? r.history.slice(0, 3) : [];
+        return html`<div class="row" key=${r.id || r.employee_name} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.employee_name}</div>
+            ${hist.map(h => html`<div class="unit">#${h.violation}: ${h.date}</div>`)}
+          </div>
+          <span class="badge" style=${'background:' + (r.count >= 3 ? '#D64045' : r.count === 2 ? 'var(--hivis)' : '#888') + ';color:#000'}>🚨 ${r.count}</span>
+        </div>`;
+      });
+      if (adminTab === 'sms') return hrRows.map(r => html`
+        <div class="row" key=${r.id} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.employee_name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.phone || ''}</span></div>
+            <div class="unit">${r.date || ''}${r.day ? ' · Day ' + r.day + ' of 3' : ''}${r.network ? ' · ' + r.network : ''}</div>
+            ${r.message ? html`<div class="unit">${String(r.message).slice(0, 90)}</div>` : ''}
+          </div>
+          <span class="badge">${String(r.status || '').includes('✅') ? 'SENT' : (r.status || '—')}</span>
+        </div>`);
+    })();
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">${hrTitles[adminTab]}</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="card">
+          <label>${hrTitles[adminTab][0] + hrTitles[adminTab].slice(1).toLowerCase()}${hrRows ? ` (${hrRows.length})` : ''}</label>
+          ${body}
+        </div>
+        <p class="note" style="text-align:center">View only.${adminTab === 'approvals' || adminTab === 'leaves' ? ' Approvals are actioned via Telegram.' : ''}</p>
       </div>
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
@@ -560,6 +674,17 @@ function App() {
       <div class="sectlabel">Live overview</div>
       <div class="grid">
         ${live.map(t => html`<${Tile} ...${t} />`)}
+      </div>
+
+      <div class="sectlabel">HR monitors</div>
+      <div class="grid">
+        ${[
+          { ico:'🌴', title:'Leaves',        onClick:() => setAdminTab('leaves') },
+          { ico:'⚠️', title:'Approvals',     onClick:() => setAdminTab('approvals') },
+          { ico:'⚡', title:'Straight Duty', onClick:() => setAdminTab('duty') },
+          { ico:'🚨', title:'Violations',    onClick:() => setAdminTab('violations') },
+          { ico:'📱', title:'SMS Log',       onClick:() => setAdminTab('sms') },
+        ].map(t => html`<${Tile} ...${t} />`)}
       </div>
 
       <div class="sectlabel">On the roadmap</div>
