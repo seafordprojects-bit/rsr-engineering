@@ -61,6 +61,15 @@ async function getInventory() {
   if (e2) throw e2;
   return { units, outs };
 }
+// attendance dates are stored in PH format (MM/DD/YYYY) by the kiosk
+function todayPH() { return new Date().toLocaleDateString('en-PH', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
+function todayYmd() { const d = new Date(), z = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`; }
+function ymdToPH(ymd) { if (!ymd) return todayPH(); const [y, m, d] = ymd.split('-'); return `${m}/${d}/${y}`; }
+async function getAttendance(dateStr) {
+  const { data, error } = await supabase.from('attendance_records').select('*').eq('date', dateStr).order('employee_name');
+  if (error) throw error;
+  return data || [];
+}
 async function updateEmployee(id, fields) {
   const { error } = await supabase.from('employees').update(fields).eq('id', id);
   if (error) throw error;
@@ -136,6 +145,9 @@ function App() {
   const [bor, setBor] = useState(null);     // borrowed-now list
   const [rep, setRep] = useState(null);     // repair units
   const [inv, setInv] = useState(null);     // { units, outs }
+  const [att, setAtt] = useState(null);     // today's attendance summary
+  const [attRows, setAttRows] = useState(null);  // per-employee rows for the monitor
+  const [attYmd, setAttYmd] = useState(todayYmd());
   const [toast, setToast] = useState(null);
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
 
@@ -200,8 +212,21 @@ function App() {
         countRows('employees', q => q),
       ]);
       setM({ toolsOut, inRepair, issued30, vessels, people });
+      try {
+        const recs = await getAttendance(todayPH());
+        const c = (f) => recs.filter(f).length;
+        const present = c(r => r.status !== 'absent');
+        setAtt({ working: c(r => r.status === 'working'), onBreak: c(r => r.status === 'break'),
+                 out: c(r => r.status === 'out'), late: c(r => r.is_late),
+                 total: people || 0, absent: Math.max(0, (people || 0) - present) });
+      } catch (_) { setAtt(null); }
     })();
   }, [authed, view]);
+
+  useEffect(() => {
+    if (!(authed && view === 'admin' && adminTab === 'attendance')) return;
+    (async () => { try { setAttRows(await getAttendance(ymdToPH(attYmd))); } catch (e) { flash('Load failed: ' + e.message); } })();
+  }, [adminTab, attYmd, authed, view]);
 
   useEffect(() => { if (authed && view === 'admin') loadEmps(); }, [authed, view]);
   useEffect(() => { if (authed && showSet) loadEmps(); }, [authed, showSet]);
@@ -263,9 +288,9 @@ function App() {
     { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  href:'./coordinator/' },
     { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
+    { ico:'⏱️', num:att ? att.working : null, unit:'working now', title:'Time In / Out', onClick:() => setAdminTab('attendance') },
   ];
   const soon = [
-    { ico:'⏱️', title:'Time In / Out' },
     { ico:'📝', title:'Leave Approval' },
     { ico:'📊', title:'Project Status' },
     { ico:'💰', title:'Cash Advance / Payroll' },
@@ -355,6 +380,37 @@ function App() {
             : html`<div class="empty">No tools in repair.</div>`}
         </div>
         <p class="note" style="text-align:center">View only.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  // ---- admin: attendance monitor (per-employee, by date) ----
+  if (adminTab === 'attendance') {
+    const pill = { working:'#12B89E', break:'var(--hivis)', out:'#888', incomplete:'#E8A830', absent:'#D64045', late:'#D64045' };
+    const lbl = { working:'Working', break:'Break', out:'Out', incomplete:'Incomplete', absent:'Absent', late:'Late' };
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">ATTENDANCE</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="card">
+          <${Field} label="Date">
+            <input type="date" value=${attYmd} onInput=${e => { setAttRows(null); setAttYmd(e.target.value); }} />
+          <//>
+          <label>${ymdToPH(attYmd) === todayPH() ? 'Today' : 'Records'}${attRows ? ` (${attRows.length})` : ''}</label>
+          ${attRows == null ? html`<div class="empty">Loading…</div>`
+            : attRows.length ? attRows.map(r => html`
+              <div class="row" key=${r.id || r.employee_name} style="align-items:flex-start">
+                <div>
+                  <div class="name">${r.employee_name}${r.is_late ? html` <span class="badge" style="background:#D64045;color:#fff">LATE</span>` : ''}</div>
+                  <div class="unit">In ${r.timein || '—'} · Out ${r.timeout || '—'}${r.worked_ms ? ' · ' + (r.worked_ms / 3600000).toFixed(1) + 'h' : ''}</div>
+                </div>
+                <span class="badge" style=${'background:' + (pill[r.status] || '#888') + ';color:#fff'}>${lbl[r.status] || r.status || '—'}</span>
+              </div>`)
+            : html`<div class="empty">No attendance records for this date.</div>`}
+        </div>
+        <p class="note" style="text-align:center">View only. Punches come from the attendance kiosk.</p>
       </div>
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
@@ -488,6 +544,18 @@ function App() {
                 </div>`)}
             </div>`}
         </div>`}`}
+
+      ${att && html`
+        <div class="sectlabel">Attendance today</div>
+        <div class="card" style="cursor:pointer" onClick=${() => setAdminTab('attendance')}>
+          <div style="display:flex;gap:14px;overflow-x:auto;text-align:center">
+            ${[['Working', att.working], ['On break', att.onBreak], ['Timed out', att.out], ['Late', att.late], ['Absent', att.absent], ['Total', att.total]]
+              .map(([k, v]) => html`<div style="min-width:54px">
+                <div style="font-size:22px;font-weight:800;color:var(--ink)">${v}</div>
+                <div class="unit">${k}</div>
+              </div>`)}
+          </div>
+        </div>`}
 
       <div class="sectlabel">Live overview</div>
       <div class="grid">
