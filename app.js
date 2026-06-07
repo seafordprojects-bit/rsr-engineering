@@ -841,7 +841,40 @@ function ManageItems({ items, units, outUnitIds, fixedType, defaultSite, onAddUn
 }
 
 // ---------- App shell ----------
+async function getSetting(key) {
+  const { data } = await supabase.from('settings').select('value').eq('key', key).maybeSingle();
+  return data ? data.value : null;
+}
+
+function Lock({ onUnlock, toast }) {
+  const [pin, setPin] = useState('');
+  const [busy, setBusy] = useState(false);
+  const tryUnlock = async () => {
+    setBusy(true);
+    let saved = '1234';
+    try { const v = await getSetting('issuance_pin'); if (v) saved = v; } catch (_) {}
+    setBusy(false);
+    if (pin === saved) { sessionStorage.setItem('rsr_site', '1'); onUnlock(); }
+    else toast('Wrong passcode', true);
+  };
+  return html`
+    <div class="wrap">
+      <div class="card" style="max-width:360px;margin:40px auto;text-align:center">
+        <div class="brand" style="justify-content:center;margin-bottom:8px"><b>RSR</b><span class="tag">ISSUANCE</span></div>
+        <p class="note" style="margin:0 0 14px">Enter the issuance passcode</p>
+        <${Field} label="Passcode">
+          <input type="password" inputmode="numeric" value=${pin}
+            onInput=${e => setPin(e.target.value)} placeholder="passcode"
+            onKeyDown=${e => { if (e.key === 'Enter') tryUnlock(); }} />
+        <//>
+        <button class="btn" disabled=${busy} onClick=${tryUnlock}>${busy ? 'Checking…' : 'Unlock'}</button>
+        <a href="../" style="display:block;margin-top:10px;color:var(--ink-dim);text-decoration:none;font-size:13px;font-weight:700">⌂ Home</a>
+      </div>
+    </div>`;
+}
+
 function App() {
+  const [gated, setGated] = useState(sessionStorage.getItem('rsr_site') === '1');
   const [section, setSection] = useState('borrow'); // borrow | issue  (top level)
   const [tab, setTab] = useState('form');           // form | active | stock | items (sub level)
   const [sites, setSites] = useState([]);
@@ -955,6 +988,9 @@ function App() {
 
   const activeSite = sites.find(s => s.id === siteFilter);
 
+  if (!gated) return html`<${Lock} onUnlock=${() => setGated(true)} toast=${flash} />
+    ${toast && html`<div class=${'toast' + (toast.err ? ' err' : '')}>${toast.msg}</div>`}`;
+
   return html`
     <header class="app">
       <div class="wrap">
@@ -964,7 +1000,7 @@ function App() {
             ${activeSite && html`<span class="tag" style="background:var(--panel-2);color:var(--ink)">📍 ${activeSite.name}</span>`}
             ${activeSite && html`<button onClick=${changeLocation} title="Change location"
               style="background:none;border:none;color:var(--ink-dim);font-size:13px;cursor:pointer">change</button>`}
-            <a href="../" style="color:var(--ink-dim);text-decoration:none;font-size:13px;font-weight:700">⌂ Home</a>
+            <a href="../" onClick=${() => sessionStorage.removeItem('rsr_site')} style="color:var(--ink-dim);text-decoration:none;font-size:13px;font-weight:700">⌂ Home</a>
           </span>
         </div>
       </div>
