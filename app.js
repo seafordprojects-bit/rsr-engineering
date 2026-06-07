@@ -995,7 +995,7 @@ function App() {
     <header class="app">
       <div class="wrap">
         <div class="brand" style="display:flex;align-items:center;justify-content:space-between">
-          <span><b>RSR</b><span class="tag">BORROW · ISSUE</span></span>
+          <span><b>RSR</b><span class="tag">TOOLS</span></span>
           <span style="display:flex;align-items:center;gap:10px">
             ${activeSite && html`<span class="tag" style="background:var(--panel-2);color:var(--ink)">📍 ${activeSite.name}</span>`}
             ${activeSite && html`<button onClick=${changeLocation} title="Change location"
@@ -1025,7 +1025,7 @@ function App() {
 
       <div class="tabs" style="margin-bottom:10px;flex-wrap:wrap">
         <button class=${section==='borrow'?'on':''} onClick=${() => { setSection('borrow'); setTab('form'); }}>TOOL INVENTORY</button>
-        <button class=${section==='issue'?'on':''}  onClick=${() => { setSection('issue');  setTab('form'); }}>ISSUE</button>
+        <button onClick=${() => { window.location.href = '../material-issuance/'; }}>ISSUE</button>
         <button class=${section==='records'?'on':''} onClick=${() => setSection('records')}>RECORDS</button>
       </div>
 
