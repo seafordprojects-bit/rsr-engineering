@@ -178,6 +178,18 @@ function App() {
   useEffect(() => { if (authed && view === 'admin') loadEmps(); }, [authed, view]);
   useEffect(() => { if (authed && showSet) loadEmps(); }, [authed, showSet]);
 
+  // auto-logout the admin after 2 minutes of no activity
+  useEffect(() => {
+    if (!(authed && view === 'admin')) return;
+    let t;
+    const logout = () => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setView('choose'); setShowSet(false); };
+    const reset = () => { clearTimeout(t); t = setTimeout(logout, 2 * 60 * 1000); };
+    const evs = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+    evs.forEach(e => window.addEventListener(e, reset, { passive: true }));
+    reset();
+    return () => { clearTimeout(t); evs.forEach(e => window.removeEventListener(e, reset)); };
+  }, [authed, view]);
+
   // ---- front chooser: Admin | Coordinator ----
   if (view === 'choose') return html`
     <header class="app">
