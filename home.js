@@ -79,12 +79,13 @@ function Lock({ onUnlock, onBack, toast }) {
     </div>`;
 }
 
-function Tile({ ico, num, unit, title, href }) {
+function Tile({ ico, num, unit, title, href, onClick }) {
   const inner = html`
     <div class="ico">${ico}</div>
     <div class=${'num' + (num == null ? ' dim' : '')}>${num == null ? '—' : num}</div>
     <h3>${title}</h3>
     <div class="unit">${unit}</div>`;
+  if (onClick) return html`<div class="tile" style="cursor:pointer" onClick=${onClick}>${inner}</div>`;
   return href
     ? html`<a class="tile" href=${href}>${inner}</a>`
     : html`<div class="tile soon">${ico ? html`<div class="ico">${ico}</div>` : ''}<h3 style="margin-top:8px">${title}</h3><span class="badge">COMING SOON</span></div>`;
@@ -92,6 +93,7 @@ function Tile({ ico, num, unit, title, href }) {
 
 function App() {
   const [view, setView] = useState('choose');   // 'choose' | 'admin'
+  const [adminTab, setAdminTab] = useState('dash');  // 'dash' | 'people'
   const [authed, setAuthed] = useState(sessionStorage.getItem(SESSION_KEY) === '1');
   const [m, setM] = useState({});
   const [showSet, setShowSet] = useState(false);
@@ -182,7 +184,7 @@ function App() {
   useEffect(() => {
     if (!(authed && view === 'admin')) return;
     let t;
-    const logout = () => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setView('choose'); setShowSet(false); };
+    const logout = () => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setView('choose'); setShowSet(false); setAdminTab('dash'); };
     const reset = () => { clearTimeout(t); t = setTimeout(logout, 2 * 60 * 1000); };
     const evs = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
     evs.forEach(e => window.addEventListener(e, reset, { passive: true }));
@@ -222,7 +224,7 @@ function App() {
     { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', href:'./borrower-equipments/' },
     { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      href:'./borrower-equipments/' },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  href:'./coordinator/' },
-    { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        href:'./coordinator/' },
+    { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
   ];
   const soon = [
     { ico:'⏱️', title:'Time In / Out' },
@@ -231,6 +233,35 @@ function App() {
     { ico:'💰', title:'Cash Advance / Payroll' },
   ];
 
+  // ---- admin: personnel roster (read-only list with details) ----
+  if (adminTab === 'people') {
+    const peso = (n) => n ? '₱' + Number(n).toLocaleString('en-PH') : '—';
+    return html`
+      <header class="app">
+        <div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+          <span><b>RSR</b><span class="tag">PERSONNEL</span></span>
+          <button onClick=${() => setAdminTab('dash')}
+            style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+        </div></div>
+      </header>
+      <div class="wrap">
+        <div class="card">
+          <label>Personnel (${emps.length})</label>
+          ${emps.length ? [...emps].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(e => html`
+            <div class="row" key=${e.id} style="align-items:flex-start">
+              <div>
+                <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.code || '—'}</span></div>
+                <div class="unit">${e.position || 'No position'}${e.phone ? ' · ' + e.phone : ''}</div>
+                <div class="unit">Rate: ${peso(e.daily_rate)}/day · Sick: ${e.sl_balance ?? 0} · Vacation: ${e.vl_balance ?? 0}</div>
+              </div>
+              <span class="badge" style=${e.pin ? '' : 'background:var(--hivis);color:#000'}>${e.pin ? 'PIN ✓' : 'no PIN'}</span>
+            </div>`) : html`<div class="empty">No personnel yet. Your assistant adds them in the Coordinator.</div>`}
+        </div>
+        <p class="note" style="text-align:center">View only. To set passcode, leave or salary, use the dashboard's <b>settings</b>.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
   return html`
     <header class="app">
       <div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
@@ -238,7 +269,7 @@ function App() {
         <span style="display:flex;gap:12px;align-items:center">
           <button onClick=${() => setShowSet(s => !s)}
             style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">settings</button>
-          <button onClick=${() => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setView('choose'); setShowSet(false); }}
+          <button onClick=${() => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setView('choose'); setShowSet(false); setAdminTab('dash'); }}
             style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">home</button>
         </span>
       </div></div>
