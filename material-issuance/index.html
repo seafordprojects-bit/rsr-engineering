@@ -1,75 +1,691 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>RSR Admin</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
-
-<script type="importmap">
-{
-  "imports": {
-    "preact": "https://esm.sh/preact@10.22.0",
-    "preact/hooks": "https://esm.sh/preact@10.22.0/hooks",
-    "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact",
-    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.0"
-  }
-}
-</script>
-
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
+<title>Material Issuance</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
 <style>
-  :root{
-    --bg:#11161c; --panel:#1a222b; --panel-2:#212c37; --line:#2c3946;
-    --ink:#e9eef3; --ink-dim:#8da0b2; --hivis:#ffb000; --hivis-ink:#1a1200;
-    --ok:#34d17a; --warn:#ff6b5e; --radius:16px;
-  }
-  *{box-sizing:border-box} html,body{margin:0}
-  body{
-    background:radial-gradient(900px 500px at 80% -10%, rgba(255,176,0,.08), transparent 60%), var(--bg);
-    color:var(--ink); font-family:"Barlow",system-ui,sans-serif; -webkit-font-smoothing:antialiased; padding-bottom:40px;
-  }
-  code,.mono{font-family:"JetBrains Mono",monospace}
-  .wrap{max-width:620px;margin:0 auto;padding:0 16px;width:100%}
-  header.app{position:sticky;top:0;z-index:10;background:rgba(17,22,28,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:14px 16px;margin-bottom:18px}
-  .brand{display:flex;align-items:center;gap:10px}
-  .brand b{font-weight:800;letter-spacing:.5px}
-  .tag{font-size:11px;color:var(--hivis-ink);background:var(--hivis);padding:2px 8px;border-radius:999px;font-weight:800;letter-spacing:.5px}
-  label{display:block;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--ink-dim);margin:0 0 6px}
-  input,select,textarea,button{font-family:inherit;font-size:16px}
-  input,select,textarea{width:100%;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:13px 12px}
-  input:focus,select:focus,textarea:focus{outline:2px solid var(--hivis);border-color:transparent}
-  .field{margin-bottom:14px}
-  .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
-  .btn{width:100%;padding:15px;border:none;border-radius:12px;cursor:pointer;background:var(--hivis);color:var(--hivis-ink);font-weight:800;letter-spacing:.4px;text-transform:uppercase}
-  .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
-  .lock{max-width:340px;margin:70px auto 0;text-align:center}
-  .note{font-size:12px;color:var(--ink-dim);line-height:1.5}
-  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--warn);color:#2a0a06;font-weight:800;padding:12px 18px;border-radius:999px;box-shadow:0 8px 30px rgba(0,0,0,.4);z-index:50}
+*{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --p:#27500A;--pl:#EAF3DE;--pm:#639922;--pd:#122606;
+  --b:#0C447C;--bl:#E6F1FB;--bm:#378ADD;
+  --r:#791F1F;--rl:#FCEBEB;--rm:#F09595;
+  --am:#EF9F27;--al:#FAEEDA;--ad:#633806;
+  --bg:#fff;--bg2:#F7F7F5;--bg3:#EFEFEC;
+  --bd:#E0DED8;--bd2:#C8C6BE;
+  --tx:#1A1A18;--tx2:#5A5955;--tx3:#9A9890;
+  --rad:10px;--radl:14px;--radx:18px;
+  --g:var(--p);--gl:var(--pl);
+}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;background:var(--bg3);color:var(--tx);min-height:100vh}
+.app{max-width:480px;margin:0 auto;background:var(--bg);display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.screen{display:none;flex-direction:column;overflow:hidden}
+.screen.active{display:flex;flex:1;min-height:0}
 
-  .sectlabel{font-size:12px;font-weight:800;letter-spacing:.6px;color:var(--ink-dim);text-transform:uppercase;margin:6px 2px 10px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px}
-  a.tile,.tile{display:block;text-decoration:none;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;transition:border-color .15s,transform .05s}
-  a.tile:active{transform:scale(.99)} a.tile:hover{border-color:var(--hivis)}
-  .tile .ico{font-size:24px}
-  .tile .num{font-size:30px;font-weight:800;line-height:1.1;margin-top:8px}
-  .tile .num.dim{color:var(--ink-dim)}
-  .tile h3{margin:2px 0 0;font-size:14px;font-weight:700}
-  .tile .unit{font-size:12px;color:var(--ink-dim)}
-  .tile.soon{opacity:.55}
-  .badge{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.5px;background:var(--panel-2);color:var(--ink-dim);padding:2px 7px;border-radius:999px;margin-top:2px;white-space:nowrap}
+/* ── SETUP ── */
+.setup-wrap{flex:1;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--pl)}
+.setup-box{background:var(--bg);border-radius:var(--radx);padding:28px 24px;width:100%;box-shadow:0 4px 24px rgba(0,0,0,.1)}
+.setup-title{font-size:20px;font-weight:700;margin-bottom:6px}
+.setup-sub{font-size:13px;color:var(--tx2);margin-bottom:20px;line-height:1.6}
 
-  .row{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}
-  .row:last-child{border-bottom:none}
-  .name{font-weight:700;font-size:15px}
-  .unit{font-size:12px;color:var(--ink-dim);margin-top:2px}
-  .empty{color:var(--ink-dim);font-size:13px;padding:10px 0;text-align:center}
+/* ── LOGIN ── */
+.lw{flex:1;display:flex;align-items:center;justify-content:center;padding:2rem;background:var(--pl)}
+.lb{background:var(--bg);border-radius:var(--radx);padding:2.5rem 2rem;width:100%;max-width:360px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.1)}
+.lav{width:72px;height:72px;border-radius:50%;background:var(--pl);border:3px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 14px}
+.pin-dots{display:flex;justify-content:center;gap:14px;margin-bottom:16px}
+.pindot{width:18px;height:18px;border-radius:50%;background:var(--bd2)}
+.pindot.on{background:var(--p)}
+.num-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+.nb{padding:18px;font-size:20px;font-weight:500;border:1.5px solid var(--bd);border-radius:var(--radl);background:var(--bg);color:var(--tx);cursor:pointer;-webkit-tap-highlight-color:transparent}
+.nb:active{background:var(--pl);border-color:var(--pm)}
+.lbtn{width:100%;padding:16px;font-size:17px;font-weight:600;border-radius:var(--radl);border:none;background:var(--p);color:#fff;cursor:pointer}
+
+/* ── TOPBAR ── */
+.tb{padding:13px 16px;background:var(--pl);border-bottom:1.5px solid var(--pm);display:flex;align-items:center;justify-content:space-between;flex-shrink:0}
+.tbk{width:38px;height:38px;border-radius:50%;border:1.5px solid var(--pm);background:transparent;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--p)}
+.ttitle{font-size:16px;font-weight:600;color:var(--p);text-align:center;flex:1}
+.tsub{font-size:12px;color:var(--pm)}
+
+/* ── PROGRESS ── */
+.progress{display:flex;gap:6px;padding:12px 16px;background:var(--bg2);flex-shrink:0}
+.pstep{flex:1;height:4px;border-radius:99px;background:var(--bd2)}
+.pstep.done{background:var(--pm)}
+.pstep.active{background:var(--p)}
+
+/* ── PAGE CONTENT ── */
+.pc{padding:16px;flex:1;overflow-y:scroll;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding-bottom:40px}
+
+/* ── FIELDS ── */
+.fl{font-size:13px;font-weight:500;color:var(--tx2);margin-bottom:5px;display:block}
+.req{color:var(--r);margin-left:2px}
+.fi{width:100%;padding:13px 15px;font-size:15px;border-radius:var(--radl);border:1.5px solid var(--bd2);background:var(--bg);color:var(--tx)}
+.fi:focus{outline:none;border-color:var(--pm);box-shadow:0 0 0 3px var(--pl)}
+select.fi{background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23888780' stroke-width='2' stroke-linecap='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 14px center;padding-right:40px;-webkit-appearance:none}
+.fr2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.fg{margin-bottom:14px}
+
+/* ── VESSEL PICKER ── */
+.vessel-search{background:var(--bg2);border-radius:var(--radl);padding:10px;margin-bottom:10px;max-height:240px;overflow-y:auto;border:1px solid var(--bd)}
+.vi{display:flex;align-items:center;justify-content:space-between;padding:13px 12px;border-radius:var(--rad);cursor:pointer;border:1.5px solid transparent;-webkit-tap-highlight-color:transparent;margin-bottom:4px}
+.vi:last-child{margin-bottom:0}
+.vi:active,.vi:hover{background:var(--pl)}
+.vi.sel{background:var(--pl);border-color:var(--pm)}
+.vn{font-size:15px;font-weight:600;color:var(--tx)}
+.vc{font-size:12px;color:var(--tx2);margin-top:2px}
+.vsel-confirm{background:var(--pl);border:2px solid var(--pm);border-radius:var(--radl);padding:14px 16px;display:flex;align-items:center;justify-content:space-between;margin-top:10px}
+
+/* ── ITEM ROWS ── */
+.irow{background:var(--bg2);border-radius:var(--radl);padding:12px;margin-bottom:10px;border:1.5px solid var(--bd)}
+.irow-top{display:grid;grid-template-columns:minmax(0,1fr) 90px 36px;gap:8px;align-items:end}
+.qty-ctrl{display:flex;align-items:center;border:1.5px solid var(--bd2);border-radius:var(--radl);overflow:hidden}
+.qty-btn{width:36px;height:44px;border:none;background:var(--bg);font-size:18px;cursor:pointer;color:var(--tx2)}
+.qty-btn:active{background:var(--pl)}
+.qty-val{flex:1;text-align:center;font-size:17px;font-weight:600;border:none;background:transparent;color:var(--tx)}
+.irow-meta{margin-top:8px;font-size:12px;color:var(--tx2);display:flex;gap:12px;flex-wrap:wrap}
+.stock-badge{padding:2px 8px;border-radius:99px;font-size:11px;font-weight:600}
+.sb-ok{background:var(--pl);color:var(--p)}
+.sb-low{background:var(--al);color:var(--ad)}
+.sb-out{background:var(--rl);color:var(--r)}
+.rm-item{width:36px;height:44px;border:1.5px solid var(--bd2);border-radius:var(--radl);background:var(--bg);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:18px;color:var(--tx3)}
+.add-item-btn{width:100%;padding:13px;border:2px dashed var(--bd2);border-radius:var(--radl);background:transparent;font-size:14px;font-weight:500;color:var(--tx2);cursor:pointer;margin-bottom:14px}
+.add-item-btn:active{background:var(--bg2)}
+
+/* ── AUTOCOMPLETE ── */
+.ac-wrap{position:relative}
+.ac-dropdown{position:absolute;top:100%;left:0;right:0;background:var(--bg);border:1.5px solid var(--pm);border-radius:var(--radl);z-index:999;max-height:200px;overflow-y:auto;display:none;box-shadow:0 4px 16px rgba(0,0,0,.12);margin-top:3px}
+.ac-dropdown.open{display:block}
+.ac-item{padding:11px 14px;font-size:14px;cursor:pointer;border-bottom:1px solid var(--bd)}
+.ac-item:last-child{border-bottom:none}
+.ac-item:hover,.ac-item.focused{background:var(--pl);color:var(--p)}
+.ac-item mark{background:transparent;color:var(--p);font-weight:700}
+
+/* ── WARNING ── */
+.warn-box{background:var(--al);border:1.5px solid var(--am);border-radius:var(--radl);padding:12px 14px;font-size:13px;color:var(--ad);margin-bottom:14px}
+.warn-box strong{display:block;margin-bottom:4px}
+
+/* ── SIGNATURE ── */
+.sig-wrap{border:2px solid var(--bd2);border-radius:var(--radl);background:var(--bg2);position:relative;overflow:hidden;cursor:crosshair;height:160px;touch-action:none;margin-bottom:10px}
+.sig-wrap canvas{position:absolute;top:0;left:0;width:100%;height:100%}
+.sig-hint{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:13px;color:var(--tx3);pointer-events:none;text-align:center;line-height:1.7}
+.sig-ok{position:absolute;bottom:10px;right:12px;font-size:12px;color:var(--p);font-weight:600;pointer-events:none;display:none;background:var(--pl);padding:3px 10px;border-radius:99px}
+.clrsig{padding:9px 16px;font-size:13px;border-radius:var(--radl);border:1.5px solid var(--bd2);background:transparent;color:var(--tx2);cursor:pointer;margin-bottom:14px}
+
+/* ── SUMMARY ── */
+.sum-card{background:var(--bg2);border-radius:var(--radl);padding:14px;margin-bottom:12px;border:1px solid var(--bd)}
+.sum-row{display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--bd);font-size:13px}
+.sum-row:last-child{border-bottom:none}
+.sum-label{color:var(--tx2)}
+.sum-val{font-weight:600;color:var(--tx)}
+.sum-item{padding:8px 0;border-bottom:1px solid var(--bd);font-size:13px}
+.sum-item:last-child{border-bottom:none}
+.sum-item-name{font-weight:600;color:var(--tx)}
+.sum-item-qty{color:var(--tx2)}
+
+/* ── SUCCESS ── */
+.success-wrap{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px;text-align:center;gap:16px;background:var(--pl)}
+.success-icon{width:80px;height:80px;border-radius:50%;background:var(--p);display:flex;align-items:center;justify-content:center;font-size:36px}
+.success-title{font-size:22px;font-weight:700;color:var(--p)}
+.success-id{font-family:monospace;font-size:18px;font-weight:700;color:var(--pd);background:#fff;padding:8px 20px;border-radius:var(--radl);border:2px solid var(--pm)}
+.success-sub{font-size:14px;color:var(--tx2);line-height:1.7}
+
+/* ── BUTTONS ── */
+.btn{padding:15px 20px;font-size:16px;font-weight:600;border-radius:var(--radl);cursor:pointer;border:none;width:100%;-webkit-tap-highlight-color:transparent}
+.btn-p{background:var(--p);color:#fff}
+.btn-p:active{opacity:.85}
+.btn-sec{background:transparent;border:1.5px solid var(--bd2) !important;color:var(--tx)}
+.btn-row{display:flex;gap:10px;padding:14px 16px;border-top:1px solid var(--bd);flex-shrink:0}
+
+/* ── TOAST ── */
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:12px 22px;border-radius:var(--radl);font-size:14px;font-weight:600;display:none;z-index:9999;white-space:nowrap;max-width:90vw;box-shadow:0 4px 16px rgba(0,0,0,.15)}
+.tok{background:#122606;color:#EAF3DE}
+.terr{background:#5C1515;color:#FCEBEB}
 </style>
 </head>
 <body>
-  <div id="app"></div>
-  <script type="module" src="../home.js"></script>
+<div class="app">
+<div id="toast" class="toast tok"></div>
+
+<!-- ══ SUPABASE SETUP ══ -->
+<div id="s-setup" class="screen active">
+  <div class="setup-wrap">
+    <div class="setup-box">
+      <div class="setup-title">Connect to Supabase</div>
+      <div class="setup-sub">Enter your project details. This is saved on this device — enter once only.</div>
+      <div class="fg"><label class="fl">Project URL</label><input class="fi" id="sb-url" placeholder="https://xxxx.supabase.co" style="font-size:14px"/></div>
+      <div class="fg"><label class="fl">Anon / Publishable Key</label><input class="fi" id="sb-key" type="password" placeholder="eyJ... or sb_publishable_..." style="font-size:14px"/></div>
+      <div id="sb-err" style="font-size:13px;color:var(--r);margin-bottom:10px;display:none"></div>
+      <button class="btn btn-p" id="sb-btn" onclick="connectSB()">Connect</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══ LOGIN ══ -->
+<div id="s-login" class="screen">
+  <div class="lw">
+    <div class="lb">
+      <div class="lav">📋</div>
+      <div style="font-size:21px;font-weight:700;margin-bottom:4px">Material Issuance</div>
+      <div style="font-size:14px;color:var(--tx2);margin-bottom:20px">Enter PIN to continue</div>
+      <div class="pin-dots"><div class="pindot" id="pd0"></div><div class="pindot" id="pd1"></div><div class="pindot" id="pd2"></div><div class="pindot" id="pd3"></div></div>
+      <div class="num-grid">
+        <button class="nb" onclick="pinTap('1')">1</button><button class="nb" onclick="pinTap('2')">2</button><button class="nb" onclick="pinTap('3')">3</button>
+        <button class="nb" onclick="pinTap('4')">4</button><button class="nb" onclick="pinTap('5')">5</button><button class="nb" onclick="pinTap('6')">6</button>
+        <button class="nb" onclick="pinTap('7')">7</button><button class="nb" onclick="pinTap('8')">8</button><button class="nb" onclick="pinTap('9')">9</button>
+        <button class="nb" onclick="pinClear()" style="font-size:13px">Clear</button>
+        <button class="nb" onclick="pinTap('0')">0</button>
+        <button class="nb" onclick="pinBack()" style="font-size:18px">&#x232B;</button>
+      </div>
+      <button class="lbtn" onclick="doLogin()">Sign in</button>
+      <div id="pin-err" style="font-size:13px;color:var(--r);margin-top:10px;display:none">Incorrect PIN.</div>
+      <div style="font-size:12px;color:var(--tx3);margin-top:10px">Default PIN: 1111</div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ STEP 1 — SELECT VESSEL ══ -->
+<div id="s-step1" class="screen">
+  <div class="tb">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="ttitle" style="text-align:left">Issue Materials</div>
+    </div>
+    <button class="tbk" onclick="doLogout()"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>
+  </div>
+  <div class="progress"><div class="pstep active"></div><div class="pstep"></div><div class="pstep"></div></div>
+  <div class="pc">
+    <div style="font-size:17px;font-weight:700;margin-bottom:4px">Step 1 — Select vessel</div>
+    <div style="font-size:13px;color:var(--tx2);margin-bottom:14px">Choose the vessel you are issuing materials for.</div>
+    <div class="fg"><label class="fl">Search vessel</label><input class="fi" id="vsearch" placeholder="Type vessel name or code..." oninput="filterVessels()"/></div>
+    <div class="vessel-search" id="vessel-list"></div>
+    <div id="vsel-box" style="display:none">
+      <div class="vsel-confirm">
+        <div><div style="font-size:13px;color:var(--tx2);margin-bottom:2px">Selected vessel</div><div id="vsel-name" style="font-size:16px;font-weight:700;color:var(--p)"></div><div id="vsel-code" style="font-size:12px;color:var(--tx2)"></div></div>
+        <button onclick="goStep2()" class="btn btn-p" style="width:auto;padding:11px 22px;font-size:15px">Next →</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ══ STEP 2 — SELECT EMPLOYEE + ITEMS ══ -->
+<div id="s-step2" class="screen">
+  <div class="tb">
+    <button class="tbk" onclick="showScreen('s-step1')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg></button>
+    <div class="ttitle">Issue Materials</div>
+    <div style="width:38px"></div>
+  </div>
+  <div class="progress"><div class="pstep done"></div><div class="pstep active"></div><div class="pstep"></div></div>
+  <div class="pc">
+    <div style="font-size:17px;font-weight:700;margin-bottom:4px">Step 2 — Employee &amp; items</div>
+    <div id="step2-vessel-label" style="font-size:13px;color:var(--tx2);margin-bottom:14px"></div>
+    <div class="fr2">
+      <div class="fg"><label class="fl">Employee <span class="req">*</span></label>
+        <select class="fi" id="emp-sel"><option value="">— Select —</option></select>
+      </div>
+      <div class="fg"><label class="fl">Department</label>
+        <input class="fi" id="emp-dept" placeholder="Position" readonly/>
+      </div>
+    </div>
+    <div class="fg"><label class="fl">Date issued <span class="req">*</span></label>
+      <input class="fi" type="date" id="iss-date"/>
+    </div>
+    <div class="fg"><label class="fl">Issued by <span class="req">*</span></label>
+      <input class="fi" id="iss-by" placeholder="Your name"/>
+    </div>
+    <div style="font-size:15px;font-weight:700;margin-bottom:10px;margin-top:4px">Items to issue</div>
+    <div id="item-rows"></div>
+    <button class="add-item-btn" onclick="addItemRow()">+ Add item</button>
+    <div id="interval-warnings"></div>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-sec" onclick="showScreen('s-step1')">Back</button>
+    <button class="btn btn-p" onclick="goStep3()">Next: Signature →</button>
+  </div>
+</div>
+
+<!-- ══ STEP 3 — SIGNATURE + CONFIRM ══ -->
+<div id="s-step3" class="screen">
+  <div class="tb">
+    <button class="tbk" onclick="showScreen('s-step2')"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 12H5M12 5l-7 7 7 7"/></svg></button>
+    <div class="ttitle">Issue Materials</div>
+    <div style="width:38px"></div>
+  </div>
+  <div class="progress"><div class="pstep done"></div><div class="pstep done"></div><div class="pstep active"></div></div>
+  <div class="pc">
+    <div style="font-size:17px;font-weight:700;margin-bottom:4px">Step 3 — Review &amp; sign</div>
+    <div style="font-size:13px;color:var(--tx2);margin-bottom:14px">Review the summary below, then have the employee sign.</div>
+    <div class="sum-card" id="summary-card"></div>
+    <label class="fl">Employee signature <span class="req">*</span></label>
+    <div class="sig-wrap" id="sig-wrap">
+      <canvas id="sig-canvas"></canvas>
+      <div class="sig-hint" id="sig-hint">Employee draws signature here<br>using their finger or mouse</div>
+      <div class="sig-ok" id="sig-ok">✓ Signature captured</div>
+    </div>
+    <button class="clrsig" onclick="clrSig()">Clear signature</button>
+  </div>
+  <div class="btn-row">
+    <button class="btn btn-sec" onclick="showScreen('s-step2')">Back</button>
+    <button class="btn btn-p" onclick="submitIss()">Submit issuance</button>
+  </div>
+</div>
+
+<!-- ══ SUCCESS ══ -->
+<div id="s-success" class="screen">
+  <div class="success-wrap">
+    <div class="success-icon">✓</div>
+    <div class="success-title">Issuance recorded!</div>
+    <div class="success-id" id="success-id">ISS-A-2026-0001</div>
+    <div class="success-sub" id="success-sub">Materials issued and deducted from site stock.</div>
+    <button class="btn btn-p" style="width:auto;padding:14px 32px;margin-top:8px" onclick="resetAll()">Issue more materials</button>
+  </div>
+</div>
+
+</div><!-- app -->
+
+<script>
+/* ══ CONFIG ══ */
+const SK='sA', SL='Site A \u2013 Cebu';
+const SB_URL_K='sb_project_url', SB_KEY_K='sb_project_key';
+const PIN_KEY='site_pin_sA', DEFAULT_PIN='1111';
+const ITEMS=[
+  {n:'Electrode handle',u:'pcs'},{n:'Welding gloves',u:'pair'},{n:'Cutting tip',u:'pcs'},
+  {n:'Dark glass',u:'pcs'},{n:'Clear glass',u:'pcs'},{n:'Trouble light',u:'pcs'},
+  {n:'Electrical tape',u:'pcs'},{n:'Chalk stone',u:'pcs'},{n:'Dry chalk',u:'pcs'},
+  {n:'Flint stone',u:'pcs'},{n:'Striker',u:'pcs'},{n:'Y-connector',u:'pcs'},
+  {n:'Cutting disk',u:'pcs'},{n:'Oxygen regulator',u:'unit'},{n:'LPG regulator',u:'unit'},{n:'Steel square',u:'pcs'}
+];
+
+/* ══ SUPABASE ══ */
+const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
+const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
+let _sb=null;
+async function sbInit(){
+  _sb=supabase.createClient(KIOSK_URL, KIOSK_KEY);return true;
+}
+async function sbSel(tbl,filters){
+  if(!_sb)return[];
+  let q=_sb.from(tbl).select('*');
+  (filters||[]).forEach(([c,op,v])=>{if(op==='eq')q=q.eq(c,v);});
+  const{data,error}=await q;
+  if(error){console.warn(tbl,error.message);return[];}
+  return data||[];
+}
+async function sbUps(tbl,rows,oc){
+  if(!_sb)return;
+  const{error}=await _sb.from(tbl).upsert(Array.isArray(rows)?rows:[rows],{onConflict:oc||'id'});
+  if(error)console.warn('upsert',tbl,error.message);
+}
+
+async function connectSB(){
+  const u=document.getElementById('sb-url').value.trim();
+  const k=document.getElementById('sb-key').value.trim();
+  const err=document.getElementById('sb-err');
+  const btn=document.getElementById('sb-btn');
+  if(!u||!k){err.style.display='block';err.textContent='Both fields required.';return;}
+  btn.textContent='Connecting...';btn.disabled=true;
+  try{
+    const t=supabase.createClient(u,k);
+    const{error}=await t.from('settings').select('key').limit(1);
+    if(error){err.style.display='block';err.textContent='Failed: '+error.message;btn.textContent='Connect';btn.disabled=false;return;}
+    localStorage.setItem(SB_URL_K,u);localStorage.setItem(SB_KEY_K,k);
+    _sb=t;
+    showScreen('s-login');
+  }catch(e){err.style.display='block';err.textContent=e.message;btn.textContent='Connect';btn.disabled=false;}
+}
+
+/* ══ PIN ══ */
+let pinVal='';
+function pinTap(d){if(pinVal.length>=4)return;pinVal+=d;updateDots();}
+function pinClear(){pinVal='';updateDots();}
+function pinBack(){pinVal=pinVal.slice(0,-1);updateDots();}
+function updateDots(){for(let i=0;i<4;i++){const d=document.getElementById('pd'+i);if(d)d.className='pindot'+(i<pinVal.length?' on':'');}}
+function getPin(){return localStorage.getItem(PIN_KEY)||DEFAULT_PIN;}
+function doLogin(){
+  if(pinVal!==getPin()){document.getElementById('pin-err').style.display='block';pinVal='';updateDots();return;}
+  document.getElementById('pin-err').style.display='none';
+  pinVal='';updateDots();
+  bootApp();
+}
+function doLogout(){showScreen('s-login');pinVal='';updateDots();}
+
+async function bootApp(){
+  /* Load settings */
+  try{
+    const rows=await sbSel('settings',[]);
+    const map={};rows.forEach(r=>map[r.key]=r.value);
+    if(map.thresholds)localStorage.setItem('uni_thresh',JSON.stringify(map.thresholds));
+    if(map.intervals)localStorage.setItem('uni_intervals',JSON.stringify(map.intervals));
+    if(map.pins&&map.pins[SK]&&map.pins[SK].trim())localStorage.setItem(PIN_KEY,map.pins[SK]);
+  }catch(e){}
+  /* Load vessels and employees */
+  await loadVessels();
+  await loadEmployees();
+  showScreen('s-step1');
+  renderVesselList();
+}
+
+/* ══ SCREEN ══ */
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0,0);
+}
+
+/* ══ HELPERS ══ */
+function toast(msg,type,dur){
+  const el=document.getElementById('toast');el.textContent=msg;
+  el.className='toast '+(type==='err'?'terr':'tok');el.style.display='block';
+  clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',dur||3500);
+}
+function tsNow(){return new Date().toLocaleString('en-PH',{month:'short',day:'numeric',year:'numeric',hour:'2-digit',minute:'2-digit'});}
+function getThresh(n){return((JSON.parse(localStorage.getItem('uni_thresh')||'{}')||{})[n]||3);}
+function getInterval(n){const v=(JSON.parse(localStorage.getItem('uni_intervals')||'{}')||{})[n];return v===undefined?30:v;}
+function getUnit(n){return(ITEMS.find(i=>i.n===n)||{u:'pcs'}).u;}
+
+/* ══ VESSELS ══ */
+let vessels=[], selVessel=null;
+async function loadVessels(){
+  const rows=await sbSel('voyages',[]);
+  vessels=(rows||[])
+    .filter(v=>v.status!=='not_active')
+    .map(v=>({id:v.id,name:v.vessel_name,code:v.vessel_code||'',status:v.status}));
+}
+function renderVesselList(q){
+  q=(q||'').toLowerCase();
+  const list=document.getElementById('vessel-list');
+  const filtered=q?vessels.filter(v=>v.name.toLowerCase().includes(q)||v.code.toLowerCase().includes(q)):vessels;
+  if(!filtered.length){list.innerHTML='<div style="text-align:center;padding:20px;font-size:13px;color:var(--tx2)">No active vessels found.</div>';return;}
+  list.innerHTML=filtered.map(v=>`
+    <div class="vi${selVessel&&selVessel.id===v.id?' sel':''}" onclick="selectVessel('${v.id}')">
+      <div><div class="vn">${v.name}</div><div class="vc">${v.code}</div></div>
+      <div style="font-size:12px;color:var(--tx3);text-transform:capitalize">${v.status}</div>
+    </div>`).join('');
+}
+function filterVessels(){renderVesselList(document.getElementById('vsearch').value);}
+function selectVessel(id){
+  selVessel=vessels.find(v=>v.id===id);
+  renderVesselList(document.getElementById('vsearch').value);
+  const box=document.getElementById('vsel-box');box.style.display='block';
+  document.getElementById('vsel-name').textContent=selVessel.name;
+  document.getElementById('vsel-code').textContent=selVessel.code;
+}
+
+/* ══ EMPLOYEES ══ */
+let employees=[];
+async function loadEmployees(){
+  const rows=await sbSel('employees',[]);
+  employees=rows||[];
+  const sel=document.getElementById('emp-sel');
+  sel.innerHTML='<option value="">— Select employee —</option>'
+    +employees.map(e=>`<option value="${e.id}" data-pos="${e.position||''}">${e.name}</option>`).join('');
+  sel.onchange=function(){
+    const opt=sel.options[sel.selectedIndex];
+    document.getElementById('emp-dept').value=opt.dataset.pos||'';
+  };
+}
+
+/* ══ STEP 2 ══ */
+function goStep2(){
+  if(!selVessel){toast('Select a vessel first.','err');return;}
+  document.getElementById('step2-vessel-label').textContent='Vessel: '+selVessel.name+' ('+selVessel.code+')';
+  document.getElementById('iss-date').valueAsDate=new Date();
+  if(!document.getElementById('item-rows').children.length)addItemRow();
+  showScreen('s-step2');
+}
+
+/* ── ITEM ROWS ── */
+let rowCount=0;
+function addItemRow(name,qty){
+  rowCount++;const id='row-'+rowCount;name=name||'';qty=qty||1;
+  const div=document.createElement('div');div.className='irow';div.id=id;
+  div.innerHTML=`
+    <div class="irow-top">
+      <div class="ac-wrap">
+        <input class="fi" id="inp-${id}" value="${name}" placeholder="Type item name..." autocomplete="off" style="padding:11px 12px"/>
+        <div id="dd-${id}" class="ac-dropdown"></div>
+        <input type="hidden" id="val-${id}" value="${name}"/>
+      </div>
+      <div class="qty-ctrl">
+        <button class="qty-btn" onclick="adjQty('${id}',-1)">−</button>
+        <input class="qty-val" type="number" min="1" id="qty-${id}" value="${qty}" readonly/>
+        <button class="qty-btn" onclick="adjQty('${id}',1)">+</button>
+      </div>
+      <div class="rm-item" onclick="document.getElementById('${id}').remove()">×</div>
+    </div>
+    <div class="irow-meta" id="meta-${id}">
+      ${name?getItemMeta(name):'<span style="color:var(--tx3)">Select an item</span>'}
+    </div>`;
+  document.getElementById('item-rows').appendChild(div);
+  const inp=document.getElementById('inp-'+id);
+  inp.addEventListener('input',()=>acFilter(id));
+  inp.addEventListener('focus',()=>acFilter(id));
+  inp.addEventListener('keydown',e=>acKey(e,id));
+  inp.addEventListener('blur',()=>setTimeout(()=>acClose(id),200));
+}
+
+function adjQty(id,dir){
+  const el=document.getElementById('qty-'+id);
+  const v=parseInt(el.value)||1;
+  el.value=Math.max(1,v+dir);
+}
+
+function getItemMeta(name){
+  const stock=getSiteStock();
+  const qty=stock[name]||0;
+  const t=getThresh(name);
+  const u=getUnit(name);
+  const badge=qty<=0?'<span class="stock-badge sb-out">Out of stock</span>':
+    qty<=t?'<span class="stock-badge sb-low">Low ('+qty+' '+u+')</span>':
+    '<span class="stock-badge sb-ok">In stock ('+qty+' '+u+')</span>';
+  const interval=getInterval(name);
+  const intvTxt=interval>0?`<span>Re-issue every ${interval} days</span>`:'';
+  return badge+intvTxt;
+}
+
+function getSiteStock(){
+  try{return JSON.parse(localStorage.getItem('uni_ss_'+SK))||{};}catch(e){return{};}
+}
+
+/* ── AUTOCOMPLETE ── */
+let acFocus={};
+function acFilter(id){
+  const inp=document.getElementById('inp-'+id);
+  const dd=document.getElementById('dd-'+id);
+  if(!inp||!dd)return;
+  const q=inp.value.toLowerCase().trim();
+  const matches=q?ITEMS.filter(i=>i.n.toLowerCase().includes(q)):ITEMS;
+  if(!matches.length){dd.classList.remove('open');return;}
+  acFocus[id]=-1;
+  dd.innerHTML=matches.map((i,idx)=>{
+    let hl=i.n;
+    if(q){const pos=i.n.toLowerCase().indexOf(q);if(pos>=0)hl=i.n.slice(0,pos)+'<mark>'+i.n.slice(pos,pos+q.length)+'</mark>'+i.n.slice(pos+q.length);}
+    return`<div class="ac-item" data-name="${i.n}" onmousedown="acSel('${id}','${i.n}')">${hl} <span style="font-size:12px;color:var(--tx3)">${i.u}</span></div>`;
+  }).join('');
+  dd.classList.add('open');
+}
+function acSel(id,name){
+  const inp=document.getElementById('inp-'+id);
+  const hid=document.getElementById('val-'+id);
+  const meta=document.getElementById('meta-'+id);
+  if(inp)inp.value=name;
+  if(hid)hid.value=name;
+  if(meta)meta.innerHTML=getItemMeta(name);
+  acClose(id);
+}
+function acClose(id){const dd=document.getElementById('dd-'+id);if(dd)dd.classList.remove('open');}
+function acKey(e,id){
+  const dd=document.getElementById('dd-'+id);
+  if(!dd||!dd.classList.contains('open'))return;
+  const its=dd.querySelectorAll('.ac-item');
+  if(!its.length)return;
+  if(e.key==='ArrowDown'){e.preventDefault();acFocus[id]=Math.min((acFocus[id]||0)+1,its.length-1);its.forEach((it,i)=>it.classList.toggle('focused',i===acFocus[id]));}
+  else if(e.key==='ArrowUp'){e.preventDefault();acFocus[id]=Math.max((acFocus[id]||0)-1,0);its.forEach((it,i)=>it.classList.toggle('focused',i===acFocus[id]));}
+  else if(e.key==='Enter'){e.preventDefault();const f=dd.querySelector('.ac-item.focused');if(f)acSel(id,f.dataset.name);else if(its.length===1)acSel(id,its[0].dataset.name);}
+  else if(e.key==='Escape')acClose(id);
+}
+
+/* ══ STEP 3 ══ */
+async function goStep3(){
+  const empSel=document.getElementById('emp-sel');
+  const by=document.getElementById('iss-by').value.trim();
+  const dt=document.getElementById('iss-date').value;
+  if(!empSel.value){toast('Select an employee.','err');return;}
+  if(!by){toast('Enter your name.','err');return;}
+  if(!dt){toast('Select a date.','err');return;}
+
+  /* collect items */
+  const items=[];let empty=false;
+  document.querySelectorAll('#item-rows .irow').forEach(row=>{
+    const id=row.id;
+    const name=(document.getElementById('val-'+id)||{value:''}).value.trim();
+    const qty=parseInt(document.getElementById('qty-'+id)?.value)||0;
+    if(name&&qty>0)items.push({name,qty,unit:getUnit(name)});
+    else if(!name&&qty>0)empty=true;
+  });
+  if(empty){toast('Select an item for all rows or remove empty ones.','err');return;}
+  if(!items.length){toast('Add at least one item.','err');return;}
+
+  /* check intervals */
+  const plog=await getPlog();
+  const empName=empSel.options[empSel.selectedIndex].text;
+  const warnings=[];
+  items.forEach(it=>{
+    const interval=getInterval(it.name);
+    if(!interval||interval<=0)return;
+    const key=empName.toLowerCase()+'__'+it.name;
+    const last=plog[key];
+    if(last&&last.date){
+      const days=Math.floor((new Date(dt)-new Date(last.date))/86400000);
+      if(days<interval)warnings.push({item:it.name,days,interval,lastDate:last.date});
+    }
+  });
+
+  /* show warnings */
+  const warnDiv=document.getElementById('interval-warnings');
+  warnDiv.innerHTML='';
+  if(warnings.length){
+    warnDiv.innerHTML='<div class="warn-box"><strong>⚠ Re-issuance interval warning</strong>'
+      +warnings.map(w=>`${w.item}: last issued ${w.days} day${w.days!==1?'s':''} ago (minimum ${w.interval} days)`).join('<br>')
+      +'</div>';
+  }
+
+  /* build summary */
+  const empOpt=empSel.options[empSel.selectedIndex];
+  const dept=document.getElementById('emp-dept').value;
+  const summary=document.getElementById('summary-card');
+  summary.innerHTML=`
+    <div class="sum-row"><span class="sum-label">Vessel</span><span class="sum-val">${selVessel.name}</span></div>
+    <div class="sum-row"><span class="sum-label">Code</span><span class="sum-val">${selVessel.code}</span></div>
+    <div class="sum-row"><span class="sum-label">Employee</span><span class="sum-val">${empName}${dept?' · '+dept:''}</span></div>
+    <div class="sum-row"><span class="sum-label">Date</span><span class="sum-val">${dt}</span></div>
+    <div class="sum-row"><span class="sum-label">Issued by</span><span class="sum-val">${by}</span></div>
+    <div style="font-size:13px;font-weight:600;color:var(--tx2);margin:10px 0 6px">Items</div>
+    ${items.map(it=>`<div class="sum-item"><span class="sum-item-name">${it.name}</span> <span class="sum-item-qty">— ${it.qty} ${it.unit}</span></div>`).join('')}`;
+
+  showScreen('s-step3');
+  initSig();
+}
+
+/* ══ SIGNATURE ══ */
+let sigCtx, sigCvs, hasSig=false, drawing=false;
+function initSig(){
+  sigCvs=document.getElementById('sig-canvas');
+  const wrap=document.getElementById('sig-wrap');
+  if(!sigCvs||!wrap)return;
+  sigCvs.width=wrap.offsetWidth||440;sigCvs.height=160;
+  sigCtx=sigCvs.getContext('2d');
+  sigCtx.strokeStyle='#1A1A18';sigCtx.lineWidth=2.5;sigCtx.lineCap='round';sigCtx.lineJoin='round';
+  clrSig();
+  const getPos=(e)=>{const r=sigCvs.getBoundingClientRect();const src=e.touches?e.touches[0]:e;return{x:(src.clientX-r.left)*(sigCvs.width/r.width),y:(src.clientY-r.top)*(sigCvs.height/r.height)};};
+  sigCvs.addEventListener('mousedown',e=>{drawing=true;const p=getPos(e);sigCtx.beginPath();sigCtx.moveTo(p.x,p.y);});
+  sigCvs.addEventListener('mousemove',e=>{if(!drawing)return;const p=getPos(e);sigCtx.lineTo(p.x,p.y);sigCtx.stroke();sigDone();});
+  sigCvs.addEventListener('mouseup',()=>drawing=false);
+  sigCvs.addEventListener('touchstart',e=>{e.preventDefault();drawing=true;const p=getPos(e);sigCtx.beginPath();sigCtx.moveTo(p.x,p.y);},{passive:false});
+  sigCvs.addEventListener('touchmove',e=>{e.preventDefault();if(!drawing)return;const p=getPos(e);sigCtx.lineTo(p.x,p.y);sigCtx.stroke();sigDone();},{passive:false});
+  sigCvs.addEventListener('touchend',()=>drawing=false);
+}
+function sigDone(){hasSig=true;const h=document.getElementById('sig-hint');const o=document.getElementById('sig-ok');if(h)h.style.display='none';if(o)o.style.display='block';}
+function clrSig(){if(sigCtx&&sigCvs)sigCtx.clearRect(0,0,sigCvs.width,sigCvs.height);hasSig=false;const h=document.getElementById('sig-hint');const o=document.getElementById('sig-ok');if(h)h.style.display='';if(o)o.style.display='none';}
+
+/* ══ SUBMIT ══ */
+async function submitIss(){
+  if(!hasSig){toast('Employee signature is required.','err');return;}
+  const empSel=document.getElementById('emp-sel');
+  const empName=empSel.options[empSel.selectedIndex].text;
+  const dt=document.getElementById('iss-date').value;
+  const by=document.getElementById('iss-by').value.trim();
+
+  /* collect items */
+  const items=[];
+  document.querySelectorAll('#item-rows .irow').forEach(row=>{
+    const id=row.id;
+    const name=(document.getElementById('val-'+id)||{value:''}).value.trim();
+    const qty=parseInt(document.getElementById('qty-'+id)?.value)||0;
+    if(name&&qty>0)items.push({name,qty,unit:getUnit(name)});
+  });
+
+  /* get sig */
+  const sig=sigCvs?sigCvs.toDataURL('image/png'):'';
+
+  /* generate ID */
+  const existing=await sbSel('issuances',[['site_key','eq',SK]]);
+  const yr=new Date().getFullYear();
+  const issId='ISS-A-'+yr+'-'+String((existing?.length||0)+1).padStart(4,'0');
+
+  /* save issuance */
+  await sbUps('issuances',{
+    id:issId,site_key:SK,proj_name:selVessel.name,proj_code:selVessel.code,
+    emp_name:empName,dept:document.getElementById('emp-dept').value,
+    date:dt,by_name:by,items,sig,history:[{action:'Issued',by,ts:tsNow()}]
+  });
+
+  /* deduct site stock */
+  const stock=getSiteStock();
+  items.forEach(it=>stock[it.name]=Math.max(0,(stock[it.name]||0)-it.qty));
+  localStorage.setItem('uni_ss_'+SK,JSON.stringify(stock));
+  try{
+    const rows=Object.entries(stock).map(([item_name,qty])=>({site_key:SK,item_name,qty,updated_at:new Date().toISOString()}));
+    await sbUps('site_stock',rows,'site_key,item_name');
+  }catch(e){}
+
+  /* update personnel log */
+  for(const it of items){
+    const interval=getInterval(it.name);
+    if(!interval||interval<=0)continue;
+    await sbUps('personnel_log',{site_key:SK,emp_name:empName,item_name:it.name,last_date:dt,last_qty:it.qty},'site_key,emp_name,item_name');
+  }
+
+  /* show success */
+  document.getElementById('success-id').textContent=issId;
+  document.getElementById('success-sub').textContent=items.length+' item type'+(items.length>1?'s':'')+' issued to '+empName+' for '+selVessel.name+'.';
+  showScreen('s-success');
+}
+
+async function getPlog(){
+  const rows=await sbSel('personnel_log',[['site_key','eq',SK]]);
+  const obj={};(rows||[]).forEach(r=>{obj[r.emp_name.toLowerCase()+'__'+r.item_name]={date:r.last_date,qty:r.last_qty};});
+  return obj;
+}
+
+function resetAll(){
+  selVessel=null;
+  document.getElementById('vsearch').value='';
+  document.getElementById('vsel-box').style.display='none';
+  document.getElementById('emp-sel').value='';
+  document.getElementById('emp-dept').value='';
+  document.getElementById('iss-by').value='';
+  document.getElementById('item-rows').innerHTML='';
+  document.getElementById('interval-warnings').innerHTML='';
+  rowCount=0;clrSig();
+  renderVesselList();
+  showScreen('s-step1');
+}
+
+/* ══ BOOT ══ */
+window.addEventListener('DOMContentLoaded',async()=>{
+  const ok=await sbInit();
+  if(!ok){showScreen('s-setup');return;}
+  showScreen('s-login');
+});
+</script>
 </body>
 </html>
