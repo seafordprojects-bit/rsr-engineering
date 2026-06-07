@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>RSR Tools</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
+<style>
+  :root{
+    --bg:#f3f5f8; --card:#fff; --line:#e3e8ef; --tx:#1f2733; --tx2:#69788c; --tx3:#9aa7b8;
+    --p:#1976D2; --ok:#2e9e6b; --warn:#e8a330; --r:#d64045; --radius:16px;
+  }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  .screen{display:none;min-height:100vh}
+  .screen.active{display:block}
+  .wrap{max-width:680px;margin:0 auto;padding:0 14px 40px;width:100%}
+
+  /* login */
+  .lw{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:#eef1f6}
+  .lb{background:#fff;border-radius:22px;padding:30px 26px;max-width:340px;width:100%;text-align:center;box-shadow:0 12px 40px rgba(20,40,80,.08)}
+  .lav{width:64px;height:64px;border-radius:50%;background:#E3F2FD;border:3px solid var(--p);display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 14px}
+  .pin-dots{display:flex;gap:12px;justify-content:center;margin:18px 0}
+  .pindot{width:13px;height:13px;border-radius:50%;background:#d3dae4}
+  .pindot.on{background:var(--p)}
+  .num-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+  .nb{padding:16px 0;font-size:20px;font-weight:600;border:1px solid var(--line);background:#fff;border-radius:12px;cursor:pointer;color:var(--tx)}
+  .nb:active{background:#eef2f7}
+  .lbtn{width:100%;padding:14px;background:var(--p);color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer}
+
+  /* header */
+  .app-header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:12px 16px}
+  .hdr-avatar{width:38px;height:38px;border-radius:50%;background:var(--p);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800}
+  .hdr-info{flex:1;min-width:0}
+  .hdr-site{font-size:15px;font-weight:700;line-height:1.1}
+  .hdr-sub{font-size:12px;color:var(--tx2)}
+  .hdr-btn{background:none;border:none;font-size:20px;color:var(--tx2);cursor:pointer;padding:4px 6px}
+  .back{background:none;border:none;color:var(--p);font-weight:700;font-size:14px;cursor:pointer;padding:8px 0;display:inline-flex;align-items:center;gap:4px}
+
+  /* site bar */
+  .sitebar{display:flex;gap:8px;align-items:center;padding:12px 2px 4px}
+  .sitebar select{flex:1;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:#fff;font-size:15px;color:var(--tx)}
+
+  /* tiles */
+  .home-label{font-size:12px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--tx3);margin:16px 4px 10px}
+  .tile-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .tile{position:relative;border:none;border-radius:var(--radius);padding:18px 14px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:8px;min-height:118px}
+  .tile:active{transform:scale(.99)}
+  .tile-icon{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center}
+  .tile-icon svg{width:22px;height:22px}
+  .tile-title{font-size:16px;font-weight:800;color:var(--tx)}
+  .tile-sub{font-size:12px;color:var(--tx2)}
+
+  /* cards / inventory */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+  .secttitle{font-size:18px;font-weight:800;margin:14px 4px 10px}
+  .tool-row{padding:12px 0;border-bottom:1px solid var(--line)}
+  .tool-row:last-child{border-bottom:none}
+  .tool-name{font-size:15px;font-weight:700}
+  .tool-meta{font-size:12px;color:var(--tx2);margin-top:2px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .chip{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;font-family:ui-monospace,monospace}
+  .chip.available{background:#e7f6ee;color:#1d7a4d}
+  .chip.borrowed{background:#fdeef0;color:#b32430}
+  .chip.repair{background:#fff3e0;color:#9a6400}
+  .countbar{display:flex;gap:14px;font-size:12px;color:var(--tx2);margin-top:6px}
+  .countbar b{color:var(--tx)}
+  .empty{text-align:center;color:var(--tx2);font-size:14px;padding:24px 0}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1f2733;color:#fff;font-weight:700;padding:12px 18px;border-radius:999px;z-index:60;display:none;font-size:14px}
+  .search{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;font-size:15px;margin-bottom:10px}
+</style>
+</head>
+<body>
+
+<!-- LOGIN -->
+<div id="s-login" class="screen active">
+  <div class="lw"><div class="lb">
+    <div class="lav">🧰</div>
+    <div style="font-size:21px;font-weight:800">RSR Tools</div>
+    <div style="font-size:14px;color:var(--tx2);margin-bottom:6px">Enter PIN to continue</div>
+    <div class="pin-dots"><div class="pindot" id="pd0"></div><div class="pindot" id="pd1"></div><div class="pindot" id="pd2"></div><div class="pindot" id="pd3"></div></div>
+    <div class="num-grid">
+      <button class="nb" onclick="pinTap('1')">1</button><button class="nb" onclick="pinTap('2')">2</button><button class="nb" onclick="pinTap('3')">3</button>
+      <button class="nb" onclick="pinTap('4')">4</button><button class="nb" onclick="pinTap('5')">5</button><button class="nb" onclick="pinTap('6')">6</button>
+      <button class="nb" onclick="pinTap('7')">7</button><button class="nb" onclick="pinTap('8')">8</button><button class="nb" onclick="pinTap('9')">9</button>
+      <button class="nb" onclick="pinClear()" style="font-size:13px">Clear</button>
+      <button class="nb" onclick="pinTap('0')">0</button>
+      <button class="nb" onclick="pinBack()" style="font-size:18px">&#x232B;</button>
+    </div>
+    <button class="lbtn" onclick="doLogin()">Sign in</button>
+    <div id="pin-err" style="font-size:13px;color:var(--r);margin-top:10px;display:none">Incorrect PIN.</div>
+    <div style="font-size:12px;color:var(--tx3);margin-top:10px">Default PIN: 1111</div>
+  </div></div>
+</div>
+
+<!-- HOME -->
+<div id="s-home" class="screen">
+  <div class="app-header">
+    <div class="hdr-avatar">R</div>
+    <div class="hdr-info"><div class="hdr-site">RSR Tools</div><div class="hdr-sub" id="home-site-sub">—</div></div>
+    <button class="hdr-btn" onclick="doLogout()" title="Sign out">&#9211;</button>
+    <a href="../" style="text-decoration:none"><button class="hdr-btn">&#8962;</button></a>
+  </div>
+  <div class="wrap">
+    <div class="sitebar">
+      <select id="site-select" onchange="onSiteChange()"></select>
+    </div>
+    <div class="home-label">Quick actions</div>
+    <div class="tile-grid">
+      <button class="tile" style="background:#E8F0FE" onclick="goInventory()">
+        <div class="tile-icon" style="background:#4A6FA5"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></div>
+        <div class="tile-title">Inventory</div><div class="tile-sub">View tools &amp; equipment</div>
+      </button>
+      <button class="tile" style="background:#E3F2FD" onclick="soon()">
+        <div class="tile-icon" style="background:#1976D2"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg></div>
+        <div class="tile-title">Borrow Slip</div><div class="tile-sub">Issue tool to employee</div>
+      </button>
+      <button class="tile" style="background:#E8F5E9" onclick="soon()">
+        <div class="tile-icon" style="background:#388E3C"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><polyline points="1,4 1,10 7,10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg></div>
+        <div class="tile-title">Return Tool</div><div class="tile-sub">Confirm item returned</div>
+      </button>
+      <button class="tile" style="background:#FFF3E0" onclick="soon()">
+        <div class="tile-icon" style="background:#F57C00"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12,5 19,12 12,19"/></svg></div>
+        <div class="tile-title">Transfer Out</div><div class="tile-sub">Send tool to another site</div>
+      </button>
+      <button class="tile" style="background:#F3E5F5" onclick="soon()">
+        <div class="tile-icon" style="background:#7B1FA2"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><polyline points="8,17 12,21 16,17"/><line x1="12" y1="3" x2="12" y2="21"/></svg></div>
+        <div class="tile-title">Receive Tools</div><div class="tile-sub">Confirm incoming tools</div>
+      </button>
+      <button class="tile" style="background:#FFEBEE" onclick="soon()">
+        <div class="tile-icon" style="background:#C62828"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94z"/></svg></div>
+        <div class="tile-title">For Repair</div><div class="tile-sub">Tag defective equipment</div>
+      </button>
+      <button class="tile" style="background:#FFF8E1" onclick="soon()">
+        <div class="tile-icon" style="background:#F9A825"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg></div>
+        <div class="tile-title">All Records</div><div class="tile-sub">Borrow &amp; transfer logs</div>
+      </button>
+      <button class="tile" style="background:#E0F2F1" onclick="soon()">
+        <div class="tile-icon" style="background:#00695C"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 010 14.14M4.93 4.93a10 10 0 000 14.14"/></svg></div>
+        <div class="tile-title">Setup</div><div class="tile-sub">Coming soon</div>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- INVENTORY -->
+<div id="s-inventory" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Inventory</div><div class="hdr-sub" id="inv-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <input class="search" id="inv-search" placeholder="Search tool name or code…" oninput="renderInventory()" />
+    <div id="inv-list"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+/* ══ CONFIG ══ */
+const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
+const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
+const PIN_KEY='rsr_tools_pin', DEFAULT_PIN='1111', SITE_KEY='rsr_tools_site';
+let sb=null, sites=[], curSite='', invData=[];
+
+/* ══ PIN ══ */
+let pinVal='';
+function pinTap(d){if(pinVal.length>=4)return;pinVal+=d;dots();}
+function pinClear(){pinVal='';dots();}
+function pinBack(){pinVal=pinVal.slice(0,-1);dots();}
+function dots(){for(let i=0;i<4;i++){const e=document.getElementById('pd'+i);if(e)e.className='pindot'+(i<pinVal.length?' on':'');}}
+async function savedPin(){
+  try{const{data}=await sb.from('settings').select('value').eq('key','issuance_pin').maybeSingle();return (data&&data.value)?data.value:DEFAULT_PIN;}
+  catch(e){return DEFAULT_PIN;}
+}
+async function doLogin(){
+  const want=await savedPin();
+  if(pinVal!==want){document.getElementById('pin-err').style.display='block';pinVal='';dots();return;}
+  document.getElementById('pin-err').style.display='none';pinVal='';dots();
+  await boot();
+}
+function doLogout(){showScreen('s-login');}
+
+/* ══ SCREENS ══ */
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0,0);
+}
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',2600);}
+function soon(){toast('Coming in the next update');}
+
+/* ══ BOOT ══ */
+async function boot(){
+  const{data,error}=await sb.from('sites').select('id,name').order('name');
+  sites=data||[];
+  const sel=document.getElementById('site-select');
+  sel.innerHTML=sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  curSite=localStorage.getItem(SITE_KEY)||(sites[0]&&sites[0].id)||'';
+  if(curSite)sel.value=curSite;
+  updateSiteLabels();
+  showScreen('s-home');
+}
+function onSiteChange(){
+  curSite=document.getElementById('site-select').value;
+  localStorage.setItem(SITE_KEY,curSite);
+  updateSiteLabels();
+}
+function siteName(){const s=sites.find(x=>x.id===curSite);return s?s.name:'—';}
+function updateSiteLabels(){
+  document.getElementById('home-site-sub').textContent=siteName();
+  document.getElementById('inv-site-sub').textContent=siteName();
+}
+
+/* ══ INVENTORY ══ */
+async function goInventory(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-inventory');
+  document.getElementById('inv-list').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const ures=await sb.from('item_units')
+      .select('id,unit_code,status,item_id,items(name,item_code,unit)')
+      .eq('active',true).eq('site_id',curSite);
+    const units=ures.data||[];
+    const bres=await sb.from('borrow_issuance').select('unit_id').eq('status','out').eq('site_id',curSite);
+    const outSet=new Set((bres.data||[]).map(b=>b.unit_id));
+    /* group by item */
+    const map={};
+    units.forEach(u=>{
+      const k=u.item_id;
+      if(!map[k])map[k]={name:(u.items&&u.items.name)||'—',code:(u.items&&u.items.item_code)||'',units:[]};
+      let st=u.status==='repair'?'repair':(outSet.has(u.id)?'borrowed':'available');
+      map[k].units.push({code:u.unit_code,st});
+    });
+    invData=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
+  }catch(e){invData=[];toast('Load failed: '+e.message);}
+  renderInventory();
+}
+function renderInventory(){
+  const q=(document.getElementById('inv-search').value||'').toLowerCase();
+  const list=q?invData.filter(t=>t.name.toLowerCase().includes(q)||(t.code||'').toLowerCase().includes(q)):invData;
+  const el=document.getElementById('inv-list');
+  if(!list.length){el.innerHTML='<div class="empty">No tools at this site yet.</div>';return;}
+  el.innerHTML='<div class="card">'+list.map(t=>{
+    const av=t.units.filter(u=>u.st==='available').length;
+    const bo=t.units.filter(u=>u.st==='borrowed').length;
+    const rp=t.units.filter(u=>u.st==='repair').length;
+    return `<div class="tool-row">
+      <div class="tool-name">${t.name}</div>
+      <div class="countbar"><span>Avail <b>${av}</b></span><span>Out <b>${bo}</b></span><span>Repair <b>${rp}</b></span><span>Owned <b>${t.units.length}</b></span></div>
+      <div class="chips">${t.units.map(u=>`<span class="chip ${u.st}">${u.code}</span>`).join('')}</div>
+    </div>`;
+  }).join('')+'</div>';
+}
+
+/* ══ INIT ══ */
+sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
+</script>
+</body>
+</html>
