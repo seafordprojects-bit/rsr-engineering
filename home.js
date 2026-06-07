@@ -21,9 +21,22 @@ async function countRows(table, build) {
 }
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, name, code, pin, sl_balance, vl_balance').order('name').limit(2000);
+    .select('id, name, code, pin, sl_balance, vl_balance, daily_rate').order('name').limit(2000);
   if (error) throw error;
   return data;
+}
+async function getSalaryHistory(empId) {
+  const { data, error } = await supabase.from('salary_history')
+    .select('id, daily_rate, effective_date, note').eq('employee_id', empId)
+    .order('effective_date', { ascending: false }).limit(100);
+  if (error) throw error;
+  return data;
+}
+async function addSalaryChange(empId, rate, date, note) {
+  const { error } = await supabase.from('salary_history')
+    .insert({ employee_id: empId, daily_rate: rate, effective_date: date || null, note: note || null });
+  if (error) throw error;
+  await supabase.from('employees').update({ daily_rate: rate }).eq('id', empId);  // current rate
 }
 async function updateEmployee(id, fields) {
   const { error } = await supabase.from('employees').update(fields).eq('id', id);
@@ -88,6 +101,11 @@ function App() {
   const [empSick, setEmpSick] = useState('');
   const [empVac, setEmpVac] = useState('');
   const [coordPin, setCoordPin] = useState('');
+  const [rate, setRate] = useState('');          // current/starting daily rate
+  const [incRate, setIncRate] = useState('');     // new rate for an increase
+  const [incDate, setIncDate] = useState('');
+  const [incNote, setIncNote] = useState('');
+  const [salHist, setSalHist] = useState([]);
   const [toast, setToast] = useState(null);
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
 
@@ -106,10 +124,27 @@ function App() {
   };
 
   const loadEmps = async () => { try { setEmps(await getEmployees()); } catch (_) {} };
-  const pickEmp = (id) => {
+  const pickEmp = async (id) => {
     setEmpSel(id);
     const e = emps.find(x => x.id === id) || {};
     setEmpPin(e.pin || ''); setEmpSick(e.sl_balance ?? ''); setEmpVac(e.vl_balance ?? '');
+    setRate(e.daily_rate ?? ''); setIncRate(''); setIncDate(''); setIncNote('');
+    try { setSalHist(await getSalaryHistory(id)); } catch (_) { setSalHist([]); }
+  };
+  const saveRate = async () => {
+    if (!empSel) { flash('Pick an employee'); return; }
+    try { await updateEmployee(empSel, { daily_rate: rate === '' ? null : Number(rate) }); flash('Daily rate saved'); loadEmps(); }
+    catch (e) { flash('Error: ' + e.message); }
+  };
+  const addIncrease = async () => {
+    if (!empSel) { flash('Pick an employee'); return; }
+    if (incRate === '') { flash('Enter the new rate'); return; }
+    try {
+      await addSalaryChange(empSel, Number(incRate), incDate, incNote);
+      setRate(incRate); setIncRate(''); setIncDate(''); setIncNote('');
+      setSalHist(await getSalaryHistory(empSel)); loadEmps();
+      flash('Salary increase recorded');
+    } catch (e) { flash('Error: ' + e.message); }
   };
   const saveEmp = async () => {
     if (!empSel) { flash('Pick an employee'); return; }
@@ -218,7 +253,37 @@ function App() {
               <${Field} label="Vacation leave (days)"><input type="number" min="0" step="0.5" value=${empVac} onInput=${e => setEmpVac(e.target.value)} placeholder="0" /><//>
             </div>
             <button class="btn" onClick=${saveEmp}>Save</button>`}
-        </div>`}
+        </div>
+
+        ${empSel && html`
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Salary — ${(emps.find(x=>x.id===empSel)||{}).name || ''}</div>
+          <${Field} label="Daily rate (current / starting) ₱">
+            <input type="number" min="0" value=${rate} onInput=${e => setRate(e.target.value)} placeholder="0" />
+          <//>
+          <button class="btn ghost" onClick=${saveRate}>Save daily rate</button>
+
+          <div style="border-top:1px solid var(--line);margin:16px 0 12px"></div>
+          <div class="sectlabel" style="margin-top:0">Record a salary increase</div>
+          <div class="grid" style="margin-bottom:0">
+            <${Field} label="New daily rate ₱"><input type="number" min="0" value=${incRate} onInput=${e => setIncRate(e.target.value)} placeholder="0" /><//>
+            <${Field} label="Effective date"><input type="date" value=${incDate} onInput=${e => setIncDate(e.target.value)} /><//>
+          </div>
+          <${Field} label="Note (optional)"><input value=${incNote} onInput=${e => setIncNote(e.target.value)} placeholder="e.g. annual increase" /><//>
+          <button class="btn" onClick=${addIncrease}>Add increase</button>
+
+          ${salHist.length > 0 && html`
+            <div style="margin-top:14px">
+              <div class="sectlabel">Salary history</div>
+              ${salHist.map(h => html`
+                <div class="row" key=${h.id}>
+                  <div>
+                    <div class="name">₱${Number(h.daily_rate).toLocaleString('en-PH')}/day</div>
+                    <div class="unit">${h.effective_date || '—'}${h.note ? ' · ' + h.note : ''}</div>
+                  </div>
+                </div>`)}
+            </div>`}
+        </div>`}`}
 
       <div class="sectlabel">Live overview</div>
       <div class="grid">
