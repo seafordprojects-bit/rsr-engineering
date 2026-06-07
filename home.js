@@ -6,7 +6,8 @@ import { html, render } from 'htm/preact';
 import { useState, useEffect } from 'preact/hooks';
 import { supabase } from './supabase.js';
 
-const SESSION_KEY = 'rsr_admin';          // shared unlock flag for this browser session
+const SESSION_KEY = 'rsr_admin';
+const onAdminPage = location.pathname.includes('/admin');  // admin lives on its own page
 const PIN_KEY = 'rsr_admin_pin';          // changeable PIN (default 1234)
 
 // count helper — returns a number, or null if the table/column isn't ready
@@ -67,6 +68,12 @@ async function getIssued() {
     .eq('txn_type', 'issuance').order('borrowed_at', { ascending: false }).limit(500);
   if (error) throw error;
   return data;
+}
+async function getVoyagesMon() {
+  const { data, error } = await supabase.from('voyages')
+    .select('*, sites(name)').order('created_at', { ascending: false }).limit(500);
+  if (error) throw error;
+  return data || [];
 }
 // attendance dates are stored in PH format (MM/DD/YYYY) by the kiosk
 function todayPH() { return new Date().toLocaleDateString('en-PH', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
@@ -157,9 +164,8 @@ function Tile({ ico, num, unit, title, href, onClick }) {
 }
 
 function App() {
-  const [view, setView] = useState('choose');   // 'choose' | 'admin'
   const [adminTab, setAdminTab] = useState('dash');  // 'dash' | 'people'
-  const [authed, setAuthed] = useState(sessionStorage.getItem(SESSION_KEY) === '1');
+  const [authed, setAuthed] = useState(false);   // always require the passcode on open
   const [m, setM] = useState({});
   const [showSet, setShowSet] = useState(false);
   const [curPin, setCurPin] = useState('');
@@ -180,6 +186,7 @@ function App() {
   const [rep, setRep] = useState(null);     // repair units
   const [inv, setInv] = useState(null);     // { units, outs }
   const [iss, setIss] = useState(null);     // issued materials list
+  const [ves, setVes] = useState(null);     // vessels monitor list
   const [att, setAtt] = useState(null);     // today's attendance summary
   const [attRows, setAttRows] = useState(null);  // per-employee rows for the monitor
   const [attYmd, setAttYmd] = useState(todayYmd());
@@ -242,7 +249,7 @@ function App() {
   };
 
   useEffect(() => {
-    if (!authed || view !== 'admin') return;
+    if (!authed || !onAdminPage) return;
     const iso30 = new Date(Date.now() - 30 * 864e5).toISOString();
     (async () => {
       const [toolsOut, inRepair, issued30, vessels, people] = await Promise.all([
@@ -262,25 +269,25 @@ function App() {
                  total: people || 0, absent: Math.max(0, (people || 0) - present) });
       } catch (_) { setAtt(null); }
     })();
-  }, [authed, view]);
+  }, [authed]);
 
   useEffect(() => {
-    if (!(authed && view === 'admin' && adminTab === 'attendance')) return;
+    if (!(authed && onAdminPage && adminTab === 'attendance')) return;
     (async () => { try { setAttRows(await getAttendance(ymdToPH(attYmd))); } catch (e) { flash('Load failed: ' + e.message); } })();
-  }, [adminTab, attYmd, authed, view]);
+  }, [adminTab, attYmd, authed]);
 
   useEffect(() => {
     const loaders = { leaves: getLeaves, approvals: getApprovals, duty: getStraightDuty, violations: getViolations, sms: getSmsLog };
-    if (!(authed && view === 'admin' && loaders[adminTab])) return;
+    if (!(authed && onAdminPage && loaders[adminTab])) return;
     setHrRows(null);
     (async () => { try { setHrRows(await loaders[adminTab]()); } catch (e) { flash('Load failed: ' + e.message); } })();
-  }, [adminTab, authed, view]);
+  }, [adminTab, authed]);
 
-  useEffect(() => { if (authed && view === 'admin') loadEmps(); }, [authed, view]);
+  useEffect(() => { if (authed && onAdminPage) loadEmps(); }, [authed]);
   useEffect(() => { if (authed && showSet) loadEmps(); }, [authed, showSet]);
 
   useEffect(() => {
-    if (!(authed && view === 'admin')) return;
+    if (!(authed && onAdminPage)) return;
     if (adminTab === 'borrowed') (async () => {
       try { setBor(await getBorrowedNow()); setInv(await getInventory()); }
       catch (e) { flash('Load failed: ' + e.message); }
@@ -293,33 +300,32 @@ function App() {
       try { setIss(await getIssued()); }
       catch (e) { flash('Load failed: ' + e.message); }
     })();
-  }, [adminTab, authed, view]);
+    if (adminTab === 'vessels') (async () => {
+      try { setVes(await getVoyagesMon()); }
+      catch (e) { flash('Load failed: ' + e.message); }
+    })();
+  }, [adminTab, authed]);
 
   // auto-logout the admin after 2 minutes of no activity
   useEffect(() => {
-    if (!(authed && view === 'admin')) return;
+    if (!(authed && onAdminPage)) return;
     let t;
-    const logout = () => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setView('choose'); setShowSet(false); setAdminTab('dash'); };
+    const logout = () => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setShowSet(false); setAdminTab('dash'); };
     const reset = () => { clearTimeout(t); t = setTimeout(logout, 2 * 60 * 1000); };
     const evs = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
     evs.forEach(e => window.addEventListener(e, reset, { passive: true }));
     reset();
     return () => { clearTimeout(t); evs.forEach(e => window.removeEventListener(e, reset)); };
-  }, [authed, view]);
+  }, [authed]);
 
-  // ---- front chooser: Admin | Coordinator ----
-  if (view === 'choose') return html`
+  // ---- front chooser (everyone except admin): Coordinator | Issuance ----
+  if (!onAdminPage) return html`
     <header class="app">
       <div class="wrap"><div class="brand"><b>RSR</b><span class="tag">ENGINEERING</span></div></div>
     </header>
     <div class="wrap">
       <div class="sectlabel">Choose your area</div>
       <div class="grid">
-        <div class="tile" style="cursor:pointer" onClick=${() => setView('admin')}>
-          <div class="ico">🛠️</div>
-          <h3>Admin</h3>
-          <div class="unit">Dashboard, passcodes, salary, leave</div>
-        </div>
         <a class="tile" href="./coordinator/">
           <div class="ico">🗂️</div>
           <h3>Coordinator</h3>
@@ -335,15 +341,15 @@ function App() {
     </div>
     ${toast && html`<div class="toast">${toast}</div>`}`;
 
-  // ---- admin login ----
-  if (!authed) return html`<${Lock} onUnlock=${() => setAuthed(true)} onBack=${() => setView('choose')} toast=${flash} />
+  // ---- admin login (its own page, always asks) ----
+  if (!authed) return html`<${Lock} onUnlock=${() => setAuthed(true)} toast=${flash} />
     ${toast && html`<div class="toast">${toast}</div>`}`;
 
   const live = [
     { ico:'🔧', num:m.toolsOut,  unit:'out now',        title:'Tool Borrowing',   onClick:() => setAdminTab('borrowed') },
     { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', onClick:() => setAdminTab('issued') },
     { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
-    { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  href:'./coordinator/' },
+    { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  onClick:() => setAdminTab('vessels') },
     { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
     { ico:'⏱️', num:att ? att.working : null, unit:'working now', title:'Time In / Out', onClick:() => setAdminTab('attendance') },
   ];
@@ -409,6 +415,35 @@ function App() {
             </div>`)
           : html`<div class="card"><div class="empty">No tools registered yet.</div></div>`}
         <p class="note" style="text-align:center">View only. The big number is available now.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  // ---- admin: vessel schedule monitor (read-only) ----
+  if (adminTab === 'vessels') {
+    const stLabel = { drydock:'Drydock', afloat:'Afloat', not_active:'Not active' };
+    const stColor = { drydock:'var(--hivis)', afloat:'#12B89E', not_active:'#888' };
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">VESSELS</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="card">
+          <label>Vessels${ves ? ` (${ves.length})` : ''}</label>
+          ${ves == null ? html`<div class="empty">Loading…</div>`
+            : ves.length ? ves.map(v => html`
+              <div class="row" key=${v.id} style="align-items:flex-start">
+                <div>
+                  <div class="name">${v.vessel_name || '—'} ${v.vessel_code ? html`<span class="mono" style="color:var(--ink-dim);font-weight:400">· ${v.vessel_code}</span>` : ''}</div>
+                  <div class="unit">${(v.sites && v.sites.name) || '—'}${v.start_date ? ' · ' + v.start_date : ''}${v.end_date ? ' → ' + v.end_date : ''}</div>
+                  ${v.notes ? html`<div class="unit">${v.notes}</div>` : ''}
+                </div>
+                <span class="badge" style=${'background:' + (stColor[v.status] || '#888') + ';color:#000'}>${stLabel[v.status] || v.status || '—'}</span>
+              </div>`)
+            : html`<div class="empty">No vessels yet. Your assistant adds them in the Coordinator.</div>`}
+        </div>
+        <p class="note" style="text-align:center">View only.</p>
       </div>
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
@@ -616,8 +651,8 @@ function App() {
         <span style="display:flex;gap:12px;align-items:center">
           <button onClick=${() => setShowSet(s => !s)}
             style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">settings</button>
-          <button onClick=${() => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setView('choose'); setShowSet(false); setAdminTab('dash'); }}
-            style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">home</button>
+          <button onClick=${() => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setShowSet(false); setAdminTab('dash'); }}
+            style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">lock</button>
         </span>
       </div></div>
     </header>
