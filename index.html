@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>RSR Engineering</title>
+<title>RSR Admin</title>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
@@ -37,10 +37,11 @@
   .brand b{font-weight:800;letter-spacing:.5px}
   .tag{font-size:11px;color:var(--hivis-ink);background:var(--hivis);padding:2px 8px;border-radius:999px;font-weight:800;letter-spacing:.5px}
   label{display:block;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--ink-dim);margin:0 0 6px}
-  input,select,button{font-family:inherit;font-size:16px}
-  input,select{width:100%;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:13px 12px}
-  input:focus,select:focus{outline:2px solid var(--hivis);border-color:transparent}
+  input,select,textarea,button{font-family:inherit;font-size:16px}
+  input,select,textarea{width:100%;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:13px 12px}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--hivis);border-color:transparent}
   .field{margin-bottom:14px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
   .btn{width:100%;padding:15px;border:none;border-radius:12px;cursor:pointer;background:var(--hivis);color:var(--hivis-ink);font-weight:800;letter-spacing:.4px;text-transform:uppercase}
   .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
@@ -58,11 +59,17 @@
   .tile h3{margin:2px 0 0;font-size:14px;font-weight:700}
   .tile .unit{font-size:12px;color:var(--ink-dim)}
   .tile.soon{opacity:.55}
-  .badge{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.5px;background:var(--panel-2);color:var(--ink-dim);padding:2px 7px;border-radius:999px;margin-top:8px}
+  .badge{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.5px;background:var(--panel-2);color:var(--ink-dim);padding:2px 7px;border-radius:999px;margin-top:2px;white-space:nowrap}
+
+  .row{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:none}
+  .name{font-weight:700;font-size:15px}
+  .unit{font-size:12px;color:var(--ink-dim);margin-top:2px}
+  .empty{color:var(--ink-dim);font-size:13px;padding:10px 0;text-align:center}
 </style>
 </head>
 <body>
   <div id="app"></div>
-  <script type="module" src="./home.js"></script>
+  <script type="module" src="../home.js"></script>
 </body>
 </html>
