@@ -334,8 +334,7 @@
 
 <div id="bslip-modal" style="display:none;position:fixed;inset:0;background:rgba(15,25,40,.5);z-index:80;align-items:center;justify-content:center;padding:16px">
   <div class="card" style="max-width:390px;width:100%;margin:0;max-height:92vh;overflow:auto">
-    <div style="font-size:13px;color:var(--tx2);text-transform:uppercase;letter-spacing:.5px;font-weight:800">Borrow Slip</div>
-    <div id="bslip-body" style="margin:10px 0"></div>
+    <div id="bslip-body" style="margin:0 0 10px"></div>
     <div style="background:#fff8e1;border:1px solid #f0e0a8;border-radius:10px;padding:10px;font-size:12px;color:#7a5c00;line-height:1.5;margin-bottom:10px">By entering the passcode below, the borrower confirms receipt of the listed tools and accepts responsibility to return them in good condition. Lost or damaged items are charged at the replacement value shown.</div>
     <label class="lbl">Borrower passcode (sign here)</label>
     <input id="bslip-pin" class="search" type="password" inputmode="numeric" placeholder="Enter passcode to confirm"/>
@@ -609,15 +608,26 @@ async function reviewBorrow(){
   let total=0; cart.forEach(c=>total+=Number(c.price)||0);
   pendingSlip={empId,empName:emp.name,empCode:emp.code||'—',bdate,vessel,by,items:cart.slice(),total,slipNo:reservedSlipNo};
   document.getElementById('bslip-body').innerHTML=
-    `<div class="brow"><span>Slip No.</span><b style="font-family:ui-monospace,monospace;color:var(--p)">${reservedSlipNo}</b></div>`
-    +`<div class="brow"><span>Borrower</span><b>${emp.name} <span class="vc">${emp.code||'—'}</span></b></div>`
-    +`<div class="brow"><span>Date</span><b>${fmtNice(bdate)}</b></div>`
-    +`<div class="brow"><span>Project / Vessel</span><b>${vessel}</b></div>`
-    +`<div class="brow"><span>Issued by</span><b>${by}</b></div>`
-    +`<div class="brow"><span>Site</span><b>${siteName()}</b></div>`
-    +`<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">`
-    +cart.map(c=>`<div class="brow"><span>${c.name} <span class="vc">${c.code}</span></span><b>${c.price?'₱'+Number(c.price).toLocaleString():'—'}</b></div>`).join('')
-    +`</div><div class="brow" style="border-top:1px solid var(--line);margin-top:6px;padding-top:8px"><span>Total replacement value</span><b>₱${total.toLocaleString()}</b></div>`;
+    `<div style="text-align:center;border-bottom:1.5px dashed var(--tx3);padding-bottom:12px;margin-bottom:12px">`
+    +`<div style="font-size:15px;font-weight:800">RSR Tools — Borrow Slip</div>`
+    +`<div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--p);margin-top:2px">${reservedSlipNo}</div>`
+    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(bdate)} · ${siteName()}</div>`
+    +`</div>`
+    +`<div style="font-size:13px;line-height:1.9;color:var(--tx2);margin-bottom:12px">`
+    +`<div style="display:flex;justify-content:space-between"><span>Borrower</span><b style="color:var(--tx)">${emp.name} <span class="vc">${emp.code||'—'}</span></b></div>`
+    +`<div style="display:flex;justify-content:space-between"><span>Project / Vessel</span><b style="color:var(--tx)">${vessel}</b></div>`
+    +`<div style="display:flex;justify-content:space-between"><span>Issued by</span><b style="color:var(--tx)">${by}</b></div>`
+    +`</div>`
+    +`<div style="border-top:1.5px dashed var(--tx3);padding-top:10px">`
+    +`<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:10px"><span>Item</span><span>Repl. value</span></div>`
+    +cart.map(c=>`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:11px;gap:10px">
+        <div><div style="font-size:15px;font-weight:700;line-height:1.2">${c.name}</div><div style="font-family:ui-monospace,monospace;font-size:11px;color:var(--tx2);margin-top:2px">${c.code}</div></div>
+        <div style="font-size:17px;font-weight:800;white-space:nowrap">${c.price?'₱'+Number(c.price).toLocaleString():'—'}</div>
+      </div>`).join('')
+    +`<div style="display:flex;justify-content:space-between;align-items:baseline;border-top:1.5px dashed var(--tx3);padding-top:11px;margin-top:2px">
+        <div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx2)">Total</div>
+        <div style="font-size:22px;font-weight:900;color:var(--p)">₱${total.toLocaleString()}</div>
+      </div></div>`;
   document.getElementById('bslip-pin').value='';
   document.getElementById('bslip-modal').style.display='flex';
 }
