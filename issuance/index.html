@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>RSR Issuance</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<style>
+  :root{ --bg:#11161c; --panel:#1a222b; --line:#2c3946; --ink:#e9eef3; --ink-dim:#8da0b2; --hivis:#ffb000; --hivis-ink:#1a1200; --radius:16px; }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{ background:radial-gradient(900px 500px at 80% -10%, rgba(255,176,0,.08), transparent 60%), var(--bg); color:var(--ink); font-family:"Barlow",system-ui,sans-serif; -webkit-font-smoothing:antialiased; padding-bottom:40px; }
+  .wrap{max-width:620px;margin:0 auto;padding:0 16px;width:100%}
+  header.app{position:sticky;top:0;background:rgba(17,22,28,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:14px 16px;margin-bottom:18px;display:flex;align-items:center;justify-content:space-between}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand b{font-weight:800;letter-spacing:.5px}
+  .tag{font-size:11px;color:var(--hivis-ink);background:var(--hivis);padding:2px 8px;border-radius:999px;font-weight:800;letter-spacing:.5px}
+  .home{color:var(--ink-dim);text-decoration:none;font-size:13px;font-weight:700}
+  .sectlabel{font-size:12px;font-weight:800;letter-spacing:.6px;color:var(--ink-dim);text-transform:uppercase;margin:6px 2px 10px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  a.tile{display:block;text-decoration:none;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 16px;transition:border-color .15s,transform .05s}
+  a.tile:active{transform:scale(.99)} a.tile:hover{border-color:var(--hivis)}
+  .ico{font-size:26px}
+  h3{margin:8px 0 2px;font-size:16px;font-weight:800}
+  .unit{font-size:12px;color:var(--ink-dim)}
+  .note{font-size:12px;color:var(--ink-dim);text-align:center;margin-top:8px}
+</style>
+</head>
+<body>
+  <header class="app">
+    <div class="brand"><b>RSR</b><span class="tag">ISSUANCE</span></div>
+    <a class="home" href="../">&#8962; Home</a>
+  </header>
+  <div class="wrap">
+    <div class="sectlabel">Choose what to issue</div>
+    <div class="grid">
+      <a class="tile" href="../tools/">
+        <div class="ico">&#129520;</div>
+        <h3>Tool Inventory</h3>
+        <div class="unit">Borrow &amp; return tools, stock, repair</div>
+      </a>
+      <a class="tile" href="../material-issuance/">
+        <div class="ico">&#128230;</div>
+        <h3>Material Issuance</h3>
+        <div class="unit">Issue consumable materials to crew</div>
+      </a>
+    </div>
+    <p class="note">RSR Engineering Services &middot; Cebu</p>
+  </div>
+</body>
+</html>
