@@ -459,8 +459,9 @@ function renderInventory(){
 }
 
 /* ══ EMPLOYEES ══ */
-let employees=[], availTools=[], cart=[], retRows=[], vessels=[], selEmpId='', pendingSlip=null;
+let employees=[], availTools=[], cart=[], retRows=[], vessels=[], selEmpId='', pendingSlip=null, reservedSlipNo='';
 function todayYmd2(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
+function fmtNice(ymd){if(!ymd)return '';const d=new Date(ymd+'T00:00:00');return d.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'2-digit'});}
 async function loadEmployees(){
   const{data}=await sb.from('employees').select('id,code,name,pin').order('name');
   employees=data||[];
@@ -532,7 +533,7 @@ async function goBorrow(){
   document.getElementById('bw-vessel').value='';
   const vb=document.getElementById('bw-vsug'); if(vb){vb.style.display='none';vb.innerHTML='';}
   document.getElementById('bw-by').value='';
-  pendingSlip=null;
+  pendingSlip=null; reservedSlipNo='';
   await loadAvail();
 }
 async function loadAvail(){
@@ -582,7 +583,7 @@ function renderCart(){
     +`<div class="countbar" style="margin-top:8px">Total replacement value: <b>₱${total.toLocaleString()}</b></div>`;
   btn.textContent='Issue ('+cart.length+')';
 }
-function reviewBorrow(){
+async function reviewBorrow(){
   let empId=selEmpId;
   const typedName=(document.getElementById('bw-emp').value||'').trim();
   if(!empId){
@@ -599,11 +600,18 @@ function reviewBorrow(){
   if(!vessel){toast('Select or enter a project/vessel');return;}
   if(!by){toast('Enter who issued the tools');return;}
   if(!cart.length){toast('Add at least one tool');return;}
+  if(!reservedSlipNo){
+    let sn='';
+    try{const{data,error}=await sb.rpc('next_slip_no'); if(!error&&data)sn=data;}catch(e){}
+    if(!sn){const n=new Date(),z=x=>String(x).padStart(2,'0');sn='BS-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+    reservedSlipNo=sn;
+  }
   let total=0; cart.forEach(c=>total+=Number(c.price)||0);
-  pendingSlip={empId,empName:emp.name,empCode:emp.code||'—',bdate,vessel,by,items:cart.slice(),total};
+  pendingSlip={empId,empName:emp.name,empCode:emp.code||'—',bdate,vessel,by,items:cart.slice(),total,slipNo:reservedSlipNo};
   document.getElementById('bslip-body').innerHTML=
-    `<div class="brow"><span>Borrower</span><b>${emp.name} <span class="vc">${emp.code||'—'}</span></b></div>`
-    +`<div class="brow"><span>Date</span><b>${bdate}</b></div>`
+    `<div class="brow"><span>Slip No.</span><b style="font-family:ui-monospace,monospace;color:var(--p)">${reservedSlipNo}</b></div>`
+    +`<div class="brow"><span>Borrower</span><b>${emp.name} <span class="vc">${emp.code||'—'}</span></b></div>`
+    +`<div class="brow"><span>Date</span><b>${fmtNice(bdate)}</b></div>`
     +`<div class="brow"><span>Project / Vessel</span><b>${vessel}</b></div>`
     +`<div class="brow"><span>Issued by</span><b>${by}</b></div>`
     +`<div class="brow"><span>Site</span><b>${siteName()}</b></div>`
@@ -624,16 +632,14 @@ async function confirmBorrow(){
   }catch(e){toast('PIN check failed: '+e.message);return;}
   const now=new Date(), z=n=>String(n).padStart(2,'0');
   const borrowedAt=new Date(pendingSlip.bdate+'T'+z(now.getHours())+':'+z(now.getMinutes())+':00').toISOString();
-  let slipNo='';
-  try{const{data:sn,error:se}=await sb.rpc('next_slip_no'); if(!se&&sn)slipNo=sn;}catch(e){}
-  if(!slipNo)slipNo='BS-'+now.getFullYear()+z(now.getMonth()+1)+z(now.getDate())+'-'+z(now.getHours())+z(now.getMinutes())+z(now.getSeconds());
+  const slipNo=pendingSlip.slipNo;
   const batch=crypto.randomUUID();
   const rows=pendingSlip.items.map(c=>({txn_type:'borrow',employee_id:pendingSlip.empId,item_id:c.itemId,unit_id:c.unitId,site_id:curSite,quantity:1,status:'out',issued_by:pendingSlip.by||null,project_vessel:pendingSlip.vessel||null,batch_id:batch,slip_no:slipNo,borrowed_at:borrowedAt}));
   try{
     const{error}=await sb.from('borrow_issuance').insert(rows);
     if(error)throw error;
     const count=pendingSlip.items.length, nm=pendingSlip.empName, ves=pendingSlip.vessel;
-    cart=[]; pendingSlip=null;
+    cart=[]; pendingSlip=null; reservedSlipNo='';
     document.getElementById('bslip-modal').style.display='none';
     showSlip(slipNo, count+' tool(s) to '+nm+(ves?' · '+ves:''));
   }catch(e){toast('Save failed: '+e.message);}
