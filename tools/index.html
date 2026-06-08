@@ -72,6 +72,11 @@
   .lbl{display:block;font-size:12px;font-weight:700;color:var(--tx2);margin:8px 0 6px;text-transform:uppercase;letter-spacing:.4px}
   .rcf{flex:1;padding:9px;border:1px solid var(--line);background:#fff;border-radius:10px;font-size:13px;font-weight:700;color:var(--tx2);cursor:pointer}
   .rcf.on{background:var(--p);color:#fff;border-color:var(--p)}
+  .vsug{position:absolute;left:0;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--line);border-radius:10px;z-index:30;max-height:220px;overflow:auto;box-shadow:0 10px 28px rgba(20,40,80,.14)}
+  .vsug div{padding:11px 12px;cursor:pointer;border-bottom:1px solid #eef2f7;font-size:14px}
+  .vsug div:last-child{border-bottom:none}
+  .vsug div:active{background:#eef2f7}
+  .vsug .vc{color:var(--tx2);font-size:12px;margin-left:6px;font-family:ui-monospace,monospace}
 </style>
 </head>
 <body>
@@ -171,8 +176,13 @@
     <div class="card">
       <label class="lbl">Borrower</label>
       <select id="bw-emp" class="search"></select>
+      <label class="lbl">Date</label>
+      <input id="bw-date" class="search" type="date"/>
       <label class="lbl">Project / Vessel</label>
-      <input id="bw-vessel" class="search" placeholder="e.g. MV Seafarer drydock"/>
+      <div style="position:relative;margin-bottom:10px">
+        <input id="bw-vessel" class="search" style="margin-bottom:0" placeholder="Type vessel name or code…" autocomplete="off" oninput="vesselSuggest()" onfocus="vesselSuggest()"/>
+        <div id="bw-vsug" class="vsug" style="display:none"></div>
+      </div>
       <label class="lbl">Issued by</label>
       <input id="bw-by" class="search" placeholder="Warehouse staff name"/>
     </div>
@@ -359,6 +369,7 @@ function soon(){toast('Coming in the next update');}
 /* ══ BOOT ══ */
 async function boot(){
   await loadEmployees();
+  loadVessels();
   const{data,error}=await sb.from('sites').select('id,name').order('name');
   sites=data||[];
   const sel=document.getElementById('site-select');
@@ -422,10 +433,33 @@ function renderInventory(){
 }
 
 /* ══ EMPLOYEES ══ */
-let employees=[], availTools=[], cart=[], retRows=[];
+let employees=[], availTools=[], cart=[], retRows=[], vessels=[];
+function todayYmd2(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
 async function loadEmployees(){
   const{data}=await sb.from('employees').select('id,code,name,pin').order('name');
   employees=data||[];
+}
+async function loadVessels(){
+  try{const{data}=await sb.from('voyages').select('vessel_name,vessel_code').order('vessel_name');vessels=(data||[]).filter(v=>v.vessel_name);}
+  catch(e){vessels=[];}
+}
+function vesselSuggest(){
+  const raw=(document.getElementById('bw-vessel').value||'');
+  const q=raw.toLowerCase().replace(/\s+/g,'');
+  const box=document.getElementById('bw-vsug');
+  if(!q){box.style.display='none';box.innerHTML='';return;}
+  const m=vessels.filter(v=>{
+    const n=(v.vessel_name||'').toLowerCase().replace(/\s+/g,'');
+    const c=(v.vessel_code||'').toLowerCase().replace(/\s+/g,'');
+    return n.includes(q)||c.includes(q);
+  }).slice(0,8);
+  if(!m.length){box.style.display='none';box.innerHTML='';return;}
+  box.innerHTML=m.map(v=>`<div onclick="pickVessel(this)" data-name="${(v.vessel_name||'').replace(/"/g,'&quot;')}">${v.vessel_name}${v.vessel_code?`<span class="vc">${v.vessel_code}</span>`:''}</div>`).join('');
+  box.style.display='block';
+}
+function pickVessel(el){
+  document.getElementById('bw-vessel').value=el.getAttribute('data-name')||'';
+  const b=document.getElementById('bw-vsug');b.style.display='none';b.innerHTML='';
 }
 
 /* ══ BORROW ══ */
@@ -435,7 +469,9 @@ async function goBorrow(){
   document.getElementById('bw-site-sub').textContent=siteName();
   cart=[]; renderCart();
   document.getElementById('bw-emp').innerHTML='<option value="">— Select borrower —</option>'+employees.map(e=>`<option value="${e.id}">${e.name}${e.code?' ('+e.code+')':''}</option>`).join('');
+  const dEl=document.getElementById('bw-date'); dEl.min=todayYmd2(); dEl.value=todayYmd2();
   document.getElementById('bw-vessel').value='';
+  const vs=document.getElementById('bw-vsug'); if(vs){vs.style.display='none';vs.innerHTML='';}
   document.getElementById('bw-by').value='';
   document.getElementById('bw-pin').value='';
   await loadAvail();
@@ -489,18 +525,23 @@ function renderCart(){
 }
 async function submitBorrow(){
   const empId=document.getElementById('bw-emp').value;
+  const bdate=document.getElementById('bw-date').value;
   const vessel=document.getElementById('bw-vessel').value.trim();
   const by=document.getElementById('bw-by').value.trim();
   const pin=document.getElementById('bw-pin').value.trim();
   if(!empId){toast('Select a borrower');return;}
+  if(!bdate){toast('Pick a date');return;}
+  if(bdate<todayYmd2()){toast('No back-dating allowed');return;}
   if(!cart.length){toast('Add at least one tool');return;}
   if(!pin){toast('Enter the borrower passcode');return;}
   try{
     const{data:ok,error}=await sb.rpc('verify_pin',{emp_id:empId,pin_input:pin});
     if(error)throw error; if(!ok){toast('Wrong passcode');return;}
   }catch(e){toast('PIN check failed: '+e.message);return;}
+  const now=new Date(), z=n=>String(n).padStart(2,'0');
+  const borrowedAt=new Date(bdate+'T'+z(now.getHours())+':'+z(now.getMinutes())+':00').toISOString();
   const batch=crypto.randomUUID();
-  const rows=cart.map(c=>({txn_type:'borrow',employee_id:empId,item_id:c.itemId,unit_id:c.unitId,site_id:curSite,quantity:1,status:'out',issued_by:by||null,project_vessel:vessel||null,batch_id:batch}));
+  const rows=cart.map(c=>({txn_type:'borrow',employee_id:empId,item_id:c.itemId,unit_id:c.unitId,site_id:curSite,quantity:1,status:'out',issued_by:by||null,project_vessel:vessel||null,batch_id:batch,borrowed_at:borrowedAt}));
   try{
     const{error}=await sb.from('borrow_issuance').insert(rows);
     if(error)throw error;
