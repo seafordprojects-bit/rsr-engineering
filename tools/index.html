@@ -228,6 +228,8 @@
   </div>
   <div class="wrap">
     <div class="card">
+      <label class="lbl">Date</label>
+      <input id="rp-date" class="search" type="date"/>
       <label class="lbl">Transmitted by</label>
       <input id="rp-by" class="search" placeholder="Who is sending it to repair"/>
       <label class="lbl">Expected ready (ETA)</label>
@@ -305,6 +307,8 @@
   </div>
   <div class="wrap">
     <div class="card">
+      <label class="lbl">Date</label>
+      <input id="tf-date" class="search" type="date"/>
       <label class="lbl">Send to site</label>
       <select id="tf-dest" class="search"></select>
       <label class="lbl">Sent by</label>
@@ -745,7 +749,9 @@ async function goRepair(){
   document.getElementById('rp-site-sub').textContent=siteName();
   repairCart=[]; pendingRepair=null; reservedRepairNo='';
   document.getElementById('rp-by').value='';
+  const rd=document.getElementById('rp-date'); rd.min=todayYmd2(); rd.value=todayYmd2();
   document.getElementById('rp-eta').value='';
+  document.getElementById('rp-eta').min=todayYmd2();
   document.getElementById('rp-defect').value='';
   const ures=await sb.from('item_units').select('id,unit_code,status,item_id,items(name)').eq('active',true).eq('site_id',curSite);
   const units=ures.data||[];
@@ -794,7 +800,10 @@ function renderRepairCart(){
 }
 async function reviewRepair(){
   const by=document.getElementById('rp-by').value.trim();
+  const rdate=document.getElementById('rp-date').value;
   const eta=document.getElementById('rp-eta').value||'';
+  if(!rdate){toast('Pick a date');return;}
+  if(rdate<todayYmd2()){toast('No back-dating allowed');return;}
   if(!by){toast('Enter who is transmitting it');return;}
   if(!repairCart.length){toast('Add at least one tool');return;}
   if(!reservedRepairNo){
@@ -803,12 +812,12 @@ async function reviewRepair(){
     if(!rn){const n=new Date(),z=x=>String(x).padStart(2,'0');rn='RP-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
     reservedRepairNo=rn;
   }
-  pendingRepair={by,eta,items:repairCart.slice(),repairNo:reservedRepairNo};
+  pendingRepair={by,rdate,eta,items:repairCart.slice(),repairNo:reservedRepairNo};
   document.getElementById('rslip-body').innerHTML=
     `<div style="text-align:center;border-bottom:1.5px dashed var(--tx3);padding-bottom:12px;margin-bottom:12px">`
     +`<div style="font-size:15px;font-weight:800">RSR Tools — Repair Transmittal</div>`
     +`<div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--p);margin-top:2px">${reservedRepairNo}</div>`
-    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(todayYmd2())} · ${siteName()}</div>`
+    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(rdate)} · ${siteName()}</div>`
     +`</div>`
     +`<div style="font-size:13px;line-height:1.9;color:var(--tx2);margin-bottom:12px">`
     +`<div style="display:flex;justify-content:space-between"><span>Transmitted by</span><b style="color:var(--tx)">${by}</b></div>`
@@ -829,8 +838,9 @@ async function reviewRepair(){
 function cancelRslip(){document.getElementById('rslip-modal').style.display='none';}
 async function confirmRepair(){
   if(!pendingRepair)return;
-  const now=new Date().toISOString();
-  const logs=pendingRepair.items.map(c=>({transmittal_no:pendingRepair.repairNo,unit_id:c.unitId,item_id:c.itemId,site_id:curSite,defect:c.defect,repair_eta:pendingRepair.eta||null,transmitted_by:pendingRepair.by||null,status:'in_repair',sent_at:now}));
+  const n=new Date(), z=x=>String(x).padStart(2,'0');
+  const sentAt=new Date(pendingRepair.rdate+'T'+z(n.getHours())+':'+z(n.getMinutes())+':00').toISOString();
+  const logs=pendingRepair.items.map(c=>({transmittal_no:pendingRepair.repairNo,unit_id:c.unitId,item_id:c.itemId,site_id:curSite,defect:c.defect,repair_eta:pendingRepair.eta||null,transmitted_by:pendingRepair.by||null,status:'in_repair',sent_at:sentAt}));
   try{
     const{error}=await sb.from('repair_log').insert(logs); if(error)throw error;
     const ids=pendingRepair.items.map(c=>c.unitId);
@@ -966,6 +976,7 @@ async function goTransfer(){
   document.getElementById('tf-site-sub').textContent=siteName();
   xferCart=[]; renderXfer();
   pendingXfer=null; reservedXferNo='';
+  const td=document.getElementById('tf-date'); td.min=todayYmd2(); td.value=todayYmd2();
   document.getElementById('tf-by').value='';
   document.getElementById('tf-dest').innerHTML=sites.filter(s=>s.id!==curSite).map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
   const ures=await sb.from('item_units').select('id,unit_code,status,item_id,items(name)').eq('active',true).eq('site_id',curSite);
@@ -1009,6 +1020,9 @@ function renderXfer(){
 async function reviewTransfer(){
   const dest=document.getElementById('tf-dest').value;
   const by=document.getElementById('tf-by').value.trim();
+  const tdate=document.getElementById('tf-date').value;
+  if(!tdate){toast('Pick a date');return;}
+  if(tdate<todayYmd2()){toast('No back-dating allowed');return;}
   if(!dest){toast('Pick a destination site');return;}
   if(!by){toast('Enter who is sending the tools');return;}
   if(!xferCart.length){toast('Add at least one tool');return;}
@@ -1019,12 +1033,12 @@ async function reviewTransfer(){
     reservedXferNo=tn;
   }
   const destName=(sites.find(s=>s.id===dest)||{}).name||'—';
-  pendingXfer={dest,destName,by,items:xferCart.slice(),xferNo:reservedXferNo};
+  pendingXfer={dest,destName,by,tdate,items:xferCart.slice(),xferNo:reservedXferNo};
   document.getElementById('tslip-body').innerHTML=
     `<div style="text-align:center;border-bottom:1.5px dashed var(--tx3);padding-bottom:12px;margin-bottom:12px">`
     +`<div style="font-size:15px;font-weight:800">RSR Tools — Transfer Slip</div>`
     +`<div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--p);margin-top:2px">${reservedXferNo}</div>`
-    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(todayYmd2())}</div>`
+    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(tdate)}</div>`
     +`</div>`
     +`<div style="font-size:13px;line-height:1.9;color:var(--tx2);margin-bottom:12px">`
     +`<div style="display:flex;justify-content:space-between"><span>From</span><b style="color:var(--tx)">${siteName()}</b></div>`
@@ -1046,7 +1060,9 @@ async function reviewTransfer(){
 function cancelTslip(){document.getElementById('tslip-modal').style.display='none';}
 async function confirmTransfer(){
   if(!pendingXfer)return;
-  const rows=pendingXfer.items.map(c=>({unit_id:c.unitId,item_id:c.itemId,from_site:curSite,to_site:pendingXfer.dest,status:'in_transit',sent_by:pendingXfer.by||null,transfer_no:pendingXfer.xferNo}));
+  const n=new Date(), z=x=>String(x).padStart(2,'0');
+  const sentAt=new Date(pendingXfer.tdate+'T'+z(n.getHours())+':'+z(n.getMinutes())+':00').toISOString();
+  const rows=pendingXfer.items.map(c=>({unit_id:c.unitId,item_id:c.itemId,from_site:curSite,to_site:pendingXfer.dest,status:'in_transit',sent_by:pendingXfer.by||null,transfer_no:pendingXfer.xferNo,sent_at:sentAt}));
   try{
     const{error}=await sb.from('tool_transfers').insert(rows); if(error)throw error;
     const ids=pendingXfer.items.map(c=>c.unitId);
