@@ -76,6 +76,16 @@ async function getVoyagesMon() {
   return data || [];
 }
 // attendance dates are stored in PH format (MM/DD/YYYY) by the kiosk
+const MAT_CATALOG = ['Electrode handle','Welding gloves','Cutting tip','Dark glass','Clear glass','Trouble light','Electrical tape','Chalk stone','Dry chalk','Flint stone','Striker','Y-connector','Cutting disk','Oxygen regulator','LPG regulator','Steel square'];
+async function getMatUsage() {
+  const { data, error } = await supabase.from('material_usage').select('item_name,usage_days');
+  if (error) throw error;
+  return data || [];
+}
+async function upsertMatUsage(rows) {
+  const { error } = await supabase.from('material_usage').upsert(rows, { onConflict: 'item_name' });
+  if (error) throw error;
+}
 function todayPH() { return new Date().toLocaleDateString('en-PH', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
 function todayYmd() { const d = new Date(), z = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`; }
 function ymdToPH(ymd) { if (!ymd) return todayPH(); const [y, m, d] = ymd.split('-'); return `${m}/${d}/${y}`; }
@@ -161,6 +171,53 @@ function Tile({ ico, num, unit, title, href, onClick }) {
   return href
     ? html`<a class="tile" href=${href}>${inner}</a>`
     : html`<div class="tile soon">${ico ? html`<div class="ico">${ico}</div>` : ''}<h3 style="margin-top:8px">${title}</h3><span class="badge">COMING SOON</span></div>`;
+}
+
+function MatUsage({ toast, onBack }) {
+  const [map, setMap] = useState({});
+  const [extra, setExtra] = useState([]);
+  const [newName, setNewName] = useState('');
+  const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    getMatUsage().then(rows => {
+      const mm = {}, ex = [];
+      rows.forEach(r => { mm[r.item_name] = String(r.usage_days ?? ''); if (!MAT_CATALOG.includes(r.item_name)) ex.push(r.item_name); });
+      setMap(mm); setExtra(ex);
+    }).catch(() => {});
+  }, []);
+  const names = [...MAT_CATALOG, ...extra];
+  const setDays = (n, v) => setMap(p => ({ ...p, [n]: v.replace(/[^0-9]/g, '') }));
+  const addCustom = () => { const n = newName.trim(); if (!n) return; if (names.includes(n)) { toast('Already listed'); return; } setExtra(e => [...e, n]); setNewName(''); };
+  const save = async () => {
+    const rows = names.filter(n => map[n] !== undefined && map[n] !== '').map(n => ({ item_name: n, usage_days: parseInt(map[n], 10), updated_at: new Date().toISOString() }));
+    if (!rows.length) { toast('Set at least one value'); return; }
+    setSaving(true);
+    try { await upsertMatUsage(rows); toast('Saved usage life'); } catch (e) { toast('Error: ' + e.message); } finally { setSaving(false); }
+  };
+  return html`
+    <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+      <span><b>RSR</b><span class="tag">MATERIAL USAGE</span></span>
+      <button onClick=${onBack} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
+    </div></div></header>
+    <div class="wrap">
+      <div class="card">
+        <label>Usage life per material (days)</label>
+        <p class="note" style="margin:2px 0 12px">Set here by admin only and re-adjustable. This is the expected service life used to flag when an issued material is due for replacement.</p>
+        ${names.map(n => html`
+          <div class="row" key=${n} style="align-items:center">
+            <div class="name">${n}</div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input type="number" min="0" inputmode="numeric" value=${map[n] ?? ''} onInput=${e => setDays(n, e.target.value)} style="width:84px;text-align:right" placeholder="days" />
+              <span class="unit">days</span>
+            </div>
+          </div>`)}
+        <div class="row" style="align-items:center;border-top:1px solid var(--line);margin-top:6px;padding-top:10px">
+          <input value=${newName} onInput=${e => setNewName(e.target.value)} placeholder="Add other material…" style="flex:1" />
+          <button class="btn" style="width:auto;padding:10px 14px" onClick=${addCustom}>+ Add</button>
+        </div>
+        <button class="btn" disabled=${saving} onClick=${save} style="margin-top:12px">${saving ? 'Saving…' : 'Save usage life'}</button>
+      </div>
+    </div>`;
 }
 
 function App() {
@@ -449,6 +506,8 @@ function App() {
   }
 
   // ---- admin: material issuance monitor (read-only) ----
+  if (adminTab === 'matusage') return html`<${MatUsage} toast=${flash} onBack=${() => setAdminTab('issued')} />`;
+
   if (adminTab === 'issued') {
     const dt = (s) => s ? new Date(s).toLocaleDateString() : '—';
     return html`
@@ -470,6 +529,12 @@ function App() {
                 <span class="badge" style="background:#12B89E;color:#000">ISSUED</span>
               </div>`)
             : html`<div class="empty">No materials issued yet.</div>`}
+        </div>
+        <div class="card" style="cursor:pointer" onClick=${() => setAdminTab('matusage')}>
+          <div class="brand" style="display:flex;align-items:center;justify-content:space-between">
+            <span><div class="name">⏳ Usage life (days)</div><div class="unit">Set how long each material should last</div></span>
+            <span style="color:var(--ink-dim);font-weight:700">→</span>
+          </div>
         </div>
         <p class="note" style="text-align:center">View only. Site personnel record issuance in the borrower app.</p>
       </div>
