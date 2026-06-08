@@ -3,49 +3,632 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>RSR Issuance</title>
-<link rel="preconnect" href="https://fonts.googleapis.com" />
-<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+<title>RSR Tools</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
 <style>
-  :root{ --bg:#11161c; --panel:#1a222b; --line:#2c3946; --ink:#e9eef3; --ink-dim:#8da0b2; --hivis:#ffb000; --hivis-ink:#1a1200; --radius:16px; }
+  :root{
+    --bg:#f3f5f8; --card:#fff; --line:#e3e8ef; --tx:#1f2733; --tx2:#69788c; --tx3:#9aa7b8;
+    --p:#1976D2; --ok:#2e9e6b; --warn:#e8a330; --r:#d64045; --radius:16px;
+  }
   *{box-sizing:border-box} html,body{margin:0}
-  body{ background:radial-gradient(900px 500px at 80% -10%, rgba(255,176,0,.08), transparent 60%), var(--bg); color:var(--ink); font-family:"Barlow",system-ui,sans-serif; -webkit-font-smoothing:antialiased; padding-bottom:40px; }
-  .wrap{max-width:620px;margin:0 auto;padding:0 16px;width:100%}
-  header.app{position:sticky;top:0;background:rgba(17,22,28,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:14px 16px;margin-bottom:18px;display:flex;align-items:center;justify-content:space-between}
-  .brand{display:flex;align-items:center;gap:10px}
-  .brand b{font-weight:800;letter-spacing:.5px}
-  .tag{font-size:11px;color:var(--hivis-ink);background:var(--hivis);padding:2px 8px;border-radius:999px;font-weight:800;letter-spacing:.5px}
-  .home{color:var(--ink-dim);text-decoration:none;font-size:13px;font-weight:700}
-  .sectlabel{font-size:12px;font-weight:800;letter-spacing:.6px;color:var(--ink-dim);text-transform:uppercase;margin:6px 2px 10px}
-  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-  a.tile{display:block;text-decoration:none;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:18px 16px;transition:border-color .15s,transform .05s}
-  a.tile:active{transform:scale(.99)} a.tile:hover{border-color:var(--hivis)}
-  .ico{font-size:26px}
-  h3{margin:8px 0 2px;font-size:16px;font-weight:800}
-  .unit{font-size:12px;color:var(--ink-dim)}
-  .note{font-size:12px;color:var(--ink-dim);text-align:center;margin-top:8px}
+  body{background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  .screen{display:none;min-height:100vh}
+  .screen.active{display:block}
+  .wrap{max-width:680px;margin:0 auto;padding:0 14px 40px;width:100%}
+
+  /* login */
+  .lw{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:#eef1f6}
+  .lb{background:#fff;border-radius:22px;padding:30px 26px;max-width:340px;width:100%;text-align:center;box-shadow:0 12px 40px rgba(20,40,80,.08)}
+  .lav{width:64px;height:64px;border-radius:50%;background:#E3F2FD;border:3px solid var(--p);display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 14px}
+  .pin-dots{display:flex;gap:12px;justify-content:center;margin:18px 0}
+  .pindot{width:13px;height:13px;border-radius:50%;background:#d3dae4}
+  .pindot.on{background:var(--p)}
+  .num-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+  .nb{padding:16px 0;font-size:20px;font-weight:600;border:1px solid var(--line);background:#fff;border-radius:12px;cursor:pointer;color:var(--tx)}
+  .nb:active{background:#eef2f7}
+  .lbtn{width:100%;padding:14px;background:var(--p);color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer}
+
+  /* header */
+  .app-header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:12px 16px}
+  .hdr-avatar{width:38px;height:38px;border-radius:50%;background:var(--p);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800}
+  .hdr-info{flex:1;min-width:0}
+  .hdr-site{font-size:15px;font-weight:700;line-height:1.1}
+  .hdr-sub{font-size:12px;color:var(--tx2)}
+  .hdr-btn{background:none;border:none;font-size:20px;color:var(--tx2);cursor:pointer;padding:4px 6px}
+  .back{background:none;border:none;color:var(--p);font-weight:700;font-size:14px;cursor:pointer;padding:8px 0;display:inline-flex;align-items:center;gap:4px}
+
+  /* site bar */
+  .sitebar{display:flex;gap:8px;align-items:center;padding:12px 2px 4px}
+  .sitebar select{flex:1;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:#fff;font-size:15px;color:var(--tx)}
+
+  /* tiles */
+  .home-label{font-size:12px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--tx3);margin:16px 4px 10px}
+  .tile-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .tile{position:relative;border:none;border-radius:var(--radius);padding:18px 14px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:8px;min-height:118px}
+  .tile:active{transform:scale(.99)}
+  .tile-icon{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center}
+  .tile-icon svg{width:22px;height:22px}
+  .tile-title{font-size:16px;font-weight:800;color:var(--tx)}
+  .tile-sub{font-size:12px;color:var(--tx2)}
+
+  /* cards / inventory */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+  .secttitle{font-size:18px;font-weight:800;margin:14px 4px 10px}
+  .tool-row{padding:12px 0;border-bottom:1px solid var(--line)}
+  .tool-row:last-child{border-bottom:none}
+  .tool-name{font-size:15px;font-weight:700}
+  .tool-meta{font-size:12px;color:var(--tx2);margin-top:2px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .chip{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;font-family:ui-monospace,monospace}
+  .chip.available{background:#e7f6ee;color:#1d7a4d}
+  .chip.borrowed{background:#fdeef0;color:#b32430}
+  .chip.repair{background:#fff3e0;color:#9a6400}
+  .countbar{display:flex;gap:14px;font-size:12px;color:var(--tx2);margin-top:6px}
+  .countbar b{color:var(--tx)}
+  .empty{text-align:center;color:var(--tx2);font-size:14px;padding:24px 0}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1f2733;color:#fff;font-weight:700;padding:12px 18px;border-radius:999px;z-index:60;display:none;font-size:14px}
+  .search{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;font-size:15px;margin-bottom:10px;background:#fff;color:var(--tx)}
+  .lbl{display:block;font-size:12px;font-weight:700;color:var(--tx2);margin:8px 0 6px;text-transform:uppercase;letter-spacing:.4px}
+  .rcf{flex:1;padding:9px;border:1px solid var(--line);background:#fff;border-radius:10px;font-size:13px;font-weight:700;color:var(--tx2);cursor:pointer}
+  .rcf.on{background:var(--p);color:#fff;border-color:var(--p)}
 </style>
 </head>
 <body>
-  <header class="app">
-    <div class="brand"><b>RSR</b><span class="tag">ISSUANCE</span></div>
-    <a class="home" href="../">&#8962; Home</a>
-  </header>
-  <div class="wrap">
-    <div class="sectlabel">Choose what to issue</div>
-    <div class="grid">
-      <a class="tile" href="../tools/">
-        <div class="ico">&#129520;</div>
-        <h3>Tool Inventory</h3>
-        <div class="unit">Borrow &amp; return tools, stock, repair</div>
-      </a>
-      <a class="tile" href="../material-issuance/">
-        <div class="ico">&#128230;</div>
-        <h3>Material Issuance</h3>
-        <div class="unit">Issue consumable materials to crew</div>
-      </a>
+
+<!-- LOGIN -->
+<div id="s-login" class="screen active">
+  <div class="lw"><div class="lb">
+    <div class="lav">🧰</div>
+    <div style="font-size:21px;font-weight:800">RSR Tools</div>
+    <div style="font-size:14px;color:var(--tx2);margin-bottom:6px">Enter PIN to continue</div>
+    <div class="pin-dots"><div class="pindot" id="pd0"></div><div class="pindot" id="pd1"></div><div class="pindot" id="pd2"></div><div class="pindot" id="pd3"></div></div>
+    <div class="num-grid">
+      <button class="nb" onclick="pinTap('1')">1</button><button class="nb" onclick="pinTap('2')">2</button><button class="nb" onclick="pinTap('3')">3</button>
+      <button class="nb" onclick="pinTap('4')">4</button><button class="nb" onclick="pinTap('5')">5</button><button class="nb" onclick="pinTap('6')">6</button>
+      <button class="nb" onclick="pinTap('7')">7</button><button class="nb" onclick="pinTap('8')">8</button><button class="nb" onclick="pinTap('9')">9</button>
+      <button class="nb" onclick="pinClear()" style="font-size:13px">Clear</button>
+      <button class="nb" onclick="pinTap('0')">0</button>
+      <button class="nb" onclick="pinBack()" style="font-size:18px">&#x232B;</button>
     </div>
-    <p class="note">RSR Engineering Services &middot; Cebu</p>
+    <button class="lbtn" onclick="doLogin()">Sign in</button>
+    <div id="pin-err" style="font-size:13px;color:var(--r);margin-top:10px;display:none">Incorrect PIN.</div>
+    <div style="font-size:12px;color:var(--tx3);margin-top:10px">Default PIN: 1111</div>
+  </div></div>
+</div>
+
+<!-- HOME -->
+<div id="s-home" class="screen">
+  <div class="app-header">
+    <div class="hdr-avatar">R</div>
+    <div class="hdr-info"><div class="hdr-site">RSR Tools</div><div class="hdr-sub" id="home-site-sub">—</div></div>
+    <button class="hdr-btn" onclick="doLogout()" title="Sign out">&#9211;</button>
+    <a href="../" style="text-decoration:none"><button class="hdr-btn">&#8962;</button></a>
   </div>
+  <div class="wrap">
+    <div class="sitebar">
+      <select id="site-select" onchange="onSiteChange()"></select>
+    </div>
+    <div class="home-label">Quick actions</div>
+    <div class="tile-grid">
+      <button class="tile" style="background:#E8F0FE" onclick="goInventory()">
+        <div class="tile-icon" style="background:#4A6FA5"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></div>
+        <div class="tile-title">Inventory</div><div class="tile-sub">View tools &amp; equipment</div>
+      </button>
+      <button class="tile" style="background:#E3F2FD" onclick="goBorrow()">
+        <div class="tile-icon" style="background:#1976D2"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg></div>
+        <div class="tile-title">Borrow Slip</div><div class="tile-sub">Issue tool to employee</div>
+      </button>
+      <button class="tile" style="background:#E8F5E9" onclick="goReturn()">
+        <div class="tile-icon" style="background:#388E3C"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><polyline points="1,4 1,10 7,10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg></div>
+        <div class="tile-title">Return Tool</div><div class="tile-sub">Confirm item returned</div>
+      </button>
+      <button class="tile" style="background:#FFF3E0" onclick="soon()">
+        <div class="tile-icon" style="background:#F57C00"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12,5 19,12 12,19"/></svg></div>
+        <div class="tile-title">Transfer Out</div><div class="tile-sub">Send tool to another site</div>
+      </button>
+      <button class="tile" style="background:#F3E5F5" onclick="soon()">
+        <div class="tile-icon" style="background:#7B1FA2"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><polyline points="8,17 12,21 16,17"/><line x1="12" y1="3" x2="12" y2="21"/></svg></div>
+        <div class="tile-title">Receive Tools</div><div class="tile-sub">Confirm incoming tools</div>
+      </button>
+      <button class="tile" style="background:#FFEBEE" onclick="goRepair()">
+        <div class="tile-icon" style="background:#C62828"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94z"/></svg></div>
+        <div class="tile-title">For Repair</div><div class="tile-sub">Tag defective equipment</div>
+      </button>
+      <button class="tile" style="background:#FFF8E1" onclick="goRecords()">
+        <div class="tile-icon" style="background:#F9A825"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg></div>
+        <div class="tile-title">All Records</div><div class="tile-sub">Borrow &amp; transfer logs</div>
+      </button>
+      <button class="tile" style="background:#E0F2F1" onclick="goSetup()">
+        <div class="tile-icon" style="background:#00695C"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 010 14.14M4.93 4.93a10 10 0 000 14.14"/></svg></div>
+        <div class="tile-title">Setup</div><div class="tile-sub">Register tools</div>
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- INVENTORY -->
+<div id="s-inventory" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Inventory</div><div class="hdr-sub" id="inv-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <input class="search" id="inv-search" placeholder="Search tool name or code…" oninput="renderInventory()" />
+    <div id="inv-list"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
+<!-- BORROW -->
+<div id="s-borrow" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Borrow Slip</div><div class="hdr-sub" id="bw-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <div class="card">
+      <label class="lbl">Borrower</label>
+      <select id="bw-emp" class="search"></select>
+      <label class="lbl">Project / Vessel</label>
+      <input id="bw-vessel" class="search" placeholder="e.g. MV Seafarer drydock"/>
+      <label class="lbl">Issued by</label>
+      <input id="bw-by" class="search" placeholder="Warehouse staff name"/>
+    </div>
+    <div class="card">
+      <label class="lbl">Add tools to slip</label>
+      <select id="bw-tool" class="search" onchange="onToolChange()"></select>
+      <select id="bw-unit" class="search"></select>
+      <button class="lbtn" style="background:var(--p)" onclick="addToSlip()">+ Add to slip</button>
+    </div>
+    <div class="card">
+      <label class="lbl">Slip</label>
+      <div id="bw-cart"><div class="empty">No tools added yet.</div></div>
+    </div>
+    <div class="card" style="background:#fff8e1;border-color:#f0e0a8">
+      <div style="font-size:12px;color:#7a5c00;line-height:1.5">By signing, the borrower accepts responsibility for the listed tools and agrees to return them in good condition. Lost or damaged items are charged at the replacement value shown.</div>
+    </div>
+    <div class="card">
+      <label class="lbl">Borrower passcode (sign here)</label>
+      <input id="bw-pin" class="search" type="password" inputmode="numeric" placeholder="Enter passcode to confirm"/>
+      <button class="lbtn" style="background:var(--ok)" id="bw-submit" onclick="submitBorrow()">Issue (0)</button>
+    </div>
+  </div>
+</div>
+
+<!-- RETURN -->
+<div id="s-return" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Return Tool</div><div class="hdr-sub" id="rt-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap"><div id="rt-list"><div class="empty">Loading…</div></div></div>
+</div>
+
+<!-- FOR REPAIR -->
+<div id="s-repair" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">For Repair</div><div class="hdr-sub" id="rp-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <div class="card">
+      <label class="lbl">Tag a tool for repair</label>
+      <select id="rp-tool" class="search" onchange="onRepairTool()"></select>
+      <select id="rp-unit" class="search"></select>
+      <label class="lbl">Defect</label>
+      <input id="rp-defect" class="search" placeholder="What's wrong with it?"/>
+      <label class="lbl">Expected ready (ETA)</label>
+      <input id="rp-eta" class="search" type="date"/>
+      <button class="lbtn" style="background:var(--r)" onclick="tagRepair()">Send to repair</button>
+    </div>
+    <div class="card">
+      <label class="lbl">Currently in repair</label>
+      <div id="rp-list"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- ALL RECORDS -->
+<div id="s-records" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">All Records</div><div class="hdr-sub" id="rc-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <div style="display:flex;gap:8px;margin:4px 0 12px">
+      <button class="rcf" id="rcf-all" onclick="setRecFilter('all')">All</button>
+      <button class="rcf" id="rcf-out" onclick="setRecFilter('out')">Out</button>
+      <button class="rcf" id="rcf-returned" onclick="setRecFilter('returned')">Returned</button>
+    </div>
+    <div id="rc-list"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
+<!-- SETUP / REGISTER -->
+<div id="s-setup" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Register Tools</div><div class="hdr-sub" id="su-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <div class="card">
+      <label class="lbl">Register a new tool</label>
+      <input id="su-name" class="search" placeholder="Tool name (e.g. Adjustable Wrench)"/>
+      <input id="su-prefix" class="search" placeholder="Code prefix (e.g. WR)"/>
+      <input id="su-qty" class="search" type="number" min="1" placeholder="Quantity (e.g. 10)"/>
+      <input id="su-unit" class="search" placeholder="Unit label (default: pcs)"/>
+      <input id="su-price" class="search" type="number" min="0" placeholder="Replacement price ₱ (optional)"/>
+      <button class="lbtn" style="background:var(--p)" onclick="registerNew()">Register tool</button>
+      <div class="tool-meta" style="margin-top:8px">Codes auto-generate: e.g. WR001, WR002… added to <b id="su-sitehint">this site</b>.</div>
+    </div>
+    <div class="card">
+      <label class="lbl">Add more units to an existing tool</label>
+      <select id="su-exist" class="search"></select>
+      <input id="su-more-qty" class="search" type="number" min="1" placeholder="How many to add"/>
+      <button class="lbtn" style="background:var(--ok)" onclick="addMore()">Add units</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script>
+/* ══ CONFIG ══ */
+const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
+const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
+const PIN_KEY='rsr_tools_pin', DEFAULT_PIN='1111', SITE_KEY='rsr_tools_site';
+let sb=null, sites=[], curSite='', invData=[];
+
+/* ══ PIN ══ */
+let pinVal='';
+function pinTap(d){if(pinVal.length>=4)return;pinVal+=d;dots();}
+function pinClear(){pinVal='';dots();}
+function pinBack(){pinVal=pinVal.slice(0,-1);dots();}
+function dots(){for(let i=0;i<4;i++){const e=document.getElementById('pd'+i);if(e)e.className='pindot'+(i<pinVal.length?' on':'');}}
+async function savedPin(){
+  try{const{data}=await sb.from('settings').select('value').eq('key','issuance_pin').maybeSingle();return (data&&data.value)?data.value:DEFAULT_PIN;}
+  catch(e){return DEFAULT_PIN;}
+}
+async function doLogin(){
+  const want=await savedPin();
+  if(pinVal!==want){document.getElementById('pin-err').style.display='block';pinVal='';dots();return;}
+  document.getElementById('pin-err').style.display='none';pinVal='';dots();
+  await boot();
+}
+function doLogout(){showScreen('s-login');}
+
+/* ══ SCREENS ══ */
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0,0);
+}
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',2600);}
+function soon(){toast('Coming in the next update');}
+
+/* ══ BOOT ══ */
+async function boot(){
+  await loadEmployees();
+  const{data,error}=await sb.from('sites').select('id,name').order('name');
+  sites=data||[];
+  const sel=document.getElementById('site-select');
+  sel.innerHTML=sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  curSite=localStorage.getItem(SITE_KEY)||(sites[0]&&sites[0].id)||'';
+  if(curSite)sel.value=curSite;
+  updateSiteLabels();
+  showScreen('s-home');
+}
+function onSiteChange(){
+  curSite=document.getElementById('site-select').value;
+  localStorage.setItem(SITE_KEY,curSite);
+  updateSiteLabels();
+}
+function siteName(){const s=sites.find(x=>x.id===curSite);return s?s.name:'—';}
+function updateSiteLabels(){
+  document.getElementById('home-site-sub').textContent=siteName();
+  document.getElementById('inv-site-sub').textContent=siteName();
+}
+
+/* ══ INVENTORY ══ */
+async function goInventory(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-inventory');
+  document.getElementById('inv-list').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const ures=await sb.from('item_units')
+      .select('id,unit_code,status,item_id,items(name,item_code,unit)')
+      .eq('active',true).eq('site_id',curSite);
+    const units=ures.data||[];
+    const bres=await sb.from('borrow_issuance').select('unit_id').eq('status','out').eq('site_id',curSite);
+    const outSet=new Set((bres.data||[]).map(b=>b.unit_id));
+    /* group by item */
+    const map={};
+    units.forEach(u=>{
+      const k=u.item_id;
+      if(!map[k])map[k]={name:(u.items&&u.items.name)||'—',code:(u.items&&u.items.item_code)||'',units:[]};
+      let st=u.status==='repair'?'repair':(outSet.has(u.id)?'borrowed':'available');
+      map[k].units.push({code:u.unit_code,st});
+    });
+    invData=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
+  }catch(e){invData=[];toast('Load failed: '+e.message);}
+  renderInventory();
+}
+function renderInventory(){
+  const q=(document.getElementById('inv-search').value||'').toLowerCase();
+  const list=q?invData.filter(t=>t.name.toLowerCase().includes(q)||(t.code||'').toLowerCase().includes(q)):invData;
+  const el=document.getElementById('inv-list');
+  if(!list.length){el.innerHTML='<div class="empty">No tools at this site yet.</div>';return;}
+  el.innerHTML='<div class="card">'+list.map(t=>{
+    const av=t.units.filter(u=>u.st==='available').length;
+    const bo=t.units.filter(u=>u.st==='borrowed').length;
+    const rp=t.units.filter(u=>u.st==='repair').length;
+    return `<div class="tool-row">
+      <div class="tool-name">${t.name}</div>
+      <div class="countbar"><span>Avail <b>${av}</b></span><span>Out <b>${bo}</b></span><span>Repair <b>${rp}</b></span><span>Owned <b>${t.units.length}</b></span></div>
+      <div class="chips">${t.units.map(u=>`<span class="chip ${u.st}">${u.code}</span>`).join('')}</div>
+    </div>`;
+  }).join('')+'</div>';
+}
+
+/* ══ EMPLOYEES ══ */
+let employees=[], availTools=[], cart=[], retRows=[];
+async function loadEmployees(){
+  const{data}=await sb.from('employees').select('id,code,name,pin').order('name');
+  employees=data||[];
+}
+
+/* ══ BORROW ══ */
+async function goBorrow(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-borrow');
+  document.getElementById('bw-site-sub').textContent=siteName();
+  cart=[]; renderCart();
+  document.getElementById('bw-emp').innerHTML='<option value="">— Select borrower —</option>'+employees.map(e=>`<option value="${e.id}">${e.name}${e.code?' ('+e.code+')':''}</option>`).join('');
+  document.getElementById('bw-vessel').value='';
+  document.getElementById('bw-by').value='';
+  document.getElementById('bw-pin').value='';
+  await loadAvail();
+}
+async function loadAvail(){
+  const ures=await sb.from('item_units').select('id,unit_code,status,item_id,items(name,item_code,price)').eq('active',true).eq('site_id',curSite);
+  const units=ures.data||[];
+  const bres=await sb.from('borrow_issuance').select('unit_id').eq('status','out').eq('site_id',curSite);
+  const outSet=new Set((bres.data||[]).map(b=>b.unit_id));
+  const map={};
+  units.forEach(u=>{
+    if(u.status==='repair'||outSet.has(u.id))return;
+    const k=u.item_id;
+    if(!map[k])map[k]={itemId:k,name:(u.items&&u.items.name)||'—',price:(u.items&&u.items.price)||0,units:[]};
+    map[k].units.push({id:u.id,code:u.unit_code});
+  });
+  availTools=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
+  renderToolSelect();
+}
+function renderToolSelect(){
+  document.getElementById('bw-tool').innerHTML='<option value="">— Select tool —</option>'+availTools.filter(t=>t.units.length).map(t=>`<option value="${t.itemId}">${t.name} (${t.units.length} avail)</option>`).join('');
+  document.getElementById('bw-unit').innerHTML='<option value="">— unit —</option>';
+}
+function onToolChange(){
+  const t=availTools.find(x=>x.itemId===document.getElementById('bw-tool').value);
+  document.getElementById('bw-unit').innerHTML='<option value="">— unit —</option>'+(t?t.units.map(u=>`<option value="${u.id}">${u.code}</option>`).join(''):'');
+}
+function addToSlip(){
+  const tid=document.getElementById('bw-tool').value, uid=document.getElementById('bw-unit').value;
+  if(!tid||!uid){toast('Pick a tool and unit');return;}
+  const t=availTools.find(x=>x.itemId===tid), u=t.units.find(x=>x.id===uid);
+  cart.push({unitId:uid,itemId:tid,code:u.code,name:t.name,price:t.price});
+  t.units=t.units.filter(x=>x.id!==uid);
+  renderToolSelect(); renderCart();
+}
+function removeFromSlip(uid){
+  const i=cart.findIndex(c=>c.unitId===uid); if(i<0)return;
+  const c=cart[i]; cart.splice(i,1);
+  const t=availTools.find(x=>x.itemId===c.itemId); if(t)t.units.push({id:c.unitId,code:c.code});
+  renderToolSelect(); renderCart();
+}
+function renderCart(){
+  const el=document.getElementById('bw-cart'), btn=document.getElementById('bw-submit');
+  if(!cart.length){el.innerHTML='<div class="empty">No tools added yet.</div>';btn.textContent='Issue (0)';return;}
+  let total=0;
+  el.innerHTML=cart.map(c=>{total+=Number(c.price)||0;return `<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center">
+    <div><div class="tool-name">${c.name}</div><div class="tool-meta"><span class="chip available">${c.code}</span>${c.price?' ₱'+Number(c.price).toLocaleString():''}</div></div>
+    <button class="back" style="color:var(--r)" onclick="removeFromSlip('${c.unitId}')">Remove</button></div>`;}).join('')
+    +`<div class="countbar" style="margin-top:8px">Total replacement value: <b>₱${total.toLocaleString()}</b></div>`;
+  btn.textContent='Issue ('+cart.length+')';
+}
+async function submitBorrow(){
+  const empId=document.getElementById('bw-emp').value;
+  const vessel=document.getElementById('bw-vessel').value.trim();
+  const by=document.getElementById('bw-by').value.trim();
+  const pin=document.getElementById('bw-pin').value.trim();
+  if(!empId){toast('Select a borrower');return;}
+  if(!cart.length){toast('Add at least one tool');return;}
+  if(!pin){toast('Enter the borrower passcode');return;}
+  try{
+    const{data:ok,error}=await sb.rpc('verify_pin',{emp_id:empId,pin_input:pin});
+    if(error)throw error; if(!ok){toast('Wrong passcode');return;}
+  }catch(e){toast('PIN check failed: '+e.message);return;}
+  const batch=crypto.randomUUID();
+  const rows=cart.map(c=>({txn_type:'borrow',employee_id:empId,item_id:c.itemId,unit_id:c.unitId,site_id:curSite,quantity:1,status:'out',issued_by:by||null,project_vessel:vessel||null,batch_id:batch}));
+  try{
+    const{error}=await sb.from('borrow_issuance').insert(rows);
+    if(error)throw error;
+    toast('Issued '+cart.length+' tool(s)'); cart=[]; showScreen('s-home');
+  }catch(e){toast('Save failed: '+e.message);}
+}
+
+/* ══ RETURN ══ */
+async function goReturn(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-return');
+  document.getElementById('rt-site-sub').textContent=siteName();
+  document.getElementById('rt-list').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const{data}=await sb.from('borrow_issuance')
+      .select('id,unit_id,employee_id,borrowed_at,project_vessel,items(name),employees(name),item_units(unit_code)')
+      .eq('status','out').eq('site_id',curSite).order('borrowed_at',{ascending:false});
+    retRows=data||[];
+  }catch(e){retRows=[];toast('Load failed: '+e.message);}
+  renderReturn();
+}
+function renderReturn(){
+  const groups={};
+  retRows.forEach(r=>{const k=r.employee_id;if(!groups[k])groups[k]={name:(r.employees&&r.employees.name)||'—',items:[]};groups[k].items.push(r);});
+  const keys=Object.keys(groups), el=document.getElementById('rt-list');
+  if(!keys.length){el.innerHTML='<div class="empty">Nothing is out right now.</div>';return;}
+  el.innerHTML=keys.map(k=>{const g=groups[k];return `<div class="card">
+    <div class="tool-name">${g.name}</div>
+    ${g.items.map(r=>`<label style="display:flex;align-items:center;gap:8px;padding:7px 0">
+      <input type="checkbox" class="rt-chk" data-emp="${k}" value="${r.id}" checked/>
+      <span>${(r.items&&r.items.name)||'—'} <span class="chip borrowed">${(r.item_units&&r.item_units.unit_code)||''}</span>${r.project_vessel?'<span class="tool-meta"> · '+r.project_vessel+'</span>':''}</span></label>`).join('')}
+    <input class="search" id="rt-pin-${k}" type="password" inputmode="numeric" placeholder="Borrower passcode" style="margin-top:8px"/>
+    <button class="lbtn" style="background:var(--ok)" onclick="returnPerson('${k}')">Return selected</button>
+  </div>`;}).join('');
+}
+async function returnPerson(empId){
+  const pin=((document.getElementById('rt-pin-'+empId)||{}).value||'').trim();
+  if(!pin){toast('Enter passcode');return;}
+  const ids=[...document.querySelectorAll('.rt-chk[data-emp="'+empId+'"]:checked')].map(c=>c.value);
+  if(!ids.length){toast('Select items to return');return;}
+  try{
+    const{data:ok,error}=await sb.rpc('verify_pin',{emp_id:empId,pin_input:pin});
+    if(error)throw error; if(!ok){toast('Wrong passcode');return;}
+  }catch(e){toast('PIN check failed: '+e.message);return;}
+  try{
+    for(const id of ids){const{error}=await sb.rpc('mark_returned',{txn_id:id,cond:'Returned',received:null});if(error)throw error;}
+    toast('Returned '+ids.length+' item(s)'); goReturn();
+  }catch(e){toast('Return failed: '+e.message);}
+}
+
+/* ══ FOR REPAIR ══ */
+let repairTools=[], repairList=[];
+async function goRepair(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-repair');
+  document.getElementById('rp-site-sub').textContent=siteName();
+  const ures=await sb.from('item_units').select('id,unit_code,status,item_id,items(name)').eq('active',true).eq('site_id',curSite);
+  const units=ures.data||[];
+  const bres=await sb.from('borrow_issuance').select('unit_id').eq('status','out').eq('site_id',curSite);
+  const outSet=new Set((bres.data||[]).map(b=>b.unit_id));
+  const map={};
+  units.filter(u=>u.status!=='repair'&&!outSet.has(u.id)).forEach(u=>{const k=u.item_id;if(!map[k])map[k]={itemId:k,name:(u.items&&u.items.name)||'—',units:[]};map[k].units.push({id:u.id,code:u.unit_code});});
+  repairTools=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
+  repairList=units.filter(u=>u.status==='repair').map(u=>({id:u.id,code:u.unit_code,name:(u.items&&u.items.name)||'—'}));
+  renderRepair();
+}
+function renderRepair(){
+  document.getElementById('rp-tool').innerHTML='<option value="">— Select tool —</option>'+repairTools.filter(t=>t.units.length).map(t=>`<option value="${t.itemId}">${t.name} (${t.units.length})</option>`).join('');
+  document.getElementById('rp-unit').innerHTML='<option value="">— unit —</option>';
+  const el=document.getElementById('rp-list');
+  el.innerHTML=repairList.length?repairList.map(u=>`<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center"><div><div class="tool-name">${u.name}</div><div class="tool-meta"><span class="chip repair">${u.code}</span></div></div><button class="back" style="color:var(--ok)" onclick="markRepaired('${u.id}')">Mark repaired</button></div>`).join(''):'<div class="empty">Nothing in repair.</div>';
+}
+function onRepairTool(){
+  const t=repairTools.find(x=>x.itemId===document.getElementById('rp-tool').value);
+  document.getElementById('rp-unit').innerHTML='<option value="">— unit —</option>'+(t?t.units.map(u=>`<option value="${u.id}">${u.code}</option>`).join(''):'');
+}
+async function tagRepair(){
+  const uid=document.getElementById('rp-unit').value;
+  const defect=document.getElementById('rp-defect').value.trim();
+  const eta=document.getElementById('rp-eta').value||null;
+  if(!uid){toast('Pick a tool and unit');return;}
+  if(!defect){toast('Describe the defect');return;}
+  try{
+    const{error}=await sb.from('item_units').update({status:'repair',defect:defect,repair_eta:eta}).eq('id',uid);
+    if(error)throw error;
+    toast('Tagged for repair');
+    document.getElementById('rp-defect').value='';document.getElementById('rp-eta').value='';
+    goRepair();
+  }catch(e){toast('Failed: '+e.message);}
+}
+async function markRepaired(uid){
+  try{const{error}=await sb.from('item_units').update({status:'available',defect:null,repair_eta:null}).eq('id',uid);if(error)throw error;toast('Restored to available');goRepair();}
+  catch(e){toast('Failed: '+e.message);}
+}
+
+/* ══ ALL RECORDS ══ */
+let recRows=[], recFilter='all';
+async function goRecords(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-records');
+  document.getElementById('rc-site-sub').textContent=siteName();
+  document.getElementById('rc-list').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const{data}=await sb.from('borrow_issuance')
+      .select('id,status,borrowed_at,returned_at,project_vessel,items(name),employees(name),item_units(unit_code)')
+      .eq('txn_type','borrow').eq('site_id',curSite).order('borrowed_at',{ascending:false}).limit(300);
+    recRows=data||[];
+  }catch(e){recRows=[];toast('Load failed: '+e.message);}
+  setRecFilter(recFilter);
+}
+function setRecFilter(f){
+  recFilter=f;
+  ['all','out','returned'].forEach(x=>{const b=document.getElementById('rcf-'+x);if(b)b.className='rcf'+(x===f?' on':'');});
+  const list=f==='all'?recRows:recRows.filter(r=>r.status===f);
+  const el=document.getElementById('rc-list');
+  if(!list.length){el.innerHTML='<div class="card"><div class="empty">No records.</div></div>';return;}
+  el.innerHTML='<div class="card">'+list.map(r=>{
+    const ret=r.status==='returned'&&r.returned_at;
+    const d=new Date(ret?r.returned_at:r.borrowed_at);
+    return `<div class="tool-row"><div class="tool-name">${(r.items&&r.items.name)||'—'} <span class="chip ${r.status==='out'?'borrowed':'available'}">${(r.item_units&&r.item_units.unit_code)||''}</span></div>
+      <div class="tool-meta">${(r.employees&&r.employees.name)||'—'}${r.project_vessel?' · '+r.project_vessel:''} · ${r.status==='out'?'Out':'Returned'} · ${d.toLocaleDateString()}</div></div>`;
+  }).join('')+'</div>';
+}
+
+/* ══ SETUP / REGISTER ══ */
+let setupItems=[];
+async function goSetup(){
+  showScreen('s-setup');
+  document.getElementById('su-site-sub').textContent=siteName();
+  document.getElementById('su-sitehint').textContent=siteName();
+  const{data}=await sb.from('items').select('id,item_code,name').eq('active',true).order('name');
+  setupItems=data||[];
+  document.getElementById('su-exist').innerHTML='<option value="">— Select existing tool —</option>'+setupItems.map(i=>`<option value="${i.id}">${i.name} (${i.item_code})</option>`).join('');
+}
+async function nextCodeFor(prefix){
+  const{data}=await sb.from('item_units').select('unit_code').ilike('unit_code',prefix+'%');
+  let max=0;(data||[]).forEach(u=>{const n=parseInt((u.unit_code||'').slice(prefix.length),10);if(!isNaN(n)&&n>max)max=n;});
+  return max;
+}
+async function registerNew(){
+  const name=document.getElementById('su-name').value.trim();
+  const prefix=document.getElementById('su-prefix').value.trim().toUpperCase();
+  const qty=parseInt(document.getElementById('su-qty').value,10);
+  const unit=document.getElementById('su-unit').value.trim()||'pcs';
+  const price=parseFloat(document.getElementById('su-price').value)||null;
+  if(!name||!prefix||!qty||qty<1){toast('Fill name, prefix and quantity');return;}
+  try{
+    const max=await nextCodeFor(prefix);
+    const{data:item,error}=await sb.from('items').insert({item_code:prefix,name:name,unit:unit,track_type:'borrow',active:true,price:price}).select().single();
+    if(error)throw error;
+    const rows=[];for(let i=1;i<=qty;i++)rows.push({item_id:item.id,site_id:curSite,unit_code:prefix+String(max+i).padStart(3,'0'),status:'available',active:true});
+    const{error:e2}=await sb.from('item_units').insert(rows);if(e2)throw e2;
+    toast('Registered '+qty+' × '+name);
+    ['su-name','su-prefix','su-qty','su-unit','su-price'].forEach(id=>document.getElementById(id).value='');
+    goSetup();
+  }catch(e){toast('Failed: '+e.message);}
+}
+async function addMore(){
+  const itemId=document.getElementById('su-exist').value;
+  const qty=parseInt(document.getElementById('su-more-qty').value,10);
+  if(!itemId||!qty||qty<1){toast('Select a tool and quantity');return;}
+  const item=setupItems.find(i=>i.id===itemId);
+  const prefix=(item&&item.item_code)||'TL';
+  try{
+    const max=await nextCodeFor(prefix);
+    const rows=[];for(let i=1;i<=qty;i++)rows.push({item_id:itemId,site_id:curSite,unit_code:prefix+String(max+i).padStart(3,'0'),status:'available',active:true});
+    const{error}=await sb.from('item_units').insert(rows);if(error)throw error;
+    toast('Added '+qty+' unit(s) to '+item.name);
+    document.getElementById('su-more-qty').value='';
+  }catch(e){toast('Failed: '+e.message);}
+}
+
+/* ══ INIT ══ */
+sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
+</script>
 </body>
 </html>
