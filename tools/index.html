@@ -63,6 +63,7 @@
   .chip.available{background:#e7f6ee;color:#1d7a4d}
   .chip.borrowed{background:#fdeef0;color:#b32430}
   .chip.repair{background:#fff3e0;color:#9a6400}
+  .chip.transit{background:#eceff3;color:#5b6675}
   .countbar{display:flex;gap:14px;font-size:12px;color:var(--tx2);margin-top:6px}
   .countbar b{color:var(--tx)}
   .empty{text-align:center;color:var(--tx2);font-size:14px;padding:24px 0}
@@ -122,11 +123,11 @@
         <div class="tile-icon" style="background:#388E3C"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><polyline points="1,4 1,10 7,10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg></div>
         <div class="tile-title">Return Tool</div><div class="tile-sub">Confirm item returned</div>
       </button>
-      <button class="tile" style="background:#FFF3E0" onclick="soon()">
+      <button class="tile" style="background:#FFF3E0" onclick="goTransfer()">
         <div class="tile-icon" style="background:#F57C00"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12,5 19,12 12,19"/></svg></div>
         <div class="tile-title">Transfer Out</div><div class="tile-sub">Send tool to another site</div>
       </button>
-      <button class="tile" style="background:#F3E5F5" onclick="soon()">
+      <button class="tile" style="background:#F3E5F5" onclick="goReceive()">
         <div class="tile-icon" style="background:#7B1FA2"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><polyline points="8,17 12,21 16,17"/><line x1="12" y1="3" x2="12" y2="21"/></svg></div>
         <div class="tile-title">Receive Tools</div><div class="tile-sub">Confirm incoming tools</div>
       </button>
@@ -275,6 +276,50 @@
   </div>
 </div>
 
+<!-- TRANSFER OUT -->
+<div id="s-transfer" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Transfer Out</div><div class="hdr-sub" id="tf-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <div class="card">
+      <label class="lbl">Send to site</label>
+      <select id="tf-dest" class="search"></select>
+      <label class="lbl">Sent by</label>
+      <input id="tf-by" class="search" placeholder="Warehouse staff name"/>
+    </div>
+    <div class="card">
+      <label class="lbl">Add tools to transfer</label>
+      <select id="tf-tool" class="search" onchange="onTfTool()"></select>
+      <select id="tf-unit" class="search"></select>
+      <button class="lbtn" style="background:var(--p)" onclick="addToXfer()">+ Add to transfer</button>
+    </div>
+    <div class="card">
+      <label class="lbl">Transfer list</label>
+      <div id="tf-cart"><div class="empty">No tools added yet.</div></div>
+      <button class="lbtn" style="background:var(--warn);color:#3a2a00" id="tf-submit" onclick="submitTransfer()">Transfer (0)</button>
+    </div>
+  </div>
+</div>
+
+<!-- RECEIVE TOOLS -->
+<div id="s-receive" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Receive Tools</div><div class="hdr-sub" id="rv-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <div class="card">
+      <label class="lbl">Received by</label>
+      <input id="rv-by" class="search" placeholder="Warehouse staff name"/>
+    </div>
+    <div id="rv-list"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
 <div id="toast" class="toast"></div>
 
 <script>
@@ -351,7 +396,7 @@ async function goInventory(){
     units.forEach(u=>{
       const k=u.item_id;
       if(!map[k])map[k]={name:(u.items&&u.items.name)||'—',code:(u.items&&u.items.item_code)||'',units:[]};
-      let st=u.status==='repair'?'repair':(outSet.has(u.id)?'borrowed':'available');
+      let st=u.status==='repair'?'repair':(u.status==='transit'?'transit':(outSet.has(u.id)?'borrowed':'available'));
       map[k].units.push({code:u.unit_code,st});
     });
     invData=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
@@ -367,9 +412,10 @@ function renderInventory(){
     const av=t.units.filter(u=>u.st==='available').length;
     const bo=t.units.filter(u=>u.st==='borrowed').length;
     const rp=t.units.filter(u=>u.st==='repair').length;
+    const tr=t.units.filter(u=>u.st==='transit').length;
     return `<div class="tool-row">
       <div class="tool-name">${t.name}</div>
-      <div class="countbar"><span>Avail <b>${av}</b></span><span>Out <b>${bo}</b></span><span>Repair <b>${rp}</b></span><span>Owned <b>${t.units.length}</b></span></div>
+      <div class="countbar"><span>Avail <b>${av}</b></span><span>Out <b>${bo}</b></span><span>Repair <b>${rp}</b></span>${tr?`<span>Transit <b>${tr}</b></span>`:''}<span>Owned <b>${t.units.length}</b></span></div>
       <div class="chips">${t.units.map(u=>`<span class="chip ${u.st}">${u.code}</span>`).join('')}</div>
     </div>`;
   }).join('')+'</div>';
@@ -401,7 +447,7 @@ async function loadAvail(){
   const outSet=new Set((bres.data||[]).map(b=>b.unit_id));
   const map={};
   units.forEach(u=>{
-    if(u.status==='repair'||outSet.has(u.id))return;
+    if(u.status!=='available'||outSet.has(u.id))return;
     const k=u.item_id;
     if(!map[k])map[k]={itemId:k,name:(u.items&&u.items.name)||'—',price:(u.items&&u.items.price)||0,units:[]};
     map[k].units.push({id:u.id,code:u.unit_code});
@@ -516,7 +562,7 @@ async function goRepair(){
   const bres=await sb.from('borrow_issuance').select('unit_id').eq('status','out').eq('site_id',curSite);
   const outSet=new Set((bres.data||[]).map(b=>b.unit_id));
   const map={};
-  units.filter(u=>u.status!=='repair'&&!outSet.has(u.id)).forEach(u=>{const k=u.item_id;if(!map[k])map[k]={itemId:k,name:(u.items&&u.items.name)||'—',units:[]};map[k].units.push({id:u.id,code:u.unit_code});});
+  units.filter(u=>u.status==='available'&&!outSet.has(u.id)).forEach(u=>{const k=u.item_id;if(!map[k])map[k]={itemId:k,name:(u.items&&u.items.name)||'—',units:[]};map[k].units.push({id:u.id,code:u.unit_code});});
   repairTools=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
   repairList=units.filter(u=>u.status==='repair').map(u=>({id:u.id,code:u.unit_code,name:(u.items&&u.items.name)||'—'}));
   renderRepair();
@@ -625,6 +671,109 @@ async function addMore(){
     toast('Added '+qty+' unit(s) to '+item.name);
     document.getElementById('su-more-qty').value='';
   }catch(e){toast('Failed: '+e.message);}
+}
+
+/* ══ TRANSFER OUT ══ */
+let xferTools=[], xferCart=[];
+async function goTransfer(){
+  if(!curSite){toast('No site selected');return;}
+  if(sites.length<2){toast('Need a second site to transfer to');return;}
+  showScreen('s-transfer');
+  document.getElementById('tf-site-sub').textContent=siteName();
+  xferCart=[]; renderXfer();
+  document.getElementById('tf-by').value='';
+  document.getElementById('tf-dest').innerHTML=sites.filter(s=>s.id!==curSite).map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  const ures=await sb.from('item_units').select('id,unit_code,status,item_id,items(name)').eq('active',true).eq('site_id',curSite);
+  const units=ures.data||[];
+  const bres=await sb.from('borrow_issuance').select('unit_id').eq('status','out').eq('site_id',curSite);
+  const outSet=new Set((bres.data||[]).map(b=>b.unit_id));
+  const map={};
+  units.forEach(u=>{ if(u.status!=='available'||outSet.has(u.id))return;
+    const k=u.item_id; if(!map[k])map[k]={itemId:k,name:(u.items&&u.items.name)||'—',units:[]};
+    map[k].units.push({id:u.id,code:u.unit_code});});
+  xferTools=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
+  renderXferTool();
+}
+function renderXferTool(){
+  document.getElementById('tf-tool').innerHTML='<option value="">— Select tool —</option>'+xferTools.filter(t=>t.units.length).map(t=>`<option value="${t.itemId}">${t.name} (${t.units.length} avail)</option>`).join('');
+  document.getElementById('tf-unit').innerHTML='<option value="">— unit —</option>';
+}
+function onTfTool(){
+  const t=xferTools.find(x=>x.itemId===document.getElementById('tf-tool').value);
+  document.getElementById('tf-unit').innerHTML='<option value="">— unit —</option>'+(t?t.units.map(u=>`<option value="${u.id}">${u.code}</option>`).join(''):'');
+}
+function addToXfer(){
+  const tid=document.getElementById('tf-tool').value, uid=document.getElementById('tf-unit').value;
+  if(!tid||!uid){toast('Pick a tool and unit');return;}
+  const t=xferTools.find(x=>x.itemId===tid), u=t.units.find(x=>x.id===uid);
+  xferCart.push({unitId:uid,itemId:tid,code:u.code,name:t.name});
+  t.units=t.units.filter(x=>x.id!==uid); renderXferTool(); renderXfer();
+}
+function removeFromXfer(uid){
+  const i=xferCart.findIndex(c=>c.unitId===uid); if(i<0)return;
+  const c=xferCart[i]; xferCart.splice(i,1);
+  const t=xferTools.find(x=>x.itemId===c.itemId); if(t)t.units.push({id:c.unitId,code:c.code});
+  renderXferTool(); renderXfer();
+}
+function renderXfer(){
+  const el=document.getElementById('tf-cart'), btn=document.getElementById('tf-submit');
+  if(!xferCart.length){el.innerHTML='<div class="empty">No tools added yet.</div>';btn.textContent='Transfer (0)';return;}
+  el.innerHTML=xferCart.map(c=>`<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center"><div><div class="tool-name">${c.name}</div><div class="tool-meta"><span class="chip available">${c.code}</span></div></div><button class="back" style="color:var(--r)" onclick="removeFromXfer('${c.unitId}')">Remove</button></div>`).join('');
+  btn.textContent='Transfer ('+xferCart.length+')';
+}
+async function submitTransfer(){
+  const dest=document.getElementById('tf-dest').value;
+  const by=document.getElementById('tf-by').value.trim();
+  if(!dest){toast('Pick a destination site');return;}
+  if(!xferCart.length){toast('Add at least one tool');return;}
+  const rows=xferCart.map(c=>({unit_id:c.unitId,item_id:c.itemId,from_site:curSite,to_site:dest,status:'in_transit',sent_by:by||null}));
+  try{
+    const{error}=await sb.from('tool_transfers').insert(rows); if(error)throw error;
+    const ids=xferCart.map(c=>c.unitId);
+    const{error:e2}=await sb.from('item_units').update({status:'transit'}).in('id',ids); if(e2)throw e2;
+    toast('Sent '+xferCart.length+' tool(s) to '+(sites.find(s=>s.id===dest)||{}).name); xferCart=[]; showScreen('s-home');
+  }catch(e){toast('Transfer failed: '+e.message);}
+}
+
+/* ══ RECEIVE ══ */
+let recvRows=[];
+async function goReceive(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-receive');
+  document.getElementById('rv-site-sub').textContent=siteName();
+  document.getElementById('rv-by').value='';
+  document.getElementById('rv-list').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const{data}=await sb.from('tool_transfers')
+      .select('id,unit_id,sent_by,sent_at,from_site,items(name),item_units(unit_code)')
+      .eq('to_site',curSite).eq('status','in_transit').order('sent_at',{ascending:false});
+    recvRows=data||[];
+  }catch(e){recvRows=[];toast('Load failed: '+e.message);}
+  renderReceive();
+}
+function renderReceive(){
+  const el=document.getElementById('rv-list');
+  if(!recvRows.length){el.innerHTML='<div class="card"><div class="empty">No incoming tools.</div></div>';return;}
+  el.innerHTML='<div class="card">'+recvRows.map(r=>{
+    const from=(sites.find(s=>s.id===r.from_site)||{}).name||'—';
+    return `<label style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)">
+      <input type="checkbox" class="rv-chk" value="${r.id}" data-unit="${r.unit_id}" checked/>
+      <span><div class="tool-name">${(r.items&&r.items.name)||'—'} <span class="chip transit">${(r.item_units&&r.item_units.unit_code)||''}</span></div>
+      <div class="tool-meta">From ${from}${r.sent_by?' · sent by '+r.sent_by:''}</div></span></label>`;
+  }).join('')+'<button class="lbtn" style="background:var(--ok);margin-top:10px" onclick="receiveSelected()">Receive selected</button></div>';
+}
+async function receiveSelected(){
+  const by=document.getElementById('rv-by').value.trim();
+  const checks=[...document.querySelectorAll('.rv-chk:checked')];
+  if(!checks.length){toast('Select tools to receive');return;}
+  try{
+    for(const c of checks){
+      const tid=c.value, uid=c.getAttribute('data-unit');
+      const{error}=await sb.from('tool_transfers').update({status:'received',received_at:new Date().toISOString(),received_by:by||null}).eq('id',tid); if(error)throw error;
+      const{error:e2}=await sb.from('item_units').update({site_id:curSite,status:'available'}).eq('id',uid); if(e2)throw e2;
+    }
+    toast('Received '+checks.length+' tool(s)'); goReceive();
+  }catch(e){toast('Receive failed: '+e.message);}
 }
 
 /* ══ INIT ══ */
