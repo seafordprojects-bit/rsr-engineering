@@ -333,6 +333,16 @@
   </div>
 </div>
 
+<div id="slip-modal" style="display:none;position:fixed;inset:0;background:rgba(15,25,40,.45);z-index:80;align-items:center;justify-content:center;padding:20px">
+  <div class="card" style="max-width:340px;width:100%;text-align:center;margin:0">
+    <div style="font-size:36px">✅</div>
+    <div style="font-size:13px;color:var(--tx2);margin-top:2px">Borrow slip issued</div>
+    <div id="slip-no" style="font-size:24px;font-weight:800;font-family:ui-monospace,monospace;margin:6px 0;color:var(--p)">BS-000000</div>
+    <div id="slip-info" class="tool-meta" style="margin-bottom:14px">—</div>
+    <button class="lbtn" style="background:var(--p)" onclick="closeSlip()">Done</button>
+  </div>
+</div>
+
 <div id="toast" class="toast"></div>
 
 <script>
@@ -368,6 +378,8 @@ function showScreen(id){
 }
 function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',2600);}
 function soon(){toast('Coming in the next update');}
+function showSlip(no,info){document.getElementById('slip-no').textContent=no;document.getElementById('slip-info').textContent=info;document.getElementById('slip-modal').style.display='flex';}
+function closeSlip(){document.getElementById('slip-modal').style.display='none';showScreen('s-home');}
 
 /* ══ BOOT ══ */
 async function boot(){
@@ -581,12 +593,17 @@ async function submitBorrow(){
   }catch(e){toast('PIN check failed: '+e.message);return;}
   const now=new Date(), z=n=>String(n).padStart(2,'0');
   const borrowedAt=new Date(bdate+'T'+z(now.getHours())+':'+z(now.getMinutes())+':00').toISOString();
+  let slipNo='';
+  try{const{data:sn,error:se}=await sb.rpc('next_slip_no'); if(!se&&sn)slipNo=sn;}catch(e){}
+  if(!slipNo)slipNo='BS-'+now.getFullYear()+z(now.getMonth()+1)+z(now.getDate())+'-'+z(now.getHours())+z(now.getMinutes())+z(now.getSeconds());
   const batch=crypto.randomUUID();
-  const rows=cart.map(c=>({txn_type:'borrow',employee_id:empId,item_id:c.itemId,unit_id:c.unitId,site_id:curSite,quantity:1,status:'out',issued_by:by||null,project_vessel:vessel||null,batch_id:batch,borrowed_at:borrowedAt}));
+  const borrowerName=document.getElementById('bw-emp').value||'borrower';
+  const count=cart.length;
+  const rows=cart.map(c=>({txn_type:'borrow',employee_id:empId,item_id:c.itemId,unit_id:c.unitId,site_id:curSite,quantity:1,status:'out',issued_by:by||null,project_vessel:vessel||null,batch_id:batch,slip_no:slipNo,borrowed_at:borrowedAt}));
   try{
     const{error}=await sb.from('borrow_issuance').insert(rows);
     if(error)throw error;
-    toast('Issued '+cart.length+' tool(s)'); cart=[]; showScreen('s-home');
+    cart=[]; showSlip(slipNo, count+' tool(s) to '+borrowerName+(vessel?' · '+vessel:''));
   }catch(e){toast('Save failed: '+e.message);}
 }
 
@@ -598,7 +615,7 @@ async function goReturn(){
   document.getElementById('rt-list').innerHTML='<div class="empty">Loading…</div>';
   try{
     const{data}=await sb.from('borrow_issuance')
-      .select('id,unit_id,employee_id,borrowed_at,project_vessel,items(name),employees(name),item_units(unit_code)')
+      .select('id,unit_id,employee_id,slip_no,borrowed_at,project_vessel,items(name),employees(name),item_units(unit_code)')
       .eq('status','out').eq('site_id',curSite).order('borrowed_at',{ascending:false});
     retRows=data||[];
   }catch(e){retRows=[];toast('Load failed: '+e.message);}
@@ -613,13 +630,15 @@ function renderReturn(){
     <div class="tool-name">${g.name}</div>
     ${g.items.map(r=>`<label style="display:flex;align-items:center;gap:8px;padding:7px 0">
       <input type="checkbox" class="rt-chk" data-emp="${k}" value="${r.id}" checked/>
-      <span>${(r.items&&r.items.name)||'—'} <span class="chip borrowed">${(r.item_units&&r.item_units.unit_code)||''}</span>${r.project_vessel?'<span class="tool-meta"> · '+r.project_vessel+'</span>':''}</span></label>`).join('')}
+      <span>${(r.items&&r.items.name)||'—'} <span class="chip borrowed">${(r.item_units&&r.item_units.unit_code)||''}</span>${r.project_vessel?'<span class="tool-meta"> · '+r.project_vessel+'</span>':''}${r.slip_no?'<span class="tool-meta"> · '+r.slip_no+'</span>':''}</span></label>`).join('')}
+    <input class="search" id="rt-by-${k}" placeholder="Received by (warehouse staff)" style="margin-top:8px"/>
     <input class="search" id="rt-pin-${k}" type="password" inputmode="numeric" placeholder="Borrower passcode" style="margin-top:8px"/>
     <button class="lbtn" style="background:var(--ok)" onclick="returnPerson('${k}')">Return selected</button>
   </div>`;}).join('');
 }
 async function returnPerson(empId){
   const pin=((document.getElementById('rt-pin-'+empId)||{}).value||'').trim();
+  const recvBy=((document.getElementById('rt-by-'+empId)||{}).value||'').trim();
   if(!pin){toast('Enter passcode');return;}
   const ids=[...document.querySelectorAll('.rt-chk[data-emp="'+empId+'"]:checked')].map(c=>c.value);
   if(!ids.length){toast('Select items to return');return;}
@@ -628,7 +647,7 @@ async function returnPerson(empId){
     if(error)throw error; if(!ok){toast('Wrong passcode');return;}
   }catch(e){toast('PIN check failed: '+e.message);return;}
   try{
-    for(const id of ids){const{error}=await sb.rpc('mark_returned',{txn_id:id,cond:'Returned',received:null});if(error)throw error;}
+    for(const id of ids){const{error}=await sb.rpc('mark_returned',{txn_id:id,cond:'Returned',received:recvBy||null});if(error)throw error;}
     toast('Returned '+ids.length+' item(s)'); goReturn();
   }catch(e){toast('Return failed: '+e.message);}
 }
@@ -687,7 +706,7 @@ async function goRecords(){
   document.getElementById('rc-list').innerHTML='<div class="empty">Loading…</div>';
   try{
     const{data}=await sb.from('borrow_issuance')
-      .select('id,status,borrowed_at,returned_at,project_vessel,items(name),employees(name),item_units(unit_code)')
+      .select('id,status,slip_no,borrowed_at,returned_at,received_by,project_vessel,items(name),employees(name),item_units(unit_code)')
       .eq('txn_type','borrow').eq('site_id',curSite).order('borrowed_at',{ascending:false}).limit(300);
     recRows=data||[];
   }catch(e){recRows=[];toast('Load failed: '+e.message);}
@@ -703,7 +722,7 @@ function setRecFilter(f){
     const ret=r.status==='returned'&&r.returned_at;
     const d=new Date(ret?r.returned_at:r.borrowed_at);
     return `<div class="tool-row"><div class="tool-name">${(r.items&&r.items.name)||'—'} <span class="chip ${r.status==='out'?'borrowed':'available'}">${(r.item_units&&r.item_units.unit_code)||''}</span></div>
-      <div class="tool-meta">${(r.employees&&r.employees.name)||'—'}${r.project_vessel?' · '+r.project_vessel:''} · ${r.status==='out'?'Out':'Returned'} · ${d.toLocaleDateString()}</div></div>`;
+      <div class="tool-meta">${r.slip_no?`<b style="font-family:ui-monospace,monospace;color:var(--p)">${r.slip_no}</b> · `:''}${(r.employees&&r.employees.name)||'—'}${r.project_vessel?' · '+r.project_vessel:''}</div><div class="tool-meta">Out ${new Date(r.borrowed_at).toLocaleDateString()}${ret?` · Returned ${new Date(r.returned_at).toLocaleDateString()}${r.received_by?' · recv by '+r.received_by:''}`:' · still out'}</div></div>`;
   }).join('')+'</div>';
 }
 
