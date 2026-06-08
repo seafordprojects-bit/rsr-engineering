@@ -77,6 +77,10 @@
   .vsug div:last-child{border-bottom:none}
   .vsug div:active{background:#eef2f7}
   .vsug .vc{color:var(--tx2);font-size:12px;margin-left:6px;font-family:ui-monospace,monospace}
+  .brow{display:flex;justify-content:space-between;gap:10px;padding:4px 0;font-size:14px}
+  .brow span{color:var(--tx2)}
+  .brow b{text-align:right}
+  .vc{color:var(--tx2);font-size:12px;font-family:ui-monospace,monospace}
 </style>
 </head>
 <body>
@@ -199,13 +203,8 @@
       <label class="lbl">Slip</label>
       <div id="bw-cart"><div class="empty">No tools added yet.</div></div>
     </div>
-    <div class="card" style="background:#fff8e1;border-color:#f0e0a8">
-      <div style="font-size:12px;color:#7a5c00;line-height:1.5">By signing, the borrower accepts responsibility for the listed tools and agrees to return them in good condition. Lost or damaged items are charged at the replacement value shown.</div>
-    </div>
     <div class="card">
-      <label class="lbl">Borrower passcode (sign here)</label>
-      <input id="bw-pin" class="search" type="password" inputmode="numeric" placeholder="Enter passcode to confirm"/>
-      <button class="lbtn" style="background:var(--ok)" id="bw-submit" onclick="submitBorrow()">Issue (0)</button>
+      <button class="lbtn" style="background:var(--ok)" id="bw-submit" onclick="reviewBorrow()">Issue (0)</button>
     </div>
   </div>
 </div>
@@ -333,6 +332,18 @@
   </div>
 </div>
 
+<div id="bslip-modal" style="display:none;position:fixed;inset:0;background:rgba(15,25,40,.5);z-index:80;align-items:center;justify-content:center;padding:16px">
+  <div class="card" style="max-width:390px;width:100%;margin:0;max-height:92vh;overflow:auto">
+    <div style="font-size:13px;color:var(--tx2);text-transform:uppercase;letter-spacing:.5px;font-weight:800">Borrow Slip</div>
+    <div id="bslip-body" style="margin:10px 0"></div>
+    <div style="background:#fff8e1;border:1px solid #f0e0a8;border-radius:10px;padding:10px;font-size:12px;color:#7a5c00;line-height:1.5;margin-bottom:10px">By entering the passcode below, the borrower confirms receipt of the listed tools and accepts responsibility to return them in good condition. Lost or damaged items are charged at the replacement value shown.</div>
+    <label class="lbl">Borrower passcode (sign here)</label>
+    <input id="bslip-pin" class="search" type="password" inputmode="numeric" placeholder="Enter passcode to confirm"/>
+    <button class="lbtn" style="background:var(--ok)" onclick="confirmBorrow()">Confirm &amp; sign</button>
+    <button class="lbtn" style="background:#fff;color:var(--tx2);border:1px solid var(--line);margin-top:8px" onclick="cancelBslip()">Back</button>
+  </div>
+</div>
+
 <div id="slip-modal" style="display:none;position:fixed;inset:0;background:rgba(15,25,40,.45);z-index:80;align-items:center;justify-content:center;padding:20px">
   <div class="card" style="max-width:340px;width:100%;text-align:center;margin:0">
     <div style="font-size:36px">✅</div>
@@ -448,7 +459,7 @@ function renderInventory(){
 }
 
 /* ══ EMPLOYEES ══ */
-let employees=[], availTools=[], cart=[], retRows=[], vessels=[], selEmpId='';
+let employees=[], availTools=[], cart=[], retRows=[], vessels=[], selEmpId='', pendingSlip=null;
 function todayYmd2(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
 async function loadEmployees(){
   const{data}=await sb.from('employees').select('id,code,name,pin').order('name');
@@ -521,7 +532,7 @@ async function goBorrow(){
   document.getElementById('bw-vessel').value='';
   const vb=document.getElementById('bw-vsug'); if(vb){vb.style.display='none';vb.innerHTML='';}
   document.getElementById('bw-by').value='';
-  document.getElementById('bw-pin').value='';
+  pendingSlip=null;
   await loadAvail();
 }
 async function loadAvail(){
@@ -571,39 +582,60 @@ function renderCart(){
     +`<div class="countbar" style="margin-top:8px">Total replacement value: <b>₱${total.toLocaleString()}</b></div>`;
   btn.textContent='Issue ('+cart.length+')';
 }
-async function submitBorrow(){
+function reviewBorrow(){
   let empId=selEmpId;
+  const typedName=(document.getElementById('bw-emp').value||'').trim();
   if(!empId){
-    const typed=(document.getElementById('bw-emp').value||'').trim().toLowerCase();
-    const matches=employees.filter(e=>(e.name||'').trim().toLowerCase()===typed);
+    const matches=employees.filter(e=>(e.name||'').trim().toLowerCase()===typedName.toLowerCase());
     if(matches.length===1)empId=matches[0].id;
   }
+  const emp=employees.find(e=>e.id===empId);
   const bdate=document.getElementById('bw-date').value;
   const vessel=document.getElementById('bw-vessel').value.trim();
   const by=document.getElementById('bw-by').value.trim();
-  const pin=document.getElementById('bw-pin').value.trim();
-  if(!empId){toast('Select a borrower from the list');return;}
+  if(!empId||!emp){toast('Select a borrower from the list');return;}
   if(!bdate){toast('Pick a date');return;}
   if(bdate<todayYmd2()){toast('No back-dating allowed');return;}
+  if(!vessel){toast('Select or enter a project/vessel');return;}
+  if(!by){toast('Enter who issued the tools');return;}
   if(!cart.length){toast('Add at least one tool');return;}
+  let total=0; cart.forEach(c=>total+=Number(c.price)||0);
+  pendingSlip={empId,empName:emp.name,empCode:emp.code||'—',bdate,vessel,by,items:cart.slice(),total};
+  document.getElementById('bslip-body').innerHTML=
+    `<div class="brow"><span>Borrower</span><b>${emp.name} <span class="vc">${emp.code||'—'}</span></b></div>`
+    +`<div class="brow"><span>Date</span><b>${bdate}</b></div>`
+    +`<div class="brow"><span>Project / Vessel</span><b>${vessel}</b></div>`
+    +`<div class="brow"><span>Issued by</span><b>${by}</b></div>`
+    +`<div class="brow"><span>Site</span><b>${siteName()}</b></div>`
+    +`<div style="margin-top:8px;border-top:1px solid var(--line);padding-top:8px">`
+    +cart.map(c=>`<div class="brow"><span>${c.name} <span class="vc">${c.code}</span></span><b>${c.price?'₱'+Number(c.price).toLocaleString():'—'}</b></div>`).join('')
+    +`</div><div class="brow" style="border-top:1px solid var(--line);margin-top:6px;padding-top:8px"><span>Total replacement value</span><b>₱${total.toLocaleString()}</b></div>`;
+  document.getElementById('bslip-pin').value='';
+  document.getElementById('bslip-modal').style.display='flex';
+}
+function cancelBslip(){document.getElementById('bslip-modal').style.display='none';}
+async function confirmBorrow(){
+  if(!pendingSlip)return;
+  const pin=(document.getElementById('bslip-pin').value||'').trim();
   if(!pin){toast('Enter the borrower passcode');return;}
   try{
-    const{data:ok,error}=await sb.rpc('verify_pin',{emp_id:empId,pin_input:pin});
+    const{data:ok,error}=await sb.rpc('verify_pin',{emp_id:pendingSlip.empId,pin_input:pin});
     if(error)throw error; if(!ok){toast('Wrong passcode');return;}
   }catch(e){toast('PIN check failed: '+e.message);return;}
   const now=new Date(), z=n=>String(n).padStart(2,'0');
-  const borrowedAt=new Date(bdate+'T'+z(now.getHours())+':'+z(now.getMinutes())+':00').toISOString();
+  const borrowedAt=new Date(pendingSlip.bdate+'T'+z(now.getHours())+':'+z(now.getMinutes())+':00').toISOString();
   let slipNo='';
   try{const{data:sn,error:se}=await sb.rpc('next_slip_no'); if(!se&&sn)slipNo=sn;}catch(e){}
   if(!slipNo)slipNo='BS-'+now.getFullYear()+z(now.getMonth()+1)+z(now.getDate())+'-'+z(now.getHours())+z(now.getMinutes())+z(now.getSeconds());
   const batch=crypto.randomUUID();
-  const borrowerName=document.getElementById('bw-emp').value||'borrower';
-  const count=cart.length;
-  const rows=cart.map(c=>({txn_type:'borrow',employee_id:empId,item_id:c.itemId,unit_id:c.unitId,site_id:curSite,quantity:1,status:'out',issued_by:by||null,project_vessel:vessel||null,batch_id:batch,slip_no:slipNo,borrowed_at:borrowedAt}));
+  const rows=pendingSlip.items.map(c=>({txn_type:'borrow',employee_id:pendingSlip.empId,item_id:c.itemId,unit_id:c.unitId,site_id:curSite,quantity:1,status:'out',issued_by:pendingSlip.by||null,project_vessel:pendingSlip.vessel||null,batch_id:batch,slip_no:slipNo,borrowed_at:borrowedAt}));
   try{
     const{error}=await sb.from('borrow_issuance').insert(rows);
     if(error)throw error;
-    cart=[]; showSlip(slipNo, count+' tool(s) to '+borrowerName+(vessel?' · '+vessel:''));
+    const count=pendingSlip.items.length, nm=pendingSlip.empName, ves=pendingSlip.vessel;
+    cart=[]; pendingSlip=null;
+    document.getElementById('bslip-modal').style.display='none';
+    showSlip(slipNo, count+' tool(s) to '+nm+(ves?' · '+ves:''));
   }catch(e){toast('Save failed: '+e.message);}
 }
 
