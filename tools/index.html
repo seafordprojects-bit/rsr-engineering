@@ -179,10 +179,7 @@
       <label class="lbl">Date</label>
       <input id="bw-date" class="search" type="date"/>
       <label class="lbl">Project / Vessel</label>
-      <div style="position:relative;margin-bottom:10px">
-        <input id="bw-vessel" class="search" style="margin-bottom:0" placeholder="Type vessel name or code…" autocomplete="off" oninput="vesselSuggest()" onfocus="vesselSuggest()"/>
-        <div id="bw-vsug" class="vsug" style="display:none"></div>
-      </div>
+      <select id="bw-vessel" class="search"></select>
       <label class="lbl">Issued by</label>
       <input id="bw-by" class="search" placeholder="Warehouse staff name"/>
     </div>
@@ -440,26 +437,8 @@ async function loadEmployees(){
   employees=data||[];
 }
 async function loadVessels(){
-  try{const{data}=await sb.from('voyages').select('vessel_name,vessel_code').order('vessel_name');vessels=(data||[]).filter(v=>v.vessel_name);}
+  try{const{data}=await sb.from('voyages').select('vessel_name,vessel_code,status').in('status',['drydock','afloat']).order('vessel_name');vessels=(data||[]).filter(v=>v.vessel_name);}
   catch(e){vessels=[];}
-}
-function vesselSuggest(){
-  const raw=(document.getElementById('bw-vessel').value||'');
-  const q=raw.toLowerCase().replace(/\s+/g,'');
-  const box=document.getElementById('bw-vsug');
-  if(!q){box.style.display='none';box.innerHTML='';return;}
-  const m=vessels.filter(v=>{
-    const n=(v.vessel_name||'').toLowerCase().replace(/\s+/g,'');
-    const c=(v.vessel_code||'').toLowerCase().replace(/\s+/g,'');
-    return n.includes(q)||c.includes(q);
-  }).slice(0,8);
-  if(!m.length){box.style.display='none';box.innerHTML='';return;}
-  box.innerHTML=m.map(v=>`<div onclick="pickVessel(this)" data-name="${(v.vessel_name||'').replace(/"/g,'&quot;')}">${v.vessel_name}${v.vessel_code?`<span class="vc">${v.vessel_code}</span>`:''}</div>`).join('');
-  box.style.display='block';
-}
-function pickVessel(el){
-  document.getElementById('bw-vessel').value=el.getAttribute('data-name')||'';
-  const b=document.getElementById('bw-vsug');b.style.display='none';b.innerHTML='';
 }
 
 /* ══ BORROW ══ */
@@ -470,8 +449,8 @@ async function goBorrow(){
   cart=[]; renderCart();
   document.getElementById('bw-emp').innerHTML='<option value="">— Select borrower —</option>'+employees.map(e=>`<option value="${e.id}">${e.name}${e.code?' ('+e.code+')':''}</option>`).join('');
   const dEl=document.getElementById('bw-date'); dEl.min=todayYmd2(); dEl.value=todayYmd2();
-  document.getElementById('bw-vessel').value='';
-  const vs=document.getElementById('bw-vsug'); if(vs){vs.style.display='none';vs.innerHTML='';}
+  await loadVessels();
+  document.getElementById('bw-vessel').innerHTML='<option value="">— Select vessel —</option>'+vessels.map(v=>`<option value="${(v.vessel_name||'').replace(/"/g,'&quot;')}">${v.vessel_name}${v.vessel_code?' ('+v.vessel_code+')':''}</option>`).join('');
   document.getElementById('bw-by').value='';
   document.getElementById('bw-pin').value='';
   await loadAvail();
