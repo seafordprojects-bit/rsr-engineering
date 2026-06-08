@@ -437,7 +437,7 @@ async function loadEmployees(){
   employees=data||[];
 }
 async function loadVessels(){
-  try{const{data}=await sb.from('voyages').select('vessel_name,vessel_code,status').in('status',['drydock','afloat']).order('vessel_name');vessels=(data||[]).filter(v=>v.vessel_name);}
+  try{const{data}=await sb.from('voyages').select('vessel_name,vessel_code,status').in('status',['drydock','afloat','emergency']).order('vessel_name');vessels=(data||[]).filter(v=>v.vessel_name);}
   catch(e){vessels=[];}
 }
 
