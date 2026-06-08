@@ -63,11 +63,11 @@ async function getInventory() {
   return { units, outs };
 }
 async function getIssued() {
-  const { data, error } = await supabase.from('borrow_issuance')
-    .select('id, quantity, borrowed_at, project_vessel, issued_by, items(name, item_code, unit), employees(name), sites(name)')
-    .eq('txn_type', 'issuance').order('borrowed_at', { ascending: false }).limit(500);
+  const { data, error } = await supabase.from('issuances')
+    .select('id, proj_name, proj_code, emp_name, dept, date, by_name, items, created_at')
+    .order('created_at', { ascending: false }).limit(500);
   if (error) throw error;
-  return data;
+  return data || [];
 }
 async function getVoyagesMon() {
   const { data, error } = await supabase.from('voyages')
@@ -255,7 +255,7 @@ function App() {
       const [toolsOut, inRepair, issued30, vessels, people] = await Promise.all([
         countRows('borrow_issuance', q => q.eq('txn_type', 'borrow').eq('status', 'out')),
         countRows('item_units', q => q.eq('active', true).eq('status', 'repair')),
-        countRows('borrow_issuance', q => q.eq('txn_type', 'issuance').gte('borrowed_at', iso30)),
+        countRows('issuances', q => q.gte('created_at', iso30)),
         countRows('voyages', q => q.neq('status', 'not_active')),
         countRows('employees', q => q),
       ]);
@@ -331,10 +331,10 @@ function App() {
           <h3>Coordinator</h3>
           <div class="unit">Personnel &amp; vessel schedules</div>
         </a>
-        <a class="tile" href="./borrower-equipments/">
+        <a class="tile" href="./issuance/">
           <div class="ico">📦</div>
           <h3>Issuance</h3>
-          <div class="unit">Borrow &amp; issue tools / materials</div>
+          <div class="unit">Tool inventory &amp; material issuance</div>
         </a>
       </div>
       <p class="note" style="text-align:center;margin-top:6px">RSR Engineering Services · Cebu</p>
@@ -463,9 +463,9 @@ function App() {
             : iss.length ? iss.map(r => html`
               <div class="row" key=${r.id} style="align-items:flex-start">
                 <div>
-                  <div class="name">${r.items ? r.items.name : '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.quantity || 1}${r.items && r.items.unit ? ' ' + r.items.unit : ''}</span></div>
-                  <div class="unit">To: ${r.employees ? r.employees.name : '—'}${r.issued_by ? ' · by ' + r.issued_by : ''}</div>
-                  <div class="unit">${(r.sites && r.sites.name) || '—'}${r.project_vessel ? ' · ' + r.project_vessel : ''} · ${dt(r.borrowed_at)}</div>
+                  <div class="name">${r.emp_name || '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.id}</span></div>
+                  <div class="unit">${r.proj_name || '—'}${r.proj_code ? ' (' + r.proj_code + ')' : ''} · ${r.date || ''}${r.by_name ? ' · by ' + r.by_name : ''}</div>
+                  <div class="unit">${(Array.isArray(r.items) ? r.items : []).map(it => it.name + ' ×' + it.qty).join(', ') || '—'}</div>
                 </div>
                 <span class="badge" style="background:#12B89E;color:#000">ISSUED</span>
               </div>`)
