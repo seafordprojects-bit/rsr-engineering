@@ -64,7 +64,7 @@ async function getInventory() {
 }
 async function getIssued() {
   const { data, error } = await supabase.from('issuances')
-    .select('id, proj_name, proj_code, emp_name, dept, date, by_name, items, created_at')
+    .select('id, proj_name, proj_code, emp_name, date, by_name, items, created_at')
     .order('created_at', { ascending: false }).limit(500);
   if (error) throw error;
   return data || [];
