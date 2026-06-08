@@ -228,14 +228,22 @@
   </div>
   <div class="wrap">
     <div class="card">
-      <label class="lbl">Tag a tool for repair</label>
-      <select id="rp-tool" class="search" onchange="onRepairTool()"></select>
-      <select id="rp-unit" class="search"></select>
-      <label class="lbl">Defect</label>
-      <input id="rp-defect" class="search" placeholder="What's wrong with it?"/>
+      <label class="lbl">Transmitted by</label>
+      <input id="rp-by" class="search" placeholder="Who is sending it to repair"/>
       <label class="lbl">Expected ready (ETA)</label>
       <input id="rp-eta" class="search" type="date"/>
-      <button class="lbtn" style="background:var(--r)" onclick="tagRepair()">Send to repair</button>
+    </div>
+    <div class="card">
+      <label class="lbl">Add tools to transmittal</label>
+      <select id="rp-tool" class="search" onchange="onRepairTool()"></select>
+      <select id="rp-unit" class="search"></select>
+      <input id="rp-defect" class="search" placeholder="Defect for this tool"/>
+      <button class="lbtn" style="background:var(--p)" onclick="addToRepair()">+ Add to transmittal</button>
+    </div>
+    <div class="card">
+      <label class="lbl">Transmittal</label>
+      <div id="rp-cart"><div class="empty">No tools added yet.</div></div>
+      <button class="lbtn" style="background:var(--r)" id="rp-submit" onclick="reviewRepair()">Send to repair (0)</button>
     </div>
     <div class="card">
       <label class="lbl">Currently in repair</label>
@@ -340,6 +348,27 @@
     <input id="bslip-pin" class="search" type="password" inputmode="numeric" placeholder="Enter passcode to confirm"/>
     <button class="lbtn" style="background:var(--ok)" onclick="confirmBorrow()">Confirm &amp; sign</button>
     <button class="lbtn" style="background:#fff;color:var(--tx2);border:1px solid var(--line);margin-top:8px" onclick="cancelBslip()">Back</button>
+  </div>
+</div>
+
+<div id="rslip-modal" style="display:none;position:fixed;inset:0;background:rgba(15,25,40,.5);z-index:80;align-items:center;justify-content:center;padding:16px">
+  <div class="card" style="max-width:390px;width:100%;margin:0;max-height:92vh;overflow:auto">
+    <div id="rslip-body" style="margin:0 0 12px"></div>
+    <button class="lbtn" style="background:var(--r)" onclick="confirmRepair()">Confirm transmittal</button>
+    <button class="lbtn" style="background:#fff;color:var(--tx2);border:1px solid var(--line);margin-top:8px" onclick="cancelRslip()">Back</button>
+  </div>
+</div>
+
+<div id="rback-modal" style="display:none;position:fixed;inset:0;background:rgba(15,25,40,.5);z-index:80;align-items:center;justify-content:center;padding:16px">
+  <div class="card" style="max-width:340px;width:100%;margin:0;text-align:center">
+    <div style="font-size:13px;color:var(--tx2)">Mark repaired</div>
+    <div id="rback-name" style="font-size:17px;font-weight:800;margin:4px 0 12px">—</div>
+    <label class="lbl" style="text-align:left">Return to site</label>
+    <select id="rback-site" class="search" onchange="onRbackSite()"></select>
+    <label class="lbl" id="rback-bylbl" style="text-align:left">Received back by</label>
+    <input id="rback-by" class="search" placeholder="Warehouse staff name"/>
+    <button class="lbtn" style="background:var(--ok)" onclick="confirmRepaired()">Confirm repaired</button>
+    <button class="lbtn" style="background:#fff;color:var(--tx2);border:1px solid var(--line);margin-top:8px" onclick="document.getElementById('rback-modal').style.display='none'">Cancel</button>
   </div>
 </div>
 
@@ -708,12 +737,16 @@ async function returnPerson(empId){
   }catch(e){toast('Return failed: '+e.message);}
 }
 
-/* ══ FOR REPAIR ══ */
-let repairTools=[], repairList=[];
+/* ══ FOR REPAIR (transmittal) ══ */
+let repairTools=[], repairList=[], repairCart=[], pendingRepair=null, reservedRepairNo='';
 async function goRepair(){
   if(!curSite){toast('No site selected');return;}
   showScreen('s-repair');
   document.getElementById('rp-site-sub').textContent=siteName();
+  repairCart=[]; pendingRepair=null; reservedRepairNo='';
+  document.getElementById('rp-by').value='';
+  document.getElementById('rp-eta').value='';
+  document.getElementById('rp-defect').value='';
   const ures=await sb.from('item_units').select('id,unit_code,status,item_id,items(name)').eq('active',true).eq('site_id',curSite);
   const units=ures.data||[];
   const bres=await sb.from('borrow_issuance').select('unit_id').eq('status','out').eq('site_id',curSite);
@@ -721,36 +754,130 @@ async function goRepair(){
   const map={};
   units.filter(u=>u.status==='available'&&!outSet.has(u.id)).forEach(u=>{const k=u.item_id;if(!map[k])map[k]={itemId:k,name:(u.items&&u.items.name)||'—',units:[]};map[k].units.push({id:u.id,code:u.unit_code});});
   repairTools=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
-  repairList=units.filter(u=>u.status==='repair').map(u=>({id:u.id,code:u.unit_code,name:(u.items&&u.items.name)||'—'}));
-  renderRepair();
+  repairList=units.filter(u=>u.status==='repair').map(u=>({id:u.id,itemId:u.item_id,code:u.unit_code,name:(u.items&&u.items.name)||'—'}));
+  renderRepairTool(); renderRepairCart(); renderRepairList();
 }
-function renderRepair(){
+function renderRepairTool(){
   document.getElementById('rp-tool').innerHTML='<option value="">— Select tool —</option>'+repairTools.filter(t=>t.units.length).map(t=>`<option value="${t.itemId}">${t.name} (${t.units.length})</option>`).join('');
   document.getElementById('rp-unit').innerHTML='<option value="">— unit —</option>';
+}
+function renderRepairList(){
   const el=document.getElementById('rp-list');
-  el.innerHTML=repairList.length?repairList.map(u=>`<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center"><div><div class="tool-name">${u.name}</div><div class="tool-meta"><span class="chip repair">${u.code}</span></div></div><button class="back" style="color:var(--ok)" onclick="markRepaired('${u.id}')">Mark repaired</button></div>`).join(''):'<div class="empty">Nothing in repair.</div>';
+  el.innerHTML=repairList.length?repairList.map(u=>`<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center"><div><div class="tool-name">${u.name}</div><div class="tool-meta"><span class="chip repair">${u.code}</span></div></div><button class="back" style="color:var(--ok)" onclick="askRepaired('${u.id}','${u.itemId}','${(u.name||'').replace(/'/g,"\\'")} · ${u.code}')">Mark repaired</button></div>`).join(''):'<div class="empty">Nothing in repair.</div>';
 }
 function onRepairTool(){
   const t=repairTools.find(x=>x.itemId===document.getElementById('rp-tool').value);
   document.getElementById('rp-unit').innerHTML='<option value="">— unit —</option>'+(t?t.units.map(u=>`<option value="${u.id}">${u.code}</option>`).join(''):'');
 }
-async function tagRepair(){
-  const uid=document.getElementById('rp-unit').value;
+function addToRepair(){
+  const tid=document.getElementById('rp-tool').value, uid=document.getElementById('rp-unit').value;
   const defect=document.getElementById('rp-defect').value.trim();
-  const eta=document.getElementById('rp-eta').value||null;
-  if(!uid){toast('Pick a tool and unit');return;}
-  if(!defect){toast('Describe the defect');return;}
+  if(!tid||!uid){toast('Pick a tool and unit');return;}
+  if(!defect){toast('Describe the defect for this tool');return;}
+  const t=repairTools.find(x=>x.itemId===tid), u=t.units.find(x=>x.id===uid);
+  repairCart.push({unitId:uid,itemId:tid,code:u.code,name:t.name,defect:defect});
+  t.units=t.units.filter(x=>x.id!==uid);
+  document.getElementById('rp-defect').value='';
+  renderRepairTool(); renderRepairCart();
+}
+function removeFromRepair(uid){
+  const i=repairCart.findIndex(c=>c.unitId===uid); if(i<0)return;
+  const c=repairCart[i]; repairCart.splice(i,1);
+  const t=repairTools.find(x=>x.itemId===c.itemId); if(t)t.units.push({id:c.unitId,code:c.code});
+  renderRepairTool(); renderRepairCart();
+}
+function renderRepairCart(){
+  const el=document.getElementById('rp-cart'), btn=document.getElementById('rp-submit');
+  if(!repairCart.length){el.innerHTML='<div class="empty">No tools added yet.</div>';btn.textContent='Send to repair (0)';return;}
+  el.innerHTML=repairCart.map(c=>`<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div class="tool-name">${c.name} <span class="chip repair">${c.code}</span></div><div class="tool-meta">${c.defect}</div></div><button class="back" style="color:var(--r)" onclick="removeFromRepair('${c.unitId}')">Remove</button></div>`).join('');
+  btn.textContent='Send to repair ('+repairCart.length+')';
+}
+async function reviewRepair(){
+  const by=document.getElementById('rp-by').value.trim();
+  const eta=document.getElementById('rp-eta').value||'';
+  if(!by){toast('Enter who is transmitting it');return;}
+  if(!repairCart.length){toast('Add at least one tool');return;}
+  if(!reservedRepairNo){
+    let rn='';
+    try{const{data,error}=await sb.rpc('next_repair_no'); if(!error&&data)rn=data;}catch(e){}
+    if(!rn){const n=new Date(),z=x=>String(x).padStart(2,'0');rn='RP-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+    reservedRepairNo=rn;
+  }
+  pendingRepair={by,eta,items:repairCart.slice(),repairNo:reservedRepairNo};
+  document.getElementById('rslip-body').innerHTML=
+    `<div style="text-align:center;border-bottom:1.5px dashed var(--tx3);padding-bottom:12px;margin-bottom:12px">`
+    +`<div style="font-size:15px;font-weight:800">RSR Tools — Repair Transmittal</div>`
+    +`<div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--p);margin-top:2px">${reservedRepairNo}</div>`
+    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(todayYmd2())} · ${siteName()}</div>`
+    +`</div>`
+    +`<div style="font-size:13px;line-height:1.9;color:var(--tx2);margin-bottom:12px">`
+    +`<div style="display:flex;justify-content:space-between"><span>Transmitted by</span><b style="color:var(--tx)">${by}</b></div>`
+    +`<div style="display:flex;justify-content:space-between"><span>Expected ready</span><b style="color:var(--tx)">${eta?fmtNice(eta):'—'}</b></div>`
+    +`</div>`
+    +`<div style="border-top:1.5px dashed var(--tx3);padding-top:10px">`
+    +`<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:10px"><span>Item · defect</span><span>Unit</span></div>`
+    +repairCart.map(c=>`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:11px;gap:10px">
+        <div><div style="font-size:15px;font-weight:700">${c.name}</div><div style="font-size:12px;color:var(--tx2)">${c.defect}</div></div>
+        <div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--tx2);white-space:nowrap">${c.code}</div>
+      </div>`).join('')
+    +`<div style="display:flex;justify-content:space-between;align-items:baseline;border-top:1.5px dashed var(--tx3);padding-top:11px;margin-top:2px">
+        <div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx2)">Total units</div>
+        <div style="font-size:22px;font-weight:900;color:var(--p)">${repairCart.length}</div>
+      </div></div>`;
+  document.getElementById('rslip-modal').style.display='flex';
+}
+function cancelRslip(){document.getElementById('rslip-modal').style.display='none';}
+async function confirmRepair(){
+  if(!pendingRepair)return;
+  const now=new Date().toISOString();
+  const logs=pendingRepair.items.map(c=>({transmittal_no:pendingRepair.repairNo,unit_id:c.unitId,item_id:c.itemId,site_id:curSite,defect:c.defect,repair_eta:pendingRepair.eta||null,transmitted_by:pendingRepair.by||null,status:'in_repair',sent_at:now}));
   try{
-    const{error}=await sb.from('item_units').update({status:'repair',defect:defect,repair_eta:eta}).eq('id',uid);
-    if(error)throw error;
-    toast('Tagged for repair');
-    document.getElementById('rp-defect').value='';document.getElementById('rp-eta').value='';
-    goRepair();
+    const{error}=await sb.from('repair_log').insert(logs); if(error)throw error;
+    const ids=pendingRepair.items.map(c=>c.unitId);
+    const{error:e2}=await sb.from('item_units').update({status:'repair',repair_eta:pendingRepair.eta||null}).in('id',ids); if(e2)throw e2;
+    const count=pendingRepair.items.length, rn=pendingRepair.repairNo;
+    repairCart=[]; pendingRepair=null; reservedRepairNo='';
+    document.getElementById('rslip-modal').style.display='none';
+    showSlip(rn, count+' tool(s) sent to repair');
   }catch(e){toast('Failed: '+e.message);}
 }
-async function markRepaired(uid){
-  try{const{error}=await sb.from('item_units').update({status:'available',defect:null,repair_eta:null}).eq('id',uid);if(error)throw error;toast('Restored to available');goRepair();}
-  catch(e){toast('Failed: '+e.message);}
+let repairBackUid='', repairBackItemId='';
+function askRepaired(uid,itemId,label){
+  repairBackUid=uid; repairBackItemId=itemId;
+  document.getElementById('rback-name').textContent=label;
+  document.getElementById('rback-by').value='';
+  document.getElementById('rback-site').innerHTML=sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  document.getElementById('rback-site').value=curSite;
+  onRbackSite();
+  document.getElementById('rback-modal').style.display='flex';
+}
+function onRbackSite(){
+  const site=document.getElementById('rback-site').value;
+  document.getElementById('rback-bylbl').textContent = site===curSite ? 'Received back by' : 'Sent by (ships to other site)';
+}
+async function confirmRepaired(){
+  const by=document.getElementById('rback-by').value.trim();
+  const dest=document.getElementById('rback-site').value;
+  if(!by){toast('Enter a name');return;}
+  const uid=repairBackUid, itemId=repairBackItemId;
+  try{
+    await sb.from('repair_log').update({status:'repaired',received_back_by:by,repaired_at:new Date().toISOString()}).eq('unit_id',uid).eq('status','in_repair');
+    if(dest===curSite){
+      const{error}=await sb.from('item_units').update({status:'available',defect:null,repair_eta:null}).eq('id',uid); if(error)throw error;
+      document.getElementById('rback-modal').style.display='none';
+      toast('Repaired · received back by '+by); goRepair();
+    } else {
+      let tn='';
+      try{const{data,error}=await sb.rpc('next_transfer_no'); if(!error&&data)tn=data;}catch(e){}
+      if(!tn){const n=new Date(),z=x=>String(x).padStart(2,'0');tn='TR-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+      const{error}=await sb.from('tool_transfers').insert([{unit_id:uid,item_id:itemId,from_site:curSite,to_site:dest,status:'in_transit',sent_by:by,transfer_no:tn,note:'Repaired tool'}]); if(error)throw error;
+      const{error:e2}=await sb.from('item_units').update({status:'transit',defect:null,repair_eta:null}).eq('id',uid); if(e2)throw e2;
+      document.getElementById('rback-modal').style.display='none';
+      const dn=(sites.find(s=>s.id===dest)||{}).name||'site';
+      showSlip(tn, 'Repaired tool shipped to '+dn+' · awaiting receive');
+      goRepair();
+    }
+  }catch(e){toast('Failed: '+e.message);}
 }
 
 /* ══ ALL RECORDS ══ */
