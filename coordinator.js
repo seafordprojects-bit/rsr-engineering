@@ -45,6 +45,19 @@ async function deleteVoyage(id) {
   const { error } = await supabase.from('voyages').delete().eq('id', id);
   if (error) throw error;
 }
+async function getExpenses() {
+  const { data, error } = await supabase.from('expenses').select('*').order('created_at', { ascending: false }).limit(1000);
+  if (error) throw error;
+  return data || [];
+}
+async function addExpense(row) {
+  const { error } = await supabase.from('expenses').insert(row);
+  if (error) throw error;
+}
+async function deleteExpense(id) {
+  const { error } = await supabase.from('expenses').delete().eq('id', id);
+  if (error) throw error;
+}
 function todayPH() { return new Date().toLocaleDateString('en-PH', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
 async function fileLeave(row) {
   const { error } = await supabase.from('leave_requests').insert(row);
@@ -200,7 +213,7 @@ function Personnel({ employees, onReload, toast }) {
 }
 
 // ---------- Vessel schedule ----------
-const STATUS = [['drydock','Drydock'], ['afloat','Afloat repair'], ['not_active','Not active']];
+const STATUS = [['drydock','Drydock'], ['afloat','Afloat repair'], ['not_active','Not active'], ['finished','Project finished']];
 function Vessels({ voyages, sites, onReload, toast }) {
   const [vessel, setVessel] = useState('');
   const [vcode, setVcode] = useState('');
@@ -460,9 +473,89 @@ function FileDuty({ employees, toast }) {
     </div>`;
 }
 
+function Expenses({ voyages, toast }) {
+  const [voyage, setVoyage] = useState('');
+  const [cat, setCat] = useState('Materials');
+  const [amount, setAmount] = useState('');
+  const [date, setDate] = useState('');
+  const [paidBy, setPaidBy] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [rows, setRows] = useState([]);
+  const reload = () => getExpenses().then(setRows).catch(() => {});
+  useEffect(() => { reload(); }, []);
+
+  const peso = (n) => '₱' + Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const submit = async () => {
+    if (!voyage) { toast('Select a vessel', true); return; }
+    if (amount === '' || isNaN(Number(amount))) { toast('Enter an amount', true); return; }
+    const v = voyages.find(x => x.id === voyage);
+    setSaving(true);
+    try {
+      await addExpense({ voyage_id: voyage, vessel_name: v ? v.vessel_name : null, category: cat,
+        amount: Number(amount), spent_on: date || null, paid_by: paidBy.trim() || null, note: note.trim() || null });
+      toast('Expense added');
+      setAmount(''); setNote(''); setPaidBy(''); setDate('');
+      reload();
+    } catch (e) { toast('Error: ' + e.message, true); }
+    finally { setSaving(false); }
+  };
+  const remove = async (id) => {
+    if (!confirm('Delete this expense?')) return;
+    try { await deleteExpense(id); reload(); toast('Deleted'); } catch (e) { toast('Error: ' + e.message, true); }
+  };
+
+  // group by vessel
+  const groups = {};
+  rows.forEach(r => { const k = r.voyage_id || 'none'; if (!groups[k]) groups[k] = { name: r.vessel_name || 'Unassigned', items: [], total: 0 }; groups[k].items.push(r); groups[k].total += Number(r.amount) || 0; });
+  const grand = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
+
+  return html`
+    <div class="card">
+      <label>Add a vessel expense</label>
+      <${Field} label="Vessel / project">
+        <select value=${voyage} onChange=${e => setVoyage(e.target.value)}>
+          <option value="">— Select vessel —</option>
+          ${voyages.map(v => html`<option value=${v.id}>${v.vessel_name}${v.vessel_code ? ' (' + v.vessel_code + ')' : ''}</option>`)}
+        </select>
+      <//>
+      <div class="two">
+        <${Field} label="Category">
+          <select value=${cat} onChange=${e => setCat(e.target.value)}>
+            <option>Materials</option><option>Labor</option><option>Equipment</option>
+            <option>Subcontractor</option><option>Transport</option><option>Consumables</option><option>Other</option>
+          </select>
+        <//>
+        <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${amount} onInput=${e => setAmount(e.target.value)} placeholder="0.00" /><//>
+      </div>
+      <div class="two">
+        <${Field} label="Date"><input type="date" value=${date} onInput=${e => setDate(e.target.value)} /><//>
+        <${Field} label="Paid by"><input value=${paidBy} onInput=${e => setPaidBy(e.target.value)} placeholder="Name" /><//>
+      </div>
+      <${Field} label="Note (optional)"><input value=${note} onInput=${e => setNote(e.target.value)} placeholder="What was it for?" /><//>
+      <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Saving…' : 'Add expense'}</button>
+    </div>
+
+    <div class="card">
+      <label>Costs by vessel — total ${peso(grand)}</label>
+      ${Object.keys(groups).length ? Object.values(groups).sort((a, b) => b.total - a.total).map(g => html`
+        <div style="margin-bottom:14px">
+          <div class="row" style="border-bottom:1px solid var(--line)"><div class="name">${g.name}</div><div class="name">${peso(g.total)}</div></div>
+          ${g.items.map(r => html`
+            <div class="row" key=${r.id} style="align-items:flex-start">
+              <div><div class="sub"><b>${r.category || '—'}</b> · ${peso(r.amount)}</div>
+                <div class="sub" style="color:var(--ink-dim)">${r.spent_on || '—'}${r.paid_by ? ' · ' + r.paid_by : ''}${r.note ? ' · ' + r.note : ''}</div></div>
+              <button class="ret" onClick=${() => remove(r.id)}>✕</button>
+            </div>`)}
+        </div>`) : html`<div class="empty">No expenses logged yet.</div>`}
+    </div>`;
+}
+
 function App() {
   const [authed, setAuthed] = useState(sessionStorage.getItem('rsr_coord') === '1');
-  const [tab, setTab] = useState('personnel');
+  const [area, setArea] = useState(null);          // null | 'vessels' | 'personnel' | 'expenses'
+  const [pdTab, setPdTab] = useState('personnel');  // personnel | leave | duty
   const [employees, setEmployees] = useState([]);
   const [voyages, setVoyages] = useState([]);
   const [sites, setSites] = useState([]);
@@ -485,27 +578,54 @@ function App() {
       ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
     </div>`;
 
-  return html`
+  const Header = (title) => html`
     <header class="app">
       <div class="wrap"><div class="brand" style="display:flex;align-items:center;justify-content:space-between">
-        <span><b>RSR</b><span class="tag">COORDINATOR</span></span>
-        <a href="../" onClick=${() => sessionStorage.removeItem('rsr_coord')} style="color:var(--ink-dim);text-decoration:none;font-size:13px;font-weight:700">⌂ Home</a>
+        <span><b>RSR</b><span class="tag">${title}</span></span>
+        <span style="display:flex;gap:14px;align-items:center">
+          ${area && html`<button onClick=${() => setArea(null)} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Menu</button>`}
+          <a href="../" onClick=${() => sessionStorage.removeItem('rsr_coord')} style="color:var(--ink-dim);text-decoration:none;font-size:13px;font-weight:700">⌂ Home</a>
+        </span>
       </div></div>
-    </header>
+    </header>`;
+
+  // ---- landing: 3 tiles ----
+  if (area === null) return html`
+    ${Header('COORDINATOR')}
     <div class="wrap">
-      ${fatal && html`<div class="card" style="border-color:var(--warn)"><div class="note" style="color:#ffc7c0">Couldn't reach Supabase: ${fatal}. Check supabase.js key and that you ran the SQL.</div></div>`}
-
-      <div class="tabs">
-        <button class=${tab==='personnel'?'on':''} onClick=${() => setTab('personnel')}>Personnel</button>
-        <button class=${tab==='vessels'?'on':''}  onClick=${() => setTab('vessels')}>Vessels</button>
-        <button class=${tab==='leave'?'on':''}    onClick=${() => setTab('leave')}>Leave</button>
-        <button class=${tab==='duty'?'on':''}     onClick=${() => setTab('duty')}>Duty</button>
+      ${fatal && html`<div class="card" style="border-color:var(--warn)"><div class="note" style="color:#ffc7c0">Couldn't reach Supabase: ${fatal}.</div></div>`}
+      <label style="margin:4px 2px 12px">Choose an area</label>
+      <div class="card" style="cursor:pointer" onClick=${() => setArea('vessels')}>
+        <div style="font-size:26px">🚢</div><div class="name" style="font-size:18px;margin-top:6px">Vessel Schedule</div>
+        <div class="sub">Dockings, status &amp; dates</div>
       </div>
+      <div class="card" style="cursor:pointer" onClick=${() => { setArea('personnel'); setPdTab('personnel'); }}>
+        <div style="font-size:26px">👷</div><div class="name" style="font-size:18px;margin-top:6px">Personnel Data</div>
+        <div class="sub">Employees, leave &amp; straight duty</div>
+      </div>
+      <div class="card" style="cursor:pointer" onClick=${() => setArea('expenses')}>
+        <div style="font-size:26px">💰</div><div class="name" style="font-size:18px;margin-top:6px">Expenses</div>
+        <div class="sub">Per-vessel job costs</div>
+      </div>
+    </div>
+    ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}`;
 
-      ${tab==='personnel' && html`<${Personnel} employees=${employees} onReload=${loadEmployees} toast=${flash} />`}
-      ${tab==='vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
-      ${tab==='leave' && html`<${FileLeave} employees=${employees} toast=${flash} />`}
-      ${tab==='duty' && html`<${FileDuty} employees=${employees} toast=${flash} />`}
+  // ---- areas ----
+  return html`
+    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : 'PERSONNEL DATA')}
+    <div class="wrap">
+      ${area === 'vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
+      ${area === 'expenses' && html`<${Expenses} voyages=${voyages} toast=${flash} />`}
+      ${area === 'personnel' && html`
+        <div class="tabs">
+          <button class=${pdTab==='personnel'?'on':''} onClick=${() => setPdTab('personnel')}>Personnel</button>
+          <button class=${pdTab==='leave'?'on':''}     onClick=${() => setPdTab('leave')}>Leave</button>
+          <button class=${pdTab==='duty'?'on':''}      onClick=${() => setPdTab('duty')}>Duty</button>
+        </div>
+        ${pdTab==='personnel' && html`<${Personnel} employees=${employees} onReload=${loadEmployees} toast=${flash} />`}
+        ${pdTab==='leave' && html`<${FileLeave} employees=${employees} toast=${flash} />`}
+        ${pdTab==='duty' && html`<${FileDuty} employees=${employees} toast=${flash} />`}
+      `}
     </div>
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
   `;
