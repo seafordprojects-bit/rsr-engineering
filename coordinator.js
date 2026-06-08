@@ -290,24 +290,24 @@ function Vessels({ voyages, sites, onReload, toast }) {
         <//>
       </div>
 
-      ${isDry && html`
-        <div class="two">
-          <${Field} label="Docking date"><input type="date" value=${docking} onInput=${e => setDocking(e.target.value)} /><//>
-          <${Field} label="Undocking date"><input type="date" value=${undocking} onInput=${e => setUndocking(e.target.value)} /><//>
-        </div>
-        <${Field} label="Departure date"><input type="date" value=${departure} onInput=${e => setDeparture(e.target.value)} /><//>`}
+      <label style="margin-top:6px">Drydock dates ${isDry ? '' : html`<span style="font-weight:400;color:var(--ink-dim)">(if applicable)</span>`}</label>
+      <div class="two">
+        <${Field} label="Docking date"><input type="date" value=${docking} onInput=${e => setDocking(e.target.value)} /><//>
+        <${Field} label="Undocking date"><input type="date" value=${undocking} onInput=${e => setUndocking(e.target.value)} /><//>
+      </div>
+      <${Field} label="Departure date"><input type="date" value=${departure} onInput=${e => setDeparture(e.target.value)} /><//>
 
-      ${isAfloat && html`
-        <div class="two">
-          <${Field} label="Afloat start"><input type="date" value=${afloatStart} onInput=${e => setAfloatStart(e.target.value)} /><//>
-          <${Field} label="Afloat end"><input type="date" value=${afloatDone} onInput=${e => setAfloatDone(e.target.value)} /><//>
-        </div>`}
+      <label style="margin-top:6px">Afloat repair dates <span style="font-weight:400;color:var(--ink-dim)">(if applicable)</span></label>
+      <div class="two">
+        <${Field} label="Afloat start"><input type="date" value=${afloatStart} onInput=${e => setAfloatStart(e.target.value)} /><//>
+        <${Field} label="Afloat end"><input type="date" value=${afloatDone} onInput=${e => setAfloatDone(e.target.value)} /><//>
+      </div>
 
-      ${isEmergency && html`
-        <div class="two">
-          <${Field} label="Emergency repair start"><input type="date" value=${emergStart} onInput=${e => setEmergStart(e.target.value)} /><//>
-          <${Field} label="Emergency repair end"><input type="date" value=${emergEnd} onInput=${e => setEmergEnd(e.target.value)} /><//>
-        </div>`}
+      <label style="margin-top:6px">Emergency repair dates <span style="font-weight:400;color:var(--ink-dim)">(if applicable)</span></label>
+      <div class="two">
+        <${Field} label="Emergency repair start"><input type="date" value=${emergStart} onInput=${e => setEmergStart(e.target.value)} /><//>
+        <${Field} label="Emergency repair end"><input type="date" value=${emergEnd} onInput=${e => setEmergEnd(e.target.value)} /><//>
+      </div>
 
       <${Field} label="Notes">
         <textarea rows="2" value=${notes} onInput=${e => setNotes(e.target.value)}></textarea>
