@@ -53,6 +53,13 @@ async function getRepairUnits() {
   if (error) throw error;
   return data;
 }
+async function getRepairLog() {
+  const { data, error } = await supabase.from('repair_log')
+    .select('id, transmittal_no, defect, transmitted_by, status, received_back_by, sent_at, repaired_at, repair_eta, items(name), item_units(unit_code)')
+    .order('sent_at', { ascending: false }).limit(500);
+  if (error) throw error;
+  return data || [];
+}
 async function getInventory() {
   const { data: units, error: e1 } = await supabase.from('item_units')
     .select('item_id, site_id, status, items(name), sites(name)').eq('active', true).limit(5000);
@@ -217,6 +224,37 @@ function MatUsage({ toast, onBack }) {
         </div>
         <button class="btn" disabled=${saving} onClick=${save} style="margin-top:12px">${saving ? 'Saving…' : 'Save usage life'}</button>
       </div>
+    </div>`;
+}
+
+function RepairHistory() {
+  const [rows, setRows] = useState(null);
+  const [filter, setFilter] = useState('all');
+  useEffect(() => { getRepairLog().then(setRows).catch(() => setRows([])); }, []);
+  const dt = (s) => s ? new Date(s).toLocaleDateString() : '—';
+  const list = (rows || []).filter(r => filter === 'all' ? true : r.status === filter);
+  return html`
+    <div class="card">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+        <label style="margin:0">Repair history${rows ? ` (${list.length})` : ''}</label>
+        <select value=${filter} onChange=${e => setFilter(e.target.value)} style="width:auto">
+          <option value="all">All</option>
+          <option value="in_repair">In repair</option>
+          <option value="repaired">Repaired</option>
+        </select>
+      </div>
+      ${rows == null ? html`<div class="empty">Loading…</div>`
+        : list.length ? list.map(r => html`
+          <div class="row" key=${r.id} style="align-items:flex-start">
+            <div>
+              <div class="name">${r.items ? r.items.name : '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.item_units ? r.item_units.unit_code : ''}</span></div>
+              <div class="unit">${r.transmittal_no ? r.transmittal_no + ' · ' : ''}${r.defect || '—'}</div>
+              <div class="unit">Sent by ${r.transmitted_by || '—'} · ${dt(r.sent_at)}${r.repair_eta ? ' · ETA ' + r.repair_eta : ''}</div>
+              ${r.status === 'repaired' ? html`<div class="unit">Repaired ${dt(r.repaired_at)}${r.received_back_by ? ' · recv by ' + r.received_back_by : ''}</div>` : ''}
+            </div>
+            <span class="badge" style=${r.status === 'repaired' ? 'background:#12B89E;color:#000' : ''}>${r.status === 'repaired' ? 'REPAIRED' : 'IN REPAIR'}</span>
+          </div>`)
+        : html`<div class="empty">No repair history yet.</div>`}
     </div>`;
 }
 
@@ -564,6 +602,7 @@ function App() {
               </div>`)
             : html`<div class="empty">No tools in repair.</div>`}
         </div>
+        <${RepairHistory} />
         <p class="note" style="text-align:center">View only.</p>
       </div>
       ${toast && html`<div class="toast">${toast}</div>`}`;
