@@ -229,32 +229,35 @@ function MatUsage({ toast, onBack }) {
 
 function RepairHistory() {
   const [rows, setRows] = useState(null);
-  const [filter, setFilter] = useState('all');
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
   useEffect(() => { getRepairLog().then(setRows).catch(() => setRows([])); }, []);
   const dt = (s) => s ? new Date(s).toLocaleDateString() : '—';
-  const list = (rows || []).filter(r => filter === 'all' ? true : r.status === filter);
+  const repaired = (rows || []).filter(r => r.status === 'repaired');
+  const ql = q.trim().toLowerCase();
+  const list = ql ? repaired.filter(r => (((r.items && r.items.name) || '').toLowerCase().includes(ql)) || (((r.item_units && r.item_units.unit_code) || '').toLowerCase().includes(ql))) : repaired;
   return html`
     <div class="card">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
-        <label style="margin:0">Repair history${rows ? ` (${list.length})` : ''}</label>
-        <select value=${filter} onChange=${e => setFilter(e.target.value)} style="width:auto">
-          <option value="all">All</option>
-          <option value="in_repair">In repair</option>
-          <option value="repaired">Repaired</option>
-        </select>
+      <div onClick=${() => setOpen(o => !o)} style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+        <label style="margin:0;cursor:pointer">Repair history${rows ? ` (${repaired.length})` : ''}</label>
+        <span style="color:var(--ink-dim);font-weight:700;font-size:13px">${open ? '▲ Hide' : '▼ View'}</span>
       </div>
-      ${rows == null ? html`<div class="empty">Loading…</div>`
-        : list.length ? list.map(r => html`
-          <div class="row" key=${r.id} style="align-items:flex-start">
-            <div>
-              <div class="name">${r.items ? r.items.name : '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.item_units ? r.item_units.unit_code : ''}</span></div>
-              <div class="unit">${r.transmittal_no ? r.transmittal_no + ' · ' : ''}${r.defect || '—'}</div>
-              <div class="unit">Sent by ${r.transmitted_by || '—'} · ${dt(r.sent_at)}${r.repair_eta ? ' · ETA ' + r.repair_eta : ''}</div>
-              ${r.status === 'repaired' ? html`<div class="unit">Repaired ${dt(r.repaired_at)}${r.received_back_by ? ' · recv by ' + r.received_back_by : ''}</div>` : ''}
-            </div>
-            <span class="badge" style=${r.status === 'repaired' ? 'background:#12B89E;color:#000' : ''}>${r.status === 'repaired' ? 'REPAIRED' : 'IN REPAIR'}</span>
-          </div>`)
-        : html`<div class="empty">No repair history yet.</div>`}
+      ${open && html`
+        <input placeholder="Search tool name or code (e.g. GR001)" value=${q} onInput=${e => setQ(e.target.value)} style="width:100%;margin-top:12px" />
+        ${ql ? html`<div class="unit" style="margin:10px 0 2px;font-weight:700;color:var(--ink)">${list.length} repair${list.length === 1 ? '' : 's'} found${list.length ? ` for "${q}"` : ''}</div>` : ''}
+        ${rows == null ? html`<div class="empty">Loading…</div>`
+          : list.length ? list.map(r => html`
+            <div class="row" key=${r.id} style="align-items:flex-start">
+              <div>
+                <div class="name">${r.items ? r.items.name : '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.item_units ? r.item_units.unit_code : ''}</span></div>
+                <div class="unit">${r.transmittal_no ? r.transmittal_no + ' · ' : ''}${r.defect || '—'}</div>
+                <div class="unit">Sent by ${r.transmitted_by || '—'} · ${dt(r.sent_at)}</div>
+                <div class="unit">Repaired ${dt(r.repaired_at)}${r.received_back_by ? ' · recv by ' + r.received_back_by : ''}</div>
+              </div>
+              <span class="badge" style="background:#12B89E;color:#000">REPAIRED</span>
+            </div>`)
+          : html`<div class="empty">${ql ? 'No repairs found for that tool.' : 'No repair history yet.'}</div>`}
+      `}
     </div>`;
 }
 
