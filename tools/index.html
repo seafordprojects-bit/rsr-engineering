@@ -175,7 +175,10 @@
   <div class="wrap">
     <div class="card">
       <label class="lbl">Borrower</label>
-      <select id="bw-emp" class="search"></select>
+      <div style="position:relative;margin-bottom:10px">
+        <input id="bw-emp" class="search" style="margin-bottom:0" placeholder="Type or tap to choose a borrower…" autocomplete="off" oninput="onEmpInput()" onfocus="empSuggest()" onblur="hideEmpSug()"/>
+        <div id="bw-emp-sug" class="vsug" style="display:none"></div>
+      </div>
       <label class="lbl">Date</label>
       <input id="bw-date" class="search" type="date"/>
       <label class="lbl">Project / Vessel</label>
@@ -433,12 +436,33 @@ function renderInventory(){
 }
 
 /* ══ EMPLOYEES ══ */
-let employees=[], availTools=[], cart=[], retRows=[], vessels=[];
+let employees=[], availTools=[], cart=[], retRows=[], vessels=[], selEmpId='';
 function todayYmd2(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
 async function loadEmployees(){
   const{data}=await sb.from('employees').select('id,code,name,pin').order('name');
   employees=data||[];
 }
+function onEmpInput(){ selEmpId=''; empSuggest(); }
+function empSuggest(){
+  const q=(document.getElementById('bw-emp').value||'').toLowerCase().replace(/\s+/g,'');
+  const box=document.getElementById('bw-emp-sug');
+  let m=employees;
+  if(q)m=employees.filter(e=>{
+    const n=(e.name||'').toLowerCase().replace(/\s+/g,'');
+    const c=(e.code||'').toLowerCase().replace(/\s+/g,'');
+    return n.includes(q)||c.includes(q);
+  });
+  m=m.slice(0,12);
+  if(!m.length){box.style.display='none';box.innerHTML='';return;}
+  box.innerHTML=m.map(e=>`<div onmousedown="pickEmp(this)" data-id="${e.id}" data-name="${(e.name||'').replace(/"/g,'&quot;')}">${e.name}${e.code?`<span class="vc">${e.code}</span>`:''}</div>`).join('');
+  box.style.display='block';
+}
+function pickEmp(el){
+  document.getElementById('bw-emp').value=el.getAttribute('data-name')||'';
+  selEmpId=el.getAttribute('data-id')||'';
+  const b=document.getElementById('bw-emp-sug');b.style.display='none';b.innerHTML='';
+}
+function hideEmpSug(){setTimeout(()=>{const b=document.getElementById('bw-emp-sug');if(b)b.style.display='none';},180);}
 async function loadVessels(){
   try{
     const{data}=await sb.from('voyages').select('*').order('vessel_name');
@@ -478,7 +502,8 @@ async function goBorrow(){
   showScreen('s-borrow');
   document.getElementById('bw-site-sub').textContent=siteName();
   cart=[]; renderCart();
-  document.getElementById('bw-emp').innerHTML='<option value="">— Select borrower —</option>'+employees.map(e=>`<option value="${e.id}">${e.name}${e.code?' ('+e.code+')':''}</option>`).join('');
+  document.getElementById('bw-emp').value=''; selEmpId='';
+  const es=document.getElementById('bw-emp-sug'); if(es){es.style.display='none';es.innerHTML='';}
   const dEl=document.getElementById('bw-date'); dEl.min=todayYmd2(); dEl.value=todayYmd2();
   await loadVessels();
   document.getElementById('bw-vessel').value='';
@@ -535,12 +560,17 @@ function renderCart(){
   btn.textContent='Issue ('+cart.length+')';
 }
 async function submitBorrow(){
-  const empId=document.getElementById('bw-emp').value;
+  let empId=selEmpId;
+  if(!empId){
+    const typed=(document.getElementById('bw-emp').value||'').trim().toLowerCase();
+    const matches=employees.filter(e=>(e.name||'').trim().toLowerCase()===typed);
+    if(matches.length===1)empId=matches[0].id;
+  }
   const bdate=document.getElementById('bw-date').value;
   const vessel=document.getElementById('bw-vessel').value.trim();
   const by=document.getElementById('bw-by').value.trim();
   const pin=document.getElementById('bw-pin').value.trim();
-  if(!empId){toast('Select a borrower');return;}
+  if(!empId){toast('Select a borrower from the list');return;}
   if(!bdate){toast('Pick a date');return;}
   if(bdate<todayYmd2()){toast('No back-dating allowed');return;}
   if(!cart.length){toast('Add at least one tool');return;}
