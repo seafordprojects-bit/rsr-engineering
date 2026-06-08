@@ -437,8 +437,17 @@ async function loadEmployees(){
   employees=data||[];
 }
 async function loadVessels(){
-  try{const{data}=await sb.from('voyages').select('vessel_name,vessel_code,status').in('status',['drydock','afloat','emergency']).order('vessel_name');vessels=(data||[]).filter(v=>v.vessel_name);}
-  catch(e){vessels=[];}
+  try{
+    const{data}=await sb.from('voyages').select('*').order('vessel_name');
+    vessels=(data||[]).filter(v=>{
+      if(!v.vessel_name)return false;
+      if(v.status==='finished'||v.status==='not_active')return false;
+      const dry=(v.docking_date||v.status==='drydock')&&!v.undocking_date;  // in drydock, not yet undocked
+      const afl=v.afloat_start&&!v.afloat_done;                              // afloat repair started, not done
+      const eme=v.emergency_start&&!v.emergency_end;                         // emergency repair started, not done
+      return dry||afl||eme;
+    });
+  }catch(e){vessels=[];}
 }
 
 /* ══ BORROW ══ */
