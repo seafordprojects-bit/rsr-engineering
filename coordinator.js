@@ -213,7 +213,7 @@ function Personnel({ employees, onReload, toast }) {
 }
 
 // ---------- Vessel schedule ----------
-const STATUS = [['drydock','Drydock'], ['afloat','Afloat repair'], ['not_active','Not active'], ['finished','Project finished']];
+const STATUS = [['drydock','Drydock'], ['afloat','Afloat repair'], ['emergency','Emergency repair'], ['not_active','Not active'], ['finished','Project finished']];
 function Vessels({ voyages, sites, onReload, toast }) {
   const [vessel, setVessel] = useState('');
   const [vcode, setVcode] = useState('');
@@ -224,12 +224,14 @@ function Vessels({ voyages, sites, onReload, toast }) {
   const [departure, setDeparture] = useState('');
   const [afloatStart, setAfloatStart] = useState('');
   const [afloatDone, setAfloatDone] = useState('');
+  const [emergStart, setEmergStart] = useState('');
+  const [emergEnd, setEmergEnd] = useState('');
   const [notes, setNotes] = useState('');
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
 
   const reset = () => { setVessel(''); setVcode(''); setSiteId(''); setStatus('drydock'); setDocking(''); setUndocking('');
-    setDeparture(''); setAfloatStart(''); setAfloatDone(''); setNotes(''); setEditId(null); };
+    setDeparture(''); setAfloatStart(''); setAfloatDone(''); setEmergStart(''); setEmergEnd(''); setNotes(''); setEditId(null); };
 
   const submit = async () => {
     if (!vessel.trim()) { toast('Enter a vessel name', true); return; }
@@ -237,7 +239,8 @@ function Vessels({ voyages, sites, onReload, toast }) {
     const row = {
       vessel_name: vessel.trim(), vessel_code: vcode.trim() || null, site_id: siteId || null, status,
       docking_date: docking || null, undocking_date: undocking || null, departure_date: departure || null,
-      afloat_start: afloatStart || null, afloat_done: afloatDone || null, notes: notes || null,
+      afloat_start: afloatStart || null, afloat_done: afloatDone || null,
+      emergency_start: emergStart || null, emergency_end: emergEnd || null, notes: notes || null,
     };
     try {
       if (editId) { await updateVoyage(editId, row); toast('Schedule updated'); }
@@ -250,7 +253,8 @@ function Vessels({ voyages, sites, onReload, toast }) {
   const edit = (v) => {
     setEditId(v.id); setVessel(v.vessel_name); setVcode(v.vessel_code || ''); setSiteId(v.site_id || ''); setStatus(v.status || 'drydock');
     setDocking(v.docking_date || ''); setUndocking(v.undocking_date || ''); setDeparture(v.departure_date || '');
-    setAfloatStart(v.afloat_start || ''); setAfloatDone(v.afloat_done || ''); setNotes(v.notes || '');
+    setAfloatStart(v.afloat_start || ''); setAfloatDone(v.afloat_done || '');
+    setEmergStart(v.emergency_start || ''); setEmergEnd(v.emergency_end || ''); setNotes(v.notes || '');
   };
   const remove = async (v) => {
     if (!confirm(`Delete schedule for "${v.vessel_name}"?`)) return;
@@ -260,6 +264,7 @@ function Vessels({ voyages, sites, onReload, toast }) {
 
   const isDry = status === 'drydock';
   const isAfloat = status === 'afloat';
+  const isEmergency = status === 'emergency';
 
   return html`
     <div class="card">
@@ -294,8 +299,14 @@ function Vessels({ voyages, sites, onReload, toast }) {
 
       ${isAfloat && html`
         <div class="two">
-          <${Field} label="Repair start"><input type="date" value=${afloatStart} onInput=${e => setAfloatStart(e.target.value)} /><//>
-          <${Field} label="Repair done"><input type="date" value=${afloatDone} onInput=${e => setAfloatDone(e.target.value)} /><//>
+          <${Field} label="Afloat start"><input type="date" value=${afloatStart} onInput=${e => setAfloatStart(e.target.value)} /><//>
+          <${Field} label="Afloat end"><input type="date" value=${afloatDone} onInput=${e => setAfloatDone(e.target.value)} /><//>
+        </div>`}
+
+      ${isEmergency && html`
+        <div class="two">
+          <${Field} label="Emergency repair start"><input type="date" value=${emergStart} onInput=${e => setEmergStart(e.target.value)} /><//>
+          <${Field} label="Emergency repair end"><input type="date" value=${emergEnd} onInput=${e => setEmergEnd(e.target.value)} /><//>
         </div>`}
 
       <${Field} label="Notes">
