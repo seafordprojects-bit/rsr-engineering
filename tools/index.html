@@ -285,7 +285,6 @@
       <input id="su-prefix" class="search" placeholder="Code prefix (e.g. WR)"/>
       <input id="su-qty" class="search" type="number" min="1" placeholder="Quantity (e.g. 10)"/>
       <input id="su-unit" class="search" placeholder="Unit label (default: pcs)"/>
-      <input id="su-price" class="search" type="number" min="0" placeholder="Replacement price ₱ (optional)"/>
       <button class="lbtn" style="background:var(--p)" onclick="registerNew()">Register tool</button>
       <div class="tool-meta" style="margin-top:8px">Codes auto-generate: e.g. WR001, WR002… added to <b id="su-sitehint">this site</b>.</div>
     </div>
@@ -939,16 +938,15 @@ async function registerNew(){
   const prefix=document.getElementById('su-prefix').value.trim().toUpperCase();
   const qty=parseInt(document.getElementById('su-qty').value,10);
   const unit=document.getElementById('su-unit').value.trim()||'pcs';
-  const price=parseFloat(document.getElementById('su-price').value)||null;
   if(!name||!prefix||!qty||qty<1){toast('Fill name, prefix and quantity');return;}
   try{
     const max=await nextCodeFor(prefix);
-    const{data:item,error}=await sb.from('items').insert({item_code:prefix,name:name,unit:unit,track_type:'borrow',active:true,price:price}).select().single();
+    const{data:item,error}=await sb.from('items').insert({item_code:prefix,name:name,unit:unit,track_type:'borrow',active:true}).select().single();
     if(error)throw error;
     const rows=[];for(let i=1;i<=qty;i++)rows.push({item_id:item.id,site_id:curSite,unit_code:prefix+String(max+i).padStart(3,'0'),status:'available',active:true});
     const{error:e2}=await sb.from('item_units').insert(rows);if(e2)throw e2;
     toast('Registered '+qty+' × '+name);
-    ['su-name','su-prefix','su-qty','su-unit','su-price'].forEach(id=>document.getElementById(id).value='');
+    ['su-name','su-prefix','su-qty','su-unit'].forEach(id=>document.getElementById(id).value='');
     goSetup();
   }catch(e){toast('Failed: '+e.message);}
 }
