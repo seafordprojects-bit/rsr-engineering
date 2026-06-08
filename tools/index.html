@@ -311,7 +311,7 @@
     <div class="card">
       <label class="lbl">Transfer list</label>
       <div id="tf-cart"><div class="empty">No tools added yet.</div></div>
-      <button class="lbtn" style="background:var(--warn);color:#3a2a00" id="tf-submit" onclick="submitTransfer()">Transfer (0)</button>
+      <button class="lbtn" style="background:var(--warn);color:#3a2a00" id="tf-submit" onclick="reviewTransfer()">Transfer (0)</button>
     </div>
   </div>
 </div>
@@ -340,6 +340,14 @@
     <input id="bslip-pin" class="search" type="password" inputmode="numeric" placeholder="Enter passcode to confirm"/>
     <button class="lbtn" style="background:var(--ok)" onclick="confirmBorrow()">Confirm &amp; sign</button>
     <button class="lbtn" style="background:#fff;color:var(--tx2);border:1px solid var(--line);margin-top:8px" onclick="cancelBslip()">Back</button>
+  </div>
+</div>
+
+<div id="tslip-modal" style="display:none;position:fixed;inset:0;background:rgba(15,25,40,.5);z-index:80;align-items:center;justify-content:center;padding:16px">
+  <div class="card" style="max-width:390px;width:100%;margin:0;max-height:92vh;overflow:auto">
+    <div id="tslip-body" style="margin:0 0 12px"></div>
+    <button class="lbtn" style="background:var(--warn);color:#3a2a00" onclick="confirmTransfer()">Confirm transfer</button>
+    <button class="lbtn" style="background:#fff;color:var(--tx2);border:1px solid var(--line);margin-top:8px" onclick="cancelTslip()">Back</button>
   </div>
 </div>
 
@@ -823,13 +831,14 @@ async function addMore(){
 }
 
 /* ══ TRANSFER OUT ══ */
-let xferTools=[], xferCart=[];
+let xferTools=[], xferCart=[], pendingXfer=null, reservedXferNo='';
 async function goTransfer(){
   if(!curSite){toast('No site selected');return;}
   if(sites.length<2){toast('Need a second site to transfer to');return;}
   showScreen('s-transfer');
   document.getElementById('tf-site-sub').textContent=siteName();
   xferCart=[]; renderXfer();
+  pendingXfer=null; reservedXferNo='';
   document.getElementById('tf-by').value='';
   document.getElementById('tf-dest').innerHTML=sites.filter(s=>s.id!==curSite).map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
   const ures=await sb.from('item_units').select('id,unit_code,status,item_id,items(name)').eq('active',true).eq('site_id',curSite);
@@ -870,17 +879,55 @@ function renderXfer(){
   el.innerHTML=xferCart.map(c=>`<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center"><div><div class="tool-name">${c.name}</div><div class="tool-meta"><span class="chip available">${c.code}</span></div></div><button class="back" style="color:var(--r)" onclick="removeFromXfer('${c.unitId}')">Remove</button></div>`).join('');
   btn.textContent='Transfer ('+xferCart.length+')';
 }
-async function submitTransfer(){
+async function reviewTransfer(){
   const dest=document.getElementById('tf-dest').value;
   const by=document.getElementById('tf-by').value.trim();
   if(!dest){toast('Pick a destination site');return;}
+  if(!by){toast('Enter who is sending the tools');return;}
   if(!xferCart.length){toast('Add at least one tool');return;}
-  const rows=xferCart.map(c=>({unit_id:c.unitId,item_id:c.itemId,from_site:curSite,to_site:dest,status:'in_transit',sent_by:by||null}));
+  if(!reservedXferNo){
+    let tn='';
+    try{const{data,error}=await sb.rpc('next_transfer_no'); if(!error&&data)tn=data;}catch(e){}
+    if(!tn){const n=new Date(),z=x=>String(x).padStart(2,'0');tn='TR-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+    reservedXferNo=tn;
+  }
+  const destName=(sites.find(s=>s.id===dest)||{}).name||'—';
+  pendingXfer={dest,destName,by,items:xferCart.slice(),xferNo:reservedXferNo};
+  document.getElementById('tslip-body').innerHTML=
+    `<div style="text-align:center;border-bottom:1.5px dashed var(--tx3);padding-bottom:12px;margin-bottom:12px">`
+    +`<div style="font-size:15px;font-weight:800">RSR Tools — Transfer Slip</div>`
+    +`<div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--p);margin-top:2px">${reservedXferNo}</div>`
+    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(todayYmd2())}</div>`
+    +`</div>`
+    +`<div style="font-size:13px;line-height:1.9;color:var(--tx2);margin-bottom:12px">`
+    +`<div style="display:flex;justify-content:space-between"><span>From</span><b style="color:var(--tx)">${siteName()}</b></div>`
+    +`<div style="display:flex;justify-content:space-between"><span>To</span><b style="color:var(--tx)">${destName}</b></div>`
+    +`<div style="display:flex;justify-content:space-between"><span>Sent by</span><b style="color:var(--tx)">${by}</b></div>`
+    +`</div>`
+    +`<div style="border-top:1.5px dashed var(--tx3);padding-top:10px">`
+    +`<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:10px"><span>Item</span><span>Unit</span></div>`
+    +xferCart.map(c=>`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:11px;gap:10px">
+        <div style="font-size:15px;font-weight:700">${c.name}</div>
+        <div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--tx2);white-space:nowrap">${c.code}</div>
+      </div>`).join('')
+    +`<div style="display:flex;justify-content:space-between;align-items:baseline;border-top:1.5px dashed var(--tx3);padding-top:11px;margin-top:2px">
+        <div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx2)">Total units</div>
+        <div style="font-size:22px;font-weight:900;color:var(--p)">${xferCart.length}</div>
+      </div></div>`;
+  document.getElementById('tslip-modal').style.display='flex';
+}
+function cancelTslip(){document.getElementById('tslip-modal').style.display='none';}
+async function confirmTransfer(){
+  if(!pendingXfer)return;
+  const rows=pendingXfer.items.map(c=>({unit_id:c.unitId,item_id:c.itemId,from_site:curSite,to_site:pendingXfer.dest,status:'in_transit',sent_by:pendingXfer.by||null,transfer_no:pendingXfer.xferNo}));
   try{
     const{error}=await sb.from('tool_transfers').insert(rows); if(error)throw error;
-    const ids=xferCart.map(c=>c.unitId);
+    const ids=pendingXfer.items.map(c=>c.unitId);
     const{error:e2}=await sb.from('item_units').update({status:'transit'}).in('id',ids); if(e2)throw e2;
-    toast('Sent '+xferCart.length+' tool(s) to '+(sites.find(s=>s.id===dest)||{}).name); xferCart=[]; showScreen('s-home');
+    const count=pendingXfer.items.length, dn=pendingXfer.destName, tn=pendingXfer.xferNo;
+    xferCart=[]; pendingXfer=null; reservedXferNo='';
+    document.getElementById('tslip-modal').style.display='none';
+    showSlip(tn, count+' tool(s) sent to '+dn);
   }catch(e){toast('Transfer failed: '+e.message);}
 }
 
@@ -894,7 +941,7 @@ async function goReceive(){
   document.getElementById('rv-list').innerHTML='<div class="empty">Loading…</div>';
   try{
     const{data}=await sb.from('tool_transfers')
-      .select('id,unit_id,sent_by,sent_at,from_site,items(name),item_units(unit_code)')
+      .select('id,unit_id,sent_by,sent_at,from_site,transfer_no,items(name),item_units(unit_code)')
       .eq('to_site',curSite).eq('status','in_transit').order('sent_at',{ascending:false});
     recvRows=data||[];
   }catch(e){recvRows=[];toast('Load failed: '+e.message);}
@@ -908,7 +955,7 @@ function renderReceive(){
     return `<label style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)">
       <input type="checkbox" class="rv-chk" value="${r.id}" data-unit="${r.unit_id}" checked/>
       <span><div class="tool-name">${(r.items&&r.items.name)||'—'} <span class="chip transit">${(r.item_units&&r.item_units.unit_code)||''}</span></div>
-      <div class="tool-meta">From ${from}${r.sent_by?' · sent by '+r.sent_by:''}</div></span></label>`;
+      <div class="tool-meta">From ${from}${r.sent_by?' · sent by '+r.sent_by:''}${r.transfer_no?' · <b style="font-family:ui-monospace,monospace;color:var(--p)">'+r.transfer_no+'</b>':''}</div></span></label>`;
   }).join('')+'<button class="lbtn" style="background:var(--ok);margin-top:10px" onclick="receiveSelected()">Receive selected</button></div>';
 }
 async function receiveSelected(){
