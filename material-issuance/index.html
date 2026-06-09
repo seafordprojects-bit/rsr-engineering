@@ -4,7 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
 <title>RSR Material Issuance</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
 <style>
 :root{--p:#1976D2;--tx:#0f2540;--tx2:#5a6b7e;--tx3:#9aa7b5;--line:#e3e9ef;--bg:#fff;--pl:#f4f7fb;--ok:#12B89E;--r:#e0506a;--rad:14px}
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
@@ -131,13 +131,16 @@ function siteName(){const s=sites.find(x=>x.id===curSite);return s?s.name:'—';
 
 /* ── boot ── */
 (async function boot(){
-  const sres=await sb.from('sites').select('id,name').eq('active',true).order('name');
-  sites=sres.data||[];
-  curSite=localStorage.getItem('rsr_mi_site')||(sites[0]&&sites[0].id)||'';
-  const sel=document.getElementById('login-site');
-  sel.innerHTML=sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
-  if(curSite)sel.value=curSite;
-  try{const{data}=await sb.from('settings').select('value').eq('key','issuance_pin').single();if(data&&data.value)issuancePin=String(data.value);}catch(e){}
+  try{
+    const sres=await sb.from('sites').select('id,name').order('name');
+    sites=sres.data||[];
+    if(!sites.length){toast('No sites found — check database');}
+    curSite=localStorage.getItem('rsr_mi_site')||(sites[0]&&sites[0].id)||'';
+    const sel=document.getElementById('login-site');
+    sel.innerHTML=sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+    if(curSite)sel.value=curSite;
+    try{const{data}=await sb.from('settings').select('value').eq('key','issuance_pin').single();if(data&&data.value)issuancePin=String(data.value);}catch(e){}
+  }catch(e){toast('Load failed: '+e.message);}
 })();
 
 function doLogin(){
