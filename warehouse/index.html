@@ -204,7 +204,7 @@ async function renderStock(c){
 
 /* ── REQUESTS ── */
 async function renderRequests(c){
-  let rows=[];try{const{data}=await sb.from('requests').select('*').in('status',['Pending','Approved','Dispatched']).order('created_at',{ascending:false}).limit(100);rows=data||[];}catch(e){}
+  let rows=[];try{const{data}=await sb.from('requests').select('*').in('status',['Pending','Approved']).order('created_at',{ascending:false}).limit(100);rows=data||[];}catch(e){}
   window._reqs=rows;
   if(!rows.length){c.innerHTML='<div class="sc"><div class="empty">No open requests.</div></div>';return;}
   const stBadge=s=>({Pending:'bwarn',Approved:'binfo',Dispatched:'binfo',Received:'bok',Cancelled:''}[s]||'');
@@ -326,7 +326,10 @@ async function saveDispatch(){
   try{
     await sb.from('dispatches').insert([{id,dr_no:drNo,site,request_id:dpReqId,items,dispatched_by:by,date:todayYmd(),created_at:new Date().toISOString()}]);
     for(const it of items){const cur=stockMap[it.n]||0;await sb.from('warehouse_stock').upsert({item_name:it.n,qty:Math.max(0,cur-it.qty),updated_at:new Date().toISOString()},{onConflict:'item_name'});}
-    if(dpReqId)await sb.from('requests').update({status:'Dispatched',dr_no:drNo,updated_at:new Date().toISOString()}).eq('id',dpReqId);
+    if(dpReqId){
+      let u=await sb.from('requests').update({status:'Dispatched',dr_no:drNo,updated_at:new Date().toISOString()}).eq('id',dpReqId);
+      if(u.error){await sb.from('requests').update({status:'Dispatched',updated_at:new Date().toISOString()}).eq('id',dpReqId);}
+    }
     const c=document.getElementById('main-content');
     c.innerHTML=`<div class="sc" style="text-align:center"><div style="font-size:40px">✅</div><div class="sc-title" style="margin-top:8px">Dispatch created</div>
       <div class="disp-num-box" style="justify-content:center;margin-top:12px"><div class="disp-num">${drNo}</div></div>
@@ -340,13 +343,32 @@ async function saveDispatch(){
 async function renderLog(c){
   let rows=[];try{const{data}=await sb.from('dispatches').select('*').order('created_at',{ascending:false}).limit(80);rows=data||[];}catch(e){}
   if(!rows.length){c.innerHTML='<div class="sc"><div class="empty">No dispatches yet.</div></div>';return;}
-  c.innerHTML='<div class="sc"><div class="sc-title">Dispatch log</div><div class="sc-sub">'+rows.length+' dispatch(es)</div>'
-    +rows.map((r,i)=>{const items=(r.items||[]).map(it=>`${it.n} ×${it.qty}`).join(', ');
-      return `<div class="dcard"><div class="dcard-hdr" onclick="document.getElementById('db-${i}').classList.toggle('open')">
-        <div><div style="font-weight:700;font-family:monospace;color:var(--pd)">${r.dr_no||r.id}</div><div style="font-size:12px;color:var(--tx2)">${r.site||'—'} · ${fmt(r.date||r.created_at)}</div></div>
-        <span class="badge binfo">${(r.items||[]).reduce((s,x)=>s+x.qty,0)} items</span></div>
-        <div class="dcard-body" id="db-${i}"><div style="font-size:13px;color:var(--tx2)">${items}</div>
-        <div style="font-size:12px;color:var(--tx3);margin-top:6px">by ${r.dispatched_by||'—'}${r.request_id?' · req '+r.request_id:''}</div></div></div>`;}).join('')
+  c.innerHTML='<div class="sc"><div class="sc-title">Dispatch log</div><div class="sc-sub">'+rows.length+' dispatch(es) · tap a row for the full slip</div>'
+    +rows.map(r=>{
+      const its=(r.items||[]);
+      const totalUnits=its.reduce((s,x)=>s+(Number(x.qty)||0),0);
+      const itemRows=its.map(it=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${it.n}</span><span style="font-family:monospace;color:var(--tx2);white-space:nowrap">${it.qty}${it.u?' '+it.u:''}</span></div>`).join('');
+      return `<div class="dcard">
+        <div class="dcard-hdr" onclick="var b=this.parentNode.querySelector('.dcard-body');b.classList.toggle('open');this.querySelector('.chev').textContent=b.classList.contains('open')?'▾':'▸'">
+          <div style="display:flex;align-items:center;gap:9px"><span class="chev" style="color:var(--tx3);font-size:13px">▸</span>
+          <div><div style="font-weight:700;font-family:monospace;color:var(--pd)">${r.dr_no||r.id}</div><div style="font-size:12px;color:var(--tx2)">${r.site||'—'} · ${fmt(r.date||r.created_at)}</div></div></div>
+          <span class="badge binfo">${totalUnits} ${its.length===1?'item':'items'}</span>
+        </div>
+        <div class="dcard-body">
+          <div style="border:1.5px dashed var(--bd2);border-radius:12px;padding:14px;margin-top:2px">
+            <div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px">
+              <div style="font-size:14px;font-weight:800;color:var(--p)">Dispatch Receipt</div>
+              <div style="font-family:monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.dr_no||r.id}</div>
+              <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmt(r.date||r.created_at)} · to ${r.site||'—'}</div>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Dispatched by</span><span style="font-weight:700">${r.dispatched_by||'—'}</span></div>
+            ${r.request_id?`<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Against request</span><span style="font-family:monospace">${r.request_id}</span></div>`:''}
+            <div style="border-top:1.5px dashed var(--bd2);margin:8px 0;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Item</span><span>Qty</span></div>
+            ${itemRows}
+            <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:800;text-transform:uppercase;color:var(--tx2)">Total</span><span style="font-size:18px;font-weight:800;color:var(--p)">${totalUnits} units</span></div>
+          </div>
+        </div>
+      </div>`;}).join('')
     +'</div>';
 }
 
