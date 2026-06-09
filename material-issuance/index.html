@@ -260,6 +260,7 @@ function doLogin(){
   if(pin!==issuancePin){toast('Wrong passcode');return;}
   document.getElementById('login-pin').value='';
   showScreen('s-home');
+  autoRequestCheck();
 }
 function logout(){showScreen('s-login');}
 
@@ -423,6 +424,7 @@ async function confirmIssue(){
     document.getElementById('ok-no').textContent=no;
     document.getElementById('ok-info').textContent=total+' item(s) to '+vn;
     document.getElementById('ok-modal').style.display='flex';
+    autoRequestCheck();
   }catch(e){toast('Save failed: '+e.message);}
 }
 function newIssue(){document.getElementById('ok-modal').style.display='none';openIssue();}
@@ -487,6 +489,42 @@ async function submitRequest(){
     openReqHist();
   }catch(e){toast('Save failed: '+e.message);}
 }
+/* ── AUTO-REQUEST (low + predicted) ── */
+async function autoRequestCheck(){
+  try{
+    await loadStock();
+    // items already on an open request (avoid duplicates)
+    const have=new Set();
+    try{const{data}=await sb.from('requests').select('items,status').eq('site',SITE).in('status',['Pending','Approved','Dispatched']);(data||[]).forEach(r=>(r.items||[]).forEach(it=>have.add(it.n||it.name)));}catch(e){}
+    // daily usage from last 30 days of issuances
+    const since=new Date(Date.now()-30*86400000).toISOString();
+    const daily={};
+    try{const{data}=await sb.from('issuances').select('items,created_at').eq('site_key',SITE).gte('created_at',since).limit(500);
+      const use={};(data||[]).forEach(r=>(r.items||[]).forEach(it=>{const nm=it.n||it.name;use[nm]=(use[nm]||0)+(it.qty||0);}));
+      Object.keys(use).forEach(k=>daily[k]=use[k]/30);
+    }catch(e){}
+    const H=14; // forecast horizon (days)
+    const autoItems=[];
+    ITEMS.forEach(it=>{
+      const cur=stockMap[it.n]||0, du=daily[it.n]||0;
+      const lowNow=cur<=it.th;
+      const predLow=du>0 && (cur-du*H)<=it.th;
+      if((lowNow||predLow)&&!have.has(it.n)){
+        const target=Math.max(it.th*2, Math.ceil(du*H)+it.th);
+        const qty=Math.max(1, target-cur);
+        autoItems.push({n:it.n,u:it.u,qty});
+      }
+    });
+    if(!autoItems.length)return;
+    const n=new Date(),z=x=>String(x).padStart(2,'0');
+    const id='REQ-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds())+'-A';
+    const anyZero=autoItems.some(a=>(stockMap[a.n]||0)<=0);
+    const row={id,site:SITE,by_name:'System (auto)',date:todayYmd(),remarks:'Auto-generated · low / predicted stock',items:autoItems,status:'Pending',urgent:anyZero,created_at:new Date().toISOString(),updated_at:new Date().toISOString()};
+    const{error}=await sb.from('requests').insert([row]);
+    if(!error)toast('Auto-request created: '+autoItems.length+' low item(s)');
+  }catch(e){}
+}
+
 async function openReqHist(){
   showScreen('s-reqhist');
   const el=document.getElementById('rh-list');el.innerHTML='<div class="empty">Loading…</div>';
