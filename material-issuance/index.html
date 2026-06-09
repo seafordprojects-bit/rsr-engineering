@@ -19,15 +19,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .fl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3);margin:14px 0 6px;display:block}
 .fl:first-child{margin-top:0}
 .req{color:var(--r)}
-.lbtn{width:100%;padding:15px;font-size:16px;font-weight:700;border-radius:12px;border:none;background:var(--p);color:#fff;cursor:pointer;margin-top:14px}
+.lbtn{width:100%;padding:15px;font-size:16px;font-weight:700;border-radius:12px;border:none;background:var(--p);color:#fff;cursor:pointer;margin-top:16px}
 .btn{padding:14px;font-size:15px;font-weight:700;border-radius:12px;border:none;cursor:pointer}
 .btn-p{background:var(--p);color:#fff}.btn-sec{background:var(--bg2);color:var(--tx2);border:1.5px solid var(--bd)}
 .tb{padding:14px 16px;background:var(--pl);border-bottom:1.5px solid var(--pm);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
 .ttitle{font-size:16px;font-weight:700;color:var(--p)}.tsub{font-size:12px;color:var(--pm)}
 .bk{background:none;border:1.5px solid var(--pm);color:var(--p);width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:18px}
 .pc{padding:16px}
-.progress{display:flex;gap:6px;padding:12px 16px;background:var(--bg2)}
-.pstep{flex:1;height:4px;border-radius:99px;background:var(--bd2)}.pstep.active{background:var(--p)}.pstep.done{background:var(--pm)}
 .hcard{background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--radl);padding:18px;margin-bottom:12px;cursor:pointer;display:flex;align-items:center;gap:14px}
 .hcard .ico{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
 .hcard .ht{font-size:16px;font-weight:700}.hcard .hs{font-size:12px;color:var(--tx2);margin-top:2px}
@@ -37,9 +35,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .iunit{font-size:12px;color:var(--tx2);text-align:center}
 .rm{width:32px;height:38px;border:1.5px solid var(--bd2);border-radius:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--tx3);font-size:18px}
 .add-row{width:100%;padding:11px;border:1.5px dashed var(--pm);background:var(--pl);color:var(--p);border-radius:12px;font-weight:700;cursor:pointer;margin-top:4px}
-.warn{background:var(--al);border:1px solid var(--am);border-radius:10px;padding:10px 12px;font-size:13px;color:#7a4a06;margin-top:10px}
-.sum-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bd);font-size:14px}
-.sum-row:last-child{border-bottom:none}
+.warn{background:var(--al);border:1px solid var(--am);border-radius:10px;padding:10px 12px;font-size:13px;color:#7a4a06;margin-top:12px}
 .stk-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid var(--bg3)}
 .stk-row:last-child{border-bottom:none}
 .stk-name{font-size:15px;font-weight:600}.stk-meta{font-size:12px;color:var(--tx3)}
@@ -47,9 +43,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--rl);color:var(--r)}
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--tx);color:#fff;padding:11px 18px;border-radius:10px;font-size:14px;z-index:99;max-width:90%;text-align:center}
 .modal{display:none;position:fixed;inset:0;background:rgba(15,25,15,.5);z-index:80;align-items:center;justify-content:center;padding:16px}
-.modal .card{max-width:380px;width:100%;margin:0;text-align:center}
+.modal .card{max-width:380px;width:100%;margin:0}
+.row2{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .empty{text-align:center;color:var(--tx3);padding:18px;font-size:14px}
-.btn-row{display:grid;grid-template-columns:1fr 1.4fr;gap:10px;margin-top:6px}
 </style>
 </head>
 <body>
@@ -80,27 +76,13 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
   </div>
 </div>
 
-<!-- ISSUE STEP 1 -->
-<div id="s-issue1" class="screen">
+<!-- ISSUE (single page) -->
+<div id="s-issue" class="screen">
   <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div class="ttitle">Issue Materials</div><div style="width:38px"></div></div>
-  <div class="progress"><div class="pstep active"></div><div class="pstep"></div><div class="pstep"></div></div>
   <div class="pc">
-    <div style="font-size:17px;font-weight:700">Step 1 — Select vessel</div>
-    <div style="font-size:13px;color:var(--tx2);margin:4px 0 14px">Choose the vessel you are issuing for.</div>
     <label class="fl">Project / Vessel <span class="req">*</span></label>
     <select id="i-vessel" class="fi"></select>
     <div id="i-vessel-empty" class="empty" style="display:none">No active vessels. Add/activate one in Coordinator first.</div>
-    <button class="lbtn" onclick="toStep2()">Next →</button>
-  </div>
-</div>
-
-<!-- ISSUE STEP 2 -->
-<div id="s-issue2" class="screen">
-  <div class="tb"><button class="bk" onclick="showScreen('s-issue1')">←</button><div class="ttitle">Issue Materials</div><div style="width:38px"></div></div>
-  <div class="progress"><div class="pstep done"></div><div class="pstep active"></div><div class="pstep"></div></div>
-  <div class="pc">
-    <div style="font-size:17px;font-weight:700">Step 2 — Crew &amp; items</div>
-    <div id="i-vlabel" style="font-size:13px;color:var(--tx2);margin:4px 0 14px"></div>
     <label class="fl">Issued to (crew) <span class="req">*</span></label>
     <select id="i-emp" class="fi" onchange="onEmpPick()"></select>
     <label class="fl">Department</label>
@@ -113,41 +95,31 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
     <div id="i-rows"></div>
     <button class="add-row" onclick="addRow()">+ Add item</button>
     <div id="i-warn"></div>
+    <button class="lbtn" onclick="reviewIssue()">Issue</button>
   </div>
-  <div class="pc" style="padding-top:0"><div class="btn-row">
-    <button class="btn btn-sec" onclick="showScreen('s-issue1')">Back</button>
-    <button class="btn btn-p" onclick="toStep3()">Review →</button>
-  </div></div>
-</div>
-
-<!-- ISSUE STEP 3 -->
-<div id="s-issue3" class="screen">
-  <div class="tb"><button class="bk" onclick="showScreen('s-issue2')">←</button><div class="ttitle">Issue Materials</div><div style="width:38px"></div></div>
-  <div class="progress"><div class="pstep done"></div><div class="pstep done"></div><div class="pstep active"></div></div>
-  <div class="pc">
-    <div style="font-size:17px;font-weight:700">Step 3 — Review &amp; confirm</div>
-    <div style="font-size:13px;color:var(--tx2);margin:4px 0 14px">Crew confirms receipt with their passcode.</div>
-    <div class="card" id="i-summary"></div>
-    <label class="fl">Crew passcode (PIN) <span class="req">*</span></label>
-    <input id="i-pin" class="fi" type="password" inputmode="numeric" placeholder="Employee PIN"/>
-  </div>
-  <div class="pc" style="padding-top:0"><div class="btn-row">
-    <button class="btn btn-sec" onclick="showScreen('s-issue2')">Back</button>
-    <button class="btn btn-p" onclick="submitIssue()">Confirm &amp; issue</button>
-  </div></div>
 </div>
 
 <!-- STOCK -->
 <div id="s-stock" class="screen">
   <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div class="ttitle">Carmen Stock</div><div style="width:38px"></div></div>
   <div class="pc">
-    <div style="font-size:13px;color:var(--tx2);margin-bottom:12px">Set on-hand quantity per material. Low stock (at or below threshold) is flagged.</div>
+    <div style="font-size:13px;color:var(--tx2);margin-bottom:12px">Current on-hand stock at Carmen. Updated automatically when deliveries are received and when materials are issued. Low stock (at or below threshold) is flagged.</div>
     <div class="card" id="stk-list"><div class="empty">Loading…</div></div>
   </div>
 </div>
 
+<!-- SLIP CONFIRM -->
+<div id="mislip-modal" class="modal"><div class="card" style="max-height:92vh;overflow:auto">
+  <div id="mislip-body" style="margin:0 0 12px"></div>
+  <div style="font-size:11px;color:var(--tx2);line-height:1.5;background:var(--bg2);border-radius:10px;padding:10px 12px;margin-bottom:10px">By entering their PIN, the crew member confirms receipt of the materials listed above.</div>
+  <label class="fl">Crew passcode (PIN)</label>
+  <input id="i-pin" class="fi" type="password" inputmode="numeric" placeholder="Employee PIN"/>
+  <button class="lbtn" onclick="confirmIssue()">Confirm &amp; issue</button>
+  <button class="btn btn-sec" style="width:100%;margin-top:8px" onclick="document.getElementById('mislip-modal').style.display='none'">Back</button>
+</div></div>
+
 <!-- SUCCESS -->
-<div id="ok-modal" class="modal"><div class="card">
+<div id="ok-modal" class="modal"><div class="card" style="text-align:center">
   <div style="width:64px;height:64px;border-radius:50%;background:var(--pm);color:#fff;font-size:32px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">✓</div>
   <div style="font-size:18px;font-weight:800">Materials issued</div>
   <div id="ok-no" style="font-family:ui-monospace,monospace;font-size:15px;color:var(--p);margin:6px 0"></div>
@@ -171,10 +143,9 @@ const ITEMS=[
   {n:'Cutting disk',u:'pcs',th:5,iv:30},{n:'Oxygen regulator',u:'unit',th:1,iv:0},{n:'LPG regulator',u:'unit',th:1,iv:0},{n:'Steel square',u:'pcs',th:1,iv:0}
 ];
 function gu(n){return (ITEMS.find(i=>i.n===n)||{u:'pcs'}).u;}
-function gth(n){return (ITEMS.find(i=>i.n===n)||{th:0}).th;}
 function giv(n){return (ITEMS.find(i=>i.n===n)||{iv:0}).iv;}
 
-let issuancePin='1111', employees=[], vessels=[], stockMap={}, empLast={}, selVessel=null, selEmp=null, rc=0, pending=null, reservedNo='';
+let issuancePin='1111', employees=[], vessels=[], stockMap={}, empLast={}, selEmp=null, rc=0, pending=null, reservedNo='';
 
 function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),2600);}
 function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo(0,0);}
@@ -213,29 +184,20 @@ async function loadVessels(){
   }catch(e){vessels=[];}
 }
 
-/* ── ISSUE ── */
+/* ── ISSUE (single page) ── */
 async function openIssue(){
-  selVessel=null; selEmp=null; empLast={}; rc=0; pending=null; reservedNo='';
+  selEmp=null; empLast={}; rc=0; pending=null; reservedNo='';
   await Promise.all([loadEmployees(),loadVessels(),loadStock()]);
   const vs=document.getElementById('i-vessel');
   vs.innerHTML='<option value="">— Select vessel —</option>'+vessels.map(v=>`<option value="${v.vessel_name}" data-code="${(v.vessel_code||'').replace(/"/g,'&quot;')}">${v.vessel_name}${v.vessel_code?' · '+v.vessel_code:''}</option>`).join('');
   document.getElementById('i-vessel-empty').style.display=vessels.length?'none':'block';
-  showScreen('s-issue1');
-}
-function toStep2(){
-  const vs=document.getElementById('i-vessel');
-  if(!vs.value){toast('Pick a vessel');return;}
-  const opt=vs.options[vs.selectedIndex];
-  selVessel={name:vs.value,code:opt.getAttribute('data-code')||''};
-  document.getElementById('i-vlabel').textContent='For: '+selVessel.name+(selVessel.code?' ('+selVessel.code+')':'');
   document.getElementById('i-emp').innerHTML='<option value="">— Select crew —</option>'+employees.map(e=>`<option value="${e.id}">${e.name}${e.code?' · '+e.code:''}</option>`).join('');
   document.getElementById('i-dept').value='';
   const d=document.getElementById('i-date');d.min=todayYmd();d.value=todayYmd();
   document.getElementById('i-by').value='';
   document.getElementById('i-rows').innerHTML='';rc=0;addRow();
   document.getElementById('i-warn').innerHTML='';
-  selEmp=null; empLast={};
-  showScreen('s-issue2');
+  showScreen('s-issue');
 }
 async function onEmpPick(){
   const id=document.getElementById('i-emp').value;
@@ -280,7 +242,9 @@ function renderWarn(){
   });
   box.innerHTML=w.length?`<div class="warn"><b>Heads up</b><br>${w.join('<br>')}</div>`:'';
 }
-async function toStep3(){
+async function reviewIssue(){
+  const vs=document.getElementById('i-vessel');
+  if(!vs.value){toast('Pick a vessel');return;}
   if(!selEmp){toast('Choose the crew member');return;}
   const by=document.getElementById('i-by').value.trim();
   const date=document.getElementById('i-date').value;
@@ -290,24 +254,33 @@ async function toStep3(){
   const {out,empty}=getRows();
   if(empty){toast('Fill or remove the empty item row');return;}
   if(!out.length){toast('Add at least one item');return;}
+  const opt=vs.options[vs.selectedIndex];
+  const vessel={name:vs.value,code:opt.getAttribute('data-code')||''};
   if(!reservedNo){
     let no='';try{const{data,error}=await sb.rpc('next_issuance_no');if(!error&&data)no=data;}catch(e){}
     if(!no){const n=new Date(),z=x=>String(x).padStart(2,'0');no='MI-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
     reservedNo=no;
   }
-  pending={vessel:selVessel,emp:selEmp,by,date,items:out,no:reservedNo};
-  document.getElementById('i-summary').innerHTML=
-    `<div class="sum-row"><span style="color:var(--tx2)">Slip no</span><b style="font-family:ui-monospace,monospace;color:var(--p)">${reservedNo}</b></div>`
-    +`<div class="sum-row"><span style="color:var(--tx2)">Date</span><b>${fmtNice(date)}</b></div>`
-    +`<div class="sum-row"><span style="color:var(--tx2)">Vessel</span><b>${selVessel.name}</b></div>`
-    +`<div class="sum-row"><span style="color:var(--tx2)">Issued to</span><b>${selEmp.name}${selEmp.code?' · '+selEmp.code:''}</b></div>`
-    +`<div class="sum-row"><span style="color:var(--tx2)">Issued by</span><b>${by}</b></div>`
-    +out.map(it=>`<div class="sum-row"><span>${it.n}</span><b>${it.qty} ${it.u}</b></div>`).join('')
-    +`<div class="sum-row"><span style="font-weight:800">Total</span><b style="font-size:18px;color:var(--p)">${out.reduce((s,i)=>s+i.qty,0)}</b></div>`;
+  pending={vessel,emp:selEmp,by,date,items:out,no:reservedNo};
+  document.getElementById('mislip-body').innerHTML=
+    `<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:12px;margin-bottom:12px">`
+    +`<div style="font-size:15px;font-weight:800">RSR — Material Issuance Slip</div>`
+    +`<div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--p);margin-top:2px">${reservedNo}</div>`
+    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(date)} · Carmen</div>`
+    +`</div>`
+    +`<div style="font-size:13px;line-height:1.9;color:var(--tx2);margin-bottom:12px">`
+    +`<div class="row2"><span>Vessel</span><b style="color:var(--tx)">${vessel.name}</b></div>`
+    +`<div class="row2"><span>Issued to</span><b style="color:var(--tx)">${selEmp.name}${selEmp.code?' · '+selEmp.code:''}</b></div>`
+    +`<div class="row2"><span>Issued by</span><b style="color:var(--tx)">${by}</b></div>`
+    +`</div>`
+    +`<div style="border-top:1.5px dashed var(--bd2);padding-top:10px">`
+    +`<div class="row2" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:10px"><span>Material</span><span>Qty</span></div>`
+    +out.map(c=>`<div class="row2" style="align-items:baseline;margin-bottom:9px"><div style="font-size:15px;font-weight:700;color:var(--tx)">${c.n}</div><div style="font-size:14px;color:var(--tx2);white-space:nowrap">${c.qty} ${c.u}</div></div>`).join('')
+    +`<div class="row2" style="align-items:baseline;border-top:1.5px dashed var(--bd2);padding-top:11px;margin-top:2px"><div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx2)">Total</div><div style="font-size:22px;font-weight:900;color:var(--p)">${out.reduce((s,i)=>s+i.qty,0)}</div></div></div>`;
   document.getElementById('i-pin').value='';
-  showScreen('s-issue3');
+  document.getElementById('mislip-modal').style.display='flex';
 }
-async function submitIssue(){
+async function confirmIssue(){
   if(!pending)return;
   const pin=document.getElementById('i-pin').value.trim();
   if(!pin){toast('Enter the crew PIN');return;}
@@ -319,7 +292,6 @@ async function submitIssue(){
   const row={id:pending.no,site_key:SITE,proj_name:pending.vessel.name,proj_code:pending.vessel.code||null,emp_name:pending.emp.name,dept:pending.emp.position||null,date:pending.date,by_name:pending.by,items:itemsJson,slip_no:pending.no,created_at:createdAt};
   try{
     const{error}=await sb.from('issuances').insert([row]);if(error)throw error;
-    // deduct stock
     for(const it of pending.items){
       const cur=stockMap[it.n]||0;const nq=Math.max(0,cur-it.qty);
       await sb.from('site_stock').upsert({site_key:SITE,item_name:it.n,qty:nq,updated_at:new Date().toISOString()},{onConflict:'site_key,item_name'});
@@ -328,6 +300,7 @@ async function submitIssue(){
     }
     const no=pending.no,total=pending.items.reduce((s,i)=>s+i.qty,0),vn=pending.vessel.name;
     pending=null;reservedNo='';
+    document.getElementById('mislip-modal').style.display='none';
     document.getElementById('ok-no').textContent=no;
     document.getElementById('ok-info').textContent=total+' item(s) to '+vn;
     document.getElementById('ok-modal').style.display='flex';
