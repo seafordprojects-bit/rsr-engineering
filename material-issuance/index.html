@@ -2,108 +2,230 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
-<title>Main Warehouse | RSR</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
+<title>RSR Material Issuance — Carmen</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
 <style>
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-:root{--p:#27500A;--pl:#EAF3DE;--pm:#639922;--pd:#122606;--b:#0C447C;--bl:#E6F1FB;--bm:#378ADD;--am:#EF9F27;--al:#FAEEDA;--ad:#633806;--r:#791F1F;--rl:#FCEBEB;--rm:#F09595;--bg:#fff;--bg2:#F7F7F5;--bg3:#EFEFEC;--bd:#E0DED8;--bd2:#C8C6BE;--tx:#1A1A18;--tx2:#5A5955;--tx3:#9A9890;--rad:10px;--radl:14px;--radx:18px}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;background:var(--bg3);color:var(--tx);min-height:100vh}
-.app{max-width:720px;margin:0 auto;background:var(--bg);min-height:100vh}
+:root{--p:#27500A;--pl:#EAF3DE;--pm:#639922;--pd:#122606;--b:#0C447C;--bl:#E6F1FB;--r:#791F1F;--rl:#FCEBEB;--rm:#F09595;--am:#EF9F27;--al:#FAEEDA;--bg:#fff;--bg2:#F7F7F5;--bg3:#EFEFEC;--bd:#E0DED8;--bd2:#C8C6BE;--tx:#1A1A18;--tx2:#5A5955;--tx3:#9A9890;--rad:10px;--radl:14px;--radx:18px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;background:var(--bg3);color:var(--tx)}
+.app{max-width:480px;margin:0 auto;background:var(--bg);min-height:100vh;display:flex;flex-direction:column}
 .screen{display:none}.screen.active{display:block}
-.lw{flex:1;display:flex;align-items:center;justify-content:center;padding:2rem;background:var(--pl);min-height:100vh}
-.lb{background:var(--bg);border-radius:var(--radx);padding:2.5rem 2rem;width:100%;max-width:340px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.1)}
-.lav{width:72px;height:72px;border-radius:50%;background:var(--pl);border:3px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 14px}
-.pin-dots{display:flex;justify-content:center;gap:14px;margin-bottom:16px}
-.pd{width:18px;height:18px;border-radius:50%;background:var(--bd2)}.pd.on{background:var(--p)}
-.num-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
-.nb{padding:18px;font-size:20px;font-weight:500;border:1.5px solid var(--bd);border-radius:var(--radl);background:var(--bg);color:var(--tx);cursor:pointer}
-.nb:active{background:var(--pl);border-color:var(--pm)}
-.lbtn{width:100%;padding:16px;font-size:17px;font-weight:600;border-radius:var(--radl);border:none;background:var(--p);color:#fff;cursor:pointer}
-.tb{padding:13px 16px;background:var(--pl);border-bottom:1.5px solid var(--pm);display:flex;align-items:center;justify-content:space-between}
-.tdot{width:38px;height:38px;border-radius:50%;background:#fff;border:2px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:18px}
-.ttitle{font-size:16px;font-weight:700;color:var(--p)}.tsub{font-size:12px;color:var(--pm);margin-top:1px}
-.lout{padding:8px 14px;font-size:13px;border-radius:8px;border:1.5px solid var(--pm);background:transparent;color:var(--p);cursor:pointer;font-weight:600;text-decoration:none}
-.tabs{display:flex;overflow-x:auto;background:var(--bg);border-bottom:1px solid var(--bd);padding:6px 6px}
-.tab{padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;color:var(--tx2);border:none;background:transparent;font-family:inherit;white-space:nowrap;flex:0 0 auto;text-align:center;position:relative;border-radius:9px;margin:0 2px}
-.tab.active{background:var(--p);color:#fff;font-weight:700}
-.dot{position:absolute;top:6px;right:8px;width:8px;height:8px;border-radius:50%}
-.pc{padding:16px;padding-bottom:48px}
-.sc{background:var(--bg);border:1px solid var(--bd);border-radius:var(--radx);padding:16px;margin-bottom:12px}
-.sc-title{font-size:16px;font-weight:700;margin-bottom:4px}.sc-sub{font-size:13px;color:var(--tx2);margin-bottom:14px}
-.fl{font-size:13px;font-weight:500;color:var(--tx2);margin-bottom:5px;display:block}.fl span{color:var(--r)}
-.fi{width:100%;padding:12px 14px;font-size:15px;border-radius:var(--radl);border:1.5px solid var(--bd2);background:var(--bg);color:var(--tx)}
-.fi:focus{outline:none;border-color:var(--pm);box-shadow:0 0 0 3px var(--pl)}
-.fg{margin-bottom:12px}.fr3{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.btn{padding:12px 18px;font-size:14px;font-weight:600;border-radius:var(--radl);cursor:pointer;border:none}
-.btn-primary{background:var(--p);color:#fff}.btn-secondary{background:transparent;color:var(--tx);border:1.5px solid var(--bd2)}
-.btn-sm{padding:9px 14px;font-size:13px}.btn-row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
-.irow{display:grid;grid-template-columns:minmax(0,2fr) 70px 78px 38px;gap:8px;align-items:center;margin-bottom:8px}
-.irow.nop{grid-template-columns:minmax(0,2fr) 70px 38px}
-.rm{height:46px;display:flex;align-items:center;justify-content:center;border:1.5px solid var(--bd2);border-radius:var(--radl);cursor:pointer;font-size:18px;color:var(--tx3);background:var(--bg2)}
-.add-row{width:100%;padding:12px;font-size:14px;font-weight:500;border-radius:var(--radl);border:2px dashed var(--bd2);background:transparent;color:var(--tx2);cursor:pointer;margin-top:4px}
-.mstrip{display:grid;gap:10px;margin-bottom:14px;grid-template-columns:repeat(3,1fr)}
-.mbox{background:var(--bg2);border-radius:var(--radl);padding:12px 8px;text-align:center;border:1px solid var(--bd)}
-.mv{font-size:22px;font-weight:700}.ml{font-size:11px;color:var(--tx2);margin-top:2px}
-.tbl{width:100%;border-collapse:collapse;font-size:14px}
-.tbl th{text-align:left;padding:9px 8px;font-size:12px;font-weight:600;color:var(--tx2);border-bottom:1.5px solid var(--bd);background:var(--bg2)}
-.tbl td{padding:10px 8px;border-bottom:1px solid var(--bd);vertical-align:middle}.tbl tr:last-child td{border-bottom:none}
-.badge{display:inline-block;font-size:11px;padding:3px 9px;border-radius:99px;font-weight:600;white-space:nowrap}
-.bok{background:var(--pl);color:var(--p)}.bwarn{background:var(--al);color:var(--ad)}.bdanger{background:var(--rl);color:var(--r)}.binfo{background:var(--bl);color:var(--b)}
-.dcard{border:1px solid var(--bd);border-radius:var(--radl);margin-bottom:10px;overflow:hidden}
-.dcard-hdr{padding:13px 16px;background:var(--bg2);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;cursor:pointer}
-.dcard-body{padding:13px 16px;display:none}.dcard-body.open{display:block}
-.disp-num-box{background:var(--bg2);border-radius:var(--radl);padding:12px 14px;margin-bottom:14px;display:flex;align-items:center;gap:12px;border:1px solid var(--bd)}
-.disp-num{font-size:20px;font-weight:700;font-family:monospace;color:var(--pd)}
-.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:12px 22px;border-radius:var(--radl);font-size:14px;font-weight:600;display:none;z-index:9999;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.15)}
-.tok{background:#122606;color:#EAF3DE}.terr{background:#5C1515;color:#FCEBEB}
+.lw{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--pl)}
+.lb{background:var(--bg);border-radius:var(--radx);padding:32px 24px;width:100%;max-width:340px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.1)}
+.lav{width:72px;height:72px;border-radius:50%;background:var(--pl);border:3px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:30px;margin:0 auto 14px}
+.fi{width:100%;padding:13px 14px;border:1.5px solid var(--bd2);border-radius:12px;font-size:16px;background:var(--bg);color:var(--tx);outline:none}
+.fi:focus{border-color:var(--pm)}
+.fl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3);margin:14px 0 6px;display:block}
+.fl:first-child{margin-top:0}
+.req{color:var(--r)}
+.lbtn{width:100%;padding:15px;font-size:16px;font-weight:700;border-radius:12px;border:none;background:var(--p);color:#fff;cursor:pointer;margin-top:16px}
+.btn{padding:14px;font-size:15px;font-weight:700;border-radius:12px;border:none;cursor:pointer}
+.btn-p{background:var(--p);color:#fff}.btn-sec{background:var(--bg2);color:var(--tx2);border:1.5px solid var(--bd)}
+.tb{padding:14px 16px;background:var(--pl);border-bottom:1.5px solid var(--pm);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
+.ttitle{font-size:16px;font-weight:700;color:var(--p)}.tsub{font-size:12px;color:var(--pm)}
+.bk{background:none;border:1.5px solid var(--pm);color:var(--p);width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:18px}
+.pc{padding:16px}
+.hcard{background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--radl);padding:18px;margin-bottom:12px;cursor:pointer;display:flex;align-items:center;gap:14px}
+.hcard .ico{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.hcard .ht{font-size:16px;font-weight:700}.hcard .hs{font-size:12px;color:var(--tx2);margin-top:2px}
+.hcard.soon{opacity:.55}
+.card{background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--radl);padding:16px;margin-bottom:14px}
+.sec{background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--radl);padding:18px 16px;margin-bottom:14px}
+.sec-h{display:flex;align-items:flex-start;gap:12px;border-bottom:1px solid var(--bg3);padding-bottom:12px;margin-bottom:14px}
+.sec-n{width:30px;height:30px;border-radius:50%;background:var(--p);color:#fff;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.sec-t{font-size:16px;font-weight:700;color:var(--pd)}
+.sec-s{font-size:12px;color:var(--tx2);margin-top:2px}
+.irow{display:grid;grid-template-columns:minmax(0,1fr) 76px 40px 32px;gap:8px;align-items:center;margin-bottom:8px}
+.iunit{font-size:12px;color:var(--tx2);text-align:center}
+.rm{width:32px;height:38px;border:1.5px solid var(--bd2);border-radius:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--tx3);font-size:18px}
+.add-row{width:100%;padding:11px;border:1.5px dashed var(--pm);background:var(--pl);color:var(--p);border-radius:12px;font-weight:700;cursor:pointer;margin-top:4px}
+.warn{background:var(--al);border:1px solid var(--am);border-radius:10px;padding:10px 12px;font-size:13px;color:#7a4a06;margin-top:12px}
+.stk-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid var(--bg3)}
+.stk-row:last-child{border-bottom:none}
+.stk-name{font-size:15px;font-weight:600}.stk-meta{font-size:12px;color:var(--tx3)}
+.stk-low{color:var(--r)}
+.pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--rl);color:var(--r)}
+.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--tx);color:#fff;padding:11px 18px;border-radius:10px;font-size:14px;z-index:99;max-width:90%;text-align:center}
+.modal{display:none;position:fixed;inset:0;background:rgba(15,25,15,.5);z-index:80;align-items:center;justify-content:center;padding:16px}
+.modal .card{max-width:380px;width:100%;margin:0}
+.row2{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .empty{text-align:center;color:var(--tx3);padding:18px;font-size:14px}
+.combo{position:relative}
+.sug{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--bg);border:1.5px solid var(--bd2);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.14);z-index:30;max-height:240px;overflow:auto;display:none}
+.sug div{padding:11px 14px;font-size:15px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--bg3)}
+.sug div:hover{background:var(--pl)}
+.vc{font-family:ui-monospace,monospace;font-size:12px;color:var(--tx3)}
 </style>
 </head>
 <body>
 <div class="app">
-<div id="toast" class="toast"></div>
 
 <!-- LOGIN -->
-<div id="sl" class="screen">
+<div id="s-login" class="screen active">
   <div class="lw"><div class="lb">
-    <div class="lav">🏭</div>
-    <div style="font-size:21px;font-weight:700;margin-bottom:4px">Main Warehouse</div>
-    <div style="font-size:14px;color:var(--tx2);margin-bottom:20px">Enter PIN to continue</div>
-    <div class="pin-dots"><div class="pd" id="p0"></div><div class="pd" id="p1"></div><div class="pd" id="p2"></div><div class="pd" id="p3"></div></div>
-    <div class="num-grid">
-      <button class="nb" onclick="numTap('1')">1</button><button class="nb" onclick="numTap('2')">2</button><button class="nb" onclick="numTap('3')">3</button>
-      <button class="nb" onclick="numTap('4')">4</button><button class="nb" onclick="numTap('5')">5</button><button class="nb" onclick="numTap('6')">6</button>
-      <button class="nb" onclick="numTap('7')">7</button><button class="nb" onclick="numTap('8')">8</button><button class="nb" onclick="numTap('9')">9</button>
-      <button class="nb" onclick="nc()" style="font-size:13px">Clear</button>
-      <button class="nb" onclick="nb2()" style="font-size:18px">&#x232B;</button>
-      <button class="nb" onclick="numTap('0')">0</button>
-    </div>
+    <div class="lav">📋</div>
+    <div style="font-size:21px;font-weight:700">Material Issuance</div>
+    <div style="font-size:13px;color:var(--tx2);margin:4px 0 18px">Carmen · enter passcode</div>
+    <input id="login-pin" class="fi" type="password" inputmode="numeric" placeholder="Passcode" style="text-align:center;letter-spacing:4px" onkeydown="if(event.key==='Enter')doLogin()"/>
     <button class="lbtn" onclick="doLogin()">Sign in</button>
-    <div id="lerr" style="font-size:13px;color:var(--r);margin-top:10px;display:none">Incorrect PIN.</div>
-    <div style="font-size:12px;color:var(--tx3);margin-top:10px">Default: 5555</div>
+    <div style="font-size:12px;color:var(--tx3);margin-top:12px">Default: 1111</div>
   </div></div>
 </div>
 
-<!-- APP -->
-<div id="sa" class="screen active">
-  <div class="tb">
-    <div style="display:flex;align-items:center;gap:10px">
-      <div class="tdot">🏭</div>
-      <div><div class="ttitle">Main Warehouse</div><div class="tsub" id="hg">Stock management</div></div>
-    </div>
-    <a class="lout" href="../admin/">← Admin</a>
+<!-- HOME -->
+<div id="s-home" class="screen">
+  <div class="tb"><div><div class="ttitle">RSR Materials</div><div class="tsub">Carmen</div></div>
+    <button class="bk" onclick="logout()" title="Sign out">⎋</button></div>
+  <div class="pc">
+    <div class="hcard" onclick="openIssue()"><div class="ico" style="background:var(--pl);color:var(--p)">📤</div><div><div class="ht">Issue Materials</div><div class="hs">Issue to a vessel · crew confirms by passcode</div></div></div>
+    <div class="hcard" onclick="openStock()"><div class="ico" style="background:var(--bl);color:var(--b)">📦</div><div><div class="ht">Stock</div><div class="hs">View &amp; adjust Carmen site stock</div></div></div>
+    <div class="hcard" onclick="openRequest()"><div class="ico" style="background:#F0EAF8;color:#6b3fa0">📝</div><div><div class="ht">Request Materials</div><div class="hs">Request stock from the warehouse</div></div></div>
+    <div class="hcard" onclick="openReceive()"><div class="ico" style="background:var(--al);color:var(--am)">📥</div><div><div class="ht">Receive Delivery</div><div class="hs">Receive items into stock</div></div></div>
+    <div class="hcard" onclick="openRecords()"><div class="ico" style="background:var(--bg2);color:var(--tx2)">🗂️</div><div><div class="ht">Records</div><div class="hs">Issued &amp; received history</div></div></div>
   </div>
-  <div class="tabs">
-    <button type="button" class="tab active" id="tab-stock" data-tab="stock">Stock</button>
-    <button type="button" class="tab" id="tab-requests" data-tab="requests">Requests<span class="dot" id="req-dot" style="display:none;background:var(--r)"></span></button>
-    <button type="button" class="tab" id="tab-delivery" data-tab="delivery">Record delivery</button>
-    <button type="button" class="tab" id="tab-dispatch" data-tab="dispatch">Create dispatch</button>
-    <button type="button" class="tab" id="tab-log" data-tab="log">Dispatch log</button>
-    <button type="button" class="tab" id="tab-inventory" data-tab="inventory">Inventory</button>
-  </div>
-  <div class="pc" id="main-content"></div>
 </div>
+
+<!-- ISSUE (single page) -->
+<div id="s-issue" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Issue Materials</div><div class="tsub">Complete all sections below</div></div><div style="width:38px"></div></div>
+  <div class="pc">
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">1</div><div><div class="sec-t">Vessel / project</div><div class="sec-s">Select the vessel you are issuing for</div></div></div>
+      <label class="fl">Project / Vessel <span class="req">*</span></label>
+      <select id="i-vessel" class="fi"></select>
+      <div id="i-vessel-empty" class="empty" style="display:none">No active vessels. Add/activate one in Coordinator first.</div>
+    </div>
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">2</div><div><div class="sec-t">Crew details</div><div class="sec-s">Who is receiving the materials</div></div></div>
+      <label class="fl">Issued to (crew) <span class="req">*</span></label>
+      <div class="combo">
+        <input id="i-emp" class="fi" placeholder="Type name or code, or tap to choose" autocomplete="off" oninput="onEmpInput()" onfocus="empSuggest()" onblur="hideEmpSug()"/>
+        <div id="i-emp-sug" class="sug"></div>
+      </div>
+      <label class="fl">Date <span class="req">*</span></label>
+      <input id="i-date" class="fi" type="date"/>
+      <label class="fl">Issued by <span class="req">*</span></label>
+      <input id="i-by" class="fi" placeholder="Storekeeper name"/>
+    </div>
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">3</div><div><div class="sec-t">Materials to issue</div><div class="sec-s">Add all items being issued</div></div></div>
+      <div id="i-rows"></div>
+      <button class="add-row" onclick="addRow()">+ Add item</button>
+      <div id="i-warn"></div>
+    </div>
+    <button class="lbtn" onclick="reviewIssue()">Issue</button>
+  </div>
+</div>
+
+<!-- STOCK -->
+<div id="s-stock" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div class="ttitle">Carmen Stock</div><div style="width:38px"></div></div>
+  <div class="pc">
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n" style="background:var(--b)">≡</div><div><div class="sec-t">On-hand stock</div><div class="sec-s">Updates automatically on receive &amp; issue</div></div></div>
+      <div id="stk-list"><div class="empty">Loading…</div></div>
+    </div>
+  </div>
+</div>
+
+<!-- REQUEST -->
+<div id="s-request" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Request Materials</div><div class="tsub">To warehouse · Carmen</div></div><button class="bk" style="width:auto;padding:0 14px;border-radius:18px;font-size:13px;font-weight:700" onclick="openReqHist()">History</button></div>
+  <div class="pc">
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">1</div><div><div class="sec-t">Request details</div><div class="sec-s">Who is requesting and any note</div></div></div>
+      <label class="fl">Date</label>
+      <input id="r-date" class="fi" type="date"/>
+      <label class="fl">Requested by <span class="req">*</span></label>
+      <input id="r-by" class="fi" placeholder="Storekeeper name"/>
+      <label class="fl">Remarks</label>
+      <input id="r-remarks" class="fi" placeholder="Optional note"/>
+      <label style="display:flex;align-items:center;gap:9px;margin-top:14px;font-size:14px;cursor:pointer;font-weight:600;color:var(--r)"><input type="checkbox" id="r-urgent" style="width:18px;height:18px"/> Mark as urgent</label>
+    </div>
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">2</div><div><div class="sec-t">Items needed</div><div class="sec-s">Add the materials to request</div></div></div>
+      <div id="r-rows"></div>
+      <button class="add-row" onclick="addReqRow()">+ Add item</button>
+      <button class="add-row" style="border-color:var(--am);background:var(--al);color:#7a4a06;margin-top:8px" onclick="addLowStock()">+ Add all low-stock items</button>
+    </div>
+    <button class="lbtn" onclick="submitRequest()">Submit request</button>
+  </div>
+</div>
+
+<!-- REQUEST HISTORY -->
+<div id="s-reqhist" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-request')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Request History</div><div class="tsub">Carmen</div></div><div style="width:38px"></div></div>
+  <div class="pc"><div class="sec"><div id="rh-list"><div class="empty">Loading…</div></div></div></div>
+</div>
+
+<!-- RECEIVE -->
+<div id="s-receive" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Receive Delivery</div><div class="tsub">Carmen</div></div><div style="width:38px"></div></div>
+  <div class="pc">
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n" style="background:var(--am)">1</div><div><div class="sec-t">Incoming dispatches</div><div class="sec-s">Receive items the warehouse sent you</div></div></div>
+      <div id="rcv-list"><div class="empty">Loading…</div></div>
+    </div>
+    <button class="lbtn" style="background:var(--am)" onclick="openDelivery(null)">+ Log direct delivery</button>
+  </div>
+</div>
+
+<!-- DELIVERY FORM -->
+<div id="s-delivery" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-receive')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Receive Items</div><div class="tsub" id="dl-sub">Direct delivery</div></div><div style="width:38px"></div></div>
+  <div class="pc">
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">1</div><div><div class="sec-t">Delivery details</div><div class="sec-s">Where it came from</div></div></div>
+      <label class="fl">Source</label>
+      <input id="dl-source" class="fi" placeholder="Warehouse / supplier"/>
+      <label class="fl">Reference / DR no</label>
+      <input id="dl-ref" class="fi" placeholder="Optional"/>
+      <label class="fl">Date</label>
+      <input id="dl-date" class="fi" type="date"/>
+      <label class="fl">Received by <span class="req">*</span></label>
+      <input id="dl-by" class="fi" placeholder="Storekeeper name"/>
+    </div>
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">2</div><div><div class="sec-t">Items received</div><div class="sec-s">Confirm the quantities actually received</div></div></div>
+      <div id="dl-rows"></div>
+      <button class="add-row" onclick="addDelRow()">+ Add item</button>
+    </div>
+    <button class="lbtn" onclick="confirmDelivery()">Confirm &amp; add to stock</button>
+  </div>
+</div>
+
+<!-- RECORDS -->
+<div id="s-records" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Records</div><div class="tsub">Carmen</div></div><div style="width:38px"></div></div>
+  <div class="pc">
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button id="rec-tab-issued" class="btn btn-p" style="flex:1" onclick="renderRecords('issued')">Issued</button>
+      <button id="rec-tab-received" class="btn btn-sec" style="flex:1" onclick="renderRecords('received')">Received</button>
+      <button id="rec-tab-tracking" class="btn btn-sec" style="flex:1" onclick="renderRecords('tracking')">Tracking</button>
+    </div>
+    <div class="sec"><div id="rec-list"><div class="empty">Loading…</div></div></div>
+  </div>
+</div>
+
+
+<div id="mislip-modal" class="modal"><div class="card" style="max-height:92vh;overflow:auto">
+  <div id="mislip-body" style="margin:0 0 12px"></div>
+  <div style="font-size:11px;color:var(--tx2);line-height:1.5;background:var(--bg2);border-radius:10px;padding:10px 12px;margin-bottom:10px">By entering their PIN, the crew member confirms receipt of the materials listed above.</div>
+  <label class="fl">Crew passcode (PIN)</label>
+  <input id="i-pin" class="fi" type="password" inputmode="numeric" placeholder="Employee PIN"/>
+  <button class="lbtn" onclick="confirmIssue()">Confirm &amp; issue</button>
+  <button class="btn btn-sec" style="width:100%;margin-top:8px" onclick="document.getElementById('mislip-modal').style.display='none'">Back</button>
+</div></div>
+
+<!-- SUCCESS -->
+<div id="ok-modal" class="modal"><div class="card" style="text-align:center">
+  <div style="width:64px;height:64px;border-radius:50%;background:var(--pm);color:#fff;font-size:32px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">✓</div>
+  <div style="font-size:18px;font-weight:800">Materials issued</div>
+  <div id="ok-no" style="font-family:ui-monospace,monospace;font-size:15px;color:var(--p);margin:6px 0"></div>
+  <div id="ok-info" style="font-size:13px;color:var(--tx2)"></div>
+  <button class="lbtn" onclick="newIssue()">Issue more</button>
+</div></div>
 
 </div>
 
@@ -111,308 +233,516 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
 const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
 const sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
+const SITE='Carmen';
+const SITE_CODES={'Carmen':'CAR','Mandaue':'MAN','Lapu-Lapu':'LAP'};
+const SITECODE=SITE_CODES[SITE]||SITE.slice(0,3).toUpperCase();
 
 const ITEMS=[
-  {n:'Electrode handle',u:'pcs',th:3},{n:'Welding gloves',u:'pair',th:3},{n:'Cutting tip',u:'pcs',th:5},
-  {n:'Dark glass',u:'pcs',th:3},{n:'Clear glass',u:'pcs',th:3},{n:'Trouble light',u:'pcs',th:2},
-  {n:'Electrical tape',u:'pcs',th:5},{n:'Chalk stone',u:'pcs',th:5},{n:'Dry chalk',u:'pcs',th:5},
-  {n:'Flint stone',u:'pcs',th:5},{n:'Striker',u:'pcs',th:3},{n:'Y-connector',u:'pcs',th:2},
-  {n:'Cutting disk',u:'pcs',th:5},{n:'Oxygen regulator',u:'unit',th:1},{n:'LPG regulator',u:'unit',th:1},{n:'Steel square',u:'pcs',th:1}
+  {n:'Electrode handle',u:'pcs',th:3,iv:30},{n:'Welding gloves',u:'pair',th:3,iv:30},{n:'Cutting tip',u:'pcs',th:5,iv:30},
+  {n:'Dark glass',u:'pcs',th:3,iv:30},{n:'Clear glass',u:'pcs',th:3,iv:30},{n:'Trouble light',u:'pcs',th:2,iv:60},
+  {n:'Electrical tape',u:'pcs',th:5,iv:30},{n:'Chalk stone',u:'pcs',th:5,iv:30},{n:'Dry chalk',u:'pcs',th:5,iv:30},
+  {n:'Flint stone',u:'pcs',th:5,iv:30},{n:'Striker',u:'pcs',th:3,iv:30},{n:'Y-connector',u:'pcs',th:2,iv:90},
+  {n:'Cutting disk',u:'pcs',th:5,iv:30},{n:'Oxygen regulator',u:'unit',th:1,iv:0},{n:'LPG regulator',u:'unit',th:1,iv:0},{n:'Steel square',u:'pcs',th:1,iv:0}
 ];
-function gu(n){const c=catalog.find(i=>i.n===n);if(c)return c.u;return (ITEMS.find(i=>i.n===n)||{u:'pcs'}).u;}
-function gth(n){const c=catalog.find(i=>i.n===n);if(c)return c.th;return (ITEMS.find(i=>i.n===n)||{th:0}).th;}
-const peso=v=>'\u20b1'+(Number(v)||0).toLocaleString('en-PH',{maximumFractionDigits:2});
+function gu(n){return (ITEMS.find(i=>i.n===n)||{u:'pcs'}).u;}
+function giv(n){return (ITEMS.find(i=>i.n===n)||{iv:0}).iv;}
+
+let issuancePin='1111', employees=[], vessels=[], stockMap={}, empLast={}, selEmp=null, rc=0, pending=null, reservedNo='';
+
+function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),2600);}
+function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo(0,0);}
 function todayYmd(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
-function fmt(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});}
-function itemOpts(sel){const list=catalog.length?catalog:ITEMS;return '<option value="">— Item —</option>'+list.map(i=>`<option value="${i.n}"${i.n===sel?' selected':''}>${i.n}</option>`).join('');}
+function fmtNice(y){if(!y)return '';return new Date(y+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'2-digit'});}
 
-let WH_PIN='5555', stockMap={}, prices={}, sites=[], dispatchPrefill=null, unitMap={}, catalog=[];
-const SITE_CODES={'Carmen':'CAR','Mandaue':'MAN','Lapu-Lapu':'LAP'};
-function siteCode(name){return SITE_CODES[name]||((name||'XXX').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase());}
-
-function toast(m,t){const el=document.getElementById('toast');el.textContent=m;el.className='toast '+(t==='err'?'terr':'tok');el.style.display='block';clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',3200);}
-
-/* login */
-let pv='';
-function numTap(d){if(pv.length>=6)return;pv+=d;upd();}
-function nc(){pv='';upd();}
-function nb2(){pv=pv.slice(0,-1);upd();}
-function upd(){for(let i=0;i<4;i++){const e=document.getElementById('p'+i);if(e)e.className='pd'+(i<pv.length?' on':'');}}
-(async function init(){
-  document.querySelectorAll('#sa .tab[data-tab]').forEach(b=>b.addEventListener('click',function(){swTab(this.getAttribute('data-tab'));}));
-  try{const{data}=await sb.from('sites').select('name').order('name');sites=(data||[]).map(s=>s.name);}catch(e){sites=['Carmen','Mandaue'];}
-  swTab('stock'); refreshBadge();
+(async function boot(){
+  try{const{data}=await sb.from('settings').select('value').eq('key','issuance_pin').single();if(data&&data.value)issuancePin=String(data.value);}catch(e){}
 })();
-async function doLogin(){
-  if(pv!==WH_PIN){document.getElementById('lerr').style.display='block';pv='';upd();return;}
-  document.getElementById('lerr').style.display='none';
-  document.getElementById('sl').classList.remove('active');
-  document.getElementById('sa').classList.add('active');
-  const h=new Date().getHours();
-  document.getElementById('hg').textContent=h<12?'Good morning':h<17?'Good afternoon':'Good evening';
-  pv='';upd();
-  try{const{data}=await sb.from('sites').select('name').order('name');sites=(data||[]).map(s=>s.name);}catch(e){sites=['Carmen','Mandaue'];}
-  swTab('stock'); refreshBadge();
-}
 
+function doLogin(){
+  const pin=document.getElementById('login-pin').value.trim();
+  if(pin!==issuancePin){toast('Wrong passcode');return;}
+  document.getElementById('login-pin').value='';
+  showScreen('s-home');
+  autoRequestCheck();
+}
+function logout(){showScreen('s-login');}
+
+/* ── data ── */
 async function loadStock(){
-  stockMap={};unitMap={};
-  let rows=[];
-  try{const{data,error}=await sb.from('warehouse_stock').select('item_name,qty,unit');if(error)throw error;rows=data||[];}
-  catch(e){try{const{data}=await sb.from('warehouse_stock').select('item_name,qty');rows=data||[];}catch(e2){}}
-  rows.forEach(r=>{stockMap[r.item_name]=Number(r.qty)||0;if(r.unit)unitMap[r.item_name]=r.unit;});
-  const baseNames=ITEMS.map(i=>i.n);
-  const extra=rows.map(r=>r.item_name).filter(n=>n&&!baseNames.includes(n)).sort((a,b)=>a.localeCompare(b));
-  catalog=ITEMS.concat(extra.map(n=>({n,u:unitMap[n]||'pcs',th:0})));
+  stockMap={};
+  try{const{data}=await sb.from('site_stock').select('item_name,qty').eq('site_key',SITE);(data||[]).forEach(r=>stockMap[r.item_name]=Number(r.qty)||0);}catch(e){}
 }
-async function upsertStock(name,qty,unit){
-  let r=await sb.from('warehouse_stock').upsert({item_name:name,qty:qty,unit:unit,updated_at:new Date().toISOString()},{onConflict:'item_name'});
-  if(r.error){r=await sb.from('warehouse_stock').upsert({item_name:name,qty:qty,updated_at:new Date().toISOString()},{onConflict:'item_name'});}
-  return r.error;
+async function loadEmployees(){const{data}=await sb.from('employees').select('id,code,name,position,pin').order('name');employees=data||[];}
+async function loadVessels(){
+  try{
+    const{data}=await sb.from('voyages').select('*').order('vessel_name');
+    vessels=(data||[]).filter(v=>{
+      if(!v.vessel_name)return false;
+      if(v.status==='finished'||v.status==='not_active')return false;
+      const dry=(v.docking_date||v.status==='drydock')&&!v.undocking_date;
+      const afl=v.afloat_start&&!v.afloat_done;
+      const eme=v.emergency_start&&!v.emergency_end;
+      return dry||afl||eme;
+    });
+  }catch(e){vessels=[];}
 }
-async function loadPrices(){prices={};try{const{data}=await sb.from('item_prices').select('item_name,price');(data||[]).forEach(r=>prices[r.item_name]=Number(r.price)||0);}catch(e){}}
-async function refreshBadge(){let n=0;try{const{count}=await sb.from('requests').select('*',{count:'exact',head:true}).in('status',['Pending','Partial']);n=count||0;}catch(e){}const d=document.getElementById('req-dot');if(d)d.style.display=n>0?'block':'none';}
 
-async function swTab(name){
- try{
-  ['stock','requests','delivery','dispatch','log','inventory'].forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.classList.toggle('active',t===name);});
-  const c=document.getElementById('main-content');c.scrollTop=0;c.innerHTML='<div class="empty">Loading…</div>';
-  if(name==='stock')await renderStock(c);
-  else if(name==='requests')await renderRequests(c);
-  else if(name==='delivery')renderDelivery(c);
-  else if(name==='dispatch')await renderDispatch(c);
-  else if(name==='log')await renderLog(c);
-  else if(name==='inventory')await renderInventory(c);
-  refreshBadge();
- }catch(e){const c=document.getElementById('main-content');if(c)c.innerHTML='<div class="sc"><div class="empty">Could not open this tab.<br>'+(e&&e.message?e.message:e)+'</div></div>';}
+/* ── ISSUE (single page) ── */
+async function openIssue(){
+  selEmp=null; empLast={}; rc=0; pending=null; reservedNo='';
+  await Promise.all([loadEmployees(),loadVessels(),loadStock()]);
+  const vs=document.getElementById('i-vessel');
+  vs.innerHTML='<option value="">— Select vessel —</option>'+vessels.map(v=>`<option value="${(v.vessel_name||'').replace(/"/g,'&quot;')}" data-code="${(v.vessel_code||'').replace(/"/g,'&quot;')}">${v.vessel_name}${v.vessel_code?' · '+v.vessel_code:''}</option>`).join('');
+  document.getElementById('i-vessel-empty').style.display=vessels.length?'none':'block';
+  document.getElementById('i-emp').value='';
+  document.getElementById('i-emp-sug').innerHTML='';
+  const d=document.getElementById('i-date');d.min=todayYmd();d.value=todayYmd();
+  document.getElementById('i-by').value='';
+  document.getElementById('i-rows').innerHTML='';rc=0;addRow();
+  document.getElementById('i-warn').innerHTML='';
+  showScreen('s-issue');
+}
+function onEmpInput(){ selEmp=null; empLast={}; renderWarn(); empSuggest(); }
+function empSuggest(){
+  const q=(document.getElementById('i-emp').value||'').toLowerCase().replace(/\s+/g,'');
+  const box=document.getElementById('i-emp-sug');
+  let m=employees;
+  if(q)m=employees.filter(e=>((e.name||'').toLowerCase().replace(/\s+/g,'')).includes(q)||((e.code||'').toLowerCase().replace(/\s+/g,'')).includes(q));
+  m=m.slice(0,12);
+  if(!m.length){box.style.display='none';box.innerHTML='';return;}
+  box.innerHTML=m.map(e=>`<div onmousedown="pickEmp('${e.id}')" data-id="${e.id}">${e.name}${e.code?`<span class="vc">${e.code}</span>`:''}</div>`).join('');
+  box.style.display='block';
+}
+async function pickEmp(id){
+  selEmp=employees.find(e=>e.id===id)||null;
+  if(selEmp)document.getElementById('i-emp').value=selEmp.name||'';
+  const b=document.getElementById('i-emp-sug');b.style.display='none';b.innerHTML='';
+  await loadEmpLast();
+}
+function hideEmpSug(){setTimeout(()=>{const b=document.getElementById('i-emp-sug');if(b)b.style.display='none';},180);}
+async function loadEmpLast(){
+  empLast={};
+  if(selEmp){
+    try{const{data}=await sb.from('personnel_log').select('item_name,last_date').eq('site_key',SITE).eq('emp_name',selEmp.name);(data||[]).forEach(r=>empLast[r.item_name]=r.last_date);}catch(e){}
+  }
+  renderWarn();
+}
+function addRow(name='',qty=1){
+  rc++;const id='ir-'+rc;
+  const div=document.createElement('div');div.className='irow';div.id=id;
+  div.innerHTML=`<select class="fi" onchange="document.getElementById('u-${id}').textContent=gu(this.value);renderWarn()"><option value="">— Item —</option>${ITEMS.map(x=>`<option value="${x.n}"${x.n===name?' selected':''}>${x.n}</option>`).join('')}</select>
+    <input class="fi" type="number" min="1" value="${qty}" style="text-align:center" oninput="renderWarn()"/>
+    <div class="iunit" id="u-${id}">${name?gu(name):''}</div>
+    <div class="rm" onclick="document.getElementById('${id}').remove();renderWarn()">×</div>`;
+  document.getElementById('i-rows').appendChild(div);
+}
+function getRows(){
+  const out=[];let empty=false;
+  document.querySelectorAll('#i-rows .irow').forEach(r=>{
+    const s=r.querySelector('select'),q=r.querySelector('input[type=number]');
+    if(s&&s.value&&q&&parseInt(q.value)>0)out.push({n:s.value,qty:parseInt(q.value),u:gu(s.value)});
+    else if(s&&!s.value)empty=true;
+  });
+  return {out,empty};
+}
+function renderWarn(){
+  const box=document.getElementById('i-warn');if(!box)return;
+  if(!selEmp){box.innerHTML='';return;}
+  const {out}=getRows();const today=new Date();const w=[];
+  out.forEach(it=>{
+    const iv=giv(it.n),last=empLast[it.n];
+    if(iv>0&&last){
+      const days=Math.floor((today-new Date(last+'T00:00:00'))/86400000);
+      if(days<iv)w.push(`${it.n}: last issued to ${selEmp.name} ${days} day(s) ago (every ${iv}d)`);
+    }
+    const onhand=stockMap[it.n]||0;
+    if(it.qty>onhand)w.push(`${it.n}: only ${onhand} ${it.u} in stock, issuing ${it.qty}`);
+  });
+  box.innerHTML=w.length?`<div class="warn"><b>Heads up</b><br>${w.join('<br>')}</div>`:'';
+}
+async function reviewIssue(){
+  const vs=document.getElementById('i-vessel');
+  if(!vs.value){toast('Pick a vessel');return;}
+  if(!selEmp){
+    const typed=(document.getElementById('i-emp').value||'').trim().toLowerCase();
+    const m=employees.find(e=>(e.name||'').trim().toLowerCase()===typed);
+    if(m){selEmp=m;await loadEmpLast();}
+  }
+  if(!selEmp){toast('Choose the crew member from the list');return;}
+  const by=document.getElementById('i-by').value.trim();
+  const date=document.getElementById('i-date').value;
+  if(!date){toast('Pick a date');return;}
+  if(date<todayYmd()){toast('No back-dating allowed');return;}
+  if(!by){toast('Enter who is issuing');return;}
+  const {out,empty}=getRows();
+  if(empty){toast('Fill or remove the empty item row');return;}
+  if(!out.length){toast('Add at least one item');return;}
+  const opt=vs.options[vs.selectedIndex];
+  const vessel={name:vs.value,code:opt.getAttribute('data-code')||''};
+  if(!reservedNo){
+    let no='';try{const{data,error}=await sb.rpc('next_no',{p_prefix:'MI',p_site:SITECODE});if(!error&&data)no=data;}catch(e){}
+    if(!no){const n=new Date(),z=x=>String(x).padStart(2,'0');no='MI-'+SITECODE+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+    reservedNo=no;
+  }
+  pending={vessel,emp:selEmp,by,date,items:out,no:reservedNo};
+  document.getElementById('mislip-body').innerHTML=
+    `<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:12px;margin-bottom:12px">`
+    +`<div style="font-size:15px;font-weight:800">RSR — Material Issuance Slip</div>`
+    +`<div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--p);margin-top:2px">${reservedNo}</div>`
+    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(date)} · Carmen</div>`
+    +`</div>`
+    +`<div style="font-size:13px;line-height:1.9;color:var(--tx2);margin-bottom:12px">`
+    +`<div class="row2"><span>Vessel</span><b style="color:var(--tx)">${vessel.name}</b></div>`
+    +`<div class="row2"><span>Issued to</span><b style="color:var(--tx)">${selEmp.name}${selEmp.code?' · '+selEmp.code:''}</b></div>`
+    +`<div class="row2"><span>Issued by</span><b style="color:var(--tx)">${by}</b></div>`
+    +`</div>`
+    +`<div style="border-top:1.5px dashed var(--bd2);padding-top:10px">`
+    +`<div class="row2" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:10px"><span>Material</span><span>Qty</span></div>`
+    +out.map(c=>`<div class="row2" style="align-items:baseline;margin-bottom:9px"><div style="font-size:15px;font-weight:700;color:var(--tx)">${c.n}</div><div style="font-size:14px;color:var(--tx2);white-space:nowrap">${c.qty} ${c.u}</div></div>`).join('')
+    +`<div class="row2" style="align-items:baseline;border-top:1.5px dashed var(--bd2);padding-top:11px;margin-top:2px"><div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx2)">Total</div><div style="font-size:22px;font-weight:900;color:var(--p)">${out.reduce((s,i)=>s+i.qty,0)}</div></div></div>`;
+  document.getElementById('i-pin').value='';
+  document.getElementById('mislip-modal').style.display='flex';
+}
+async function confirmIssue(){
+  if(!pending)return;
+  const pin=document.getElementById('i-pin').value.trim();
+  if(!pin){toast('Enter the crew PIN');return;}
+  try{const{data:ok,error}=await sb.rpc('verify_pin',{emp_id:pending.emp.id,pin_input:pin});if(error)throw error;if(!ok){toast('Wrong PIN');return;}}
+  catch(e){toast('PIN check failed: '+e.message);return;}
+  const n=new Date(),z=x=>String(x).padStart(2,'0');
+  const createdAt=new Date(pending.date+'T'+z(n.getHours())+':'+z(n.getMinutes())+':00').toISOString();
+  const itemsJson=pending.items.map(i=>({n:i.n,u:i.u,qty:i.qty}));
+  const row={id:pending.no,site_key:SITE,proj_name:pending.vessel.name,proj_code:pending.vessel.code||null,emp_name:pending.emp.name,date:pending.date,by_name:pending.by,items:itemsJson,slip_no:pending.no,created_at:createdAt};
+  try{
+    const{error}=await sb.from('issuances').insert([row]);if(error)throw error;
+    for(const it of pending.items){
+      const cur=stockMap[it.n]||0;const nq=Math.max(0,cur-it.qty);
+      await sb.from('site_stock').upsert({site_key:SITE,item_name:it.n,qty:nq,updated_at:new Date().toISOString()},{onConflict:'site_key,item_name'});
+      stockMap[it.n]=nq;
+      await sb.from('personnel_log').upsert({site_key:SITE,emp_name:pending.emp.name,item_name:it.n,last_date:pending.date,last_qty:it.qty},{onConflict:'site_key,emp_name,item_name'});
+    }
+    const no=pending.no,total=pending.items.reduce((s,i)=>s+i.qty,0),vn=pending.vessel.name;
+    pending=null;reservedNo='';
+    document.getElementById('mislip-modal').style.display='none';
+    document.getElementById('ok-no').textContent=no;
+    document.getElementById('ok-info').textContent=total+' item(s) to '+vn;
+    document.getElementById('ok-modal').style.display='flex';
+    autoRequestCheck();
+  }catch(e){toast('Save failed: '+e.message);}
+}
+function newIssue(){document.getElementById('ok-modal').style.display='none';openIssue();}
+
+/* ── REQUEST ── */
+let rr=0;
+async function openRequest(){
+  rr=0;
+  await loadStock();
+  const d=document.getElementById('r-date');d.min=todayYmd();d.value=todayYmd();
+  document.getElementById('r-by').value='';
+  document.getElementById('r-remarks').value='';
+  document.getElementById('r-urgent').checked=false;
+  document.getElementById('r-rows').innerHTML='';addReqRow();
+  showScreen('s-request');
+}
+function addReqRow(name='',qty=1){
+  rr++;const id='rr-'+rr;
+  const div=document.createElement('div');div.className='irow';div.id=id;
+  div.innerHTML=`<select class="fi" onchange="document.getElementById('ru-${id}').textContent=gu(this.value)"><option value="">— Item —</option>${ITEMS.map(x=>`<option value="${x.n}"${x.n===name?' selected':''}>${x.n}</option>`).join('')}</select>
+    <input class="fi" type="number" min="1" value="${qty}" style="text-align:center"/>
+    <div class="iunit" id="ru-${id}">${name?gu(name):''}</div>
+    <div class="rm" onclick="document.getElementById('${id}').remove()">×</div>`;
+  document.getElementById('r-rows').appendChild(div);
+}
+function addLowStock(){
+  const low=ITEMS.filter(it=>(stockMap[it.n]||0)<=it.th);
+  if(!low.length){toast('No low-stock items right now');return;}
+  // remove the single empty starter row if present
+  const rows=document.querySelectorAll('#r-rows .irow');
+  if(rows.length===1){const s=rows[0].querySelector('select');if(s&&!s.value)rows[0].remove();}
+  const existing=new Set();
+  document.querySelectorAll('#r-rows .irow select').forEach(s=>{if(s.value)existing.add(s.value);});
+  low.forEach(it=>{if(!existing.has(it.n))addReqRow(it.n,Math.max(1,it.th));});
+  toast(low.length+' low-stock item(s) added');
+}
+function getReqRows(){
+  const out=[];let empty=false;
+  document.querySelectorAll('#r-rows .irow').forEach(r=>{
+    const s=r.querySelector('select'),q=r.querySelector('input[type=number]');
+    if(s&&s.value&&q&&parseInt(q.value)>0)out.push({n:s.value,qty:parseInt(q.value),u:gu(s.value)});
+    else if(s&&!s.value)empty=true;
+  });
+  return {out,empty};
+}
+async function submitRequest(){
+  const by=document.getElementById('r-by').value.trim();
+  const date=document.getElementById('r-date').value;
+  const remarks=document.getElementById('r-remarks').value.trim();
+  const urgent=document.getElementById('r-urgent').checked;
+  if(!by){toast('Enter who is requesting');return;}
+  if(!date){toast('Pick a date');return;}
+  const {out,empty}=getReqRows();
+  if(empty){toast('Fill or remove the empty item row');return;}
+  if(!out.length){toast('Add at least one item');return;}
+  let id='';
+  try{const{data,error}=await sb.rpc('next_request_no',{p_site:SITECODE,p_mode:'M'});if(!error&&data)id=data;}catch(e){}
+  if(!id){const n=new Date(),z=x=>String(x).padStart(2,'0');id='MR-'+SITECODE+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds())+'-M';}
+  const row={id,site:SITE,by_name:by,date,remarks:remarks||null,items:out.map(i=>({n:i.n,u:i.u,qty:i.qty})),status:'Pending',urgent,created_at:new Date().toISOString(),updated_at:new Date().toISOString()};
+  try{
+    const{error}=await sb.from('requests').insert([row]);if(error)throw error;
+    toast('Request submitted'+(urgent?' (URGENT)':''));
+    openReqHist();
+  }catch(e){toast('Save failed: '+e.message);}
+}
+/* ── AUTO-REQUEST (low + predicted) ── */
+async function autoRequestCheck(){
+  try{
+    await loadStock();
+    // items already on an open request (avoid duplicates)
+    const have=new Set();
+    try{const{data}=await sb.from('requests').select('items,status').eq('site',SITE).in('status',['Pending','Approved','Dispatched']);(data||[]).forEach(r=>(r.items||[]).forEach(it=>have.add(it.n||it.name)));}catch(e){}
+    // daily usage from last 30 days of issuances
+    const since=new Date(Date.now()-30*86400000).toISOString();
+    const daily={};
+    try{const{data}=await sb.from('issuances').select('items,created_at').eq('site_key',SITE).gte('created_at',since).limit(500);
+      const use={};(data||[]).forEach(r=>(r.items||[]).forEach(it=>{const nm=it.n||it.name;use[nm]=(use[nm]||0)+(it.qty||0);}));
+      Object.keys(use).forEach(k=>daily[k]=use[k]/30);
+    }catch(e){}
+    const H=14; // forecast horizon (days)
+    const autoItems=[];
+    ITEMS.forEach(it=>{
+      const cur=stockMap[it.n]||0, du=daily[it.n]||0;
+      const lowNow=cur<=it.th;
+      const predLow=du>0 && (cur-du*H)<=it.th;
+      if((lowNow||predLow)&&!have.has(it.n)){
+        const target=Math.max(it.th*2, Math.ceil(du*H)+it.th);
+        const qty=Math.max(1, target-cur);
+        autoItems.push({n:it.n,u:it.u,qty});
+      }
+    });
+    if(!autoItems.length)return;
+    let id='';
+    try{const{data,error}=await sb.rpc('next_request_no',{p_site:SITECODE,p_mode:'A'});if(!error&&data)id=data;}catch(e){}
+    if(!id){const n=new Date(),z=x=>String(x).padStart(2,'0');id='MR-'+SITECODE+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds())+'-A';}
+    const anyZero=autoItems.some(a=>(stockMap[a.n]||0)<=0);
+    const row={id,site:SITE,by_name:'System (auto)',date:todayYmd(),remarks:'Auto-generated · low / predicted stock',items:autoItems,status:'Pending',urgent:anyZero,created_at:new Date().toISOString(),updated_at:new Date().toISOString()};
+    const{error}=await sb.from('requests').insert([row]);
+    if(!error)toast('Auto-request created: '+autoItems.length+' low item(s)');
+  }catch(e){}
+}
+
+async function openReqHist(){
+  showScreen('s-reqhist');
+  const el=document.getElementById('rh-list');el.innerHTML='<div class="empty">Loading…</div>';
+  let rows=[];
+  try{const{data}=await sb.from('requests').select('*').eq('site',SITE).order('created_at',{ascending:false}).limit(100);rows=data||[];}catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
+  if(!rows.length){el.innerHTML='<div class="empty">No requests yet.</div>';return;}
+  const stBadge=s=>{const c={Pending:'var(--am)',Approved:'var(--b)',Dispatched:'var(--b)',Received:'var(--pm)',Cancelled:'var(--tx3)'}[s]||'var(--tx3)';return `<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:${c};color:#fff">${(s||'Pending').toUpperCase()}</span>`;};
+  el.innerHTML=rows.map(r=>{
+    const its=(r.items||[]);
+    const total=its.reduce((s,i)=>s+(Number(i.qty)||0),0);
+    const itemRows=its.map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${i.n}</span><span style="font-family:ui-monospace,monospace;color:var(--tx2);white-space:nowrap">${i.qty}${i.u?' '+i.u:''}</span></div>`).join('');
+    return `<div style="border:1.5px solid var(--bd);border-radius:14px;padding:16px;margin-bottom:12px">
+      <div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:12px;margin-bottom:10px">
+        <div style="font-size:15px;font-weight:800;color:var(--p)">Material Request</div>
+        <div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.id}${r.dr_no?' · '+r.dr_no:''}</div>
+        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(r.date)} · ${r.site||'—'}</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Requested by</span><span style="font-weight:700">${r.by_name||'—'}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Status</span>${stBadge(r.status)}</div>
+      ${r.urgent?'<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Priority</span><span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:var(--r);color:#fff">URGENT</span></div>':''}
+      ${r.remarks?`<div style="font-size:12px;color:var(--tx3);margin-top:4px">“${r.remarks}”</div>`:''}
+      <div style="border-top:1.5px dashed var(--bd2);margin:10px 0 8px;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Item</span><span>Qty</span></div>
+      ${itemRows}
+      <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-size:13px;font-weight:800;text-transform:uppercase;color:var(--tx2)">Total</span>
+        <span style="font-size:20px;font-weight:900;color:var(--p)">${total} units</span></div>
+    </div>`;
+  }).join('');
+}
+
+/* ── RECEIVE / DELIVERY ── */
+let dr=0, linkedReq=null, linkedDispatch=null, sentMap={};
+async function openReceive(){
+  showScreen('s-receive');
+  const el=document.getElementById('rcv-list');el.innerHTML='<div class="empty">Loading…</div>';
+  let rows=[];
+  try{const{data}=await sb.from('dispatches').select('*').eq('site',SITE).order('created_at',{ascending:false}).limit(60);rows=(data||[]).filter(d=>!d.received);}
+  catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
+  window._rcvDisp=rows;
+  if(!rows.length){el.innerHTML='<div class="empty">No incoming dispatches. Use “Log direct delivery” below.</div>';return;}
+  el.innerHTML=rows.map(d=>{
+    const items=(d.items||[]).map(i=>`${i.n} ${i.qty}${i.u?' '+i.u:''}`).join(' · ');
+    return `<div class="row2" style="align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--bg3)">
+      <div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${d.dr_no||d.id}</div>
+      <div style="font-size:12px;color:var(--tx2);margin-top:3px">${items}</div>
+      <div style="font-size:11px;color:var(--tx3);margin-top:2px">${fmtNice(d.date)}</div></div>
+      <button class="btn btn-p" style="padding:9px 14px;white-space:nowrap" onclick='openDispatchById("${d.id}")'>Receive</button>
+    </div>`;
+  }).join('');
+}
+function openDispatchById(id){const d=(window._rcvDisp||[]).find(x=>x.id===id);openDelivery(d||null);}
+async function openDelivery(disp){
+  dr=0; linkedDispatch=disp?disp.id:null; linkedReq=disp?disp.request_id:null; sentMap={};
+  await loadStock();
+  document.getElementById('dl-sub').textContent=disp?('Receiving '+(disp.dr_no||disp.id)):'Direct delivery';
+  document.getElementById('dl-source').value=disp?'Warehouse':'';
+  document.getElementById('dl-ref').value=disp?(disp.dr_no||''):'';
+  document.getElementById('dl-date').value=todayYmd();
+  document.getElementById('dl-by').value='';
+  document.getElementById('dl-rows').innerHTML='';
+  const addBtn=document.querySelector('#s-delivery .add-row');
+  if(disp&&(disp.items||[]).length){
+    (disp.items||[]).forEach(i=>{sentMap[i.n]=Number(i.qty)||0;addRecvRow(i.n,i.qty,i.u);});
+    if(addBtn)addBtn.style.display='none';
+  } else {
+    if(addBtn)addBtn.style.display='';
+    addDelRow();
+  }
+  showScreen('s-delivery');
+}
+function addRecvRow(name,sent,unit){
+  dr++;const id='dl-'+dr;const u=unit||gu(name);
+  const div=document.createElement('div');div.className='irow';div.id=id;
+  div.setAttribute('data-name',name);div.setAttribute('data-unit',u);
+  div.style.cssText='display:grid;grid-template-columns:minmax(0,1fr) 80px 44px;gap:8px;align-items:center;margin-bottom:8px';
+  div.innerHTML=`<div style="min-width:0"><div style="font-weight:600;font-size:14px">${name}</div><div style="font-size:11px;color:var(--tx3)">sent: ${sent} ${u}</div></div>
+    <input class="fi" type="number" min="0" value="${sent}" style="text-align:center"/>
+    <div class="iunit">${u}</div>`;
+  document.getElementById('dl-rows').appendChild(div);
+}
+function addDelRow(name='',qty=1){
+  dr++;const id='dl-'+dr;
+  const div=document.createElement('div');div.className='irow';div.id=id;
+  div.innerHTML=`<select class="fi" onchange="document.getElementById('du-${id}').textContent=gu(this.value)"><option value="">— Item —</option>${ITEMS.map(x=>`<option value="${x.n}"${x.n===name?' selected':''}>${x.n}</option>`).join('')}</select>
+    <input class="fi" type="number" min="1" value="${qty}" style="text-align:center"/>
+    <div class="iunit" id="du-${id}">${name?gu(name):''}</div>
+    <div class="rm" onclick="document.getElementById('${id}').remove()">×</div>`;
+  document.getElementById('dl-rows').appendChild(div);
+}
+function getDelRows(){
+  const out=[];let empty=false;
+  document.querySelectorAll('#dl-rows .irow').forEach(r=>{
+    if(r.getAttribute('data-name')){
+      const q=r.querySelector('input[type=number]');const qty=parseInt(q&&q.value)||0;
+      if(qty>0)out.push({n:r.getAttribute('data-name'),qty,u:r.getAttribute('data-unit')||gu(r.getAttribute('data-name'))});
+    } else {
+      const s=r.querySelector('select'),q=r.querySelector('input[type=number]');
+      if(s&&s.value&&q&&parseInt(q.value)>0)out.push({n:s.value,qty:parseInt(q.value),u:gu(s.value)});
+      else if(s&&!s.value)empty=true;
+    }
+  });
+  return {out,empty};
+}
+async function confirmDelivery(){
+  const by=document.getElementById('dl-by').value.trim();
+  const date=document.getElementById('dl-date').value;
+  const source=document.getElementById('dl-source').value.trim()||'Delivery';
+  const ref=document.getElementById('dl-ref').value.trim();
+  if(!by){toast('Enter who received it');return;}
+  const {out,empty}=getDelRows();
+  if(empty){toast('Fill or remove the empty item row');return;}
+  if(!out.length&&!linkedDispatch){toast('Add at least one item');return;}
+  const recvMap={};out.forEach(it=>{recvMap[it.n]=(recvMap[it.n]||0)+it.qty;});
+  let short=[];
+  if(linkedDispatch){short=Object.keys(sentMap).map(nm=>({n:nm,u:gu(nm),qty:Math.max(0,(sentMap[nm]||0)-(recvMap[nm]||0))})).filter(x=>x.qty>0);}
+  const n=new Date(),z=x=>String(x).padStart(2,'0');
+  const id='DLV-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
+  const base={id,site:SITE,source,ref:ref||null,date,received_by:by,items:out.map(i=>({n:i.n,u:i.u,qty:i.qty})),request_id:linkedReq,created_at:new Date().toISOString()};
+  try{
+    let ins=await sb.from('deliveries').insert([{...base,short:short,dr_no:ref||null,dispatch_id:linkedDispatch}]);
+    if(ins.error){ins=await sb.from('deliveries').insert([base]);if(ins.error)throw ins.error;}
+    for(const it of out){const cur=stockMap[it.n]||0;const nq=cur+it.qty;await sb.from('site_stock').upsert({site_key:SITE,item_name:it.n,qty:nq,updated_at:new Date().toISOString()},{onConflict:'site_key,item_name'});stockMap[it.n]=nq;}
+    if(linkedDispatch){
+      let u=await sb.from('dispatches').update({received:true,received_at:new Date().toISOString(),received_by:by,short_items:short}).eq('id',linkedDispatch);
+      if(u.error){await sb.from('dispatches').update({received:true}).eq('id',linkedDispatch);}
+    }
+    if(linkedReq){
+      if(short.length){
+        let u=await sb.from('requests').update({status:'Partial',items:short,updated_at:new Date().toISOString()}).eq('id',linkedReq);
+        if(u.error){await sb.from('requests').update({status:'Partial',updated_at:new Date().toISOString()}).eq('id',linkedReq);}
+      } else {
+        await sb.from('requests').update({status:'Received',updated_at:new Date().toISOString()}).eq('id',linkedReq);
+      }
+    }
+    toast(short.length?('Received · '+short.length+' item(s) short'):'Received · stock updated');
+    openReceive();
+  }catch(e){toast('Save failed: '+e.message);}
+}
+
+/* ── RECORDS ── */
+function openRecords(){showScreen('s-records');renderRecords('issued');}
+async function renderRecords(tab){
+  ['issued','received','tracking'].forEach(t=>{const b=document.getElementById('rec-tab-'+t);if(b)b.className='btn '+(t===tab?'btn-p':'btn-sec');});
+  const el=document.getElementById('rec-list');el.innerHTML='<div class="empty">Loading…</div>';
+  const itRows=its=>(its||[]).map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${i.n}</span><span style="font-family:ui-monospace,monospace;color:var(--tx2)">${i.qty}${i.u?' '+i.u:''}</span></div>`).join('');
+  const tot=its=>(its||[]).reduce((s,i)=>s+(Number(i.qty)||0),0);
+  const bdg=s=>{const c={Pending:'var(--am)',Approved:'var(--b)',Partial:'var(--am)',Dispatched:'var(--b)',Received:'var(--pm)',Cancelled:'var(--tx3)'}[s]||'var(--tx3)';return `<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:${c};color:#fff;white-space:nowrap">${(s||'').toUpperCase()}</span>`;};
+  const dd=(headHtml,bodyHtml,accent)=>`<div style="border:1px solid ${accent||'var(--bd)'};border-radius:12px;margin-bottom:10px;overflow:hidden">
+    <div onclick="var b=this.nextElementSibling;var o=b.style.display!=='none';b.style.display=o?'none':'block';this.querySelector('.chev').textContent=o?'▸':'▾'" style="padding:12px 14px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;cursor:pointer;gap:8px">${headHtml}<span class="chev" style="color:var(--tx3);font-size:13px">▸</span></div>
+    <div style="display:none;padding:14px">${bodyHtml}</div></div>`;
+  if(tab==='issued'){
+    let rows=[];try{const{data}=await sb.from('issuances').select('*').eq('site_key',SITE).order('created_at',{ascending:false}).limit(80);rows=data||[];}
+    catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
+    if(!rows.length){el.innerHTML='<div class="empty">No issuances yet.</div>';return;}
+    el.innerHTML=rows.map(r=>{
+      const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px">${r.proj_name||'—'}</div><div style="font-family:ui-monospace,monospace;font-size:12px;color:var(--p)">${r.slip_no||r.id||''}</div></div><div style="font-size:12px;color:var(--tx3);white-space:nowrap">${fmtNice(r.date)}</div>`;
+      const body=`<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px"><div style="font-size:15px;font-weight:800;color:var(--p)">Material Issuance</div><div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.slip_no||r.id||''}</div><div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(r.date)} · ${SITE}</div></div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Project / vessel</span><span style="font-weight:700">${r.proj_name||'—'}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Issued to</span><span style="font-weight:700">${r.emp_name||'—'}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Issued by</span><span style="font-weight:700">${r.by_name||'—'}</span></div>
+        <div style="border-top:1.5px dashed var(--bd2);margin:10px 0 8px;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Item</span><span>Qty</span></div>
+        ${itRows(r.items)}
+        <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:800;text-transform:uppercase;color:var(--tx2)">Total</span><span style="font-size:20px;font-weight:900;color:var(--p)">${tot(r.items)} units</span></div>`;
+      return dd(head,body);
+    }).join('');
+  } else if(tab==='received'){
+    let rows=[];try{const{data}=await sb.from('deliveries').select('*').eq('site',SITE).order('created_at',{ascending:false}).limit(80);rows=data||[];}
+    catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
+    if(!rows.length){el.innerHTML='<div class="empty">No deliveries yet.</div>';return;}
+    el.innerHTML=rows.map(r=>{
+      const short=(r.short||[]);
+      const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${r.dr_no||r.ref||r.id}</div><div style="font-size:12px;color:var(--tx2)">${r.source||'Delivery'} · ${fmtNice(r.date)}</div></div>${short.length?'<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:var(--r);color:#fff">SHORT</span>':'<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:var(--pm);color:#fff">OK</span>'}`;
+      const shortRows=short.length?`<div style="background:var(--rl);color:var(--r);font-size:12px;padding:9px 11px;border-radius:8px;margin-top:8px"><b>⚠ Short / not received</b><br>${short.map(s=>`${s.n} ${s.qty}${s.u?' '+s.u:''}`).join(' · ')}<br><span style="color:var(--tx2)">Sent back to the warehouse as still owed.</span></div>`:'';
+      const body=`<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px"><div style="font-size:15px;font-weight:800;color:var(--p)">Delivery Receipt</div><div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.dr_no||r.ref||r.id}</div><div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(r.date)} · ${r.source||'Delivery'}</div></div>
+        <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Received by</span><span style="font-weight:700">${r.received_by||'—'}</span></div>
+        <div style="border-top:1.5px dashed var(--bd2);margin:10px 0 8px;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Received</span><span>Qty</span></div>
+        ${itRows(r.items)}
+        <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:800;text-transform:uppercase;color:var(--tx2)">Total</span><span style="font-size:20px;font-weight:900;color:var(--p)">${tot(r.items)} units</span></div>${shortRows}`;
+      return dd(head,body,short.length?'var(--rm)':null);
+    }).join('');
+  } else {
+    let reqs=[],disps=[],dels=[];
+    try{const[a,b,c]=await Promise.all([
+      sb.from('requests').select('*').eq('site',SITE).order('created_at',{ascending:false}).limit(60),
+      sb.from('dispatches').select('*').eq('site',SITE).limit(200),
+      sb.from('deliveries').select('*').eq('site',SITE).limit(200)
+    ]);reqs=a.data||[];disps=b.data||[];dels=c.data||[];}
+    catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
+    if(!reqs.length){el.innerHTML='<div class="empty">No requests yet.</div>';return;}
+    const step=(num,color,title,html)=>`<div style="display:flex;gap:10px;margin-bottom:12px"><div style="flex:none;width:22px;height:22px;border-radius:50%;background:${color};color:#fff;font-size:12px;font-weight:800;display:flex;align-items:center;justify-content:center">${num}</div><div style="flex:1;min-width:0"><div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.3px;color:var(--tx2);margin-bottom:3px">${title}</div>${html}</div></div>`;
+    el.innerHTML=reqs.map(r=>{
+      const myDisp=disps.filter(d=>d.request_id===r.id);
+      const myDel=dels.filter(d=>d.request_id===r.id||myDisp.some(x=>x.id===d.dispatch_id));
+      const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${r.id}</div><div style="font-size:12px;color:var(--tx2)">${fmtNice(r.date)}${r.urgent?' · <span style=\"color:var(--r);font-weight:800\">URGENT</span>':''}</div></div>${bdg(r.status)}`;
+      const s1=step('1','var(--am)','Requested · by '+(r.by_name||'—'),itRows(r.items)||'<div style="font-size:12px;color:var(--tx3)">—</div>');
+      const s2=step('2','var(--b)','Dispatched',myDisp.length?myDisp.map(d=>`<div style="margin-bottom:6px"><div style="font-family:ui-monospace,monospace;font-size:12px;color:var(--b)">${d.dr_no||d.id} · ${fmtNice(d.date)}</div>${itRows(d.items)}</div>`).join(''):'<div style="font-size:12px;color:var(--tx3)">Not yet dispatched</div>');
+      const s3=step('3','var(--pm)','Received',myDel.length?myDel.map(d=>{const sh=(d.short||[]);return `<div style="margin-bottom:6px"><div style="font-size:12px;color:var(--tx2)">${fmtNice(d.date)} · by ${d.received_by||'—'}</div>${itRows(d.items)}${sh.length?`<div style="font-size:12px;color:var(--r);margin-top:3px">⚠ short: ${sh.map(s=>s.n+' '+s.qty).join(', ')}</div>`:''}</div>`;}).join(''):'<div style="font-size:12px;color:var(--tx3)">Not yet received</div>');
+      return dd(head,s1+s2+s3);
+    }).join('');
+  }
 }
 
 /* ── STOCK ── */
-async function renderStock(c){
-  await Promise.all([loadStock(),loadPrices()]);
-  let low=0,zero=0,total=0;
-  catalog.forEach(i=>{const q=stockMap[i.n]||0;total+=q;if(q<=0)zero++;else if(i.th>0&&q<=i.th)low++;});
-  c.innerHTML='<div class="mstrip">'
-    +`<div class="mbox"><div class="mv">${total}</div><div class="ml">Total on hand</div></div>`
-    +`<div class="mbox" style="border-color:var(--am)"><div class="mv" style="color:var(--ad)">${low}</div><div class="ml">Low stock</div></div>`
-    +`<div class="mbox" style="border-color:var(--rm)"><div class="mv" style="color:var(--r)">${zero}</div><div class="ml">Out of stock</div></div></div>`
-    +'<div class="sc"><table class="tbl"><thead><tr><th>Item</th><th>Unit</th><th style="text-align:right">On hand</th><th>Min</th><th>Status</th></tr></thead><tbody>'
-    +catalog.map(i=>{const q=stockMap[i.n]||0;const b=q<=0?'<span class="badge bdanger">Out</span>':(i.th>0&&q<=i.th)?'<span class="badge bwarn">Low</span>':'<span class="badge bok">OK</span>';
-      return `<tr><td style="font-weight:600">${i.n}</td><td style="color:var(--tx2)">${i.u}</td><td style="text-align:right;font-size:16px;font-weight:700;color:${q<=0?'var(--r)':(i.th>0&&q<=i.th)?'var(--ad)':'var(--tx)'}">${q}</td><td style="color:var(--tx2)">${i.th>0?i.th:'—'}</td><td>${b}</td></tr>`;}).join('')
-    +'</tbody></table></div>';
-}
-
-/* ── REQUESTS ── */
-async function renderRequests(c){
-  let rows=[];try{const{data}=await sb.from('requests').select('*').in('status',['Pending','Approved','Partial']).order('created_at',{ascending:false}).limit(100);rows=data||[];}catch(e){}
-  window._reqs=rows;
-  if(!rows.length){c.innerHTML='<div class="sc"><div class="empty">No open requests.</div></div>';return;}
-  const stBadge=s=>({Pending:'bwarn',Approved:'binfo',Partial:'bwarn',Dispatched:'binfo',Received:'bok',Cancelled:''}[s]||'');
-  c.innerHTML=rows.map(r=>{
-    const its=(r.items||[]);
-    const total=its.reduce((s,i)=>s+(Number(i.qty)||0),0);
-    const itemRows=its.map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${i.n}</span><span style="font-family:monospace;color:var(--tx2);white-space:nowrap">${i.qty}${i.u?' '+i.u:''}</span></div>`).join('');
-    return `<div class="sc" style="max-width:420px;margin:0 auto 14px;padding:18px 16px">
-      <div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:12px;margin-bottom:10px">
-        <div style="font-size:15px;font-weight:700;color:var(--p)">Material Request</div>
-        <div style="font-family:monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.id}${r.dr_no?' · '+r.dr_no:''}</div>
-        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmt(r.date||r.created_at)} · ${r.site||'—'}</div>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Requested by</span><span style="font-weight:600">${r.by_name||'—'}</span></div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Status</span><span class="badge ${stBadge(r.status)}">${(r.status||'').toUpperCase()}</span></div>
-      ${r.urgent?'<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Priority</span><span class="badge bdanger">URGENT</span></div>':''}
-      ${r.status==='Partial'?'<div style="background:var(--al);color:var(--ad);font-size:12px;padding:8px 10px;border-radius:8px;margin-top:6px">⚠ Partially given — only the items below are still owed. The rest was already dispatched (see Dispatch log).</div>':''}
-      ${r.remarks?`<div style="font-size:12px;color:var(--tx3);margin-top:4px">“${r.remarks}”</div>`:''}
-      <div style="border-top:1.5px dashed var(--bd2);margin:10px 0 8px;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>${r.status==='Partial'?'Still owed':'Item'}</span><span>Qty</span></div>
-      ${itemRows}
-      <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:baseline">
-        <span style="font-size:13px;font-weight:700;text-transform:uppercase;color:var(--tx2)">${r.status==='Partial'?'Outstanding':'Total'}</span>
-        <span style="font-size:20px;font-weight:800;color:var(--p)">${total} units</span></div>
-      <div class="btn-row">
-        ${r.status!=='Dispatched'?`<button class="btn btn-secondary btn-sm" onclick="cancelReq('${r.id}')">Cancel</button><button class="btn btn-primary btn-sm" onclick="dispatchFromReq('${r.id}')">Dispatch →</button>`:'<span class="badge binfo">Dispatched · awaiting site receive</span>'}
-      </div></div>`;
+async function openStock(){showScreen('s-stock');await loadStock();renderStock();}
+function renderStock(){
+  const el=document.getElementById('stk-list');
+  el.innerHTML=ITEMS.map(it=>{
+    const q=stockMap[it.n]||0,low=q<=it.th;
+    return `<div class="stk-row">
+      <div><div class="stk-name ${low?'stk-low':''}">${it.n}</div><div class="stk-meta">${it.u} · min ${it.th}${low?'  <span class="pill">LOW</span>':''}</div></div>
+      <div style="font-size:20px;font-weight:800;${low?'color:var(--r)':'color:var(--tx)'}">${q}</div>
+    </div>`;
   }).join('');
-}
-async function cancelReq(id){try{await sb.from('requests').update({status:'Cancelled',updated_at:new Date().toISOString()}).eq('id',id);toast('Request cancelled');swTab('requests');}catch(e){toast('Failed: '+e.message,'err');}}
-function dispatchFromReq(id){const r=(window._reqs||[]).find(x=>x.id===id);if(!r)return;dispatchPrefill=r;swTab('dispatch');}
-
-/* ── RECORD DELIVERY (supplier → warehouse) ── */
-let dcRows=0;
-function renderDelivery(c){
-  dcRows=0;
-  c.innerHTML='<div class="sc"><div class="sc-title">Record incoming delivery</div><div class="sc-sub">Items received from a supplier. Stock updates immediately on save.</div>'
-    +'<div class="fr3"><div class="fg"><label class="fl">Supplier <span>*</span></label><input class="fi" id="del-sup" placeholder="Supplier name"/></div>'
-    +'<div class="fg"><label class="fl">Supplier DR / invoice</label><input class="fi" id="del-ref" placeholder="e.g. SDR-2026-041"/></div></div>'
-    +'<div class="fr3"><div class="fg"><label class="fl">Date <span>*</span></label><input class="fi" type="date" id="del-date"/></div>'
-    +'<div class="fg"><label class="fl">Received by <span>*</span></label><input class="fi" id="del-by" placeholder="Your name"/></div></div>'
-    +'<label class="fl">Items received <span>*</span></label>'
-    +'<div style="display:grid;grid-template-columns:minmax(0,2fr) 70px 78px 38px;gap:8px;margin-bottom:6px"><span class="fl" style="margin:0">Item</span><span class="fl" style="margin:0">Qty</span><span class="fl" style="margin:0">Unit \u20b1</span><span></span></div>'
-    +'<div id="del-rows"></div><button class="add-row" onclick="addDelRow()">+ Add item</button>'
-    +'<div class="btn-row"><button class="btn btn-secondary btn-sm" onclick="swTab(\'delivery\')">Clear</button><button class="btn btn-primary" onclick="saveDelivery()">Save &amp; add to stock</button></div></div>';
-  document.getElementById('del-date').value=todayYmd();
-  addDelRow();addDelRow();
-}
-function addDelRow(name,qty){
-  dcRows++;const id='del-'+dcRows;
-  const div=document.createElement('div');div.className='irow';div.id=id;
-  div.innerHTML=`<select class="fi" id="dn-${id}" onchange="document.getElementById('dpr-${id}').value=(window._prices&&window._prices[this.value])||document.getElementById('dpr-${id}').value">${itemOpts(name||'')}</select>
-    <input class="fi" type="number" min="1" value="${qty||1}" id="dq-${id}" style="text-align:center"/>
-    <input class="fi" type="number" min="0" step="0.01" placeholder="\u20b1" id="dpr-${id}" style="text-align:center"/>
-    <div class="rm" onclick="document.getElementById('${id}').remove()">&#x2715;</div>`;
-  document.getElementById('del-rows').appendChild(div);
-}
-async function saveDelivery(){
-  await loadPrices();window._prices=prices;
-  const sup=document.getElementById('del-sup').value.trim();
-  const by=document.getElementById('del-by').value.trim();
-  const date=document.getElementById('del-date').value;
-  const ref=document.getElementById('del-ref').value.trim();
-  if(!sup||!by){toast('Supplier and received-by are required','err');return;}
-  const items=[];let empty=false;
-  document.querySelectorAll('#del-rows .irow').forEach(r=>{const id=r.id;const n=document.getElementById('dn-'+id).value;const q=parseInt(document.getElementById('dq-'+id).value)||0;const pr=parseFloat(document.getElementById('dpr-'+id).value)||0;if(n&&q>0)items.push({n,u:gu(n),qty:q,price:pr});else if(!n&&q>0)empty=true;});
-  if(empty){toast('Select an item for all rows','err');return;}
-  if(!items.length){toast('Add at least one item','err');return;}
-  await loadStock();
-  const n=new Date(),z=x=>String(x).padStart(2,'0');
-  const id='PO-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
-  const total=items.reduce((s,it)=>s+it.qty*(it.price||0),0);
-  try{
-    await sb.from('purchases').insert([{id,supplier:sup,invoice:ref||null,date,received_by:by,items,grand_total:total,created_at:new Date().toISOString()}]);
-    for(const it of items){const cur=stockMap[it.n]||0;await sb.from('warehouse_stock').upsert({item_name:it.n,qty:cur+it.qty,updated_at:new Date().toISOString()},{onConflict:'item_name'});if(it.price>0)await sb.from('item_prices').upsert({item_name:it.n,price:it.price,updated_at:new Date().toISOString()},{onConflict:'item_name'});}
-    toast('Delivery recorded · stock updated');
-    swTab('stock');
-  }catch(e){toast('Failed: '+e.message,'err');}
-}
-
-/* ── CREATE DISPATCH (warehouse → site) ── */
-let dpRows=0, dpReqId=null;
-async function renderDispatch(c){
-  await Promise.all([loadStock()]);
-  dpRows=0; dpReqId=dispatchPrefill?dispatchPrefill.id:null;
-  const siteOpts=(sites.length?sites:['Carmen','Mandaue']).map(s=>`<option value="${s}"${dispatchPrefill&&dispatchPrefill.site===s?' selected':''}>${s}</option>`).join('');
-  c.innerHTML='<div class="sc"><div class="sc-title">Create dispatch</div><div class="sc-sub">Send items to a site. Reduces warehouse stock; the site then receives it.</div>'
-    +(dpReqId?`<div class="disp-num-box"><div><div style="font-size:11px;color:var(--tx2)">Against request</div><div class="disp-num" style="font-size:14px">${dpReqId}</div></div></div>`:'')
-    +'<div class="fr3"><div class="fg"><label class="fl">Destination site <span>*</span></label><select class="fi" id="dp-site">'+siteOpts+'</select></div>'
-    +'<div class="fg"><label class="fl">Dispatched by <span>*</span></label><input class="fi" id="dp-by" placeholder="Your name"/></div></div>'
-    +'<label class="fl">Items to dispatch <span>*</span></label>'
-    +(dpReqId?'<div style="font-size:12px;color:var(--tx2);margin:-2px 0 8px">Pre-filled with what was requested. To give less, lower a qty or remove a row — whatever isn\'t given keeps the request open as <b>Partial</b>.</div>':'')
-    +'<div style="display:grid;grid-template-columns:minmax(0,2fr) 70px 38px;gap:8px;margin-bottom:6px"><span class="fl" style="margin:0">Item</span><span class="fl" style="margin:0">Qty</span><span></span></div>'
-    +'<div id="dp-rows"></div><button class="add-row" onclick="addDpRow()">+ Add item</button>'
-    +'<div class="btn-row"><button class="btn btn-secondary btn-sm" onclick="dispatchPrefill=null;swTab(\'dispatch\')">Clear</button><button class="btn btn-primary" onclick="saveDispatch()">Dispatch &amp; get DR no</button></div></div>';
-  if(dispatchPrefill&&(dispatchPrefill.items||[]).length)dispatchPrefill.items.forEach(it=>addDpRow(it.n,it.qty,it.qty));else addDpRow();
-  dispatchPrefill=null;
-}
-function addDpRow(name,qty,reqQty){
-  dpRows++;const id='dp-'+dpRows;
-  const div=document.createElement('div');div.className='irow nop';div.id=id;
-  div.innerHTML=`<div><select class="fi" id="pn-${id}">${itemOpts(name||'')}</select>${reqQty?`<div style="font-size:11px;color:var(--tx3);margin-top:3px">requested: ${reqQty}</div>`:''}</div>
-    <input class="fi" type="number" min="0" value="${qty||1}" id="pq-${id}" style="text-align:center"/>
-    <div class="rm" onclick="document.getElementById('${id}').remove()">&#x2715;</div>`;
-  document.getElementById('dp-rows').appendChild(div);
-}
-async function saveDispatch(){
-  const site=document.getElementById('dp-site').value;
-  const by=document.getElementById('dp-by').value.trim();
-  if(!site){toast('Pick a destination site','err');return;}
-  if(!by){toast('Enter who is dispatching','err');return;}
-  const items=[];let empty=false;
-  document.querySelectorAll('#dp-rows .irow').forEach(r=>{const id=r.id;const n=document.getElementById('pn-'+id).value;const q=parseInt(document.getElementById('pq-'+id).value)||0;if(n&&q>0)items.push({n,u:gu(n),qty:q});else if(!n&&q>0)empty=true;});
-  if(empty){toast('Select an item for all rows','err');return;}
-  if(!items.length){toast('Add at least one item','err');return;}
-  await loadStock();
-  const dcode=siteCode(site);
-  let drNo='';try{const{data,error}=await sb.rpc('next_no',{p_prefix:'DR',p_site:dcode});if(!error&&data)drNo=data;}catch(e){}
-  if(!drNo){const n=new Date(),z=x=>String(x).padStart(2,'0');drNo='DR-'+dcode+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
-  const n=new Date(),z=x=>String(x).padStart(2,'0');
-  const id='DSP-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
-  try{
-    await sb.from('dispatches').insert([{id,dr_no:drNo,site,request_id:dpReqId,items,dispatched_by:by,date:todayYmd(),created_at:new Date().toISOString()}]);
-    for(const it of items){const cur=stockMap[it.n]||0;await sb.from('warehouse_stock').upsert({item_name:it.n,qty:Math.max(0,cur-it.qty),updated_at:new Date().toISOString()},{onConflict:'item_name'});}
-    if(dpReqId){
-      let reqItems=[];try{const{data}=await sb.from('requests').select('items').eq('id',dpReqId).single();reqItems=(data&&data.items)||[];}catch(e){}
-      const givenMap={};items.forEach(it=>{givenMap[it.n]=(givenMap[it.n]||0)+it.qty;});
-      const remaining=reqItems.map(ri=>({n:ri.n,u:ri.u,qty:Math.max(0,(Number(ri.qty)||0)-(givenMap[ri.n]||0))})).filter(ri=>ri.qty>0);
-      const done=remaining.length===0;
-      const patch=done?{status:'Dispatched',dr_no:drNo,updated_at:new Date().toISOString()}
-                       :{status:'Partial',items:remaining,dr_no:drNo,updated_at:new Date().toISOString()};
-      let u=await sb.from('requests').update(patch).eq('id',dpReqId);
-      if(u.error){const{dr_no,...p2}=patch;await sb.from('requests').update(p2).eq('id',dpReqId);}
-    }
-    const c=document.getElementById('main-content');
-    c.innerHTML=`<div class="sc" style="text-align:center"><div style="font-size:40px">✅</div><div class="sc-title" style="margin-top:8px">Dispatch created</div>
-      <div class="disp-num-box" style="justify-content:center;margin-top:12px"><div class="disp-num">${drNo}</div></div>
-      <div class="sc-sub">${items.reduce((s,i)=>s+i.qty,0)} item(s) to ${site}. The site can now receive it.</div>
-      <button class="btn btn-primary" onclick="swTab('log')">View dispatch log</button></div>`;
-    toast('Dispatched '+drNo);
-  }catch(e){toast('Failed: '+e.message,'err');}
-}
-
-/* ── DISPATCH LOG ── */
-async function renderLog(c){
-  let rows=[];try{const{data}=await sb.from('dispatches').select('*').order('created_at',{ascending:false}).limit(80);rows=data||[];}catch(e){}
-  if(!rows.length){c.innerHTML='<div class="sc"><div class="empty">No dispatches yet.</div></div>';return;}
-  c.innerHTML='<div class="sc"><div class="sc-title">Dispatch log</div><div class="sc-sub">'+rows.length+' dispatch(es) · tap a row for the full slip</div>'
-    +rows.map(r=>{
-      const its=(r.items||[]);
-      const totalUnits=its.reduce((s,x)=>s+(Number(x.qty)||0),0);
-      const itemRows=its.map(it=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${it.n}</span><span style="font-family:monospace;color:var(--tx2);white-space:nowrap">${it.qty}${it.u?' '+it.u:''}</span></div>`).join('');
-      return `<div class="dcard">
-        <div class="dcard-hdr" onclick="var b=this.parentNode.querySelector('.dcard-body');b.classList.toggle('open');this.querySelector('.chev').textContent=b.classList.contains('open')?'▾':'▸'">
-          <div style="display:flex;align-items:center;gap:9px"><span class="chev" style="color:var(--tx3);font-size:13px">▸</span>
-          <div><div style="font-weight:700;font-family:monospace;color:var(--pd)">${r.dr_no||r.id}</div><div style="font-size:12px;color:var(--tx2)">${r.site||'—'} · ${fmt(r.date||r.created_at)}</div></div></div>
-          <span class="badge binfo">${totalUnits} ${its.length===1?'item':'items'}</span>
-        </div>
-        <div class="dcard-body">
-          <div style="border:1.5px dashed var(--bd2);border-radius:12px;padding:14px;margin-top:2px">
-            <div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px">
-              <div style="font-size:14px;font-weight:800;color:var(--p)">Dispatch Receipt</div>
-              <div style="font-family:monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.dr_no||r.id}</div>
-              <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmt(r.date||r.created_at)} · to ${r.site||'—'}</div>
-            </div>
-            <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Dispatched by</span><span style="font-weight:700">${r.dispatched_by||'—'}</span></div>
-            ${r.request_id?`<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Against request</span><span style="font-family:monospace">${r.request_id}</span></div>`:''}
-            <div style="border-top:1.5px dashed var(--bd2);margin:8px 0;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Item</span><span>Qty</span></div>
-            ${itemRows}
-            <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:800;text-transform:uppercase;color:var(--tx2)">Total</span><span style="font-size:18px;font-weight:800;color:var(--p)">${totalUnits} units</span></div>
-          </div>
-        </div>
-      </div>`;}).join('')
-    +'</div>';
-}
-
-/* ── INVENTORY (set on-hand) ── */
-async function renderInventory(c){
-  await loadStock();
-  c.innerHTML='<div class="sc"><div class="sc-title">Add a material</div><div class="sc-sub">For old stock not yet on the list. Type the name, unit, and how many are in the warehouse now.</div>'
-    +'<div class="fr3"><div class="fg"><label class="fl">Material name</label><input class="fi" id="ni-name" placeholder="e.g. Steel plate 6mm"/></div>'
-    +'<div class="fg"><label class="fl">Unit</label><input class="fi" id="ni-unit" placeholder="pcs / m / kg / set" value="pcs"/></div></div>'
-    +'<div class="fg"><label class="fl">Quantity on hand</label><input class="fi" type="number" min="0" id="ni-qty" value="0"/></div>'
-    +'<div class="btn-row"><button class="btn btn-primary" onclick="saveNewItem()">+ Add to warehouse</button></div></div>'
-    +'<div class="sc"><div class="sc-title">Inventory count</div><div class="sc-sub">Set the actual on-hand quantity for each item (opening balance or correction).</div>'
-    +catalog.map((i,idx)=>`<div class="irow nop" style="grid-template-columns:minmax(0,1fr) 90px 60px;align-items:center">
-      <div><div style="font-weight:600">${i.n}</div><div style="font-size:12px;color:var(--tx3)">${i.u}${i.th>0?' · min '+i.th:''}</div></div>
-      <input class="fi" type="number" min="0" id="inv-${idx}" value="${stockMap[i.n]||0}" style="text-align:center"/>
-      <button class="btn btn-primary btn-sm" onclick="saveInv(${idx})">Set</button></div>`).join('')
-    +'</div>';
-}
-async function saveInv(idx){
-  const it=catalog[idx];if(!it)return;
-  const v=parseInt(document.getElementById('inv-'+idx).value,10);
-  if(isNaN(v)||v<0){toast('Enter a valid qty','err');return;}
-  const err=await upsertStock(it.n,v,it.u);
-  if(err){toast('Failed: '+err.message,'err');return;}
-  stockMap[it.n]=v;toast(it.n+' set to '+v);
-}
-async function saveNewItem(){
-  const name=document.getElementById('ni-name').value.trim();
-  const unit=(document.getElementById('ni-unit').value.trim())||'pcs';
-  const qty=parseInt(document.getElementById('ni-qty').value,10)||0;
-  if(!name){toast('Enter a material name','err');return;}
-  if(catalog.find(i=>i.n.toLowerCase()===name.toLowerCase())){toast('That material is already listed','err');return;}
-  const err=await upsertStock(name,qty,unit);
-  if(err){toast('Failed: '+err.message,'err');return;}
-  toast(name+' added');
-  swTab('inventory');
 }
 </script>
 </body>
