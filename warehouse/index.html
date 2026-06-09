@@ -353,17 +353,36 @@ async function renderLog(c){
 /* ── INVENTORY (set on-hand) ── */
 async function renderInventory(c){
   await loadStock();
-  c.innerHTML='<div class="sc"><div class="sc-title">Inventory count</div><div class="sc-sub">Set the actual on-hand quantity for each item (initial entry or correction).</div>'
-    +ITEMS.map(i=>`<div class="irow nop" style="grid-template-columns:minmax(0,1fr) 90px 60px;align-items:center">
-      <div><div style="font-weight:600">${i.n}</div><div style="font-size:12px;color:var(--tx3)">${i.u} · min ${i.th}</div></div>
-      <input class="fi" type="number" min="0" id="inv-${i.n.replace(/[^a-zA-Z]/g,'')}" value="${stockMap[i.n]||0}" style="text-align:center"/>
-      <button class="btn btn-primary btn-sm" onclick="saveInv('${i.n.replace(/'/g,"\\'")}')">Set</button></div>`).join('')
+  c.innerHTML='<div class="sc"><div class="sc-title">Add a material</div><div class="sc-sub">For old stock not yet on the list. Type the name, unit, and how many are in the warehouse now.</div>'
+    +'<div class="fr3"><div class="fg"><label class="fl">Material name</label><input class="fi" id="ni-name" placeholder="e.g. Steel plate 6mm"/></div>'
+    +'<div class="fg"><label class="fl">Unit</label><input class="fi" id="ni-unit" placeholder="pcs / m / kg / set" value="pcs"/></div></div>'
+    +'<div class="fg"><label class="fl">Quantity on hand</label><input class="fi" type="number" min="0" id="ni-qty" value="0"/></div>'
+    +'<div class="btn-row"><button class="btn btn-primary" onclick="saveNewItem()">+ Add to warehouse</button></div></div>'
+    +'<div class="sc"><div class="sc-title">Inventory count</div><div class="sc-sub">Set the actual on-hand quantity for each item (opening balance or correction).</div>'
+    +catalog.map((i,idx)=>`<div class="irow nop" style="grid-template-columns:minmax(0,1fr) 90px 60px;align-items:center">
+      <div><div style="font-weight:600">${i.n}</div><div style="font-size:12px;color:var(--tx3)">${i.u}${i.th>0?' · min '+i.th:''}</div></div>
+      <input class="fi" type="number" min="0" id="inv-${idx}" value="${stockMap[i.n]||0}" style="text-align:center"/>
+      <button class="btn btn-primary btn-sm" onclick="saveInv(${idx})">Set</button></div>`).join('')
     +'</div>';
 }
-async function saveInv(name){
-  const v=parseInt(document.getElementById('inv-'+name.replace(/[^a-zA-Z]/g,'')).value,10);
+async function saveInv(idx){
+  const it=catalog[idx];if(!it)return;
+  const v=parseInt(document.getElementById('inv-'+idx).value,10);
   if(isNaN(v)||v<0){toast('Enter a valid qty','err');return;}
-  try{await sb.from('warehouse_stock').upsert({item_name:name,qty:v,updated_at:new Date().toISOString()},{onConflict:'item_name'});stockMap[name]=v;toast(name+' set to '+v);}catch(e){toast('Failed: '+e.message,'err');}
+  const err=await upsertStock(it.n,v,it.u);
+  if(err){toast('Failed: '+err.message,'err');return;}
+  stockMap[it.n]=v;toast(it.n+' set to '+v);
+}
+async function saveNewItem(){
+  const name=document.getElementById('ni-name').value.trim();
+  const unit=(document.getElementById('ni-unit').value.trim())||'pcs';
+  const qty=parseInt(document.getElementById('ni-qty').value,10)||0;
+  if(!name){toast('Enter a material name','err');return;}
+  if(catalog.find(i=>i.n.toLowerCase()===name.toLowerCase())){toast('That material is already listed','err');return;}
+  const err=await upsertStock(name,qty,unit);
+  if(err){toast('Failed: '+err.message,'err');return;}
+  toast(name+' added');
+  swTab('inventory');
 }
 </script>
 </body>
