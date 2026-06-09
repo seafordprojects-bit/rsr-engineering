@@ -2,193 +2,203 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
-<title>RSR Material Issuance</title>
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
+<title>RSR Material Issuance — Carmen</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
 <style>
-:root{--p:#1976D2;--tx:#0f2540;--tx2:#5a6b7e;--tx3:#9aa7b5;--line:#e3e9ef;--bg:#fff;--pl:#f4f7fb;--ok:#12B89E;--r:#e0506a;--rad:14px}
-*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--pl);color:var(--tx)}
-.app-header{background:var(--bg);border-bottom:1px solid var(--line);padding:12px 14px;display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
-.hdr-site{font-size:15px;font-weight:800}.hdr-sub{font-size:11px;color:var(--tx2);margin-top:1px}
-.back{background:none;border:none;color:var(--tx2);font-size:13px;font-weight:700;cursor:pointer;padding:6px}
-.wrap{max-width:520px;margin:0 auto;padding:14px}
-.card{background:var(--bg);border:1px solid var(--line);border-radius:var(--rad);padding:16px;margin-bottom:14px}
-.lbl{display:block;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin:10px 0 6px}
-.lbl:first-child{margin-top:0}
-.search{width:100%;padding:13px 14px;border:1.5px solid var(--line);border-radius:12px;font-size:16px;background:var(--bg);color:var(--tx);outline:none}
-.search:focus{border-color:var(--p)}
-.lbtn{width:100%;padding:14px;border:none;border-radius:12px;color:#fff;font-size:16px;font-weight:800;cursor:pointer;margin-top:12px}
-.combo{position:relative}
-.sug{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--bg);border:1.5px solid var(--line);border-radius:12px;box-shadow:0 8px 24px rgba(15,37,64,.12);z-index:30;max-height:240px;overflow:auto;display:none}
-.sug div{padding:11px 14px;font-size:15px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--pl)}
-.sug div:hover{background:var(--pl)}
-.vc{font-family:ui-monospace,monospace;font-size:12px;color:var(--tx3)}
-.empty{text-align:center;color:var(--tx3);padding:18px;font-size:14px}
-.tool-row{padding:11px 0;border-bottom:1px solid var(--pl)}
-.tool-row:last-child{border-bottom:none}
-.tool-name{font-size:15px;font-weight:700}.tool-meta{font-size:12px;color:var(--tx2);margin-top:2px}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{--p:#27500A;--pl:#EAF3DE;--pm:#639922;--pd:#122606;--b:#0C447C;--bl:#E6F1FB;--r:#791F1F;--rl:#FCEBEB;--rm:#F09595;--am:#EF9F27;--al:#FAEEDA;--bg:#fff;--bg2:#F7F7F5;--bg3:#EFEFEC;--bd:#E0DED8;--bd2:#C8C6BE;--tx:#1A1A18;--tx2:#5A5955;--tx3:#9A9890;--rad:10px;--radl:14px;--radx:18px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;background:var(--bg3);color:var(--tx)}
+.app{max-width:480px;margin:0 auto;background:var(--bg);min-height:100vh;display:flex;flex-direction:column}
+.screen{display:none}.screen.active{display:block}
+.lw{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--pl)}
+.lb{background:var(--bg);border-radius:var(--radx);padding:32px 24px;width:100%;max-width:340px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.1)}
+.lav{width:72px;height:72px;border-radius:50%;background:var(--pl);border:3px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:30px;margin:0 auto 14px}
+.fi{width:100%;padding:13px 14px;border:1.5px solid var(--bd2);border-radius:12px;font-size:16px;background:var(--bg);color:var(--tx);outline:none}
+.fi:focus{border-color:var(--pm)}
+.fl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3);margin:14px 0 6px;display:block}
+.fl:first-child{margin-top:0}
+.req{color:var(--r)}
+.lbtn{width:100%;padding:15px;font-size:16px;font-weight:700;border-radius:12px;border:none;background:var(--p);color:#fff;cursor:pointer;margin-top:14px}
+.btn{padding:14px;font-size:15px;font-weight:700;border-radius:12px;border:none;cursor:pointer}
+.btn-p{background:var(--p);color:#fff}.btn-sec{background:var(--bg2);color:var(--tx2);border:1.5px solid var(--bd)}
+.tb{padding:14px 16px;background:var(--pl);border-bottom:1.5px solid var(--pm);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
+.ttitle{font-size:16px;font-weight:700;color:var(--p)}.tsub{font-size:12px;color:var(--pm)}
+.bk{background:none;border:1.5px solid var(--pm);color:var(--p);width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:18px}
+.pc{padding:16px}
+.progress{display:flex;gap:6px;padding:12px 16px;background:var(--bg2)}
+.pstep{flex:1;height:4px;border-radius:99px;background:var(--bd2)}.pstep.active{background:var(--p)}.pstep.done{background:var(--pm)}
+.hcard{background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--radl);padding:18px;margin-bottom:12px;cursor:pointer;display:flex;align-items:center;gap:14px}
+.hcard .ico{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.hcard .ht{font-size:16px;font-weight:700}.hcard .hs{font-size:12px;color:var(--tx2);margin-top:2px}
+.hcard.soon{opacity:.55}
+.card{background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--radl);padding:16px;margin-bottom:14px}
+.irow{display:grid;grid-template-columns:minmax(0,1fr) 76px 40px 32px;gap:8px;align-items:center;margin-bottom:8px}
+.iunit{font-size:12px;color:var(--tx2);text-align:center}
+.rm{width:32px;height:38px;border:1.5px solid var(--bd2);border-radius:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--tx3);font-size:18px}
+.add-row{width:100%;padding:11px;border:1.5px dashed var(--pm);background:var(--pl);color:var(--p);border-radius:12px;font-weight:700;cursor:pointer;margin-top:4px}
+.warn{background:var(--al);border:1px solid var(--am);border-radius:10px;padding:10px 12px;font-size:13px;color:#7a4a06;margin-top:10px}
+.sum-row{display:flex;justify-content:space-between;padding:7px 0;border-bottom:1px solid var(--bd);font-size:14px}
+.sum-row:last-child{border-bottom:none}
+.stk-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid var(--bg3)}
+.stk-row:last-child{border-bottom:none}
+.stk-name{font-size:15px;font-weight:600}.stk-meta{font-size:12px;color:var(--tx3)}
+.stk-low{color:var(--r)}
+.pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--rl);color:var(--r)}
 .toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--tx);color:#fff;padding:11px 18px;border-radius:10px;font-size:14px;z-index:99;max-width:90%;text-align:center}
-.modal{display:none;position:fixed;inset:0;background:rgba(15,25,40,.5);z-index:80;align-items:center;justify-content:center;padding:16px}
-.modal .card{max-width:390px;width:100%;margin:0;max-height:92vh;overflow:auto}
-.row2{display:flex;justify-content:space-between;align-items:center;gap:10px}
-.kp{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;padding:24px;gap:6px}
+.modal{display:none;position:fixed;inset:0;background:rgba(15,25,15,.5);z-index:80;align-items:center;justify-content:center;padding:16px}
+.modal .card{max-width:380px;width:100%;margin:0;text-align:center}
+.empty{text-align:center;color:var(--tx3);padding:18px;font-size:14px}
+.btn-row{display:grid;grid-template-columns:1fr 1.4fr;gap:10px;margin-top:6px}
 </style>
 </head>
 <body>
+<div class="app">
 
-<!-- PIN LOGIN -->
-<div id="s-login" class="kp">
-  <div style="font-size:46px">📦</div>
-  <div style="font-size:20px;font-weight:800">RSR Material Issuance</div>
-  <div style="font-size:13px;color:var(--tx2);margin-bottom:14px">Enter passcode to continue</div>
-  <input id="login-pin" class="search" type="password" inputmode="numeric" placeholder="Passcode" style="max-width:240px;text-align:center;letter-spacing:4px" onkeydown="if(event.key==='Enter')doLogin()"/>
-  <button class="lbtn" style="background:var(--p);max-width:240px" onclick="doLogin()">Enter</button>
-  <div style="margin-top:14px;font-size:12px;color:var(--tx3)">Site:
-    <select id="login-site" class="search" style="display:inline-block;width:auto;padding:6px 10px;font-size:13px"></select>
+<!-- LOGIN -->
+<div id="s-login" class="screen active">
+  <div class="lw"><div class="lb">
+    <div class="lav">📋</div>
+    <div style="font-size:21px;font-weight:700">Material Issuance</div>
+    <div style="font-size:13px;color:var(--tx2);margin:4px 0 18px">Carmen · enter passcode</div>
+    <input id="login-pin" class="fi" type="password" inputmode="numeric" placeholder="Passcode" style="text-align:center;letter-spacing:4px" onkeydown="if(event.key==='Enter')doLogin()"/>
+    <button class="lbtn" onclick="doLogin()">Sign in</button>
+    <div style="font-size:12px;color:var(--tx3);margin-top:12px">Default: 1111</div>
+  </div></div>
+</div>
+
+<!-- HOME -->
+<div id="s-home" class="screen">
+  <div class="tb"><div><div class="ttitle">RSR Materials</div><div class="tsub">Carmen</div></div>
+    <button class="bk" onclick="logout()" title="Sign out">⎋</button></div>
+  <div class="pc">
+    <div class="hcard" onclick="openIssue()"><div class="ico" style="background:var(--pl);color:var(--p)">📤</div><div><div class="ht">Issue Materials</div><div class="hs">Issue to a vessel · crew confirms by passcode</div></div></div>
+    <div class="hcard" onclick="openStock()"><div class="ico" style="background:var(--bl);color:var(--b)">📦</div><div><div class="ht">Stock</div><div class="hs">View &amp; adjust Carmen site stock</div></div></div>
+    <div class="hcard soon" onclick="toast('Coming next update')"><div class="ico" style="background:#F0EAF8;color:#6b3fa0">📝</div><div><div class="ht">Request Materials</div><div class="hs">Coming next</div></div></div>
+    <div class="hcard soon" onclick="toast('Coming next update')"><div class="ico" style="background:var(--al);color:var(--am)">📥</div><div><div class="ht">Receive Delivery</div><div class="hs">Coming next</div></div></div>
+    <div class="hcard soon" onclick="toast('Coming next update')"><div class="ico" style="background:var(--bg2);color:var(--tx2)">🗂️</div><div><div class="ht">Records</div><div class="hs">Coming next</div></div></div>
   </div>
 </div>
 
-<!-- ISSUE PAGE -->
-<div id="s-issue" style="display:none">
-  <div class="app-header">
-    <div class="hdr-info"><div class="hdr-site">Material Issuance</div><div class="hdr-sub" id="mi-site-sub">—</div></div>
-    <button class="back" onclick="switchSite()">Switch site</button>
-  </div>
-  <div class="wrap">
-    <div class="card">
-      <label class="lbl">Date</label>
-      <input id="mi-date" class="search" type="date"/>
-      <label class="lbl">Project / Vessel</label>
-      <div class="combo">
-        <input id="mi-vessel" class="search" placeholder="Type or tap to choose vessel" autocomplete="off" oninput="vesselSuggest()" onfocus="vesselSuggest()" onblur="hideVsug()"/>
-        <div id="mi-vsug" class="sug"></div>
-      </div>
-      <label class="lbl">Issued to (crew)</label>
-      <div class="combo">
-        <input id="mi-emp" class="search" placeholder="Type name or code, or tap to choose" autocomplete="off" oninput="onEmpInput()" onfocus="empSuggest()" onblur="hideEmpSug()"/>
-        <div id="mi-emp-sug" class="sug"></div>
-      </div>
-      <label class="lbl">Issued by</label>
-      <input id="mi-by" class="search" placeholder="Storekeeper name"/>
-    </div>
-    <div class="card">
-      <label class="lbl">Add materials</label>
-      <select id="mi-item" class="search"></select>
-      <input id="mi-qty" class="search" type="number" min="1" value="1" style="margin-top:8px" placeholder="Quantity"/>
-      <button class="lbtn" style="background:var(--p)" onclick="addToCart()">+ Add material</button>
-    </div>
-    <div class="card">
-      <label class="lbl">Issuance list</label>
-      <div id="mi-cart"><div class="empty">No materials added yet.</div></div>
-      <button class="lbtn" style="background:var(--ok)" id="mi-submit" onclick="reviewIssue()">Issue (0)</button>
-    </div>
+<!-- ISSUE STEP 1 -->
+<div id="s-issue1" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div class="ttitle">Issue Materials</div><div style="width:38px"></div></div>
+  <div class="progress"><div class="pstep active"></div><div class="pstep"></div><div class="pstep"></div></div>
+  <div class="pc">
+    <div style="font-size:17px;font-weight:700">Step 1 — Select vessel</div>
+    <div style="font-size:13px;color:var(--tx2);margin:4px 0 14px">Choose the vessel you are issuing for.</div>
+    <label class="fl">Project / Vessel <span class="req">*</span></label>
+    <select id="i-vessel" class="fi"></select>
+    <div id="i-vessel-empty" class="empty" style="display:none">No active vessels. Add/activate one in Coordinator first.</div>
+    <button class="lbtn" onclick="toStep2()">Next →</button>
   </div>
 </div>
 
-<!-- SLIP CONFIRM -->
-<div id="mislip-modal" class="modal">
-  <div class="card">
-    <div id="mislip-body" style="margin:0 0 12px"></div>
-    <div style="font-size:11px;color:var(--tx2);line-height:1.5;background:var(--pl);border-radius:10px;padding:10px 12px;margin-bottom:10px">By signing, the crew member confirms receipt of the materials listed above.</div>
-    <label class="lbl">Crew PIN to confirm</label>
-    <input id="mislip-pin" class="search" type="password" inputmode="numeric" placeholder="Employee PIN"/>
-    <button class="lbtn" style="background:var(--ok)" onclick="confirmIssue()">Confirm &amp; sign</button>
-    <button class="lbtn" style="background:#fff;color:var(--tx2);border:1px solid var(--line);margin-top:8px" onclick="document.getElementById('mislip-modal').style.display='none'">Back</button>
+<!-- ISSUE STEP 2 -->
+<div id="s-issue2" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-issue1')">←</button><div class="ttitle">Issue Materials</div><div style="width:38px"></div></div>
+  <div class="progress"><div class="pstep done"></div><div class="pstep active"></div><div class="pstep"></div></div>
+  <div class="pc">
+    <div style="font-size:17px;font-weight:700">Step 2 — Crew &amp; items</div>
+    <div id="i-vlabel" style="font-size:13px;color:var(--tx2);margin:4px 0 14px"></div>
+    <label class="fl">Issued to (crew) <span class="req">*</span></label>
+    <select id="i-emp" class="fi" onchange="onEmpPick()"></select>
+    <label class="fl">Department</label>
+    <input id="i-dept" class="fi" placeholder="Position" readonly/>
+    <label class="fl">Date <span class="req">*</span></label>
+    <input id="i-date" class="fi" type="date"/>
+    <label class="fl">Issued by <span class="req">*</span></label>
+    <input id="i-by" class="fi" placeholder="Storekeeper name"/>
+    <label class="fl">Items to issue <span class="req">*</span></label>
+    <div id="i-rows"></div>
+    <button class="add-row" onclick="addRow()">+ Add item</button>
+    <div id="i-warn"></div>
+  </div>
+  <div class="pc" style="padding-top:0"><div class="btn-row">
+    <button class="btn btn-sec" onclick="showScreen('s-issue1')">Back</button>
+    <button class="btn btn-p" onclick="toStep3()">Review →</button>
+  </div></div>
+</div>
+
+<!-- ISSUE STEP 3 -->
+<div id="s-issue3" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-issue2')">←</button><div class="ttitle">Issue Materials</div><div style="width:38px"></div></div>
+  <div class="progress"><div class="pstep done"></div><div class="pstep done"></div><div class="pstep active"></div></div>
+  <div class="pc">
+    <div style="font-size:17px;font-weight:700">Step 3 — Review &amp; confirm</div>
+    <div style="font-size:13px;color:var(--tx2);margin:4px 0 14px">Crew confirms receipt with their passcode.</div>
+    <div class="card" id="i-summary"></div>
+    <label class="fl">Crew passcode (PIN) <span class="req">*</span></label>
+    <input id="i-pin" class="fi" type="password" inputmode="numeric" placeholder="Employee PIN"/>
+  </div>
+  <div class="pc" style="padding-top:0"><div class="btn-row">
+    <button class="btn btn-sec" onclick="showScreen('s-issue2')">Back</button>
+    <button class="btn btn-p" onclick="submitIssue()">Confirm &amp; issue</button>
+  </div></div>
+</div>
+
+<!-- STOCK -->
+<div id="s-stock" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div class="ttitle">Carmen Stock</div><div style="width:38px"></div></div>
+  <div class="pc">
+    <div style="font-size:13px;color:var(--tx2);margin-bottom:12px">Set on-hand quantity per material. Low stock (at or below threshold) is flagged.</div>
+    <div class="card" id="stk-list"><div class="empty">Loading…</div></div>
   </div>
 </div>
 
 <!-- SUCCESS -->
-<div id="ok-modal" class="modal">
-  <div class="card" style="text-align:center">
-    <div style="width:64px;height:64px;border-radius:50%;background:var(--ok);color:#fff;font-size:32px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">✓</div>
-    <div style="font-size:18px;font-weight:800">Materials issued</div>
-    <div id="ok-no" style="font-family:ui-monospace,monospace;font-size:15px;color:var(--p);margin:6px 0"></div>
-    <div id="ok-info" style="font-size:13px;color:var(--tx2)"></div>
-    <button class="lbtn" style="background:var(--p)" onclick="newIssue()">New issuance</button>
-  </div>
+<div id="ok-modal" class="modal"><div class="card">
+  <div style="width:64px;height:64px;border-radius:50%;background:var(--pm);color:#fff;font-size:32px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">✓</div>
+  <div style="font-size:18px;font-weight:800">Materials issued</div>
+  <div id="ok-no" style="font-family:ui-monospace,monospace;font-size:15px;color:var(--p);margin:6px 0"></div>
+  <div id="ok-info" style="font-size:13px;color:var(--tx2)"></div>
+  <button class="lbtn" onclick="newIssue()">Issue more</button>
+</div></div>
+
 </div>
 
 <script>
 const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
 const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
 const sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
+const SITE='Carmen';
 
 const ITEMS=[
-  {n:'Electrode handle',u:'pcs'},{n:'Welding gloves',u:'pair'},{n:'Cutting tip',u:'pcs'},
-  {n:'Dark glass',u:'pcs'},{n:'Clear glass',u:'pcs'},{n:'Trouble light',u:'pcs'},
-  {n:'Electrical tape',u:'pcs'},{n:'Chalk stone',u:'pcs'},{n:'Dry chalk',u:'pcs'},
-  {n:'Flint stone',u:'pcs'},{n:'Striker',u:'pcs'},{n:'Y-connector',u:'pcs'},
-  {n:'Cutting disk',u:'pcs'},{n:'Oxygen regulator',u:'unit'},{n:'LPG regulator',u:'unit'},{n:'Steel square',u:'pcs'}
+  {n:'Electrode handle',u:'pcs',th:3,iv:30},{n:'Welding gloves',u:'pair',th:3,iv:30},{n:'Cutting tip',u:'pcs',th:5,iv:30},
+  {n:'Dark glass',u:'pcs',th:3,iv:30},{n:'Clear glass',u:'pcs',th:3,iv:30},{n:'Trouble light',u:'pcs',th:2,iv:60},
+  {n:'Electrical tape',u:'pcs',th:5,iv:30},{n:'Chalk stone',u:'pcs',th:5,iv:30},{n:'Dry chalk',u:'pcs',th:5,iv:30},
+  {n:'Flint stone',u:'pcs',th:5,iv:30},{n:'Striker',u:'pcs',th:3,iv:30},{n:'Y-connector',u:'pcs',th:2,iv:90},
+  {n:'Cutting disk',u:'pcs',th:5,iv:30},{n:'Oxygen regulator',u:'unit',th:1,iv:0},{n:'LPG regulator',u:'unit',th:1,iv:0},{n:'Steel square',u:'pcs',th:1,iv:0}
 ];
+function gu(n){return (ITEMS.find(i=>i.n===n)||{u:'pcs'}).u;}
+function gth(n){return (ITEMS.find(i=>i.n===n)||{th:0}).th;}
+function giv(n){return (ITEMS.find(i=>i.n===n)||{iv:0}).iv;}
 
-let sites=[], curSite='', employees=[], vessels=[], cart=[], selEmpId='', issuancePin='1111', pendingIssue=null, reservedNo='';
+let issuancePin='1111', employees=[], vessels=[], stockMap={}, empLast={}, selVessel=null, selEmp=null, rc=0, pending=null, reservedNo='';
 
 function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),2600);}
-function todayYmd2(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
-function fmtNice(ymd){if(!ymd)return '';const d=new Date(ymd+'T00:00:00');return d.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'2-digit'});}
-function siteName(){const s=sites.find(x=>x.id===curSite);return s?s.name:'—';}
+function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo(0,0);}
+function todayYmd(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
+function fmtNice(y){if(!y)return '';return new Date(y+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'2-digit'});}
 
-/* ── boot ── */
 (async function boot(){
-  try{
-    const sres=await sb.from('sites').select('id,name').order('name');
-    sites=sres.data||[];
-    if(!sites.length){toast('No sites found — check database');}
-    curSite=localStorage.getItem('rsr_mi_site')||(sites[0]&&sites[0].id)||'';
-    const sel=document.getElementById('login-site');
-    sel.innerHTML=sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
-    if(curSite)sel.value=curSite;
-    try{const{data}=await sb.from('settings').select('value').eq('key','issuance_pin').single();if(data&&data.value)issuancePin=String(data.value);}catch(e){}
-  }catch(e){toast('Load failed: '+e.message);}
+  try{const{data}=await sb.from('settings').select('value').eq('key','issuance_pin').single();if(data&&data.value)issuancePin=String(data.value);}catch(e){}
 })();
 
 function doLogin(){
   const pin=document.getElementById('login-pin').value.trim();
-  curSite=document.getElementById('login-site').value;
-  if(!curSite){toast('Pick a site');return;}
   if(pin!==issuancePin){toast('Wrong passcode');return;}
-  localStorage.setItem('rsr_mi_site',curSite);
   document.getElementById('login-pin').value='';
-  document.getElementById('s-login').style.display='none';
-  document.getElementById('s-issue').style.display='block';
-  openIssue();
+  showScreen('s-home');
 }
-function switchSite(){
-  document.getElementById('s-issue').style.display='none';
-  document.getElementById('s-login').style.display='flex';
-}
+function logout(){showScreen('s-login');}
 
-async function openIssue(){
-  document.getElementById('mi-site-sub').textContent=siteName();
-  cart=[]; pendingIssue=null; reservedNo=''; selEmpId='';
-  const d=document.getElementById('mi-date'); d.min=todayYmd2(); d.value=todayYmd2();
-  document.getElementById('mi-vessel').value='';
-  document.getElementById('mi-emp').value='';
-  document.getElementById('mi-by').value='';
-  document.getElementById('mi-qty').value='1';
-  document.getElementById('mi-item').innerHTML=ITEMS.map((it,i)=>`<option value="${i}">${it.n} (${it.u})</option>`).join('');
-  renderCart();
-  const e=await sb.from('employees').select('id,code,name,pin').order('name'); employees=e.data||[];
-  await loadVessels();
+/* ── data ── */
+async function loadStock(){
+  stockMap={};
+  try{const{data}=await sb.from('site_stock').select('item_name,qty').eq('site_key',SITE);(data||[]).forEach(r=>stockMap[r.item_name]=Number(r.qty)||0);}catch(e){}
 }
-
-/* ── employee combobox ── */
-function onEmpInput(){ selEmpId=''; empSuggest(); }
-function empSuggest(){
-  const q=(document.getElementById('mi-emp').value||'').toLowerCase().replace(/\s+/g,'');
-  const box=document.getElementById('mi-emp-sug');
-  let m=employees;
-  if(q)m=employees.filter(e=>((e.name||'').toLowerCase().replace(/\s+/g,'')).includes(q)||((e.code||'').toLowerCase().replace(/\s+/g,'')).includes(q));
-  m=m.slice(0,12);
-  if(!m.length){box.style.display='none';box.innerHTML='';return;}
-  box.innerHTML=m.map(e=>`<div onmousedown="pickEmp(this)" data-id="${e.id}" data-name="${(e.name||'').replace(/"/g,'&quot;')}">${e.name}${e.code?`<span class="vc">${e.code}</span>`:''}</div>`).join('');
-  box.style.display='block';
-}
-function pickEmp(el){document.getElementById('mi-emp').value=el.getAttribute('data-name')||'';selEmpId=el.getAttribute('data-id')||'';const b=document.getElementById('mi-emp-sug');b.style.display='none';b.innerHTML='';}
-function hideEmpSug(){setTimeout(()=>{const b=document.getElementById('mi-emp-sug');if(b)b.style.display='none';},180);}
-
-/* ── vessel combobox (active only) ── */
+async function loadEmployees(){const{data}=await sb.from('employees').select('id,code,name,position,pin').order('name');employees=data||[];}
 async function loadVessels(){
   try{
     const{data}=await sb.from('voyages').select('*').order('vessel_name');
@@ -202,112 +212,152 @@ async function loadVessels(){
     });
   }catch(e){vessels=[];}
 }
-function vesselSuggest(){
-  const q=(document.getElementById('mi-vessel').value||'').toLowerCase().replace(/\s+/g,'');
-  const box=document.getElementById('mi-vsug');
-  let m=vessels;
-  if(q)m=vessels.filter(v=>((v.vessel_name||'').toLowerCase().replace(/\s+/g,'')).includes(q)||((v.vessel_code||'').toLowerCase().replace(/\s+/g,'')).includes(q));
-  m=m.slice(0,12);
-  if(!m.length){box.style.display='none';box.innerHTML=vessels.length?'':'<div style="padding:11px 14px;color:var(--tx3);font-size:14px">No active vessels.</div>';if(!vessels.length)box.style.display='block';return;}
-  box.innerHTML=m.map(v=>`<div onmousedown="pickVessel(this)" data-name="${(v.vessel_name||'').replace(/"/g,'&quot;')}" data-code="${(v.vessel_code||'').replace(/"/g,'&quot;')}">${v.vessel_name}${v.vessel_code?`<span class="vc">${v.vessel_code}</span>`:''}</div>`).join('');
-  box.style.display='block';
-}
-let selVesselCode='';
-function pickVessel(el){document.getElementById('mi-vessel').value=el.getAttribute('data-name')||'';selVesselCode=el.getAttribute('data-code')||'';const b=document.getElementById('mi-vsug');b.style.display='none';b.innerHTML='';}
-function hideVsug(){setTimeout(()=>{const b=document.getElementById('mi-vsug');if(b)b.style.display='none';},180);}
 
-/* ── cart ── */
-function addToCart(){
-  const idx=document.getElementById('mi-item').value;
-  const qty=parseInt(document.getElementById('mi-qty').value,10);
-  if(idx===''||isNaN(qty)||qty<1){toast('Pick a material and quantity');return;}
-  const it=ITEMS[+idx];
-  const ex=cart.find(c=>c.n===it.n);
-  if(ex)ex.qty+=qty; else cart.push({n:it.n,u:it.u,qty:qty});
-  document.getElementById('mi-qty').value='1';
-  renderCart();
+/* ── ISSUE ── */
+async function openIssue(){
+  selVessel=null; selEmp=null; empLast={}; rc=0; pending=null; reservedNo='';
+  await Promise.all([loadEmployees(),loadVessels(),loadStock()]);
+  const vs=document.getElementById('i-vessel');
+  vs.innerHTML='<option value="">— Select vessel —</option>'+vessels.map(v=>`<option value="${v.vessel_name}" data-code="${(v.vessel_code||'').replace(/"/g,'&quot;')}">${v.vessel_name}${v.vessel_code?' · '+v.vessel_code:''}</option>`).join('');
+  document.getElementById('i-vessel-empty').style.display=vessels.length?'none':'block';
+  showScreen('s-issue1');
 }
-function removeFromCart(n){cart=cart.filter(c=>c.n!==n);renderCart();}
-function renderCart(){
-  const el=document.getElementById('mi-cart'), btn=document.getElementById('mi-submit');
-  if(!cart.length){el.innerHTML='<div class="empty">No materials added yet.</div>';btn.textContent='Issue (0)';return;}
-  el.innerHTML=cart.map(c=>`<div class="tool-row row2"><div><div class="tool-name">${c.n}</div><div class="tool-meta">${c.qty} ${c.u}</div></div><button class="back" style="color:var(--r)" onclick="removeFromCart('${c.n.replace(/'/g,"\\'")}')">Remove</button></div>`).join('');
-  btn.textContent='Issue ('+cart.reduce((s,c)=>s+c.qty,0)+')';
+function toStep2(){
+  const vs=document.getElementById('i-vessel');
+  if(!vs.value){toast('Pick a vessel');return;}
+  const opt=vs.options[vs.selectedIndex];
+  selVessel={name:vs.value,code:opt.getAttribute('data-code')||''};
+  document.getElementById('i-vlabel').textContent='For: '+selVessel.name+(selVessel.code?' ('+selVessel.code+')':'');
+  document.getElementById('i-emp').innerHTML='<option value="">— Select crew —</option>'+employees.map(e=>`<option value="${e.id}">${e.name}${e.code?' · '+e.code:''}</option>`).join('');
+  document.getElementById('i-dept').value='';
+  const d=document.getElementById('i-date');d.min=todayYmd();d.value=todayYmd();
+  document.getElementById('i-by').value='';
+  document.getElementById('i-rows').innerHTML='';rc=0;addRow();
+  document.getElementById('i-warn').innerHTML='';
+  selEmp=null; empLast={};
+  showScreen('s-issue2');
 }
-
-/* ── review → slip ── */
-async function reviewIssue(){
-  const date=document.getElementById('mi-date').value;
-  const vessel=document.getElementById('mi-vessel').value.trim();
-  const emp=document.getElementById('mi-emp').value.trim();
-  const by=document.getElementById('mi-by').value.trim();
-  if(!date){toast('Pick a date');return;}
-  if(date<todayYmd2()){toast('No back-dating allowed');return;}
-  if(!vessel){toast('Pick a vessel');return;}
-  if(!emp){toast('Choose the crew member');return;}
-  if(!by){toast('Enter who is issuing');return;}
-  if(!cart.length){toast('Add at least one material');return;}
-  // resolve employee id if not picked from list
-  if(!selEmpId){
-    const match=employees.find(e=>(e.name||'').trim().toLowerCase()===emp.toLowerCase());
-    if(match)selEmpId=match.id;
+async function onEmpPick(){
+  const id=document.getElementById('i-emp').value;
+  selEmp=employees.find(e=>e.id===id)||null;
+  document.getElementById('i-dept').value=selEmp?(selEmp.position||''):'';
+  empLast={};
+  if(selEmp){
+    try{const{data}=await sb.from('personnel_log').select('item_name,last_date').eq('site_key',SITE).eq('emp_name',selEmp.name);(data||[]).forEach(r=>empLast[r.item_name]=r.last_date);}catch(e){}
   }
-  if(!selEmpId){toast('Select the crew member from the list');return;}
+  renderWarn();
+}
+function addRow(name='',qty=1){
+  rc++;const id='ir-'+rc;
+  const div=document.createElement('div');div.className='irow';div.id=id;
+  div.innerHTML=`<select class="fi" onchange="document.getElementById('u-${id}').textContent=gu(this.value);renderWarn()"><option value="">— Item —</option>${ITEMS.map(x=>`<option value="${x.n}"${x.n===name?' selected':''}>${x.n}</option>`).join('')}</select>
+    <input class="fi" type="number" min="1" value="${qty}" style="text-align:center" oninput="renderWarn()"/>
+    <div class="iunit" id="u-${id}">${name?gu(name):''}</div>
+    <div class="rm" onclick="document.getElementById('${id}').remove();renderWarn()">×</div>`;
+  document.getElementById('i-rows').appendChild(div);
+}
+function getRows(){
+  const out=[];let empty=false;
+  document.querySelectorAll('#i-rows .irow').forEach(r=>{
+    const s=r.querySelector('select'),q=r.querySelector('input[type=number]');
+    if(s&&s.value&&q&&parseInt(q.value)>0)out.push({n:s.value,qty:parseInt(q.value),u:gu(s.value)});
+    else if(s&&!s.value)empty=true;
+  });
+  return {out,empty};
+}
+function renderWarn(){
+  const box=document.getElementById('i-warn');if(!box)return;
+  if(!selEmp){box.innerHTML='';return;}
+  const {out}=getRows();const today=new Date();const w=[];
+  out.forEach(it=>{
+    const iv=giv(it.n),last=empLast[it.n];
+    if(iv>0&&last){
+      const days=Math.floor((today-new Date(last+'T00:00:00'))/86400000);
+      if(days<iv)w.push(`${it.n}: last issued to ${selEmp.name} ${days} day(s) ago (every ${iv}d)`);
+    }
+    const onhand=stockMap[it.n]||0;
+    if(it.qty>onhand)w.push(`${it.n}: only ${onhand} ${it.u} in stock, issuing ${it.qty}`);
+  });
+  box.innerHTML=w.length?`<div class="warn"><b>Heads up</b><br>${w.join('<br>')}</div>`:'';
+}
+async function toStep3(){
+  if(!selEmp){toast('Choose the crew member');return;}
+  const by=document.getElementById('i-by').value.trim();
+  const date=document.getElementById('i-date').value;
+  if(!date){toast('Pick a date');return;}
+  if(date<todayYmd()){toast('No back-dating allowed');return;}
+  if(!by){toast('Enter who is issuing');return;}
+  const {out,empty}=getRows();
+  if(empty){toast('Fill or remove the empty item row');return;}
+  if(!out.length){toast('Add at least one item');return;}
   if(!reservedNo){
-    let no='';
-    try{const{data,error}=await sb.rpc('next_issuance_no');if(!error&&data)no=data;}catch(e){}
+    let no='';try{const{data,error}=await sb.rpc('next_issuance_no');if(!error&&data)no=data;}catch(e){}
     if(!no){const n=new Date(),z=x=>String(x).padStart(2,'0');no='MI-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
     reservedNo=no;
   }
-  const empObj=employees.find(e=>e.id===selEmpId)||{};
-  pendingIssue={date,vessel,vesselCode:selVesselCode,emp,empId:selEmpId,empCode:empObj.code||'',by,items:cart.slice(),no:reservedNo};
-  document.getElementById('mislip-body').innerHTML=
-    `<div style="text-align:center;border-bottom:1.5px dashed var(--tx3);padding-bottom:12px;margin-bottom:12px">`
-    +`<div style="font-size:15px;font-weight:800">RSR — Material Issuance Slip</div>`
-    +`<div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--p);margin-top:2px">${reservedNo}</div>`
-    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(date)} · ${siteName()}</div>`
-    +`</div>`
-    +`<div style="font-size:13px;line-height:1.9;color:var(--tx2);margin-bottom:12px">`
-    +`<div class="row2"><span>Vessel</span><b style="color:var(--tx)">${vessel}</b></div>`
-    +`<div class="row2"><span>Issued to</span><b style="color:var(--tx)">${emp}${empObj.code?' · '+empObj.code:''}</b></div>`
-    +`<div class="row2"><span>Issued by</span><b style="color:var(--tx)">${by}</b></div>`
-    +`</div>`
-    +`<div style="border-top:1.5px dashed var(--tx3);padding-top:10px">`
-    +`<div class="row2" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:10px"><span>Material</span><span>Qty</span></div>`
-    +cart.map(c=>`<div class="row2" style="align-items:baseline;margin-bottom:9px"><div style="font-size:15px;font-weight:700">${c.n}</div><div style="font-size:14px;color:var(--tx2);white-space:nowrap">${c.qty} ${c.u}</div></div>`).join('')
-    +`<div class="row2" style="align-items:baseline;border-top:1.5px dashed var(--tx3);padding-top:11px;margin-top:2px"><div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx2)">Total</div><div style="font-size:22px;font-weight:900;color:var(--p)">${cart.reduce((s,c)=>s+c.qty,0)}</div></div></div>`;
-  document.getElementById('mislip-pin').value='';
-  document.getElementById('mislip-modal').style.display='flex';
+  pending={vessel:selVessel,emp:selEmp,by,date,items:out,no:reservedNo};
+  document.getElementById('i-summary').innerHTML=
+    `<div class="sum-row"><span style="color:var(--tx2)">Slip no</span><b style="font-family:ui-monospace,monospace;color:var(--p)">${reservedNo}</b></div>`
+    +`<div class="sum-row"><span style="color:var(--tx2)">Date</span><b>${fmtNice(date)}</b></div>`
+    +`<div class="sum-row"><span style="color:var(--tx2)">Vessel</span><b>${selVessel.name}</b></div>`
+    +`<div class="sum-row"><span style="color:var(--tx2)">Issued to</span><b>${selEmp.name}${selEmp.code?' · '+selEmp.code:''}</b></div>`
+    +`<div class="sum-row"><span style="color:var(--tx2)">Issued by</span><b>${by}</b></div>`
+    +out.map(it=>`<div class="sum-row"><span>${it.n}</span><b>${it.qty} ${it.u}</b></div>`).join('')
+    +`<div class="sum-row"><span style="font-weight:800">Total</span><b style="font-size:18px;color:var(--p)">${out.reduce((s,i)=>s+i.qty,0)}</b></div>`;
+  document.getElementById('i-pin').value='';
+  showScreen('s-issue3');
 }
-
-async function confirmIssue(){
-  if(!pendingIssue)return;
-  const pin=document.getElementById('mislip-pin').value.trim();
+async function submitIssue(){
+  if(!pending)return;
+  const pin=document.getElementById('i-pin').value.trim();
   if(!pin){toast('Enter the crew PIN');return;}
-  try{
-    const{data:ok,error}=await sb.rpc('verify_pin',{emp_id:pendingIssue.empId,pin_input:pin});
-    if(error)throw error; if(!ok){toast('Wrong PIN');return;}
-  }catch(e){toast('PIN check failed: '+e.message);return;}
+  try{const{data:ok,error}=await sb.rpc('verify_pin',{emp_id:pending.emp.id,pin_input:pin});if(error)throw error;if(!ok){toast('Wrong PIN');return;}}
+  catch(e){toast('PIN check failed: '+e.message);return;}
   const n=new Date(),z=x=>String(x).padStart(2,'0');
-  const row={
-    site_key:siteName(), site_id:curSite,
-    proj_name:pendingIssue.vessel, proj_code:pendingIssue.vesselCode||null,
-    emp_name:pendingIssue.emp, emp_code:pendingIssue.empCode||null,
-    date:pendingIssue.date, by_name:pendingIssue.by,
-    items:pendingIssue.items, slip_no:pendingIssue.no,
-    created_at:new Date(pendingIssue.date+'T'+z(n.getHours())+':'+z(n.getMinutes())+':00').toISOString()
-  };
+  const createdAt=new Date(pending.date+'T'+z(n.getHours())+':'+z(n.getMinutes())+':00').toISOString();
+  const itemsJson=pending.items.map(i=>({n:i.n,u:i.u,qty:i.qty}));
+  const row={id:pending.no,site_key:SITE,proj_name:pending.vessel.name,proj_code:pending.vessel.code||null,emp_name:pending.emp.name,dept:pending.emp.position||null,date:pending.date,by_name:pending.by,items:itemsJson,slip_no:pending.no,created_at:createdAt};
   try{
-    const{error}=await sb.from('issuances').insert([row]); if(error)throw error;
-    const no=pendingIssue.no, total=pendingIssue.items.reduce((s,c)=>s+c.qty,0);
-    document.getElementById('mislip-modal').style.display='none';
+    const{error}=await sb.from('issuances').insert([row]);if(error)throw error;
+    // deduct stock
+    for(const it of pending.items){
+      const cur=stockMap[it.n]||0;const nq=Math.max(0,cur-it.qty);
+      await sb.from('site_stock').upsert({site_key:SITE,item_name:it.n,qty:nq,updated_at:new Date().toISOString()},{onConflict:'site_key,item_name'});
+      stockMap[it.n]=nq;
+      await sb.from('personnel_log').upsert({site_key:SITE,emp_name:pending.emp.name,item_name:it.n,last_date:pending.date,last_qty:it.qty},{onConflict:'site_key,emp_name,item_name'});
+    }
+    const no=pending.no,total=pending.items.reduce((s,i)=>s+i.qty,0),vn=pending.vessel.name;
+    pending=null;reservedNo='';
     document.getElementById('ok-no').textContent=no;
-    document.getElementById('ok-info').textContent=total+' item(s) to '+pendingIssue.vessel;
+    document.getElementById('ok-info').textContent=total+' item(s) to '+vn;
     document.getElementById('ok-modal').style.display='flex';
-    pendingIssue=null; reservedNo='';
   }catch(e){toast('Save failed: '+e.message);}
 }
 function newIssue(){document.getElementById('ok-modal').style.display='none';openIssue();}
+
+/* ── STOCK ── */
+async function openStock(){showScreen('s-stock');await loadStock();renderStock();}
+function renderStock(){
+  const el=document.getElementById('stk-list');
+  el.innerHTML=ITEMS.map(it=>{
+    const q=stockMap[it.n]||0,low=q<=it.th;
+    return `<div class="stk-row">
+      <div><div class="stk-name ${low?'stk-low':''}">${it.n}</div><div class="stk-meta">${it.u} · min ${it.th}${low?'  <span class="pill">LOW</span>':''}</div></div>
+      <div style="display:flex;align-items:center;gap:6px">
+        <input class="fi" type="number" min="0" value="${q}" id="sq-${it.n.replace(/[^a-zA-Z]/g,'')}" style="width:74px;text-align:center;padding:9px"/>
+        <button class="btn btn-p" style="padding:9px 12px" onclick="saveStock('${it.n.replace(/'/g,"\\'")}')">Set</button>
+      </div></div>`;
+  }).join('');
+}
+async function saveStock(name){
+  const key='sq-'+name.replace(/[^a-zA-Z]/g,'');
+  const v=parseInt(document.getElementById(key).value,10);
+  if(isNaN(v)||v<0){toast('Enter a valid quantity');return;}
+  try{
+    await sb.from('site_stock').upsert({site_key:SITE,item_name:name,qty:v,updated_at:new Date().toISOString()},{onConflict:'site_key,item_name'});
+    stockMap[name]=v;renderStock();toast(name+' set to '+v);
+  }catch(e){toast('Save failed: '+e.message);}
+}
 </script>
 </body>
 </html>
