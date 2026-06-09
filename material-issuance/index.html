@@ -531,18 +531,26 @@ async function openReqHist(){
   let rows=[];
   try{const{data}=await sb.from('requests').select('*').eq('site',SITE).order('created_at',{ascending:false}).limit(100);rows=data||[];}catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
   if(!rows.length){el.innerHTML='<div class="empty">No requests yet.</div>';return;}
-  const badge=s=>{const c={Pending:'var(--am)',Approved:'var(--b)',Dispatched:'var(--b)',Received:'var(--pm)',Cancelled:'var(--tx3)'}[s]||'var(--tx3)';return `<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:${c};color:#fff">${(s||'Pending').toUpperCase()}</span>`;};
+  const stBadge=s=>{const c={Pending:'var(--am)',Approved:'var(--b)',Dispatched:'var(--b)',Received:'var(--pm)',Cancelled:'var(--tx3)'}[s]||'var(--tx3)';return `<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:${c};color:#fff">${(s||'Pending').toUpperCase()}</span>`;};
   el.innerHTML=rows.map(r=>{
-    const items=(r.items||[]).map(i=>`${i.n} <b>${i.qty}${i.u?' '+i.u:''}</b>`).join(' · ');
-    return `<div style="padding:12px 0;border-bottom:1px solid var(--bg3)">
-      <div class="row2" style="align-items:flex-start">
-        <div><div style="font-weight:700;font-size:14px">${fmtNice(r.date)} ${r.urgent?'<span style="color:var(--r);font-size:11px;font-weight:800">· URGENT</span>':''}</div>
-        <div style="font-size:12px;color:var(--tx3);font-family:ui-monospace,monospace">${r.id}</div></div>
-        ${badge(r.status)}
+    const its=(r.items||[]);
+    const total=its.reduce((s,i)=>s+(Number(i.qty)||0),0);
+    const itemRows=its.map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${i.n}</span><span style="font-family:ui-monospace,monospace;color:var(--tx2);white-space:nowrap">${i.qty}${i.u?' '+i.u:''}</span></div>`).join('');
+    return `<div style="border:1.5px solid var(--bd);border-radius:14px;padding:16px;margin-bottom:12px">
+      <div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:12px;margin-bottom:10px">
+        <div style="font-size:15px;font-weight:800;color:var(--p)">Material Request</div>
+        <div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.id}${r.dr_no?' · '+r.dr_no:''}</div>
+        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(r.date)} · ${r.site||'—'}</div>
       </div>
-      <div style="font-size:13px;color:var(--tx2);margin-top:6px">${items}</div>
-      ${r.remarks?`<div style="font-size:12px;color:var(--tx3);margin-top:3px">“${r.remarks}”</div>`:''}
-      <div style="font-size:12px;color:var(--tx3);margin-top:3px">by ${r.by_name||'—'}</div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Requested by</span><span style="font-weight:700">${r.by_name||'—'}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Status</span>${stBadge(r.status)}</div>
+      ${r.urgent?'<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Priority</span><span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:var(--r);color:#fff">URGENT</span></div>':''}
+      ${r.remarks?`<div style="font-size:12px;color:var(--tx3);margin-top:4px">“${r.remarks}”</div>`:''}
+      <div style="border-top:1.5px dashed var(--bd2);margin:10px 0 8px;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Item</span><span>Qty</span></div>
+      ${itemRows}
+      <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:baseline">
+        <span style="font-size:13px;font-weight:800;text-transform:uppercase;color:var(--tx2)">Total</span>
+        <span style="font-size:20px;font-weight:900;color:var(--p)">${total} units</span></div>
     </div>`;
   }).join('');
 }
