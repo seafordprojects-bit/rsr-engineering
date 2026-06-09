@@ -80,7 +80,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
   <div class="pc">
     <div class="hcard" onclick="openIssue()"><div class="ico" style="background:var(--pl);color:var(--p)">📤</div><div><div class="ht">Issue Materials</div><div class="hs">Issue to a vessel · crew confirms by passcode</div></div></div>
     <div class="hcard" onclick="openStock()"><div class="ico" style="background:var(--bl);color:var(--b)">📦</div><div><div class="ht">Stock</div><div class="hs">View &amp; adjust Carmen site stock</div></div></div>
-    <div class="hcard soon" onclick="toast('Coming next update')"><div class="ico" style="background:#F0EAF8;color:#6b3fa0">📝</div><div><div class="ht">Request Materials</div><div class="hs">Coming next</div></div></div>
+    <div class="hcard" onclick="openRequest()"><div class="ico" style="background:#F0EAF8;color:#6b3fa0">📝</div><div><div class="ht">Request Materials</div><div class="hs">Request stock from the warehouse</div></div></div>
     <div class="hcard soon" onclick="toast('Coming next update')"><div class="ico" style="background:var(--al);color:var(--am)">📥</div><div><div class="ht">Receive Delivery</div><div class="hs">Coming next</div></div></div>
     <div class="hcard soon" onclick="toast('Coming next update')"><div class="ico" style="background:var(--bg2);color:var(--tx2)">🗂️</div><div><div class="ht">Records</div><div class="hs">Coming next</div></div></div>
   </div>
@@ -129,7 +129,37 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
   </div>
 </div>
 
-<!-- SLIP CONFIRM -->
+<!-- REQUEST -->
+<div id="s-request" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Request Materials</div><div class="tsub">To warehouse · Carmen</div></div><button class="bk" style="width:auto;padding:0 14px;border-radius:18px;font-size:13px;font-weight:700" onclick="openReqHist()">History</button></div>
+  <div class="pc">
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">1</div><div><div class="sec-t">Request details</div><div class="sec-s">Who is requesting and any note</div></div></div>
+      <label class="fl">Date</label>
+      <input id="r-date" class="fi" type="date"/>
+      <label class="fl">Requested by <span class="req">*</span></label>
+      <input id="r-by" class="fi" placeholder="Storekeeper name"/>
+      <label class="fl">Remarks</label>
+      <input id="r-remarks" class="fi" placeholder="Optional note"/>
+      <label style="display:flex;align-items:center;gap:9px;margin-top:14px;font-size:14px;cursor:pointer;font-weight:600;color:var(--r)"><input type="checkbox" id="r-urgent" style="width:18px;height:18px"/> Mark as urgent</label>
+    </div>
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">2</div><div><div class="sec-t">Items needed</div><div class="sec-s">Add the materials to request</div></div></div>
+      <div id="r-rows"></div>
+      <button class="add-row" onclick="addReqRow()">+ Add item</button>
+      <button class="add-row" style="border-color:var(--am);background:var(--al);color:#7a4a06;margin-top:8px" onclick="addLowStock()">+ Add all low-stock items</button>
+    </div>
+    <button class="lbtn" onclick="submitRequest()">Submit request</button>
+  </div>
+</div>
+
+<!-- REQUEST HISTORY -->
+<div id="s-reqhist" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-request')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Request History</div><div class="tsub">Carmen</div></div><div style="width:38px"></div></div>
+  <div class="pc"><div class="sec"><div id="rh-list"><div class="empty">Loading…</div></div></div></div>
+</div>
+
+
 <div id="mislip-modal" class="modal"><div class="card" style="max-height:92vh;overflow:auto">
   <div id="mislip-body" style="margin:0 0 12px"></div>
   <div style="font-size:11px;color:var(--tx2);line-height:1.5;background:var(--bg2);border-radius:10px;padding:10px 12px;margin-bottom:10px">By entering their PIN, the crew member confirms receipt of the materials listed above.</div>
@@ -210,7 +240,7 @@ async function openIssue(){
   selEmp=null; empLast={}; rc=0; pending=null; reservedNo='';
   await Promise.all([loadEmployees(),loadVessels(),loadStock()]);
   const vs=document.getElementById('i-vessel');
-  vs.innerHTML='<option value="">— Select vessel —</option>'+vessels.map(v=>`<option value="${v.vessel_name}" data-code="${(v.vessel_code||'').replace(/"/g,'&quot;')}">${v.vessel_name}${v.vessel_code?' · '+v.vessel_code:''}</option>`).join('');
+  vs.innerHTML='<option value="">— Select vessel —</option>'+vessels.map(v=>`<option value="${(v.vessel_name||'').replace(/"/g,'&quot;')}" data-code="${(v.vessel_code||'').replace(/"/g,'&quot;')}">${v.vessel_name}${v.vessel_code?' · '+v.vessel_code:''}</option>`).join('');
   document.getElementById('i-vessel-empty').style.display=vessels.length?'none':'block';
   document.getElementById('i-emp').value='';
   document.getElementById('i-emp-sug').innerHTML='';
@@ -348,6 +378,88 @@ async function confirmIssue(){
   }catch(e){toast('Save failed: '+e.message);}
 }
 function newIssue(){document.getElementById('ok-modal').style.display='none';openIssue();}
+
+/* ── REQUEST ── */
+let rr=0;
+async function openRequest(){
+  rr=0;
+  await loadStock();
+  const d=document.getElementById('r-date');d.min=todayYmd();d.value=todayYmd();
+  document.getElementById('r-by').value='';
+  document.getElementById('r-remarks').value='';
+  document.getElementById('r-urgent').checked=false;
+  document.getElementById('r-rows').innerHTML='';addReqRow();
+  showScreen('s-request');
+}
+function addReqRow(name='',qty=1){
+  rr++;const id='rr-'+rr;
+  const div=document.createElement('div');div.className='irow';div.id=id;
+  div.innerHTML=`<select class="fi" onchange="document.getElementById('ru-${id}').textContent=gu(this.value)"><option value="">— Item —</option>${ITEMS.map(x=>`<option value="${x.n}"${x.n===name?' selected':''}>${x.n}</option>`).join('')}</select>
+    <input class="fi" type="number" min="1" value="${qty}" style="text-align:center"/>
+    <div class="iunit" id="ru-${id}">${name?gu(name):''}</div>
+    <div class="rm" onclick="document.getElementById('${id}').remove()">×</div>`;
+  document.getElementById('r-rows').appendChild(div);
+}
+function addLowStock(){
+  const low=ITEMS.filter(it=>(stockMap[it.n]||0)<=it.th);
+  if(!low.length){toast('No low-stock items right now');return;}
+  // remove the single empty starter row if present
+  const rows=document.querySelectorAll('#r-rows .irow');
+  if(rows.length===1){const s=rows[0].querySelector('select');if(s&&!s.value)rows[0].remove();}
+  const existing=new Set();
+  document.querySelectorAll('#r-rows .irow select').forEach(s=>{if(s.value)existing.add(s.value);});
+  low.forEach(it=>{if(!existing.has(it.n))addReqRow(it.n,Math.max(1,it.th));});
+  toast(low.length+' low-stock item(s) added');
+}
+function getReqRows(){
+  const out=[];let empty=false;
+  document.querySelectorAll('#r-rows .irow').forEach(r=>{
+    const s=r.querySelector('select'),q=r.querySelector('input[type=number]');
+    if(s&&s.value&&q&&parseInt(q.value)>0)out.push({n:s.value,qty:parseInt(q.value),u:gu(s.value)});
+    else if(s&&!s.value)empty=true;
+  });
+  return {out,empty};
+}
+async function submitRequest(){
+  const by=document.getElementById('r-by').value.trim();
+  const date=document.getElementById('r-date').value;
+  const remarks=document.getElementById('r-remarks').value.trim();
+  const urgent=document.getElementById('r-urgent').checked;
+  if(!by){toast('Enter who is requesting');return;}
+  if(!date){toast('Pick a date');return;}
+  const {out,empty}=getReqRows();
+  if(empty){toast('Fill or remove the empty item row');return;}
+  if(!out.length){toast('Add at least one item');return;}
+  const n=new Date(),z=x=>String(x).padStart(2,'0');
+  const id='REQ-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
+  const row={id,site:SITE,by_name:by,date,remarks:remarks||null,items:out.map(i=>({n:i.n,u:i.u,qty:i.qty})),status:'Pending',urgent,created_at:new Date().toISOString(),updated_at:new Date().toISOString()};
+  try{
+    const{error}=await sb.from('requests').insert([row]);if(error)throw error;
+    toast('Request submitted'+(urgent?' (URGENT)':''));
+    openReqHist();
+  }catch(e){toast('Save failed: '+e.message);}
+}
+async function openReqHist(){
+  showScreen('s-reqhist');
+  const el=document.getElementById('rh-list');el.innerHTML='<div class="empty">Loading…</div>';
+  let rows=[];
+  try{const{data}=await sb.from('requests').select('*').eq('site',SITE).order('created_at',{ascending:false}).limit(100);rows=data||[];}catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
+  if(!rows.length){el.innerHTML='<div class="empty">No requests yet.</div>';return;}
+  const badge=s=>{const c={Pending:'var(--am)',Approved:'var(--b)',Dispatched:'var(--b)',Received:'var(--pm)',Cancelled:'var(--tx3)'}[s]||'var(--tx3)';return `<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:${c};color:#fff">${(s||'Pending').toUpperCase()}</span>`;};
+  el.innerHTML=rows.map(r=>{
+    const items=(r.items||[]).map(i=>`${i.n} <b>${i.qty}${i.u?' '+i.u:''}</b>`).join(' · ');
+    return `<div style="padding:12px 0;border-bottom:1px solid var(--bg3)">
+      <div class="row2" style="align-items:flex-start">
+        <div><div style="font-weight:700;font-size:14px">${fmtNice(r.date)} ${r.urgent?'<span style="color:var(--r);font-size:11px;font-weight:800">· URGENT</span>':''}</div>
+        <div style="font-size:12px;color:var(--tx3);font-family:ui-monospace,monospace">${r.id}</div></div>
+        ${badge(r.status)}
+      </div>
+      <div style="font-size:13px;color:var(--tx2);margin-top:6px">${items}</div>
+      ${r.remarks?`<div style="font-size:12px;color:var(--tx3);margin-top:3px">“${r.remarks}”</div>`:''}
+      <div style="font-size:12px;color:var(--tx3);margin-top:3px">by ${r.by_name||'—'}</div>
+    </div>`;
+  }).join('');
+}
 
 /* ── STOCK ── */
 async function openStock(){showScreen('s-stock');await loadStock();renderStock();}
