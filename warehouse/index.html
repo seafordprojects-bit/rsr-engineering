@@ -65,7 +65,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div id="toast" class="toast"></div>
 
 <!-- LOGIN -->
-<div id="sl" class="screen active">
+<div id="sl" class="screen">
   <div class="lw"><div class="lb">
     <div class="lav">🏭</div>
     <div style="font-size:21px;font-weight:700;margin-bottom:4px">Main Warehouse</div>
@@ -86,7 +86,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 </div>
 
 <!-- APP -->
-<div id="sa" class="screen">
+<div id="sa" class="screen active">
   <div class="tb">
     <div style="display:flex;align-items:center;gap:10px">
       <div class="tdot">🏭</div>
@@ -136,7 +136,12 @@ function numTap(d){if(pv.length>=6)return;pv+=d;upd();}
 function nc(){pv='';upd();}
 function nb2(){pv=pv.slice(0,-1);upd();}
 function upd(){for(let i=0;i<4;i++){const e=document.getElementById('p'+i);if(e)e.className='pd'+(i<pv.length?' on':'');}}
-(async function boot(){try{const{data}=await sb.from('settings').select('value').eq('key','warehouse_pin').single();if(data&&data.value)WH_PIN=String(data.value);}catch(e){}})();
+(async function init(){
+  const h=new Date().getHours();
+  document.getElementById('hg').textContent=h<12?'Good morning':h<17?'Good afternoon':'Good evening';
+  try{const{data}=await sb.from('sites').select('name').order('name');sites=(data||[]).map(s=>s.name);}catch(e){sites=['Carmen','Mandaue'];}
+  swTab('stock'); refreshBadge();
+})();
 async function doLogin(){
   if(pv!==WH_PIN){document.getElementById('lerr').style.display='block';pv='';upd();return;}
   document.getElementById('lerr').style.display='none';
