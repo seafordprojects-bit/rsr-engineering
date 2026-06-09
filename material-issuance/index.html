@@ -81,8 +81,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
     <div class="hcard" onclick="openIssue()"><div class="ico" style="background:var(--pl);color:var(--p)">📤</div><div><div class="ht">Issue Materials</div><div class="hs">Issue to a vessel · crew confirms by passcode</div></div></div>
     <div class="hcard" onclick="openStock()"><div class="ico" style="background:var(--bl);color:var(--b)">📦</div><div><div class="ht">Stock</div><div class="hs">View &amp; adjust Carmen site stock</div></div></div>
     <div class="hcard" onclick="openRequest()"><div class="ico" style="background:#F0EAF8;color:#6b3fa0">📝</div><div><div class="ht">Request Materials</div><div class="hs">Request stock from the warehouse</div></div></div>
-    <div class="hcard soon" onclick="toast('Coming next update')"><div class="ico" style="background:var(--al);color:var(--am)">📥</div><div><div class="ht">Receive Delivery</div><div class="hs">Coming next</div></div></div>
-    <div class="hcard soon" onclick="toast('Coming next update')"><div class="ico" style="background:var(--bg2);color:var(--tx2)">🗂️</div><div><div class="ht">Records</div><div class="hs">Coming next</div></div></div>
+    <div class="hcard" onclick="openReceive()"><div class="ico" style="background:var(--al);color:var(--am)">📥</div><div><div class="ht">Receive Delivery</div><div class="hs">Receive items into stock</div></div></div>
+    <div class="hcard" onclick="openRecords()"><div class="ico" style="background:var(--bg2);color:var(--tx2)">🗂️</div><div><div class="ht">Records</div><div class="hs">Issued &amp; received history</div></div></div>
   </div>
 </div>
 
@@ -157,6 +157,54 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div id="s-reqhist" class="screen">
   <div class="tb"><button class="bk" onclick="showScreen('s-request')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Request History</div><div class="tsub">Carmen</div></div><div style="width:38px"></div></div>
   <div class="pc"><div class="sec"><div id="rh-list"><div class="empty">Loading…</div></div></div></div>
+</div>
+
+<!-- RECEIVE -->
+<div id="s-receive" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Receive Delivery</div><div class="tsub">Carmen</div></div><div style="width:38px"></div></div>
+  <div class="pc">
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n" style="background:var(--am)">1</div><div><div class="sec-t">Open requests</div><div class="sec-s">Receive items against a request you sent</div></div></div>
+      <div id="rcv-list"><div class="empty">Loading…</div></div>
+    </div>
+    <button class="lbtn" style="background:var(--am)" onclick="openDelivery(null)">+ Log direct delivery</button>
+  </div>
+</div>
+
+<!-- DELIVERY FORM -->
+<div id="s-delivery" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-receive')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Receive Items</div><div class="tsub" id="dl-sub">Direct delivery</div></div><div style="width:38px"></div></div>
+  <div class="pc">
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">1</div><div><div class="sec-t">Delivery details</div><div class="sec-s">Where it came from</div></div></div>
+      <label class="fl">Source</label>
+      <input id="dl-source" class="fi" placeholder="Warehouse / supplier"/>
+      <label class="fl">Reference / DR no</label>
+      <input id="dl-ref" class="fi" placeholder="Optional"/>
+      <label class="fl">Date</label>
+      <input id="dl-date" class="fi" type="date"/>
+      <label class="fl">Received by <span class="req">*</span></label>
+      <input id="dl-by" class="fi" placeholder="Storekeeper name"/>
+    </div>
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">2</div><div><div class="sec-t">Items received</div><div class="sec-s">Confirm the quantities actually received</div></div></div>
+      <div id="dl-rows"></div>
+      <button class="add-row" onclick="addDelRow()">+ Add item</button>
+    </div>
+    <button class="lbtn" onclick="confirmDelivery()">Confirm &amp; add to stock</button>
+  </div>
+</div>
+
+<!-- RECORDS -->
+<div id="s-records" class="screen">
+  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Records</div><div class="tsub">Carmen</div></div><div style="width:38px"></div></div>
+  <div class="pc">
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <button id="rec-tab-issued" class="btn btn-p" style="flex:1" onclick="renderRecords('issued')">Issued</button>
+      <button id="rec-tab-received" class="btn btn-sec" style="flex:1" onclick="renderRecords('received')">Received</button>
+    </div>
+    <div class="sec"><div id="rec-list"><div class="empty">Loading…</div></div></div>
+  </div>
 </div>
 
 
@@ -459,6 +507,98 @@ async function openReqHist(){
       <div style="font-size:12px;color:var(--tx3);margin-top:3px">by ${r.by_name||'—'}</div>
     </div>`;
   }).join('');
+}
+
+/* ── RECEIVE / DELIVERY ── */
+let dr=0, linkedReq=null;
+async function openReceive(){
+  showScreen('s-receive');
+  const el=document.getElementById('rcv-list');el.innerHTML='<div class="empty">Loading…</div>';
+  let rows=[];
+  try{const{data}=await sb.from('requests').select('*').eq('site',SITE).in('status',['Pending','Approved','Dispatched']).order('created_at',{ascending:false}).limit(50);rows=data||[];}
+  catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
+  window._rcvReqs=rows;
+  if(!rows.length){el.innerHTML='<div class="empty">No open requests. Use “Log direct delivery” below.</div>';return;}
+  el.innerHTML=rows.map(r=>{
+    const items=(r.items||[]).map(i=>`${i.n} ${i.qty}${i.u?' '+i.u:''}`).join(' · ');
+    return `<div class="row2" style="align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--bg3)">
+      <div style="min-width:0"><div style="font-weight:700;font-size:14px">${fmtNice(r.date)} ${r.urgent?'<span style="color:var(--r);font-size:11px;font-weight:800">· URGENT</span>':''}</div>
+      <div style="font-size:12px;color:var(--tx2);margin-top:3px">${items}</div></div>
+      <button class="btn btn-p" style="padding:9px 14px;white-space:nowrap" onclick='openDeliveryById("${r.id}")'>Receive</button>
+    </div>`;
+  }).join('');
+}
+function openDeliveryById(id){const r=(window._rcvReqs||[]).find(x=>x.id===id);openDelivery(r||null);}
+async function openDelivery(req){
+  dr=0; linkedReq=req?req.id:null;
+  await loadStock();
+  document.getElementById('dl-sub').textContent=req?('Against '+req.id):'Direct delivery';
+  document.getElementById('dl-source').value=req?'Warehouse':'';
+  document.getElementById('dl-ref').value='';
+  document.getElementById('dl-date').value=todayYmd();
+  document.getElementById('dl-by').value='';
+  document.getElementById('dl-rows').innerHTML='';
+  if(req&&(req.items||[]).length)req.items.forEach(i=>addDelRow(i.n,i.qty)); else addDelRow();
+  showScreen('s-delivery');
+}
+function addDelRow(name='',qty=1){
+  dr++;const id='dl-'+dr;
+  const div=document.createElement('div');div.className='irow';div.id=id;
+  div.innerHTML=`<select class="fi" onchange="document.getElementById('du-${id}').textContent=gu(this.value)"><option value="">— Item —</option>${ITEMS.map(x=>`<option value="${x.n}"${x.n===name?' selected':''}>${x.n}</option>`).join('')}</select>
+    <input class="fi" type="number" min="1" value="${qty}" style="text-align:center"/>
+    <div class="iunit" id="du-${id}">${name?gu(name):''}</div>
+    <div class="rm" onclick="document.getElementById('${id}').remove()">×</div>`;
+  document.getElementById('dl-rows').appendChild(div);
+}
+function getDelRows(){
+  const out=[];let empty=false;
+  document.querySelectorAll('#dl-rows .irow').forEach(r=>{
+    const s=r.querySelector('select'),q=r.querySelector('input[type=number]');
+    if(s&&s.value&&q&&parseInt(q.value)>0)out.push({n:s.value,qty:parseInt(q.value),u:gu(s.value)});
+    else if(s&&!s.value)empty=true;
+  });
+  return {out,empty};
+}
+async function confirmDelivery(){
+  const by=document.getElementById('dl-by').value.trim();
+  const date=document.getElementById('dl-date').value;
+  const source=document.getElementById('dl-source').value.trim()||'Delivery';
+  const ref=document.getElementById('dl-ref').value.trim();
+  if(!by){toast('Enter who received it');return;}
+  const {out,empty}=getDelRows();
+  if(empty){toast('Fill or remove the empty item row');return;}
+  if(!out.length){toast('Add at least one item');return;}
+  const n=new Date(),z=x=>String(x).padStart(2,'0');
+  const id='DLV-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
+  const row={id,site:SITE,source,ref:ref||null,date,received_by:by,items:out.map(i=>({n:i.n,u:i.u,qty:i.qty})),request_id:linkedReq,created_at:new Date().toISOString()};
+  try{
+    const{error}=await sb.from('deliveries').insert([row]);if(error)throw error;
+    for(const it of out){const cur=stockMap[it.n]||0;const nq=cur+it.qty;await sb.from('site_stock').upsert({site_key:SITE,item_name:it.n,qty:nq,updated_at:new Date().toISOString()},{onConflict:'site_key,item_name'});stockMap[it.n]=nq;}
+    if(linkedReq){await sb.from('requests').update({status:'Received',updated_at:new Date().toISOString()}).eq('id',linkedReq);}
+    toast('Received · stock updated');
+    openReceive();
+  }catch(e){toast('Save failed: '+e.message);}
+}
+
+/* ── RECORDS ── */
+function openRecords(){showScreen('s-records');renderRecords('issued');}
+async function renderRecords(tab){
+  document.getElementById('rec-tab-issued').className='btn '+(tab==='issued'?'btn-p':'btn-sec');
+  document.getElementById('rec-tab-received').className='btn '+(tab==='received'?'btn-p':'btn-sec');
+  const el=document.getElementById('rec-list');el.innerHTML='<div class="empty">Loading…</div>';
+  if(tab==='issued'){
+    let rows=[];try{const{data}=await sb.from('issuances').select('slip_no,proj_name,emp_name,date,by_name,items,created_at').eq('site_key',SITE).order('created_at',{ascending:false}).limit(80);rows=data||[];}
+    catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
+    if(!rows.length){el.innerHTML='<div class="empty">No issuances yet.</div>';return;}
+    el.innerHTML=rows.map(r=>{const items=(r.items||[]).map(i=>`${i.n} ${i.qty}${i.u?' '+i.u:''}`).join(' · ');
+      return `<div style="padding:11px 0;border-bottom:1px solid var(--bg3)"><div class="row2"><div style="font-weight:700;font-size:14px">${r.proj_name||'—'}</div><div style="font-family:ui-monospace,monospace;font-size:12px;color:var(--p)">${r.slip_no||''}</div></div><div style="font-size:12px;color:var(--tx2);margin-top:4px">${items}</div><div style="font-size:12px;color:var(--tx3);margin-top:3px">${fmtNice(r.date)} · to ${r.emp_name||'—'} · by ${r.by_name||'—'}</div></div>`;}).join('');
+  } else {
+    let rows=[];try{const{data}=await sb.from('deliveries').select('*').eq('site',SITE).order('created_at',{ascending:false}).limit(80);rows=data||[];}
+    catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
+    if(!rows.length){el.innerHTML='<div class="empty">No deliveries yet.</div>';return;}
+    el.innerHTML=rows.map(r=>{const items=(r.items||[]).map(i=>`${i.n} ${i.qty}${i.u?' '+i.u:''}`).join(' · ');
+      return `<div style="padding:11px 0;border-bottom:1px solid var(--bg3)"><div class="row2"><div style="font-weight:700;font-size:14px">${r.source||'Delivery'}${r.ref?' · '+r.ref:''}</div><div style="font-family:ui-monospace,monospace;font-size:12px;color:var(--b)">received</div></div><div style="font-size:12px;color:var(--tx2);margin-top:4px">${items}</div><div style="font-size:12px;color:var(--tx3);margin-top:3px">${fmtNice(r.date)} · recv by ${r.received_by||'—'}</div></div>`;}).join('');
+  }
 }
 
 /* ── STOCK ── */
