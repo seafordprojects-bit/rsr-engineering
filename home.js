@@ -261,6 +261,84 @@ function RepairHistory() {
     </div>`;
 }
 
+function Warehouse({ onBack }) {
+  const [reqs, setReqs] = useState(null);
+  const [stock, setStock] = useState({});
+  const [edit, setEdit] = useState({});
+  const [msg, setMsg] = useState(null);
+  const flash = (m) => { setMsg(m); setTimeout(() => setMsg(null), 2400); };
+  const load = async () => {
+    try {
+      const { data: rq } = await supabase.from('requests').select('*').in('status', ['Pending', 'Approved', 'Dispatched']).order('created_at', { ascending: false }).limit(100);
+      setReqs(rq || []);
+    } catch (e) { setReqs([]); }
+    try {
+      const { data: ws } = await supabase.from('warehouse_stock').select('item_name,qty');
+      const m = {}; (ws || []).forEach(r => m[r.item_name] = Number(r.qty) || 0);
+      setStock(m);
+      const ed = {}; MAT_CATALOG.forEach(n => ed[n] = String(m[n] ?? 0)); setEdit(ed);
+    } catch (e) {}
+  };
+  useEffect(() => { load(); }, []);
+  const itemsTxt = (r) => (Array.isArray(r.items) ? r.items : []).map(it => (it.n || it.name) + ' ×' + it.qty).join(', ') || '—';
+  const dispatch = async (r) => {
+    try {
+      for (const it of (r.items || [])) { const nm = it.n || it.name; const cur = stock[nm] || 0; const nq = Math.max(0, cur - (it.qty || 0)); await supabase.from('warehouse_stock').upsert({ item_name: nm, qty: nq, updated_at: new Date().toISOString() }, { onConflict: 'item_name' }); }
+      await supabase.from('requests').update({ status: 'Dispatched', updated_at: new Date().toISOString() }).eq('id', r.id);
+      flash('Dispatched ' + r.id); load();
+    } catch (e) { flash('Failed: ' + e.message); }
+  };
+  const cancel = async (r) => {
+    try { await supabase.from('requests').update({ status: 'Cancelled', updated_at: new Date().toISOString() }).eq('id', r.id); flash('Cancelled'); load(); }
+    catch (e) { flash('Failed: ' + e.message); }
+  };
+  const saveStock = async (name) => {
+    const v = parseInt(edit[name], 10); if (isNaN(v) || v < 0) { flash('Enter a valid qty'); return; }
+    try { await supabase.from('warehouse_stock').upsert({ item_name: name, qty: v, updated_at: new Date().toISOString() }, { onConflict: 'item_name' }); flash(name + ' set to ' + v); load(); }
+    catch (e) { flash('Failed: ' + e.message); }
+  };
+  const badge = (s) => { const c = { Pending:'#e8a330', Approved:'#378ADD', Dispatched:'#378ADD', Received:'#12B89E', Cancelled:'#9A9890' }[s] || '#9A9890'; return html`<span class="badge" style="background:${c};color:#fff">${(s || '').toUpperCase()}</span>`; };
+  return html`
+    <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+      <span><b>RSR</b><span class="tag">WAREHOUSE</span></span>
+      <button onClick=${onBack} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+    </div></div></header>
+    <div class="wrap">
+      <div class="card">
+        <label>Material requests${reqs ? ` (${reqs.length})` : ''}</label>
+        ${reqs == null ? html`<div class="empty">Loading…</div>`
+          : reqs.length ? reqs.map(r => html`
+            <div class="row" key=${r.id} style="align-items:flex-start">
+              <div>
+                <div class="name">${r.site || '—'} ${r.urgent ? html`<span style="color:#d64045;font-weight:800;font-size:11px">· URGENT</span>` : ''}</div>
+                <div class="unit mono" style="color:var(--ink-dim)">${r.id}</div>
+                <div class="unit">${itemsTxt(r)}</div>
+                <div class="unit">${r.date || ''}${r.by_name ? ' · by ' + r.by_name : ''}</div>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+                ${badge(r.status)}
+                ${r.status !== 'Dispatched' ? html`<button onClick=${() => dispatch(r)} style="background:#12B89E;color:#000;border:none;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:800;cursor:pointer">Dispatch</button>` : ''}
+                <button onClick=${() => cancel(r)} style="background:none;border:1px solid var(--line);color:var(--ink-dim);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer">Cancel</button>
+              </div>
+            </div>`)
+          : html`<div class="empty">No open requests.</div>`}
+      </div>
+      <div class="card">
+        <label>Warehouse stock (your place)</label>
+        ${MAT_CATALOG.map(n => html`
+          <div class="row" key=${n}>
+            <div class="name">${n}</div>
+            <div style="display:flex;gap:6px;align-items:center">
+              <input type="number" min="0" value=${edit[n] ?? ''} onInput=${e => setEdit({ ...edit, [n]: e.target.value })} style="width:74px;text-align:center;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:15px"/>
+              <button onClick=${() => saveStock(n)} style="background:var(--ink-dim);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:700;cursor:pointer">Set</button>
+            </div>
+          </div>`)}
+      </div>
+      <p class="note" style="text-align:center">Dispatching reduces warehouse stock and lets the site receive it.</p>
+    </div>
+    ${msg && html`<div class="toast">${msg}</div>`}`;
+}
+
 function App() {
   const [adminTab, setAdminTab] = useState('dash');  // 'dash' | 'people'
   const [authed, setAuthed] = useState(false);   // always require the passcode on open
@@ -446,6 +524,7 @@ function App() {
   const live = [
     { ico:'🔧', num:m.toolsOut,  unit:'out now',        title:'Tool Borrowing',   onClick:() => setAdminTab('borrowed') },
     { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', onClick:() => setAdminTab('issued') },
+    { ico:'🏠', num:null,        unit:'requests',         title:'Warehouse',        onClick:() => setAdminTab('warehouse') },
     { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  onClick:() => setAdminTab('vessels') },
     { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
@@ -548,6 +627,7 @@ function App() {
 
   // ---- admin: material issuance monitor (read-only) ----
   if (adminTab === 'matusage') return html`<${MatUsage} toast=${flash} onBack=${() => setAdminTab('issued')} />`;
+  if (adminTab === 'warehouse') return html`<${Warehouse} onBack=${() => setAdminTab('dash')} />`;
 
   if (adminTab === 'issued') {
     const dt = (s) => s ? new Date(s).toLocaleDateString() : '—';
@@ -565,7 +645,7 @@ function App() {
                 <div>
                   <div class="name">${r.emp_name || '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.id}</span></div>
                   <div class="unit">${r.proj_name || '—'}${r.proj_code ? ' (' + r.proj_code + ')' : ''} · ${r.date || ''}${r.by_name ? ' · by ' + r.by_name : ''}</div>
-                  <div class="unit">${(Array.isArray(r.items) ? r.items : []).map(it => it.name + ' ×' + it.qty).join(', ') || '—'}</div>
+                  <div class="unit">${(Array.isArray(r.items) ? r.items : []).map(it => (it.name || it.n) + ' ×' + it.qty).join(', ') || '—'}</div>
                 </div>
                 <span class="badge" style="background:#12B89E;color:#000">ISSUED</span>
               </div>`)
