@@ -536,27 +536,24 @@ async function openReqHist(){
   let rows=[];
   try{const{data}=await sb.from('requests').select('*').eq('site',SITE).order('created_at',{ascending:false}).limit(100);rows=data||[];}catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
   if(!rows.length){el.innerHTML='<div class="empty">No requests yet.</div>';return;}
-  const stBadge=s=>{const c={Pending:'var(--am)',Approved:'var(--b)',Dispatched:'var(--b)',Received:'var(--pm)',Cancelled:'var(--tx3)'}[s]||'var(--tx3)';return `<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:${c};color:#fff">${(s||'Pending').toUpperCase()}</span>`;};
+  const stBadge=s=>{const c={Pending:'var(--am)',Approved:'var(--b)',Partial:'var(--am)',Dispatched:'var(--b)',Received:'var(--pm)',Cancelled:'var(--tx3)'}[s]||'var(--tx3)';return `<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:${c};color:#fff;white-space:nowrap">${(s||'Pending').toUpperCase()}</span>`;};
   el.innerHTML=rows.map(r=>{
     const its=(r.items||[]);
     const total=its.reduce((s,i)=>s+(Number(i.qty)||0),0);
     const itemRows=its.map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${i.n}</span><span style="font-family:ui-monospace,monospace;color:var(--tx2);white-space:nowrap">${i.qty}${i.u?' '+i.u:''}</span></div>`).join('');
-    return `<div style="border:1.5px solid var(--bd);border-radius:14px;padding:16px;margin-bottom:12px">
-      <div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:12px;margin-bottom:10px">
+    const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${r.id}</div><div style="font-size:12px;color:var(--tx2)">${fmtNice(r.date)}${r.urgent?' · <span style=\"color:var(--r);font-weight:800\">URGENT</span>':''}</div></div>${stBadge(r.status)}`;
+    const body=`<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px">
         <div style="font-size:15px;font-weight:800;color:var(--p)">Material Request</div>
         <div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.id}${r.dr_no?' · '+r.dr_no:''}</div>
-        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(r.date)} · ${r.site||'—'}</div>
-      </div>
+        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(r.date)} · ${r.site||'—'}</div></div>
       <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Requested by</span><span style="font-weight:700">${r.by_name||'—'}</span></div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Status</span>${stBadge(r.status)}</div>
-      ${r.urgent?'<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Priority</span><span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:var(--r);color:#fff">URGENT</span></div>':''}
       ${r.remarks?`<div style="font-size:12px;color:var(--tx3);margin-top:4px">“${r.remarks}”</div>`:''}
       <div style="border-top:1.5px dashed var(--bd2);margin:10px 0 8px;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Item</span><span>Qty</span></div>
       ${itemRows}
-      <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:baseline">
-        <span style="font-size:13px;font-weight:800;text-transform:uppercase;color:var(--tx2)">Total</span>
-        <span style="font-size:20px;font-weight:900;color:var(--p)">${total} units</span></div>
-    </div>`;
+      <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:800;text-transform:uppercase;color:var(--tx2)">Total</span><span style="font-size:20px;font-weight:900;color:var(--p)">${total} units</span></div>`;
+    return `<div style="border:1px solid var(--bd);border-radius:12px;margin-bottom:10px;overflow:hidden">
+      <div onclick="var b=this.nextElementSibling;var o=b.style.display!=='none';b.style.display=o?'none':'block';this.querySelector('.chev').textContent=o?'▸':'▾'" style="padding:12px 14px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;cursor:pointer;gap:8px">${head}<span class="chev" style="color:var(--tx3);font-size:13px">▸</span></div>
+      <div style="display:none;padding:14px">${body}</div></div>`;
   }).join('');
 }
 
@@ -571,13 +568,21 @@ async function openReceive(){
   window._rcvDisp=rows;
   if(!rows.length){el.innerHTML='<div class="empty">No incoming dispatches. Use “Log direct delivery” below.</div>';return;}
   el.innerHTML=rows.map(d=>{
-    const items=(d.items||[]).map(i=>`${i.n} ${i.qty}${i.u?' '+i.u:''}`).join(' · ');
-    return `<div class="row2" style="align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--bg3)">
-      <div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${d.dr_no||d.id}</div>
-      <div style="font-size:12px;color:var(--tx2);margin-top:3px">${items}</div>
-      <div style="font-size:11px;color:var(--tx3);margin-top:2px">${fmtNice(d.date)}</div></div>
-      <button class="btn btn-p" style="padding:9px 14px;white-space:nowrap" onclick='openDispatchById("${d.id}")'>Receive</button>
-    </div>`;
+    const its=(d.items||[]);
+    const tu=its.reduce((s,x)=>s+(Number(x.qty)||0),0);
+    const itemRows=its.map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${i.n}</span><span style="font-family:ui-monospace,monospace;color:var(--tx2)">${i.qty}${i.u?' '+i.u:''}</span></div>`).join('');
+    const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${d.dr_no||d.id}</div><div style="font-size:12px;color:var(--tx2)">${fmtNice(d.date)} · ${its.length} item(s)</div></div>`;
+    const body=`<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px">
+        <div style="font-size:14px;font-weight:800;color:var(--p)">Incoming Dispatch</div>
+        <div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${d.dr_no||d.id}</div>
+        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(d.date)} · from Warehouse</div></div>
+      <div style="margin:0 0 8px;display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Sent</span><span>Qty</span></div>
+      ${itemRows}
+      <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:800;text-transform:uppercase;color:var(--tx2)">Total</span><span style="font-size:18px;font-weight:900;color:var(--p)">${tu} units</span></div>
+      <button class="btn btn-p" style="width:100%;margin-top:12px" onclick='openDispatchById("${d.id}")'>Receive this delivery</button>`;
+    return `<div style="border:1px solid var(--bd);border-radius:12px;margin-bottom:10px;overflow:hidden">
+      <div onclick="var b=this.nextElementSibling;var o=b.style.display!=='none';b.style.display=o?'none':'block';this.querySelector('.chev').textContent=o?'▸':'▾'" style="padding:12px 14px;background:var(--bg3);display:flex;justify-content:space-between;align-items:center;cursor:pointer;gap:8px">${head}<span class="chev" style="color:var(--tx3);font-size:13px">▸</span></div>
+      <div style="display:none;padding:14px">${body}</div></div>`;
   }).join('');
 }
 function openDispatchById(id){const d=(window._rcvDisp||[]).find(x=>x.id===id);openDelivery(d||null);}
