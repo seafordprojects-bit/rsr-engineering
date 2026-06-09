@@ -317,7 +317,7 @@ async function saveDispatch(){
 async function renderLog(c){
   let rows=[];try{const{data}=await sb.from('dispatches').select('*').order('created_at',{ascending:false}).limit(80);rows=data||[];}catch(e){}
   if(!rows.length){c.innerHTML='<div class="sc"><div class="empty">No dispatches yet.</div></div>';return;}
-  c.innerHTML='<div class="sc"><div class="sc-title">Dispatch log${''}</div><div class="sc-sub">'+rows.length+' dispatch(es)</div>'
+  c.innerHTML='<div class="sc"><div class="sc-title">Dispatch log</div><div class="sc-sub">'+rows.length+' dispatch(es)</div>'
     +rows.map((r,i)=>{const items=(r.items||[]).map(it=>`${it.n} ×${it.qty}`).join(', ');
       return `<div class="dcard"><div class="dcard-hdr" onclick="document.getElementById('db-${i}').classList.toggle('open')">
         <div><div style="font-weight:700;font-family:monospace;color:var(--pd)">${r.dr_no||r.id}</div><div style="font-size:12px;color:var(--tx2)">${r.site||'—'} · ${fmt(r.date||r.created_at)}</div></div>
