@@ -379,8 +379,8 @@ async function reviewIssue(){
   const opt=vs.options[vs.selectedIndex];
   const vessel={name:vs.value,code:opt.getAttribute('data-code')||''};
   if(!reservedNo){
-    let no='';try{const{data,error}=await sb.rpc('next_issuance_no');if(!error&&data)no=data;}catch(e){}
-    if(!no){const n=new Date(),z=x=>String(x).padStart(2,'0');no='MI-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+    let no='';try{const{data,error}=await sb.rpc('next_no',{p_prefix:'MI',p_site:SITECODE});if(!error&&data)no=data;}catch(e){}
+    if(!no){const n=new Date(),z=x=>String(x).padStart(2,'0');no='MI-'+SITECODE+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
     reservedNo=no;
   }
   pending={vessel,emp:selEmp,by,date,items:out,no:reservedNo};
