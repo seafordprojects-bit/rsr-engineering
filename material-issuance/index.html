@@ -31,6 +31,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .hcard .ht{font-size:16px;font-weight:700}.hcard .hs{font-size:12px;color:var(--tx2);margin-top:2px}
 .hcard.soon{opacity:.55}
 .card{background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--radl);padding:16px;margin-bottom:14px}
+.sec{background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--radl);padding:18px 16px;margin-bottom:14px}
+.sec-h{display:flex;align-items:flex-start;gap:12px;border-bottom:1px solid var(--bg3);padding-bottom:12px;margin-bottom:14px}
+.sec-n{width:30px;height:30px;border-radius:50%;background:var(--p);color:#fff;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.sec-t{font-size:16px;font-weight:700;color:var(--pd)}
+.sec-s{font-size:12px;color:var(--tx2);margin-top:2px}
 .irow{display:grid;grid-template-columns:minmax(0,1fr) 76px 40px 32px;gap:8px;align-items:center;margin-bottom:8px}
 .iunit{font-size:12px;color:var(--tx2);text-align:center}
 .rm{width:32px;height:38px;border:1.5px solid var(--bd2);border-radius:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--tx3);font-size:18px}
@@ -83,24 +88,32 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 
 <!-- ISSUE (single page) -->
 <div id="s-issue" class="screen">
-  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div class="ttitle">Issue Materials</div><div style="width:38px"></div></div>
+  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Issue Materials</div><div class="tsub">Complete all sections below</div></div><div style="width:38px"></div></div>
   <div class="pc">
-    <label class="fl">Project / Vessel <span class="req">*</span></label>
-    <select id="i-vessel" class="fi"></select>
-    <div id="i-vessel-empty" class="empty" style="display:none">No active vessels. Add/activate one in Coordinator first.</div>
-    <label class="fl">Issued to (crew) <span class="req">*</span></label>
-    <div class="combo">
-      <input id="i-emp" class="fi" placeholder="Type name or code, or tap to choose" autocomplete="off" oninput="onEmpInput()" onfocus="empSuggest()" onblur="hideEmpSug()"/>
-      <div id="i-emp-sug" class="sug"></div>
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">1</div><div><div class="sec-t">Vessel / project</div><div class="sec-s">Select the vessel you are issuing for</div></div></div>
+      <label class="fl">Project / Vessel <span class="req">*</span></label>
+      <select id="i-vessel" class="fi"></select>
+      <div id="i-vessel-empty" class="empty" style="display:none">No active vessels. Add/activate one in Coordinator first.</div>
     </div>
-    <label class="fl">Date <span class="req">*</span></label>
-    <input id="i-date" class="fi" type="date"/>
-    <label class="fl">Issued by <span class="req">*</span></label>
-    <input id="i-by" class="fi" placeholder="Storekeeper name"/>
-    <label class="fl">Items to issue <span class="req">*</span></label>
-    <div id="i-rows"></div>
-    <button class="add-row" onclick="addRow()">+ Add item</button>
-    <div id="i-warn"></div>
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">2</div><div><div class="sec-t">Crew details</div><div class="sec-s">Who is receiving the materials</div></div></div>
+      <label class="fl">Issued to (crew) <span class="req">*</span></label>
+      <div class="combo">
+        <input id="i-emp" class="fi" placeholder="Type name or code, or tap to choose" autocomplete="off" oninput="onEmpInput()" onfocus="empSuggest()" onblur="hideEmpSug()"/>
+        <div id="i-emp-sug" class="sug"></div>
+      </div>
+      <label class="fl">Date <span class="req">*</span></label>
+      <input id="i-date" class="fi" type="date"/>
+      <label class="fl">Issued by <span class="req">*</span></label>
+      <input id="i-by" class="fi" placeholder="Storekeeper name"/>
+    </div>
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">3</div><div><div class="sec-t">Materials to issue</div><div class="sec-s">Add all items being issued</div></div></div>
+      <div id="i-rows"></div>
+      <button class="add-row" onclick="addRow()">+ Add item</button>
+      <div id="i-warn"></div>
+    </div>
     <button class="lbtn" onclick="reviewIssue()">Issue</button>
   </div>
 </div>
@@ -109,8 +122,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div id="s-stock" class="screen">
   <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div class="ttitle">Carmen Stock</div><div style="width:38px"></div></div>
   <div class="pc">
-    <div style="font-size:13px;color:var(--tx2);margin-bottom:12px">Current on-hand stock at Carmen. Updated automatically when deliveries are received and when materials are issued. Low stock (at or below threshold) is flagged.</div>
-    <div class="card" id="stk-list"><div class="empty">Loading…</div></div>
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n" style="background:var(--b)">≡</div><div><div class="sec-t">On-hand stock</div><div class="sec-s">Updates automatically on receive &amp; issue</div></div></div>
+      <div id="stk-list"><div class="empty">Loading…</div></div>
+    </div>
   </div>
 </div>
 
