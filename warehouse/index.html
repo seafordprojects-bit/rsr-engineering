@@ -24,8 +24,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .tdot{width:38px;height:38px;border-radius:50%;background:#fff;border:2px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:18px}
 .ttitle{font-size:16px;font-weight:700;color:var(--p)}.tsub{font-size:12px;color:var(--pm);margin-top:1px}
 .lout{padding:8px 14px;font-size:13px;border-radius:8px;border:1.5px solid var(--pm);background:transparent;color:var(--p);cursor:pointer;font-weight:600;text-decoration:none}
-.tabs{display:flex;border-bottom:1px solid var(--bd);background:var(--bg);overflow-x:auto}
-.tab{padding:11px 6px;font-size:12px;font-weight:500;cursor:pointer;color:var(--tx2);border-bottom:2.5px solid transparent;white-space:nowrap;flex:1;min-width:0;text-align:center;position:relative;overflow:hidden;text-overflow:ellipsis}
+.tabs{display:flex;flex-wrap:wrap;border-bottom:1px solid var(--bd);background:var(--bg)}
+.tab{padding:11px 4px;font-size:12px;font-weight:600;cursor:pointer;color:var(--tx2);border:none;border-bottom:2.5px solid transparent;background:transparent;font-family:inherit;white-space:nowrap;flex:1 1 33%;min-width:0;text-align:center;position:relative;overflow:hidden;text-overflow:ellipsis}
 .tab.active{color:var(--p);border-bottom-color:var(--p);font-weight:700}
 .dot{position:absolute;top:6px;right:8px;width:8px;height:8px;border-radius:50%}
 .pc{padding:16px;padding-bottom:48px}
@@ -95,12 +95,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
     <a class="lout" href="../admin/">← Admin</a>
   </div>
   <div class="tabs">
-    <div class="tab active" id="tab-stock" onclick="swTab('stock')">Stock</div>
-    <div class="tab" id="tab-requests" onclick="swTab('requests')">Requests<span class="dot" id="req-dot" style="display:none;background:var(--r)"></span></div>
-    <div class="tab" id="tab-delivery" onclick="swTab('delivery')">Record delivery</div>
-    <div class="tab" id="tab-dispatch" onclick="swTab('dispatch')">Create dispatch</div>
-    <div class="tab" id="tab-log" onclick="swTab('log')">Dispatch log</div>
-    <div class="tab" id="tab-inventory" onclick="swTab('inventory')">Inventory</div>
+    <button type="button" class="tab active" id="tab-stock" data-tab="stock">Stock</button>
+    <button type="button" class="tab" id="tab-requests" data-tab="requests">Requests<span class="dot" id="req-dot" style="display:none;background:var(--r)"></span></button>
+    <button type="button" class="tab" id="tab-delivery" data-tab="delivery">Record delivery</button>
+    <button type="button" class="tab" id="tab-dispatch" data-tab="dispatch">Create dispatch</button>
+    <button type="button" class="tab" id="tab-log" data-tab="log">Dispatch log</button>
+    <button type="button" class="tab" id="tab-inventory" data-tab="inventory">Inventory</button>
   </div>
   <div class="pc" id="main-content"></div>
 </div>
@@ -137,6 +137,7 @@ function nc(){pv='';upd();}
 function nb2(){pv=pv.slice(0,-1);upd();}
 function upd(){for(let i=0;i<4;i++){const e=document.getElementById('p'+i);if(e)e.className='pd'+(i<pv.length?' on':'');}}
 (async function init(){
+  document.querySelectorAll('#sa .tab[data-tab]').forEach(b=>b.addEventListener('click',function(){swTab(this.getAttribute('data-tab'));}));
   const h=new Date().getHours();
   document.getElementById('hg').textContent=h<12?'Good morning':h<17?'Good afternoon':'Good evening';
   try{const{data}=await sb.from('sites').select('name').order('name');sites=(data||[]).map(s=>s.name);}catch(e){sites=['Carmen','Mandaue'];}
@@ -159,7 +160,8 @@ async function loadPrices(){prices={};try{const{data}=await sb.from('item_prices
 async function refreshBadge(){let n=0;try{const{count}=await sb.from('requests').select('*',{count:'exact',head:true}).eq('status','Pending');n=count||0;}catch(e){}const d=document.getElementById('req-dot');if(d)d.style.display=n>0?'block':'none';}
 
 async function swTab(name){
-  ['stock','requests','delivery','dispatch','log','inventory'].forEach(t=>document.getElementById('tab-'+t).classList.toggle('active',t===name));
+ try{
+  ['stock','requests','delivery','dispatch','log','inventory'].forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.classList.toggle('active',t===name);});
   const c=document.getElementById('main-content');c.scrollTop=0;c.innerHTML='<div class="empty">Loading…</div>';
   if(name==='stock')await renderStock(c);
   else if(name==='requests')await renderRequests(c);
@@ -168,6 +170,7 @@ async function swTab(name){
   else if(name==='log')await renderLog(c);
   else if(name==='inventory')await renderInventory(c);
   refreshBadge();
+ }catch(e){const c=document.getElementById('main-content');if(c)c.innerHTML='<div class="sc"><div class="empty">Could not open this tab.<br>'+(e&&e.message?e.message:e)+'</div></div>';}
 }
 
 /* ── STOCK ── */
