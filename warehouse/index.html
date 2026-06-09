@@ -119,14 +119,16 @@ const ITEMS=[
   {n:'Flint stone',u:'pcs',th:5},{n:'Striker',u:'pcs',th:3},{n:'Y-connector',u:'pcs',th:2},
   {n:'Cutting disk',u:'pcs',th:5},{n:'Oxygen regulator',u:'unit',th:1},{n:'LPG regulator',u:'unit',th:1},{n:'Steel square',u:'pcs',th:1}
 ];
-function gu(n){return (ITEMS.find(i=>i.n===n)||{u:'pcs'}).u;}
-function gth(n){return (ITEMS.find(i=>i.n===n)||{th:0}).th;}
+function gu(n){const c=catalog.find(i=>i.n===n);if(c)return c.u;return (ITEMS.find(i=>i.n===n)||{u:'pcs'}).u;}
+function gth(n){const c=catalog.find(i=>i.n===n);if(c)return c.th;return (ITEMS.find(i=>i.n===n)||{th:0}).th;}
 const peso=v=>'\u20b1'+(Number(v)||0).toLocaleString('en-PH',{maximumFractionDigits:2});
 function todayYmd(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
 function fmt(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});}
-function itemOpts(sel){return '<option value="">— Item —</option>'+ITEMS.map(i=>`<option value="${i.n}"${i.n===sel?' selected':''}>${i.n}</option>`).join('');}
+function itemOpts(sel){const list=catalog.length?catalog:ITEMS;return '<option value="">— Item —</option>'+list.map(i=>`<option value="${i.n}"${i.n===sel?' selected':''}>${i.n}</option>`).join('');}
 
-let WH_PIN='5555', stockMap={}, prices={}, sites=[], dispatchPrefill=null;
+let WH_PIN='5555', stockMap={}, prices={}, sites=[], dispatchPrefill=null, unitMap={}, catalog=[];
+const SITE_CODES={'Carmen':'CAR','Mandaue':'MAN','Lapu-Lapu':'LAP'};
+function siteCode(name){return SITE_CODES[name]||((name||'XXX').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase());}
 
 function toast(m,t){const el=document.getElementById('toast');el.textContent=m;el.className='toast '+(t==='err'?'terr':'tok');el.style.display='block';clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',3200);}
 
@@ -153,7 +155,21 @@ async function doLogin(){
   swTab('stock'); refreshBadge();
 }
 
-async function loadStock(){stockMap={};try{const{data}=await sb.from('warehouse_stock').select('item_name,qty');(data||[]).forEach(r=>stockMap[r.item_name]=Number(r.qty)||0);}catch(e){}}
+async function loadStock(){
+  stockMap={};unitMap={};
+  let rows=[];
+  try{const{data,error}=await sb.from('warehouse_stock').select('item_name,qty,unit');if(error)throw error;rows=data||[];}
+  catch(e){try{const{data}=await sb.from('warehouse_stock').select('item_name,qty');rows=data||[];}catch(e2){}}
+  rows.forEach(r=>{stockMap[r.item_name]=Number(r.qty)||0;if(r.unit)unitMap[r.item_name]=r.unit;});
+  const baseNames=ITEMS.map(i=>i.n);
+  const extra=rows.map(r=>r.item_name).filter(n=>n&&!baseNames.includes(n)).sort((a,b)=>a.localeCompare(b));
+  catalog=ITEMS.concat(extra.map(n=>({n,u:unitMap[n]||'pcs',th:0})));
+}
+async function upsertStock(name,qty,unit){
+  let r=await sb.from('warehouse_stock').upsert({item_name:name,qty:qty,unit:unit,updated_at:new Date().toISOString()},{onConflict:'item_name'});
+  if(r.error){r=await sb.from('warehouse_stock').upsert({item_name:name,qty:qty,updated_at:new Date().toISOString()},{onConflict:'item_name'});}
+  return r.error;
+}
 async function loadPrices(){prices={};try{const{data}=await sb.from('item_prices').select('item_name,price');(data||[]).forEach(r=>prices[r.item_name]=Number(r.price)||0);}catch(e){}}
 async function refreshBadge(){let n=0;try{const{count}=await sb.from('requests').select('*',{count:'exact',head:true}).eq('status','Pending');n=count||0;}catch(e){}const d=document.getElementById('req-dot');if(d)d.style.display=n>0?'block':'none';}
 
@@ -175,14 +191,14 @@ async function swTab(name){
 async function renderStock(c){
   await Promise.all([loadStock(),loadPrices()]);
   let low=0,zero=0,total=0;
-  ITEMS.forEach(i=>{const q=stockMap[i.n]||0;total+=q;if(q<=0)zero++;else if(q<=i.th)low++;});
+  catalog.forEach(i=>{const q=stockMap[i.n]||0;total+=q;if(q<=0)zero++;else if(i.th>0&&q<=i.th)low++;});
   c.innerHTML='<div class="mstrip">'
     +`<div class="mbox"><div class="mv">${total}</div><div class="ml">Total on hand</div></div>`
     +`<div class="mbox" style="border-color:var(--am)"><div class="mv" style="color:var(--ad)">${low}</div><div class="ml">Low stock</div></div>`
     +`<div class="mbox" style="border-color:var(--rm)"><div class="mv" style="color:var(--r)">${zero}</div><div class="ml">Out of stock</div></div></div>`
     +'<div class="sc"><table class="tbl"><thead><tr><th>Item</th><th>Unit</th><th style="text-align:right">On hand</th><th>Min</th><th>Status</th></tr></thead><tbody>'
-    +ITEMS.map(i=>{const q=stockMap[i.n]||0;const b=q<=0?'<span class="badge bdanger">Out</span>':q<=i.th?'<span class="badge bwarn">Low</span>':'<span class="badge bok">OK</span>';
-      return `<tr><td style="font-weight:600">${i.n}</td><td style="color:var(--tx2)">${i.u}</td><td style="text-align:right;font-size:16px;font-weight:700;color:${q<=0?'var(--r)':q<=i.th?'var(--ad)':'var(--tx)'}">${q}</td><td style="color:var(--tx2)">${i.th}</td><td>${b}</td></tr>`;}).join('')
+    +catalog.map(i=>{const q=stockMap[i.n]||0;const b=q<=0?'<span class="badge bdanger">Out</span>':(i.th>0&&q<=i.th)?'<span class="badge bwarn">Low</span>':'<span class="badge bok">OK</span>';
+      return `<tr><td style="font-weight:600">${i.n}</td><td style="color:var(--tx2)">${i.u}</td><td style="text-align:right;font-size:16px;font-weight:700;color:${q<=0?'var(--r)':(i.th>0&&q<=i.th)?'var(--ad)':'var(--tx)'}">${q}</td><td style="color:var(--tx2)">${i.th>0?i.th:'—'}</td><td>${b}</td></tr>`;}).join('')
     +'</tbody></table></div>';
 }
 
@@ -302,8 +318,9 @@ async function saveDispatch(){
   if(empty){toast('Select an item for all rows','err');return;}
   if(!items.length){toast('Add at least one item','err');return;}
   await loadStock();
-  let drNo='';try{const{data,error}=await sb.rpc('next_dispatch_no');if(!error&&data)drNo=data;}catch(e){}
-  if(!drNo){const n=new Date(),z=x=>String(x).padStart(2,'0');drNo='DR-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+  const dcode=siteCode(site);
+  let drNo='';try{const{data,error}=await sb.rpc('next_no',{p_prefix:'DR',p_site:dcode});if(!error&&data)drNo=data;}catch(e){}
+  if(!drNo){const n=new Date(),z=x=>String(x).padStart(2,'0');drNo='DR-'+dcode+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
   const n=new Date(),z=x=>String(x).padStart(2,'0');
   const id='DSP-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
   try{
