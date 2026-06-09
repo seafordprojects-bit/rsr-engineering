@@ -644,7 +644,7 @@ function App() {
   const live = [
     { ico:'🔧', num:m.toolsOut,  unit:'out now',        title:'Tool Borrowing',   onClick:() => setAdminTab('borrowed') },
     { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', onClick:() => setAdminTab('issued') },
-    { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse',        onClick:() => setAdminTab('warehouse') },
+    { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse',        href:'../warehouse/' },
     { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  onClick:() => setAdminTab('vessels') },
     { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
