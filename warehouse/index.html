@@ -9,8 +9,8 @@
 *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
 :root{--p:#27500A;--pl:#EAF3DE;--pm:#639922;--pd:#122606;--b:#0C447C;--bl:#E6F1FB;--bm:#378ADD;--am:#EF9F27;--al:#FAEEDA;--ad:#633806;--r:#791F1F;--rl:#FCEBEB;--rm:#F09595;--bg:#fff;--bg2:#F7F7F5;--bg3:#EFEFEC;--bd:#E0DED8;--bd2:#C8C6BE;--tx:#1A1A18;--tx2:#5A5955;--tx3:#9A9890;--rad:10px;--radl:14px;--radx:18px}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;background:var(--bg3);color:var(--tx);min-height:100vh}
-.app{max-width:720px;margin:0 auto;background:var(--bg);min-height:100vh;display:flex;flex-direction:column}
-.screen{display:none}.screen.active{display:flex;flex-direction:column;flex:1}
+.app{max-width:720px;margin:0 auto;background:var(--bg);min-height:100vh}
+.screen{display:none}.screen.active{display:block}
 .lw{flex:1;display:flex;align-items:center;justify-content:center;padding:2rem;background:var(--pl);min-height:100vh}
 .lb{background:var(--bg);border-radius:var(--radx);padding:2.5rem 2rem;width:100%;max-width:340px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.1)}
 .lav{width:72px;height:72px;border-radius:50%;background:var(--pl);border:3px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 14px}
@@ -20,12 +20,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .nb{padding:18px;font-size:20px;font-weight:500;border:1.5px solid var(--bd);border-radius:var(--radl);background:var(--bg);color:var(--tx);cursor:pointer}
 .nb:active{background:var(--pl);border-color:var(--pm)}
 .lbtn{width:100%;padding:16px;font-size:17px;font-weight:600;border-radius:var(--radl);border:none;background:var(--p);color:#fff;cursor:pointer}
-.tb{padding:13px 16px;background:var(--pl);border-bottom:1.5px solid var(--pm);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
+.tb{padding:13px 16px;background:var(--pl);border-bottom:1.5px solid var(--pm);display:flex;align-items:center;justify-content:space-between}
 .tdot{width:38px;height:38px;border-radius:50%;background:#fff;border:2px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:18px}
 .ttitle{font-size:16px;font-weight:700;color:var(--p)}.tsub{font-size:12px;color:var(--pm);margin-top:1px}
 .lout{padding:8px 14px;font-size:13px;border-radius:8px;border:1.5px solid var(--pm);background:transparent;color:var(--p);cursor:pointer;font-weight:600;text-decoration:none}
-.tabs{display:flex;border-bottom:1px solid var(--bd);background:var(--bg);overflow-x:auto;position:sticky;top:65px;z-index:9}
-.tab{padding:11px 13px;font-size:13px;font-weight:500;cursor:pointer;color:var(--tx2);border-bottom:2.5px solid transparent;white-space:nowrap;flex:1;text-align:center;position:relative}
+.tabs{display:flex;border-bottom:1px solid var(--bd);background:var(--bg);overflow-x:auto}
+.tab{padding:11px 6px;font-size:12px;font-weight:500;cursor:pointer;color:var(--tx2);border-bottom:2.5px solid transparent;white-space:nowrap;flex:1;min-width:0;text-align:center;position:relative;overflow:hidden;text-overflow:ellipsis}
 .tab.active{color:var(--p);border-bottom-color:var(--p);font-weight:700}
 .dot{position:absolute;top:6px;right:8px;width:8px;height:8px;border-radius:50%}
 .pc{padding:16px;padding-bottom:48px}
