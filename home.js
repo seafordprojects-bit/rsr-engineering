@@ -428,14 +428,15 @@ function App() {
     if (!authed || !onAdminPage) return;
     const iso30 = new Date(Date.now() - 30 * 864e5).toISOString();
     (async () => {
-      const [toolsOut, inRepair, issued30, vessels, people] = await Promise.all([
+      const [toolsOut, inRepair, issued30, vessels, people, pendingReqs] = await Promise.all([
         countRows('borrow_issuance', q => q.eq('txn_type', 'borrow').eq('status', 'out')),
         countRows('item_units', q => q.eq('active', true).eq('status', 'repair')),
         countRows('issuances', q => q.gte('created_at', iso30)),
         countRows('voyages', q => q.neq('status', 'not_active')),
         countRows('employees', q => q),
+        countRows('requests', q => q.eq('status', 'Pending')),
       ]);
-      setM({ toolsOut, inRepair, issued30, vessels, people });
+      setM({ toolsOut, inRepair, issued30, vessels, people, pendingReqs });
       try {
         const recs = await getAttendance(todayPH());
         const c = (f) => recs.filter(f).length;
@@ -524,7 +525,7 @@ function App() {
   const live = [
     { ico:'🔧', num:m.toolsOut,  unit:'out now',        title:'Tool Borrowing',   onClick:() => setAdminTab('borrowed') },
     { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', onClick:() => setAdminTab('issued') },
-    { ico:'🏠', num:null,        unit:'requests',         title:'Warehouse',        onClick:() => setAdminTab('warehouse') },
+    { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse',        onClick:() => setAdminTab('warehouse') },
     { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  onClick:() => setAdminTab('vessels') },
     { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
