@@ -261,81 +261,200 @@ function RepairHistory() {
     </div>`;
 }
 
+const MAT_TH = {'Electrode handle':3,'Welding gloves':3,'Cutting tip':5,'Dark glass':3,'Clear glass':3,'Trouble light':2,'Electrical tape':5,'Chalk stone':5,'Dry chalk':5,'Flint stone':5,'Striker':3,'Y-connector':2,'Cutting disk':5,'Oxygen regulator':1,'LPG regulator':1,'Steel square':1};
+function muUnit(n){return ({'Welding gloves':'pair','Oxygen regulator':'unit','LPG regulator':'unit'})[n]||'pcs';}
+const peso = (v) => '\u20b1' + (Number(v)||0).toLocaleString('en-PH',{maximumFractionDigits:2});
+
 function Warehouse({ onBack }) {
+  const [tab, setTab] = useState('requests');
   const [reqs, setReqs] = useState(null);
   const [stock, setStock] = useState({});
+  const [prices, setPrices] = useState({});
   const [edit, setEdit] = useState({});
+  const [purch, setPurch] = useState(null);
+  const [rep, setRep] = useState(null);
   const [msg, setMsg] = useState(null);
+  const [slip, setSlip] = useState(null);
+  // purchase form
+  const [pSup, setPSup] = useState('');
+  const [pInv, setPInv] = useState('');
+  const [pDate, setPDate] = useState(new Date().toISOString().slice(0,10));
+  const [pBy, setPBy] = useState('');
+  const [pRows, setPRows] = useState([{ n:'', qty:1, price:0 }]);
   const flash = (m) => { setMsg(m); setTimeout(() => setMsg(null), 2400); };
-  const load = async () => {
-    try {
-      const { data: rq } = await supabase.from('requests').select('*').in('status', ['Pending', 'Approved', 'Dispatched']).order('created_at', { ascending: false }).limit(100);
-      setReqs(rq || []);
-    } catch (e) { setReqs([]); }
-    try {
-      const { data: ws } = await supabase.from('warehouse_stock').select('item_name,qty');
-      const m = {}; (ws || []).forEach(r => m[r.item_name] = Number(r.qty) || 0);
-      setStock(m);
-      const ed = {}; MAT_CATALOG.forEach(n => ed[n] = String(m[n] ?? 0)); setEdit(ed);
-    } catch (e) {}
+
+  const loadCore = async () => {
+    try { const { data:rq } = await supabase.from('requests').select('*').in('status',['Pending','Approved','Dispatched']).order('created_at',{ascending:false}).limit(100); setReqs(rq||[]); } catch(e){ setReqs([]); }
+    try { const { data:ws } = await supabase.from('warehouse_stock').select('item_name,qty'); const m={}; (ws||[]).forEach(r=>m[r.item_name]=Number(r.qty)||0); setStock(m); const ed={}; MAT_CATALOG.forEach(n=>ed[n]=String(m[n]??0)); setEdit(ed); } catch(e){}
+    try { const { data:pr } = await supabase.from('item_prices').select('item_name,price'); const m={}; (pr||[]).forEach(r=>m[r.item_name]=Number(r.price)||0); setPrices(m); } catch(e){}
   };
-  useEffect(() => { load(); }, []);
-  const itemsTxt = (r) => (Array.isArray(r.items) ? r.items : []).map(it => (it.n || it.name) + ' ×' + it.qty).join(', ') || '—';
+  useEffect(() => { loadCore(); }, []);
+
+  const itemsTxt = (r) => (Array.isArray(r.items)?r.items:[]).map(it=>(it.n||it.name)+' \u00d7'+it.qty).join(', ')||'\u2014';
+  const badge = (s) => { const c={Pending:'#e8a330',Approved:'#378ADD',Dispatched:'#378ADD',Received:'#12B89E',Cancelled:'#9A9890'}[s]||'#9A9890'; return html`<span class="badge" style="background:${c};color:#fff">${(s||'').toUpperCase()}</span>`; };
+
+  // ---- dispatch ----
   const dispatch = async (r) => {
     try {
-      for (const it of (r.items || [])) { const nm = it.n || it.name; const cur = stock[nm] || 0; const nq = Math.max(0, cur - (it.qty || 0)); await supabase.from('warehouse_stock').upsert({ item_name: nm, qty: nq, updated_at: new Date().toISOString() }, { onConflict: 'item_name' }); }
-      await supabase.from('requests').update({ status: 'Dispatched', updated_at: new Date().toISOString() }).eq('id', r.id);
-      flash('Dispatched ' + r.id); load();
+      let drNo=''; try { const { data, error } = await supabase.rpc('next_dispatch_no'); if(!error&&data) drNo=data; } catch(e){}
+      if(!drNo){ const n=new Date(),z=x=>String(x).padStart(2,'0'); drNo='DR-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds()); }
+      for (const it of (r.items||[])) { const nm=it.n||it.name; const cur=stock[nm]||0; const nq=Math.max(0,cur-(it.qty||0)); await supabase.from('warehouse_stock').upsert({item_name:nm,qty:nq,updated_at:new Date().toISOString()},{onConflict:'item_name'}); }
+      await supabase.from('requests').update({ status:'Dispatched', dr_no:drNo, updated_at:new Date().toISOString() }).eq('id', r.id);
+      setSlip({ drNo, site:r.site, date:new Date().toISOString().slice(0,10), items:(r.items||[]).map(it=>({ n:it.n||it.name, u:it.u||muUnit(it.n||it.name), qty:it.qty })) });
+      loadCore();
     } catch (e) { flash('Failed: ' + e.message); }
   };
-  const cancel = async (r) => {
-    try { await supabase.from('requests').update({ status: 'Cancelled', updated_at: new Date().toISOString() }).eq('id', r.id); flash('Cancelled'); load(); }
-    catch (e) { flash('Failed: ' + e.message); }
+  const cancel = async (r) => { try { await supabase.from('requests').update({status:'Cancelled',updated_at:new Date().toISOString()}).eq('id',r.id); flash('Cancelled'); loadCore(); } catch(e){ flash('Failed: '+e.message); } };
+
+  // ---- stock ----
+  const saveStock = async (name) => { const v=parseInt(edit[name],10); if(isNaN(v)||v<0){flash('Enter a valid qty');return;} try{ await supabase.from('warehouse_stock').upsert({item_name:name,qty:v,updated_at:new Date().toISOString()},{onConflict:'item_name'}); flash(name+' set to '+v); loadCore(); }catch(e){ flash('Failed: '+e.message); } };
+
+  // ---- purchasing ----
+  const pTotal = pRows.reduce((s,r)=>s+((parseFloat(r.qty)||0)*(parseFloat(r.price)||0)),0);
+  const setRow = (i,k,v) => setPRows(rows => rows.map((r,j)=>j===i?{...r,[k]:v}:r));
+  const addPRow = () => setPRows(rows => [...rows,{n:'',qty:1,price:0}]);
+  const rmPRow = (i) => setPRows(rows => rows.filter((_,j)=>j!==i));
+  const pickPItem = (i,name) => setPRows(rows => rows.map((r,j)=>j===i?{...r,n:name,price:(prices[name]||r.price||0)}:r));
+  const savePurchase = async () => {
+    if(!pSup.trim()){flash('Enter supplier');return;}
+    const items=pRows.filter(r=>r.n&&parseInt(r.qty)>0).map(r=>({n:r.n,u:muUnit(r.n),qty:parseInt(r.qty),price:parseFloat(r.price)||0}));
+    if(!items.length){flash('Add at least one item');return;}
+    const n=new Date(),z=x=>String(x).padStart(2,'0');
+    const id='PO-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
+    const total=items.reduce((s,it)=>s+it.qty*it.price,0);
+    try {
+      await supabase.from('purchases').insert([{ id, supplier:pSup.trim(), invoice:pInv.trim()||null, date:pDate, received_by:pBy.trim()||null, items, grand_total:total, created_at:new Date().toISOString() }]);
+      for (const it of items) { const cur=stock[it.n]||0; await supabase.from('warehouse_stock').upsert({item_name:it.n,qty:cur+it.qty,updated_at:new Date().toISOString()},{onConflict:'item_name'}); if(it.price>0) await supabase.from('item_prices').upsert({item_name:it.n,price:it.price,updated_at:new Date().toISOString()},{onConflict:'item_name'}); }
+      flash('Purchase saved \u00b7 stock updated');
+      setPSup(''); setPInv(''); setPBy(''); setPRows([{n:'',qty:1,price:0}]);
+      await loadCore(); loadPurch();
+    } catch (e) { flash('Failed: '+e.message); }
   };
-  const saveStock = async (name) => {
-    const v = parseInt(edit[name], 10); if (isNaN(v) || v < 0) { flash('Enter a valid qty'); return; }
-    try { await supabase.from('warehouse_stock').upsert({ item_name: name, qty: v, updated_at: new Date().toISOString() }, { onConflict: 'item_name' }); flash(name + ' set to ' + v); load(); }
-    catch (e) { flash('Failed: ' + e.message); }
+  const loadPurch = async () => { try { const { data } = await supabase.from('purchases').select('*').order('created_at',{ascending:false}).limit(60); setPurch(data||[]); } catch(e){ setPurch([]); } };
+
+  // ---- reports ----
+  const loadReports = async () => {
+    let iss=[];
+    try { const since=new Date(Date.now()-30*864e5).toISOString(); const { data } = await supabase.from('issuances').select('proj_name,items,created_at').gte('created_at',since).limit(1000); iss=data||[]; } catch(e){}
+    const consume={}, byVessel={}; let issuedTotal=0;
+    iss.forEach(r=>{ (r.items||[]).forEach(it=>{ const nm=it.n||it.name, q=it.qty||0, pr=prices[nm]||0; consume[nm]=(consume[nm]||0)+q; issuedTotal+=q; const v=r.proj_name||'\u2014'; byVessel[v]=(byVessel[v]||0)+q*pr; }); });
+    let stockValue=0; MAT_CATALOG.forEach(n=>{ stockValue+=(stock[n]||0)*(prices[n]||0); });
+    setRep({ consume, byVessel, issuedTotal, stockValue });
   };
-  const badge = (s) => { const c = { Pending:'#e8a330', Approved:'#378ADD', Dispatched:'#378ADD', Received:'#12B89E', Cancelled:'#9A9890' }[s] || '#9A9890'; return html`<span class="badge" style="background:${c};color:#fff">${(s || '').toUpperCase()}</span>`; };
+
+  useEffect(() => { if(tab==='buy'&&purch==null) loadPurch(); if(tab==='reports') loadReports(); }, [tab, stock, prices]);
+
+  const lowItems = MAT_CATALOG.filter(n => (stock[n]||0) <= (MAT_TH[n]||0));
+
+  const seg = (k,label) => html`<button onClick=${()=>setTab(k)} style="flex:1;padding:9px;border:none;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;background:${tab===k?'var(--ink-dim)':'transparent'};color:${tab===k?'#fff':'var(--ink-dim)'}">${label}</button>`;
+
   return html`
     <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
       <span><b>RSR</b><span class="tag">WAREHOUSE</span></span>
-      <button onClick=${onBack} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      <button onClick=${onBack} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">\u2190 Dashboard</button>
     </div></div></header>
     <div class="wrap">
-      <div class="card">
-        <label>Material requests${reqs ? ` (${reqs.length})` : ''}</label>
-        ${reqs == null ? html`<div class="empty">Loading…</div>`
-          : reqs.length ? reqs.map(r => html`
-            <div class="row" key=${r.id} style="align-items:flex-start">
-              <div>
-                <div class="name">${r.site || '—'} ${r.urgent ? html`<span style="color:#d64045;font-weight:800;font-size:11px">· URGENT</span>` : ''}</div>
-                <div class="unit mono" style="color:var(--ink-dim)">${r.id}</div>
-                <div class="unit">${itemsTxt(r)}</div>
-                <div class="unit">${r.date || ''}${r.by_name ? ' · by ' + r.by_name : ''}</div>
-              </div>
-              <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
-                ${badge(r.status)}
-                ${r.status !== 'Dispatched' ? html`<button onClick=${() => dispatch(r)} style="background:#12B89E;color:#000;border:none;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:800;cursor:pointer">Dispatch</button>` : ''}
-                <button onClick=${() => cancel(r)} style="background:none;border:1px solid var(--line);color:var(--ink-dim);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer">Cancel</button>
-              </div>
-            </div>`)
-          : html`<div class="empty">No open requests.</div>`}
+      <div style="display:flex;gap:6px;background:var(--card,#fff);border:1px solid var(--line);border-radius:12px;padding:5px;margin-bottom:12px">
+        ${seg('requests','Requests')}${seg('stock','Stock')}${seg('buy','Buy')}${seg('reports','Reports')}
       </div>
-      <div class="card">
-        <label>Warehouse stock (your place)</label>
-        ${MAT_CATALOG.map(n => html`
-          <div class="row" key=${n}>
-            <div class="name">${n}</div>
-            <div style="display:flex;gap:6px;align-items:center">
-              <input type="number" min="0" value=${edit[n] ?? ''} onInput=${e => setEdit({ ...edit, [n]: e.target.value })} style="width:74px;text-align:center;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:15px"/>
-              <button onClick=${() => saveStock(n)} style="background:var(--ink-dim);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:700;cursor:pointer">Set</button>
-            </div>
-          </div>`)}
-      </div>
-      <p class="note" style="text-align:center">Dispatching reduces warehouse stock and lets the site receive it.</p>
+
+      ${tab==='requests' ? html`
+        <div class="card">
+          <label>Material requests${reqs?` (${reqs.length})`:''}</label>
+          ${reqs==null ? html`<div class="empty">Loading\u2026</div>`
+            : reqs.length ? reqs.map(r=>html`
+              <div class="row" key=${r.id} style="align-items:flex-start">
+                <div>
+                  <div class="name">${r.site||'\u2014'} ${r.urgent?html`<span style="color:#d64045;font-weight:800;font-size:11px">\u00b7 URGENT</span>`:''}</div>
+                  <div class="unit mono" style="color:var(--ink-dim)">${r.id}${r.dr_no?' \u00b7 '+r.dr_no:''}</div>
+                  <div class="unit">${itemsTxt(r)}</div>
+                  <div class="unit">${r.date||''}${r.by_name?' \u00b7 by '+r.by_name:''}</div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+                  ${badge(r.status)}
+                  ${r.status!=='Dispatched'?html`<button onClick=${()=>dispatch(r)} style="background:#12B89E;color:#000;border:none;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:800;cursor:pointer">Dispatch</button>`:''}
+                  <button onClick=${()=>cancel(r)} style="background:none;border:1px solid var(--line);color:var(--ink-dim);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer">Cancel</button>
+                </div>
+              </div>`)
+            : html`<div class="empty">No open requests.</div>`}
+        </div>` : ''}
+
+      ${tab==='stock' ? html`
+        ${lowItems.length?html`<div class="card" style="border-color:#e8a330;background:#FAEEDA">
+          <label style="color:#7a4a06">\u26a0 Low / reorder (${lowItems.length})</label>
+          <div class="unit" style="color:#7a4a06">${lowItems.map(n=>`${n} (${stock[n]||0})`).join(' \u00b7 ')}</div>
+        </div>`:''}
+        <div class="card">
+          <label>Warehouse stock (your place)</label>
+          ${MAT_CATALOG.map(n=>{ const low=(stock[n]||0)<=(MAT_TH[n]||0); return html`
+            <div class="row" key=${n}>
+              <div><div class="name" style=${low?'color:#d64045':''}>${n}</div><div class="unit">${muUnit(n)} \u00b7 min ${MAT_TH[n]||0}${prices[n]?' \u00b7 '+peso(prices[n]):''}</div></div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="number" min="0" value=${edit[n]??''} onInput=${e=>setEdit({...edit,[n]:e.target.value})} style="width:70px;text-align:center;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:15px"/>
+                <button onClick=${()=>saveStock(n)} style="background:var(--ink-dim);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:700;cursor:pointer">Set</button>
+              </div>
+            </div>`;})}
+        </div>` : ''}
+
+      ${tab==='buy' ? html`
+        <div class="card">
+          <label>New purchase</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0">
+            <input placeholder="Supplier *" value=${pSup} onInput=${e=>setPSup(e.target.value)} style="padding:10px;border:1px solid var(--line);border-radius:8px"/>
+            <input placeholder="Invoice / PO no" value=${pInv} onInput=${e=>setPInv(e.target.value)} style="padding:10px;border:1px solid var(--line);border-radius:8px"/>
+            <input type="date" value=${pDate} onInput=${e=>setPDate(e.target.value)} style="padding:10px;border:1px solid var(--line);border-radius:8px"/>
+            <input placeholder="Received by" value=${pBy} onInput=${e=>setPBy(e.target.value)} style="padding:10px;border:1px solid var(--line);border-radius:8px"/>
+          </div>
+          ${pRows.map((r,i)=>html`
+            <div key=${i} style="display:grid;grid-template-columns:minmax(0,1fr) 56px 78px 28px;gap:6px;align-items:center;margin-bottom:6px">
+              <select value=${r.n} onChange=${e=>pickPItem(i,e.target.value)} style="padding:9px;border:1px solid var(--line);border-radius:8px">
+                <option value="">\u2014 Item \u2014</option>${MAT_CATALOG.map(n=>html`<option value=${n} selected=${r.n===n}>${n}</option>`)}
+              </select>
+              <input type="number" min="1" value=${r.qty} onInput=${e=>setRow(i,'qty',e.target.value)} style="padding:9px;border:1px solid var(--line);border-radius:8px;text-align:center"/>
+              <input type="number" min="0" step="0.01" placeholder="\u20b1" value=${r.price} onInput=${e=>setRow(i,'price',e.target.value)} style="padding:9px;border:1px solid var(--line);border-radius:8px;text-align:center"/>
+              <button onClick=${()=>rmPRow(i)} style="background:none;border:1px solid var(--line);border-radius:8px;padding:8px 0;color:var(--ink-dim);cursor:pointer">\u00d7</button>
+            </div>`)}
+          <button onClick=${addPRow} style="width:100%;padding:10px;border:1px dashed var(--ink-dim);background:none;color:var(--ink-dim);border-radius:8px;font-weight:700;cursor:pointer;margin-top:2px">+ Add item</button>
+          <div class="row" style="margin-top:10px"><div class="name">Grand total</div><div class="name" style="color:#12B89E">${peso(pTotal)}</div></div>
+          <button onClick=${savePurchase} style="width:100%;padding:13px;background:var(--ink-dim);color:#fff;border:none;border-radius:10px;font-weight:800;cursor:pointer;margin-top:8px">Save purchase \u00b7 add to stock</button>
+        </div>
+        <div class="card">
+          <label>Purchase history${purch?` (${purch.length})`:''}</label>
+          ${purch==null?html`<div class="empty">Loading\u2026</div>`
+            : purch.length?purch.map(p=>html`
+              <div class="row" key=${p.id} style="align-items:flex-start">
+                <div><div class="name">${p.supplier||'\u2014'} ${p.invoice?html`<span class="unit">\u00b7 ${p.invoice}</span>`:''}</div>
+                <div class="unit">${(p.items||[]).map(it=>(it.n||it.name)+' \u00d7'+it.qty).join(', ')}</div>
+                <div class="unit">${p.date||''}${p.received_by?' \u00b7 '+p.received_by:''}</div></div>
+                <div class="name" style="color:#12B89E;white-space:nowrap">${peso(p.grand_total)}</div>
+              </div>`)
+            : html`<div class="empty">No purchases yet.</div>`}
+        </div>` : ''}
+
+      ${tab==='reports' ? html`
+        ${rep==null?html`<div class="card"><div class="empty">Loading\u2026</div></div>`:html`
+        <div class="card"><label>Stock on hand value</label><div class="name" style="font-size:24px;color:#12B89E">${peso(rep.stockValue)}</div><div class="unit">Across ${MAT_CATALOG.length} materials at current prices</div></div>
+        <div class="card"><label>Consumption (last 30 days) \u00b7 ${rep.issuedTotal} issued</label>
+          ${Object.keys(rep.consume).length?Object.entries(rep.consume).sort((a,b)=>b[1]-a[1]).map(([n,q])=>html`<div class="row" key=${n}><div class="name">${n}</div><div class="unit">${q} ${muUnit(n)}</div></div>`):html`<div class="empty">No issuances in 30 days.</div>`}
+        </div>
+        <div class="card"><label>Cost per vessel (last 30 days)</label>
+          ${Object.keys(rep.byVessel).length?Object.entries(rep.byVessel).sort((a,b)=>b[1]-a[1]).map(([v,c])=>html`<div class="row" key=${v}><div class="name">${v}</div><div class="name" style="color:#12B89E">${peso(c)}</div></div>`):html`<div class="empty">No data yet.</div>`}
+          <div class="unit" style="margin-top:8px">Based on issued quantities \u00d7 last purchase price.</div>
+        </div>`}` : ''}
+
+      <p class="note" style="text-align:center">You control the warehouse. Dispatch reduces stock; purchases add stock.</p>
     </div>
+
+    ${slip && html`<div style="position:fixed;inset:0;background:rgba(15,25,15,.5);z-index:80;display:flex;align-items:center;justify-content:center;padding:16px" onClick=${()=>setSlip(null)}>
+      <div class="card" style="max-width:360px;width:100%;margin:0" onClick=${e=>e.stopPropagation()}>
+        <div style="text-align:center;border-bottom:1.5px dashed var(--line);padding-bottom:12px;margin-bottom:12px">
+          <div style="font-weight:800">RSR \u2014 Dispatch Receipt</div>
+          <div class="mono" style="color:#378ADD;font-size:14px">${slip.drNo}</div>
+          <div class="unit">${slip.date} \u00b7 to ${slip.site}</div>
+        </div>
+        ${slip.items.map(it=>html`<div class="row" key=${it.n}><div class="name">${it.n}</div><div class="unit">${it.qty} ${it.u}</div></div>`)}
+        <button onClick=${()=>setSlip(null)} style="width:100%;padding:12px;background:var(--ink-dim);color:#fff;border:none;border-radius:10px;font-weight:800;cursor:pointer;margin-top:10px">Done</button>
+      </div></div>`}
     ${msg && html`<div class="toast">${msg}</div>`}`;
 }
 
