@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
+<title>Main Warehouse | RSR</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+:root{--p:#27500A;--pl:#EAF3DE;--pm:#639922;--pd:#122606;--b:#0C447C;--bl:#E6F1FB;--bm:#378ADD;--am:#EF9F27;--al:#FAEEDA;--ad:#633806;--r:#791F1F;--rl:#FCEBEB;--rm:#F09595;--bg:#fff;--bg2:#F7F7F5;--bg3:#EFEFEC;--bd:#E0DED8;--bd2:#C8C6BE;--tx:#1A1A18;--tx2:#5A5955;--tx3:#9A9890;--rad:10px;--radl:14px;--radx:18px}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;background:var(--bg3);color:var(--tx);min-height:100vh}
+.app{max-width:720px;margin:0 auto;background:var(--bg);min-height:100vh;display:flex;flex-direction:column}
+.screen{display:none}.screen.active{display:flex;flex-direction:column;flex:1}
+.lw{flex:1;display:flex;align-items:center;justify-content:center;padding:2rem;background:var(--pl);min-height:100vh}
+.lb{background:var(--bg);border-radius:var(--radx);padding:2.5rem 2rem;width:100%;max-width:340px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.1)}
+.lav{width:72px;height:72px;border-radius:50%;background:var(--pl);border:3px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 14px}
+.pin-dots{display:flex;justify-content:center;gap:14px;margin-bottom:16px}
+.pd{width:18px;height:18px;border-radius:50%;background:var(--bd2)}.pd.on{background:var(--p)}
+.num-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+.nb{padding:18px;font-size:20px;font-weight:500;border:1.5px solid var(--bd);border-radius:var(--radl);background:var(--bg);color:var(--tx);cursor:pointer}
+.nb:active{background:var(--pl);border-color:var(--pm)}
+.lbtn{width:100%;padding:16px;font-size:17px;font-weight:600;border-radius:var(--radl);border:none;background:var(--p);color:#fff;cursor:pointer}
+.tb{padding:13px 16px;background:var(--pl);border-bottom:1.5px solid var(--pm);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
+.tdot{width:38px;height:38px;border-radius:50%;background:#fff;border:2px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:18px}
+.ttitle{font-size:16px;font-weight:700;color:var(--p)}.tsub{font-size:12px;color:var(--pm);margin-top:1px}
+.lout{padding:8px 14px;font-size:13px;border-radius:8px;border:1.5px solid var(--pm);background:transparent;color:var(--p);cursor:pointer;font-weight:600;text-decoration:none}
+.tabs{display:flex;border-bottom:1px solid var(--bd);background:var(--bg);overflow-x:auto;position:sticky;top:65px;z-index:9}
+.tab{padding:11px 13px;font-size:13px;font-weight:500;cursor:pointer;color:var(--tx2);border-bottom:2.5px solid transparent;white-space:nowrap;flex:1;text-align:center;position:relative}
+.tab.active{color:var(--p);border-bottom-color:var(--p);font-weight:700}
+.dot{position:absolute;top:6px;right:8px;width:8px;height:8px;border-radius:50%}
+.pc{padding:16px;padding-bottom:48px}
+.sc{background:var(--bg);border:1px solid var(--bd);border-radius:var(--radx);padding:16px;margin-bottom:12px}
+.sc-title{font-size:16px;font-weight:700;margin-bottom:4px}.sc-sub{font-size:13px;color:var(--tx2);margin-bottom:14px}
+.fl{font-size:13px;font-weight:500;color:var(--tx2);margin-bottom:5px;display:block}.fl span{color:var(--r)}
+.fi{width:100%;padding:12px 14px;font-size:15px;border-radius:var(--radl);border:1.5px solid var(--bd2);background:var(--bg);color:var(--tx)}
+.fi:focus{outline:none;border-color:var(--pm);box-shadow:0 0 0 3px var(--pl)}
+.fg{margin-bottom:12px}.fr3{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.btn{padding:12px 18px;font-size:14px;font-weight:600;border-radius:var(--radl);cursor:pointer;border:none}
+.btn-primary{background:var(--p);color:#fff}.btn-secondary{background:transparent;color:var(--tx);border:1.5px solid var(--bd2)}
+.btn-sm{padding:9px 14px;font-size:13px}.btn-row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
+.irow{display:grid;grid-template-columns:minmax(0,2fr) 70px 78px 38px;gap:8px;align-items:center;margin-bottom:8px}
+.irow.nop{grid-template-columns:minmax(0,2fr) 70px 38px}
+.rm{height:46px;display:flex;align-items:center;justify-content:center;border:1.5px solid var(--bd2);border-radius:var(--radl);cursor:pointer;font-size:18px;color:var(--tx3);background:var(--bg2)}
+.add-row{width:100%;padding:12px;font-size:14px;font-weight:500;border-radius:var(--radl);border:2px dashed var(--bd2);background:transparent;color:var(--tx2);cursor:pointer;margin-top:4px}
+.mstrip{display:grid;gap:10px;margin-bottom:14px;grid-template-columns:repeat(3,1fr)}
+.mbox{background:var(--bg2);border-radius:var(--radl);padding:12px 8px;text-align:center;border:1px solid var(--bd)}
+.mv{font-size:22px;font-weight:700}.ml{font-size:11px;color:var(--tx2);margin-top:2px}
+.tbl{width:100%;border-collapse:collapse;font-size:14px}
+.tbl th{text-align:left;padding:9px 8px;font-size:12px;font-weight:600;color:var(--tx2);border-bottom:1.5px solid var(--bd);background:var(--bg2)}
+.tbl td{padding:10px 8px;border-bottom:1px solid var(--bd);vertical-align:middle}.tbl tr:last-child td{border-bottom:none}
+.badge{display:inline-block;font-size:11px;padding:3px 9px;border-radius:99px;font-weight:600;white-space:nowrap}
+.bok{background:var(--pl);color:var(--p)}.bwarn{background:var(--al);color:var(--ad)}.bdanger{background:var(--rl);color:var(--r)}.binfo{background:var(--bl);color:var(--b)}
+.dcard{border:1px solid var(--bd);border-radius:var(--radl);margin-bottom:10px;overflow:hidden}
+.dcard-hdr{padding:13px 16px;background:var(--bg2);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;cursor:pointer}
+.dcard-body{padding:13px 16px;display:none}.dcard-body.open{display:block}
+.disp-num-box{background:var(--bg2);border-radius:var(--radl);padding:12px 14px;margin-bottom:14px;display:flex;align-items:center;gap:12px;border:1px solid var(--bd)}
+.disp-num{font-size:20px;font-weight:700;font-family:monospace;color:var(--pd)}
+.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:12px 22px;border-radius:var(--radl);font-size:14px;font-weight:600;display:none;z-index:9999;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.15)}
+.tok{background:#122606;color:#EAF3DE}.terr{background:#5C1515;color:#FCEBEB}
+.empty{text-align:center;color:var(--tx3);padding:18px;font-size:14px}
+</style>
+</head>
+<body>
+<div class="app">
+<div id="toast" class="toast"></div>
+
+<!-- LOGIN -->
+<div id="sl" class="screen active">
+  <div class="lw"><div class="lb">
+    <div class="lav">🏭</div>
+    <div style="font-size:21px;font-weight:700;margin-bottom:4px">Main Warehouse</div>
+    <div style="font-size:14px;color:var(--tx2);margin-bottom:20px">Enter PIN to continue</div>
+    <div class="pin-dots"><div class="pd" id="p0"></div><div class="pd" id="p1"></div><div class="pd" id="p2"></div><div class="pd" id="p3"></div></div>
+    <div class="num-grid">
+      <button class="nb" onclick="numTap('1')">1</button><button class="nb" onclick="numTap('2')">2</button><button class="nb" onclick="numTap('3')">3</button>
+      <button class="nb" onclick="numTap('4')">4</button><button class="nb" onclick="numTap('5')">5</button><button class="nb" onclick="numTap('6')">6</button>
+      <button class="nb" onclick="numTap('7')">7</button><button class="nb" onclick="numTap('8')">8</button><button class="nb" onclick="numTap('9')">9</button>
+      <button class="nb" onclick="nc()" style="font-size:13px">Clear</button>
+      <button class="nb" onclick="nb2()" style="font-size:18px">&#x232B;</button>
+      <button class="nb" onclick="numTap('0')">0</button>
+    </div>
+    <button class="lbtn" onclick="doLogin()">Sign in</button>
+    <div id="lerr" style="font-size:13px;color:var(--r);margin-top:10px;display:none">Incorrect PIN.</div>
+    <div style="font-size:12px;color:var(--tx3);margin-top:10px">Default: 5555</div>
+  </div></div>
+</div>
+
+<!-- APP -->
+<div id="sa" class="screen">
+  <div class="tb">
+    <div style="display:flex;align-items:center;gap:10px">
+      <div class="tdot">🏭</div>
+      <div><div class="ttitle">Main Warehouse</div><div class="tsub" id="hg">Stock management</div></div>
+    </div>
+    <a class="lout" href="../admin/">← Admin</a>
+  </div>
+  <div class="tabs">
+    <div class="tab active" id="tab-stock" onclick="swTab('stock')">Stock</div>
+    <div class="tab" id="tab-requests" onclick="swTab('requests')">Requests<span class="dot" id="req-dot" style="display:none;background:var(--r)"></span></div>
+    <div class="tab" id="tab-delivery" onclick="swTab('delivery')">Record delivery</div>
+    <div class="tab" id="tab-dispatch" onclick="swTab('dispatch')">Create dispatch</div>
+    <div class="tab" id="tab-log" onclick="swTab('log')">Dispatch log</div>
+    <div class="tab" id="tab-inventory" onclick="swTab('inventory')">Inventory</div>
+  </div>
+  <div class="pc" id="main-content"></div>
+</div>
+
+</div>
+
+<script>
+const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
+const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
+const sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
+
+const ITEMS=[
+  {n:'Electrode handle',u:'pcs',th:3},{n:'Welding gloves',u:'pair',th:3},{n:'Cutting tip',u:'pcs',th:5},
+  {n:'Dark glass',u:'pcs',th:3},{n:'Clear glass',u:'pcs',th:3},{n:'Trouble light',u:'pcs',th:2},
+  {n:'Electrical tape',u:'pcs',th:5},{n:'Chalk stone',u:'pcs',th:5},{n:'Dry chalk',u:'pcs',th:5},
+  {n:'Flint stone',u:'pcs',th:5},{n:'Striker',u:'pcs',th:3},{n:'Y-connector',u:'pcs',th:2},
+  {n:'Cutting disk',u:'pcs',th:5},{n:'Oxygen regulator',u:'unit',th:1},{n:'LPG regulator',u:'unit',th:1},{n:'Steel square',u:'pcs',th:1}
+];
+function gu(n){return (ITEMS.find(i=>i.n===n)||{u:'pcs'}).u;}
+function gth(n){return (ITEMS.find(i=>i.n===n)||{th:0}).th;}
+const peso=v=>'\u20b1'+(Number(v)||0).toLocaleString('en-PH',{maximumFractionDigits:2});
+function todayYmd(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
+function fmt(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});}
+function itemOpts(sel){return '<option value="">— Item —</option>'+ITEMS.map(i=>`<option value="${i.n}"${i.n===sel?' selected':''}>${i.n}</option>`).join('');}
+
+let WH_PIN='5555', stockMap={}, prices={}, sites=[], dispatchPrefill=null;
+
+function toast(m,t){const el=document.getElementById('toast');el.textContent=m;el.className='toast '+(t==='err'?'terr':'tok');el.style.display='block';clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',3200);}
+
+/* login */
+let pv='';
+function numTap(d){if(pv.length>=6)return;pv+=d;upd();}
+function nc(){pv='';upd();}
+function nb2(){pv=pv.slice(0,-1);upd();}
+function upd(){for(let i=0;i<4;i++){const e=document.getElementById('p'+i);if(e)e.className='pd'+(i<pv.length?' on':'');}}
+(async function boot(){try{const{data}=await sb.from('settings').select('value').eq('key','warehouse_pin').single();if(data&&data.value)WH_PIN=String(data.value);}catch(e){}})();
+async function doLogin(){
+  if(pv!==WH_PIN){document.getElementById('lerr').style.display='block';pv='';upd();return;}
+  document.getElementById('lerr').style.display='none';
+  document.getElementById('sl').classList.remove('active');
+  document.getElementById('sa').classList.add('active');
+  const h=new Date().getHours();
+  document.getElementById('hg').textContent=h<12?'Good morning':h<17?'Good afternoon':'Good evening';
+  pv='';upd();
+  try{const{data}=await sb.from('sites').select('name').order('name');sites=(data||[]).map(s=>s.name);}catch(e){sites=['Carmen','Mandaue'];}
+  swTab('stock'); refreshBadge();
+}
+
+async function loadStock(){stockMap={};try{const{data}=await sb.from('warehouse_stock').select('item_name,qty');(data||[]).forEach(r=>stockMap[r.item_name]=Number(r.qty)||0);}catch(e){}}
+async function loadPrices(){prices={};try{const{data}=await sb.from('item_prices').select('item_name,price');(data||[]).forEach(r=>prices[r.item_name]=Number(r.price)||0);}catch(e){}}
+async function refreshBadge(){let n=0;try{const{count}=await sb.from('requests').select('*',{count:'exact',head:true}).eq('status','Pending');n=count||0;}catch(e){}const d=document.getElementById('req-dot');if(d)d.style.display=n>0?'block':'none';}
+
+async function swTab(name){
+  ['stock','requests','delivery','dispatch','log','inventory'].forEach(t=>document.getElementById('tab-'+t).classList.toggle('active',t===name));
+  const c=document.getElementById('main-content');c.scrollTop=0;c.innerHTML='<div class="empty">Loading…</div>';
+  if(name==='stock')await renderStock(c);
+  else if(name==='requests')await renderRequests(c);
+  else if(name==='delivery')renderDelivery(c);
+  else if(name==='dispatch')await renderDispatch(c);
+  else if(name==='log')await renderLog(c);
+  else if(name==='inventory')await renderInventory(c);
+  refreshBadge();
+}
+
+/* ── STOCK ── */
+async function renderStock(c){
+  await Promise.all([loadStock(),loadPrices()]);
+  let low=0,zero=0,total=0;
+  ITEMS.forEach(i=>{const q=stockMap[i.n]||0;total+=q;if(q<=0)zero++;else if(q<=i.th)low++;});
+  c.innerHTML='<div class="mstrip">'
+    +`<div class="mbox"><div class="mv">${total}</div><div class="ml">Total on hand</div></div>`
+    +`<div class="mbox" style="border-color:var(--am)"><div class="mv" style="color:var(--ad)">${low}</div><div class="ml">Low stock</div></div>`
+    +`<div class="mbox" style="border-color:var(--rm)"><div class="mv" style="color:var(--r)">${zero}</div><div class="ml">Out of stock</div></div></div>`
+    +'<div class="sc"><table class="tbl"><thead><tr><th>Item</th><th>Unit</th><th style="text-align:right">On hand</th><th>Min</th><th>Status</th></tr></thead><tbody>'
+    +ITEMS.map(i=>{const q=stockMap[i.n]||0;const b=q<=0?'<span class="badge bdanger">Out</span>':q<=i.th?'<span class="badge bwarn">Low</span>':'<span class="badge bok">OK</span>';
+      return `<tr><td style="font-weight:600">${i.n}</td><td style="color:var(--tx2)">${i.u}</td><td style="text-align:right;font-size:16px;font-weight:700;color:${q<=0?'var(--r)':q<=i.th?'var(--ad)':'var(--tx)'}">${q}</td><td style="color:var(--tx2)">${i.th}</td><td>${b}</td></tr>`;}).join('')
+    +'</tbody></table></div>';
+}
+
+/* ── REQUESTS ── */
+async function renderRequests(c){
+  let rows=[];try{const{data}=await sb.from('requests').select('*').in('status',['Pending','Approved','Dispatched']).order('created_at',{ascending:false}).limit(100);rows=data||[];}catch(e){}
+  window._reqs=rows;
+  if(!rows.length){c.innerHTML='<div class="sc"><div class="empty">No open requests.</div></div>';return;}
+  const badge=s=>({Pending:'bwarn',Approved:'binfo',Dispatched:'binfo',Received:'bok',Cancelled:''}[s]||'');
+  c.innerHTML=rows.map(r=>{
+    const items=(r.items||[]).map(i=>`${i.n} <b>${i.qty}${i.u?' '+i.u:''}</b>`).join(' · ');
+    return `<div class="sc" style="padding:14px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
+        <div><div style="font-weight:700">${r.site||'—'} ${r.urgent?'<span class="badge bdanger">URGENT</span>':''}</div>
+        <div style="font-size:12px;color:var(--tx3);font-family:monospace">${r.id}${r.dr_no?' · '+r.dr_no:''}</div></div>
+        <span class="badge ${badge(r.status)}">${(r.status||'').toUpperCase()}</span>
+      </div>
+      <div style="font-size:13px;color:var(--tx2);margin-top:8px">${items}</div>
+      ${r.remarks?`<div style="font-size:12px;color:var(--tx3);margin-top:3px">“${r.remarks}”</div>`:''}
+      <div style="font-size:12px;color:var(--tx3);margin-top:3px">${fmt(r.date||r.created_at)} · by ${r.by_name||'—'}</div>
+      <div class="btn-row">
+        ${r.status!=='Dispatched'?`<button class="btn btn-secondary btn-sm" onclick="cancelReq('${r.id}')">Cancel</button><button class="btn btn-primary btn-sm" onclick="dispatchFromReq('${r.id}')">Dispatch →</button>`:'<span class="badge binfo">Dispatched · awaiting site receive</span>'}
+      </div></div>`;
+  }).join('');
+}
+async function cancelReq(id){try{await sb.from('requests').update({status:'Cancelled',updated_at:new Date().toISOString()}).eq('id',id);toast('Request cancelled');swTab('requests');}catch(e){toast('Failed: '+e.message,'err');}}
+function dispatchFromReq(id){const r=(window._reqs||[]).find(x=>x.id===id);if(!r)return;dispatchPrefill=r;swTab('dispatch');}
+
+/* ── RECORD DELIVERY (supplier → warehouse) ── */
+let dcRows=0;
+function renderDelivery(c){
+  dcRows=0;
+  c.innerHTML='<div class="sc"><div class="sc-title">Record incoming delivery</div><div class="sc-sub">Items received from a supplier. Stock updates immediately on save.</div>'
+    +'<div class="fr3"><div class="fg"><label class="fl">Supplier <span>*</span></label><input class="fi" id="del-sup" placeholder="Supplier name"/></div>'
+    +'<div class="fg"><label class="fl">Supplier DR / invoice</label><input class="fi" id="del-ref" placeholder="e.g. SDR-2026-041"/></div></div>'
+    +'<div class="fr3"><div class="fg"><label class="fl">Date <span>*</span></label><input class="fi" type="date" id="del-date"/></div>'
+    +'<div class="fg"><label class="fl">Received by <span>*</span></label><input class="fi" id="del-by" placeholder="Your name"/></div></div>'
+    +'<label class="fl">Items received <span>*</span></label>'
+    +'<div style="display:grid;grid-template-columns:minmax(0,2fr) 70px 78px 38px;gap:8px;margin-bottom:6px"><span class="fl" style="margin:0">Item</span><span class="fl" style="margin:0">Qty</span><span class="fl" style="margin:0">Unit \u20b1</span><span></span></div>'
+    +'<div id="del-rows"></div><button class="add-row" onclick="addDelRow()">+ Add item</button>'
+    +'<div class="btn-row"><button class="btn btn-secondary btn-sm" onclick="swTab(\'delivery\')">Clear</button><button class="btn btn-primary" onclick="saveDelivery()">Save &amp; add to stock</button></div></div>';
+  document.getElementById('del-date').value=todayYmd();
+  addDelRow();addDelRow();
+}
+function addDelRow(name,qty){
+  dcRows++;const id='del-'+dcRows;
+  const div=document.createElement('div');div.className='irow';div.id=id;
+  div.innerHTML=`<select class="fi" id="dn-${id}" onchange="document.getElementById('dpr-${id}').value=(window._prices&&window._prices[this.value])||document.getElementById('dpr-${id}').value">${itemOpts(name||'')}</select>
+    <input class="fi" type="number" min="1" value="${qty||1}" id="dq-${id}" style="text-align:center"/>
+    <input class="fi" type="number" min="0" step="0.01" placeholder="\u20b1" id="dpr-${id}" style="text-align:center"/>
+    <div class="rm" onclick="document.getElementById('${id}').remove()">&#x2715;</div>`;
+  document.getElementById('del-rows').appendChild(div);
+}
+async function saveDelivery(){
+  await loadPrices();window._prices=prices;
+  const sup=document.getElementById('del-sup').value.trim();
+  const by=document.getElementById('del-by').value.trim();
+  const date=document.getElementById('del-date').value;
+  const ref=document.getElementById('del-ref').value.trim();
+  if(!sup||!by){toast('Supplier and received-by are required','err');return;}
+  const items=[];let empty=false;
+  document.querySelectorAll('#del-rows .irow').forEach(r=>{const id=r.id;const n=document.getElementById('dn-'+id).value;const q=parseInt(document.getElementById('dq-'+id).value)||0;const pr=parseFloat(document.getElementById('dpr-'+id).value)||0;if(n&&q>0)items.push({n,u:gu(n),qty:q,price:pr});else if(!n&&q>0)empty=true;});
+  if(empty){toast('Select an item for all rows','err');return;}
+  if(!items.length){toast('Add at least one item','err');return;}
+  await loadStock();
+  const n=new Date(),z=x=>String(x).padStart(2,'0');
+  const id='PO-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
+  const total=items.reduce((s,it)=>s+it.qty*(it.price||0),0);
+  try{
+    await sb.from('purchases').insert([{id,supplier:sup,invoice:ref||null,date,received_by:by,items,grand_total:total,created_at:new Date().toISOString()}]);
+    for(const it of items){const cur=stockMap[it.n]||0;await sb.from('warehouse_stock').upsert({item_name:it.n,qty:cur+it.qty,updated_at:new Date().toISOString()},{onConflict:'item_name'});if(it.price>0)await sb.from('item_prices').upsert({item_name:it.n,price:it.price,updated_at:new Date().toISOString()},{onConflict:'item_name'});}
+    toast('Delivery recorded · stock updated');
+    swTab('stock');
+  }catch(e){toast('Failed: '+e.message,'err');}
+}
+
+/* ── CREATE DISPATCH (warehouse → site) ── */
+let dpRows=0, dpReqId=null;
+async function renderDispatch(c){
+  await Promise.all([loadStock()]);
+  dpRows=0; dpReqId=dispatchPrefill?dispatchPrefill.id:null;
+  const siteOpts=(sites.length?sites:['Carmen','Mandaue']).map(s=>`<option value="${s}"${dispatchPrefill&&dispatchPrefill.site===s?' selected':''}>${s}</option>`).join('');
+  c.innerHTML='<div class="sc"><div class="sc-title">Create dispatch</div><div class="sc-sub">Send items to a site. Reduces warehouse stock; the site then receives it.</div>'
+    +(dpReqId?`<div class="disp-num-box"><div><div style="font-size:11px;color:var(--tx2)">Against request</div><div class="disp-num" style="font-size:14px">${dpReqId}</div></div></div>`:'')
+    +'<div class="fr3"><div class="fg"><label class="fl">Destination site <span>*</span></label><select class="fi" id="dp-site">'+siteOpts+'</select></div>'
+    +'<div class="fg"><label class="fl">Dispatched by <span>*</span></label><input class="fi" id="dp-by" placeholder="Your name"/></div></div>'
+    +'<label class="fl">Items to dispatch <span>*</span></label>'
+    +'<div style="display:grid;grid-template-columns:minmax(0,2fr) 70px 38px;gap:8px;margin-bottom:6px"><span class="fl" style="margin:0">Item</span><span class="fl" style="margin:0">Qty</span><span></span></div>'
+    +'<div id="dp-rows"></div><button class="add-row" onclick="addDpRow()">+ Add item</button>'
+    +'<div class="btn-row"><button class="btn btn-secondary btn-sm" onclick="dispatchPrefill=null;swTab(\'dispatch\')">Clear</button><button class="btn btn-primary" onclick="saveDispatch()">Dispatch &amp; get DR no</button></div></div>';
+  if(dispatchPrefill&&(dispatchPrefill.items||[]).length)dispatchPrefill.items.forEach(it=>addDpRow(it.n,it.qty));else addDpRow();
+  dispatchPrefill=null;
+}
+function addDpRow(name,qty){
+  dpRows++;const id='dp-'+dpRows;
+  const div=document.createElement('div');div.className='irow nop';div.id=id;
+  div.innerHTML=`<select class="fi" id="pn-${id}">${itemOpts(name||'')}</select>
+    <input class="fi" type="number" min="1" value="${qty||1}" id="pq-${id}" style="text-align:center"/>
+    <div class="rm" onclick="document.getElementById('${id}').remove()">&#x2715;</div>`;
+  document.getElementById('dp-rows').appendChild(div);
+}
+async function saveDispatch(){
+  const site=document.getElementById('dp-site').value;
+  const by=document.getElementById('dp-by').value.trim();
+  if(!site){toast('Pick a destination site','err');return;}
+  if(!by){toast('Enter who is dispatching','err');return;}
+  const items=[];let empty=false;
+  document.querySelectorAll('#dp-rows .irow').forEach(r=>{const id=r.id;const n=document.getElementById('pn-'+id).value;const q=parseInt(document.getElementById('pq-'+id).value)||0;if(n&&q>0)items.push({n,u:gu(n),qty:q});else if(!n&&q>0)empty=true;});
+  if(empty){toast('Select an item for all rows','err');return;}
+  if(!items.length){toast('Add at least one item','err');return;}
+  await loadStock();
+  let drNo='';try{const{data,error}=await sb.rpc('next_dispatch_no');if(!error&&data)drNo=data;}catch(e){}
+  if(!drNo){const n=new Date(),z=x=>String(x).padStart(2,'0');drNo='DR-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+  const n=new Date(),z=x=>String(x).padStart(2,'0');
+  const id='DSP-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
+  try{
+    await sb.from('dispatches').insert([{id,dr_no:drNo,site,request_id:dpReqId,items,dispatched_by:by,date:todayYmd(),created_at:new Date().toISOString()}]);
+    for(const it of items){const cur=stockMap[it.n]||0;await sb.from('warehouse_stock').upsert({item_name:it.n,qty:Math.max(0,cur-it.qty),updated_at:new Date().toISOString()},{onConflict:'item_name'});}
+    if(dpReqId)await sb.from('requests').update({status:'Dispatched',dr_no:drNo,updated_at:new Date().toISOString()}).eq('id',dpReqId);
+    const c=document.getElementById('main-content');
+    c.innerHTML=`<div class="sc" style="text-align:center"><div style="font-size:40px">✅</div><div class="sc-title" style="margin-top:8px">Dispatch created</div>
+      <div class="disp-num-box" style="justify-content:center;margin-top:12px"><div class="disp-num">${drNo}</div></div>
+      <div class="sc-sub">${items.reduce((s,i)=>s+i.qty,0)} item(s) to ${site}. The site can now receive it.</div>
+      <button class="btn btn-primary" onclick="swTab('log')">View dispatch log</button></div>`;
+    toast('Dispatched '+drNo);
+  }catch(e){toast('Failed: '+e.message,'err');}
+}
+
+/* ── DISPATCH LOG ── */
+async function renderLog(c){
+  let rows=[];try{const{data}=await sb.from('dispatches').select('*').order('created_at',{ascending:false}).limit(80);rows=data||[];}catch(e){}
+  if(!rows.length){c.innerHTML='<div class="sc"><div class="empty">No dispatches yet.</div></div>';return;}
+  c.innerHTML='<div class="sc"><div class="sc-title">Dispatch log${''}</div><div class="sc-sub">'+rows.length+' dispatch(es)</div>'
+    +rows.map((r,i)=>{const items=(r.items||[]).map(it=>`${it.n} ×${it.qty}`).join(', ');
+      return `<div class="dcard"><div class="dcard-hdr" onclick="document.getElementById('db-${i}').classList.toggle('open')">
+        <div><div style="font-weight:700;font-family:monospace;color:var(--pd)">${r.dr_no||r.id}</div><div style="font-size:12px;color:var(--tx2)">${r.site||'—'} · ${fmt(r.date||r.created_at)}</div></div>
+        <span class="badge binfo">${(r.items||[]).reduce((s,x)=>s+x.qty,0)} items</span></div>
+        <div class="dcard-body" id="db-${i}"><div style="font-size:13px;color:var(--tx2)">${items}</div>
+        <div style="font-size:12px;color:var(--tx3);margin-top:6px">by ${r.dispatched_by||'—'}${r.request_id?' · req '+r.request_id:''}</div></div></div>`;}).join('')
+    +'</div>';
+}
+
+/* ── INVENTORY (set on-hand) ── */
+async function renderInventory(c){
+  await loadStock();
+  c.innerHTML='<div class="sc"><div class="sc-title">Inventory count</div><div class="sc-sub">Set the actual on-hand quantity for each item (initial entry or correction).</div>'
+    +ITEMS.map(i=>`<div class="irow nop" style="grid-template-columns:minmax(0,1fr) 90px 60px;align-items:center">
+      <div><div style="font-weight:600">${i.n}</div><div style="font-size:12px;color:var(--tx3)">${i.u} · min ${i.th}</div></div>
+      <input class="fi" type="number" min="0" id="inv-${i.n.replace(/[^a-zA-Z]/g,'')}" value="${stockMap[i.n]||0}" style="text-align:center"/>
+      <button class="btn btn-primary btn-sm" onclick="saveInv('${i.n.replace(/'/g,"\\'")}')">Set</button></div>`).join('')
+    +'</div>';
+}
+async function saveInv(name){
+  const v=parseInt(document.getElementById('inv-'+name.replace(/[^a-zA-Z]/g,'')).value,10);
+  if(isNaN(v)||v<0){toast('Enter a valid qty','err');return;}
+  try{await sb.from('warehouse_stock').upsert({item_name:name,qty:v,updated_at:new Date().toISOString()},{onConflict:'item_name'});stockMap[name]=v;toast(name+' set to '+v);}catch(e){toast('Failed: '+e.message,'err');}
+}
+</script>
+</body>
+</html>
