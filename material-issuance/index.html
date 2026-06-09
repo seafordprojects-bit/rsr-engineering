@@ -46,6 +46,11 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .modal .card{max-width:380px;width:100%;margin:0}
 .row2{display:flex;justify-content:space-between;align-items:center;gap:10px}
 .empty{text-align:center;color:var(--tx3);padding:18px;font-size:14px}
+.combo{position:relative}
+.sug{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--bg);border:1.5px solid var(--bd2);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.14);z-index:30;max-height:240px;overflow:auto;display:none}
+.sug div{padding:11px 14px;font-size:15px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--bg3)}
+.sug div:hover{background:var(--pl)}
+.vc{font-family:ui-monospace,monospace;font-size:12px;color:var(--tx3)}
 </style>
 </head>
 <body>
@@ -84,9 +89,10 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
     <select id="i-vessel" class="fi"></select>
     <div id="i-vessel-empty" class="empty" style="display:none">No active vessels. Add/activate one in Coordinator first.</div>
     <label class="fl">Issued to (crew) <span class="req">*</span></label>
-    <select id="i-emp" class="fi" onchange="onEmpPick()"></select>
-    <label class="fl">Department</label>
-    <input id="i-dept" class="fi" placeholder="Position" readonly/>
+    <div class="combo">
+      <input id="i-emp" class="fi" placeholder="Type name or code, or tap to choose" autocomplete="off" oninput="onEmpInput()" onfocus="empSuggest()" onblur="hideEmpSug()"/>
+      <div id="i-emp-sug" class="sug"></div>
+    </div>
     <label class="fl">Date <span class="req">*</span></label>
     <input id="i-date" class="fi" type="date"/>
     <label class="fl">Issued by <span class="req">*</span></label>
@@ -191,18 +197,33 @@ async function openIssue(){
   const vs=document.getElementById('i-vessel');
   vs.innerHTML='<option value="">— Select vessel —</option>'+vessels.map(v=>`<option value="${v.vessel_name}" data-code="${(v.vessel_code||'').replace(/"/g,'&quot;')}">${v.vessel_name}${v.vessel_code?' · '+v.vessel_code:''}</option>`).join('');
   document.getElementById('i-vessel-empty').style.display=vessels.length?'none':'block';
-  document.getElementById('i-emp').innerHTML='<option value="">— Select crew —</option>'+employees.map(e=>`<option value="${e.id}">${e.name}${e.code?' · '+e.code:''}</option>`).join('');
-  document.getElementById('i-dept').value='';
+  document.getElementById('i-emp').value='';
+  document.getElementById('i-emp-sug').innerHTML='';
   const d=document.getElementById('i-date');d.min=todayYmd();d.value=todayYmd();
   document.getElementById('i-by').value='';
   document.getElementById('i-rows').innerHTML='';rc=0;addRow();
   document.getElementById('i-warn').innerHTML='';
   showScreen('s-issue');
 }
-async function onEmpPick(){
-  const id=document.getElementById('i-emp').value;
+function onEmpInput(){ selEmp=null; empLast={}; renderWarn(); empSuggest(); }
+function empSuggest(){
+  const q=(document.getElementById('i-emp').value||'').toLowerCase().replace(/\s+/g,'');
+  const box=document.getElementById('i-emp-sug');
+  let m=employees;
+  if(q)m=employees.filter(e=>((e.name||'').toLowerCase().replace(/\s+/g,'')).includes(q)||((e.code||'').toLowerCase().replace(/\s+/g,'')).includes(q));
+  m=m.slice(0,12);
+  if(!m.length){box.style.display='none';box.innerHTML='';return;}
+  box.innerHTML=m.map(e=>`<div onmousedown="pickEmp('${e.id}')" data-id="${e.id}">${e.name}${e.code?`<span class="vc">${e.code}</span>`:''}</div>`).join('');
+  box.style.display='block';
+}
+async function pickEmp(id){
   selEmp=employees.find(e=>e.id===id)||null;
-  document.getElementById('i-dept').value=selEmp?(selEmp.position||''):'';
+  if(selEmp)document.getElementById('i-emp').value=selEmp.name||'';
+  const b=document.getElementById('i-emp-sug');b.style.display='none';b.innerHTML='';
+  await loadEmpLast();
+}
+function hideEmpSug(){setTimeout(()=>{const b=document.getElementById('i-emp-sug');if(b)b.style.display='none';},180);}
+async function loadEmpLast(){
   empLast={};
   if(selEmp){
     try{const{data}=await sb.from('personnel_log').select('item_name,last_date').eq('site_key',SITE).eq('emp_name',selEmp.name);(data||[]).forEach(r=>empLast[r.item_name]=r.last_date);}catch(e){}
@@ -245,7 +266,12 @@ function renderWarn(){
 async function reviewIssue(){
   const vs=document.getElementById('i-vessel');
   if(!vs.value){toast('Pick a vessel');return;}
-  if(!selEmp){toast('Choose the crew member');return;}
+  if(!selEmp){
+    const typed=(document.getElementById('i-emp').value||'').trim().toLowerCase();
+    const m=employees.find(e=>(e.name||'').trim().toLowerCase()===typed);
+    if(m){selEmp=m;await loadEmpLast();}
+  }
+  if(!selEmp){toast('Choose the crew member from the list');return;}
   const by=document.getElementById('i-by').value.trim();
   const date=document.getElementById('i-date').value;
   if(!date){toast('Pick a date');return;}
@@ -289,7 +315,7 @@ async function confirmIssue(){
   const n=new Date(),z=x=>String(x).padStart(2,'0');
   const createdAt=new Date(pending.date+'T'+z(n.getHours())+':'+z(n.getMinutes())+':00').toISOString();
   const itemsJson=pending.items.map(i=>({n:i.n,u:i.u,qty:i.qty}));
-  const row={id:pending.no,site_key:SITE,proj_name:pending.vessel.name,proj_code:pending.vessel.code||null,emp_name:pending.emp.name,dept:pending.emp.position||null,date:pending.date,by_name:pending.by,items:itemsJson,slip_no:pending.no,created_at:createdAt};
+  const row={id:pending.no,site_key:SITE,proj_name:pending.vessel.name,proj_code:pending.vessel.code||null,emp_name:pending.emp.name,date:pending.date,by_name:pending.by,items:itemsJson,slip_no:pending.no,created_at:createdAt};
   try{
     const{error}=await sb.from('issuances').insert([row]);if(error)throw error;
     for(const it of pending.items){
@@ -316,20 +342,9 @@ function renderStock(){
     const q=stockMap[it.n]||0,low=q<=it.th;
     return `<div class="stk-row">
       <div><div class="stk-name ${low?'stk-low':''}">${it.n}</div><div class="stk-meta">${it.u} · min ${it.th}${low?'  <span class="pill">LOW</span>':''}</div></div>
-      <div style="display:flex;align-items:center;gap:6px">
-        <input class="fi" type="number" min="0" value="${q}" id="sq-${it.n.replace(/[^a-zA-Z]/g,'')}" style="width:74px;text-align:center;padding:9px"/>
-        <button class="btn btn-p" style="padding:9px 12px" onclick="saveStock('${it.n.replace(/'/g,"\\'")}')">Set</button>
-      </div></div>`;
+      <div style="font-size:20px;font-weight:800;${low?'color:var(--r)':'color:var(--tx)'}">${q}</div>
+    </div>`;
   }).join('');
-}
-async function saveStock(name){
-  const key='sq-'+name.replace(/[^a-zA-Z]/g,'');
-  const v=parseInt(document.getElementById(key).value,10);
-  if(isNaN(v)||v<0){toast('Enter a valid quantity');return;}
-  try{
-    await sb.from('site_stock').upsert({site_key:SITE,item_name:name,qty:v,updated_at:new Date().toISOString()},{onConflict:'site_key,item_name'});
-    stockMap[name]=v;renderStock();toast(name+' set to '+v);
-  }catch(e){toast('Save failed: '+e.message);}
 }
 </script>
 </body>
