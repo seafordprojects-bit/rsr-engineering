@@ -1,366 +1,1127 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no"/>
-<title>RSR Material Issuance — Carmen</title>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>RSR Tools</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
 <style>
-*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-:root{--p:#27500A;--pl:#EAF3DE;--pm:#639922;--pd:#122606;--b:#0C447C;--bl:#E6F1FB;--r:#791F1F;--rl:#FCEBEB;--rm:#F09595;--am:#EF9F27;--al:#FAEEDA;--bg:#fff;--bg2:#F7F7F5;--bg3:#EFEFEC;--bd:#E0DED8;--bd2:#C8C6BE;--tx:#1A1A18;--tx2:#5A5955;--tx3:#9A9890;--rad:10px;--radl:14px;--radx:18px}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;background:var(--bg3);color:var(--tx)}
-.app{max-width:480px;margin:0 auto;background:var(--bg);min-height:100vh;display:flex;flex-direction:column}
-.screen{display:none}.screen.active{display:block}
-.lw{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--pl)}
-.lb{background:var(--bg);border-radius:var(--radx);padding:32px 24px;width:100%;max-width:340px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.1)}
-.lav{width:72px;height:72px;border-radius:50%;background:var(--pl);border:3px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:30px;margin:0 auto 14px}
-.fi{width:100%;padding:13px 14px;border:1.5px solid var(--bd2);border-radius:12px;font-size:16px;background:var(--bg);color:var(--tx);outline:none}
-.fi:focus{border-color:var(--pm)}
-.fl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3);margin:14px 0 6px;display:block}
-.fl:first-child{margin-top:0}
-.req{color:var(--r)}
-.lbtn{width:100%;padding:15px;font-size:16px;font-weight:700;border-radius:12px;border:none;background:var(--p);color:#fff;cursor:pointer;margin-top:16px}
-.btn{padding:14px;font-size:15px;font-weight:700;border-radius:12px;border:none;cursor:pointer}
-.btn-p{background:var(--p);color:#fff}.btn-sec{background:var(--bg2);color:var(--tx2);border:1.5px solid var(--bd)}
-.tb{padding:14px 16px;background:var(--pl);border-bottom:1.5px solid var(--pm);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;z-index:10}
-.ttitle{font-size:16px;font-weight:700;color:var(--p)}.tsub{font-size:12px;color:var(--pm)}
-.bk{background:none;border:1.5px solid var(--pm);color:var(--p);width:38px;height:38px;border-radius:50%;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:18px}
-.pc{padding:16px}
-.hcard{background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--radl);padding:18px;margin-bottom:12px;cursor:pointer;display:flex;align-items:center;gap:14px}
-.hcard .ico{width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
-.hcard .ht{font-size:16px;font-weight:700}.hcard .hs{font-size:12px;color:var(--tx2);margin-top:2px}
-.hcard.soon{opacity:.55}
-.card{background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--radl);padding:16px;margin-bottom:14px}
-.sec{background:var(--bg);border:1.5px solid var(--bd);border-radius:var(--radl);padding:18px 16px;margin-bottom:14px}
-.sec-h{display:flex;align-items:flex-start;gap:12px;border-bottom:1px solid var(--bg3);padding-bottom:12px;margin-bottom:14px}
-.sec-n{width:30px;height:30px;border-radius:50%;background:var(--p);color:#fff;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.sec-t{font-size:16px;font-weight:700;color:var(--pd)}
-.sec-s{font-size:12px;color:var(--tx2);margin-top:2px}
-.irow{display:grid;grid-template-columns:minmax(0,1fr) 76px 40px 32px;gap:8px;align-items:center;margin-bottom:8px}
-.iunit{font-size:12px;color:var(--tx2);text-align:center}
-.rm{width:32px;height:38px;border:1.5px solid var(--bd2);border-radius:10px;display:flex;align-items:center;justify-content:center;cursor:pointer;color:var(--tx3);font-size:18px}
-.add-row{width:100%;padding:11px;border:1.5px dashed var(--pm);background:var(--pl);color:var(--p);border-radius:12px;font-weight:700;cursor:pointer;margin-top:4px}
-.warn{background:var(--al);border:1px solid var(--am);border-radius:10px;padding:10px 12px;font-size:13px;color:#7a4a06;margin-top:12px}
-.stk-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:11px 0;border-bottom:1px solid var(--bg3)}
-.stk-row:last-child{border-bottom:none}
-.stk-name{font-size:15px;font-weight:600}.stk-meta{font-size:12px;color:var(--tx3)}
-.stk-low{color:var(--r)}
-.pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:99px;background:var(--rl);color:var(--r)}
-.toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);background:var(--tx);color:#fff;padding:11px 18px;border-radius:10px;font-size:14px;z-index:99;max-width:90%;text-align:center}
-.modal{display:none;position:fixed;inset:0;background:rgba(15,25,15,.5);z-index:80;align-items:center;justify-content:center;padding:16px}
-.modal .card{max-width:380px;width:100%;margin:0}
-.row2{display:flex;justify-content:space-between;align-items:center;gap:10px}
-.empty{text-align:center;color:var(--tx3);padding:18px;font-size:14px}
-.combo{position:relative}
-.sug{position:absolute;left:0;right:0;top:calc(100% + 4px);background:var(--bg);border:1.5px solid var(--bd2);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.14);z-index:30;max-height:240px;overflow:auto;display:none}
-.sug div{padding:11px 14px;font-size:15px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--bg3)}
-.sug div:hover{background:var(--pl)}
-.vc{font-family:ui-monospace,monospace;font-size:12px;color:var(--tx3)}
+  :root{
+    --bg:#f3f5f8; --card:#fff; --line:#e3e8ef; --tx:#1f2733; --tx2:#69788c; --tx3:#9aa7b8;
+    --p:#1976D2; --ok:#2e9e6b; --warn:#e8a330; --r:#d64045; --radius:16px;
+  }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:var(--bg);color:var(--tx);font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  .screen{display:none;min-height:100vh}
+  .screen.active{display:block}
+  .wrap{max-width:680px;margin:0 auto;padding:0 14px 40px;width:100%}
+
+  /* login */
+  .lw{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;background:#eef1f6}
+  .lb{background:#fff;border-radius:22px;padding:30px 26px;max-width:340px;width:100%;text-align:center;box-shadow:0 12px 40px rgba(20,40,80,.08)}
+  .lav{width:64px;height:64px;border-radius:50%;background:#E3F2FD;border:3px solid var(--p);display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 14px}
+  .pin-dots{display:flex;gap:12px;justify-content:center;margin:18px 0}
+  .pindot{width:13px;height:13px;border-radius:50%;background:#d3dae4}
+  .pindot.on{background:var(--p)}
+  .num-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+  .nb{padding:16px 0;font-size:20px;font-weight:600;border:1px solid var(--line);background:#fff;border-radius:12px;cursor:pointer;color:var(--tx)}
+  .nb:active{background:#eef2f7}
+  .lbtn{width:100%;padding:14px;background:var(--p);color:#fff;border:none;border-radius:12px;font-size:16px;font-weight:700;cursor:pointer}
+
+  /* header */
+  .app-header{position:sticky;top:0;z-index:10;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:12px 16px}
+  .hdr-avatar{width:38px;height:38px;border-radius:50%;background:var(--p);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800}
+  .hdr-info{flex:1;min-width:0}
+  .hdr-site{font-size:15px;font-weight:700;line-height:1.1}
+  .hdr-sub{font-size:12px;color:var(--tx2)}
+  .hdr-btn{background:none;border:none;font-size:20px;color:var(--tx2);cursor:pointer;padding:4px 6px}
+  .back{background:none;border:none;color:var(--p);font-weight:700;font-size:14px;cursor:pointer;padding:8px 0;display:inline-flex;align-items:center;gap:4px}
+
+  /* site bar */
+  .sitebar{display:flex;gap:8px;align-items:center;padding:12px 2px 4px}
+  .sitebar select{flex:1;padding:11px 12px;border:1px solid var(--line);border-radius:12px;background:#fff;font-size:15px;color:var(--tx)}
+
+  /* tiles */
+  .home-label{font-size:12px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--tx3);margin:16px 4px 10px}
+  .tile-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .tile{position:relative;border:none;border-radius:var(--radius);padding:18px 14px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:8px;min-height:118px}
+  .tile:active{transform:scale(.99)}
+  .tile-icon{width:42px;height:42px;border-radius:12px;display:flex;align-items:center;justify-content:center}
+  .tile-icon svg{width:22px;height:22px}
+  .tile-title{font-size:16px;font-weight:800;color:var(--tx)}
+  .tile-sub{font-size:12px;color:var(--tx2)}
+
+  /* cards / inventory */
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+  .sec{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:16px 14px;margin-bottom:12px}
+  .sec-h{display:flex;align-items:flex-start;gap:12px;border-bottom:1px solid var(--bg);padding-bottom:12px;margin-bottom:14px}
+  .sec-n{width:30px;height:30px;border-radius:50%;background:var(--p);color:#fff;font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .sec-t{font-size:16px;font-weight:700;color:var(--tx)}
+  .sec-s{font-size:12px;color:var(--tx2);margin-top:2px}
+  .secttitle{font-size:18px;font-weight:800;margin:14px 4px 10px}
+  .tool-row{padding:12px 0;border-bottom:1px solid var(--line)}
+  .tool-row:last-child{border-bottom:none}
+  .tool-name{font-size:15px;font-weight:700}
+  .tool-meta{font-size:12px;color:var(--tx2);margin-top:2px}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  .chip{font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;font-family:ui-monospace,monospace}
+  .chip.available{background:#e7f6ee;color:#1d7a4d}
+  .chip.borrowed{background:#fdeef0;color:#b32430}
+  .chip.repair{background:#fff3e0;color:#9a6400}
+  .chip.transit{background:#eceff3;color:#5b6675}
+  .countbar{display:flex;gap:14px;font-size:12px;color:var(--tx2);margin-top:6px}
+  .countbar b{color:var(--tx)}
+  .empty{text-align:center;color:var(--tx2);font-size:14px;padding:24px 0}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#1f2733;color:#fff;font-weight:700;padding:12px 18px;border-radius:999px;z-index:60;display:none;font-size:14px}
+  .search{width:100%;padding:12px;border:1px solid var(--line);border-radius:12px;font-size:15px;margin-bottom:10px;background:#fff;color:var(--tx)}
+  .lbl{display:block;font-size:12px;font-weight:700;color:var(--tx2);margin:8px 0 6px;text-transform:uppercase;letter-spacing:.4px}
+  .rcf{flex:1;padding:9px;border:1px solid var(--line);background:#fff;border-radius:10px;font-size:13px;font-weight:700;color:var(--tx2);cursor:pointer}
+  .rcf.on{background:var(--p);color:#fff;border-color:var(--p)}
+  .vsug{position:absolute;left:0;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid var(--line);border-radius:10px;z-index:30;max-height:220px;overflow:auto;box-shadow:0 10px 28px rgba(20,40,80,.14)}
+  .vsug div{padding:11px 12px;cursor:pointer;border-bottom:1px solid #eef2f7;font-size:14px}
+  .vsug div:last-child{border-bottom:none}
+  .vsug div:active{background:#eef2f7}
+  .vsug .vc{color:var(--tx2);font-size:12px;margin-left:6px;font-family:ui-monospace,monospace}
+  .brow{display:flex;justify-content:space-between;gap:10px;padding:4px 0;font-size:14px}
+  .brow span{color:var(--tx2)}
+  .brow b{text-align:right}
+  .vc{color:var(--tx2);font-size:12px;font-family:ui-monospace,monospace}
 </style>
 </head>
 <body>
-<div class="app">
 
 <!-- LOGIN -->
 <div id="s-login" class="screen active">
   <div class="lw"><div class="lb">
-    <div class="lav">📋</div>
-    <div style="font-size:21px;font-weight:700">Material Issuance</div>
-    <div style="font-size:13px;color:var(--tx2);margin:4px 0 18px">Carmen · enter passcode</div>
-    <input id="login-pin" class="fi" type="password" inputmode="numeric" placeholder="Passcode" style="text-align:center;letter-spacing:4px" onkeydown="if(event.key==='Enter')doLogin()"/>
+    <div class="lav">🧰</div>
+    <div style="font-size:21px;font-weight:800">RSR Tools</div>
+    <div style="font-size:14px;color:var(--tx2);margin-bottom:6px">Enter PIN to continue</div>
+    <div class="pin-dots"><div class="pindot" id="pd0"></div><div class="pindot" id="pd1"></div><div class="pindot" id="pd2"></div><div class="pindot" id="pd3"></div></div>
+    <div class="num-grid">
+      <button class="nb" onclick="pinTap('1')">1</button><button class="nb" onclick="pinTap('2')">2</button><button class="nb" onclick="pinTap('3')">3</button>
+      <button class="nb" onclick="pinTap('4')">4</button><button class="nb" onclick="pinTap('5')">5</button><button class="nb" onclick="pinTap('6')">6</button>
+      <button class="nb" onclick="pinTap('7')">7</button><button class="nb" onclick="pinTap('8')">8</button><button class="nb" onclick="pinTap('9')">9</button>
+      <button class="nb" onclick="pinClear()" style="font-size:13px">Clear</button>
+      <button class="nb" onclick="pinTap('0')">0</button>
+      <button class="nb" onclick="pinBack()" style="font-size:18px">&#x232B;</button>
+    </div>
     <button class="lbtn" onclick="doLogin()">Sign in</button>
-    <div style="font-size:12px;color:var(--tx3);margin-top:12px">Default: 1111</div>
+    <div id="pin-err" style="font-size:13px;color:var(--r);margin-top:10px;display:none">Incorrect PIN.</div>
+    <div style="font-size:12px;color:var(--tx3);margin-top:10px">Default PIN: 1111</div>
   </div></div>
 </div>
 
 <!-- HOME -->
 <div id="s-home" class="screen">
-  <div class="tb"><div><div class="ttitle">RSR Materials</div><div class="tsub">Carmen</div></div>
-    <button class="bk" onclick="logout()" title="Sign out">⎋</button></div>
-  <div class="pc">
-    <div class="hcard" onclick="openIssue()"><div class="ico" style="background:var(--pl);color:var(--p)">📤</div><div><div class="ht">Issue Materials</div><div class="hs">Issue to a vessel · crew confirms by passcode</div></div></div>
-    <div class="hcard" onclick="openStock()"><div class="ico" style="background:var(--bl);color:var(--b)">📦</div><div><div class="ht">Stock</div><div class="hs">View &amp; adjust Carmen site stock</div></div></div>
-    <div class="hcard soon" onclick="toast('Coming next update')"><div class="ico" style="background:#F0EAF8;color:#6b3fa0">📝</div><div><div class="ht">Request Materials</div><div class="hs">Coming next</div></div></div>
-    <div class="hcard soon" onclick="toast('Coming next update')"><div class="ico" style="background:var(--al);color:var(--am)">📥</div><div><div class="ht">Receive Delivery</div><div class="hs">Coming next</div></div></div>
-    <div class="hcard soon" onclick="toast('Coming next update')"><div class="ico" style="background:var(--bg2);color:var(--tx2)">🗂️</div><div><div class="ht">Records</div><div class="hs">Coming next</div></div></div>
+  <div class="app-header">
+    <div class="hdr-avatar">R</div>
+    <div class="hdr-info"><div class="hdr-site">RSR Tools</div><div class="hdr-sub" id="home-site-sub">—</div></div>
+    <button class="hdr-btn" onclick="doLogout()" title="Sign out">&#9211;</button>
+    <a href="../" style="text-decoration:none"><button class="hdr-btn">&#8962;</button></a>
+  </div>
+  <div class="wrap">
+    <div class="sitebar">
+      <select id="site-select" onchange="onSiteChange()"></select>
+    </div>
+    <div class="home-label">Quick actions</div>
+    <div class="tile-grid">
+      <button class="tile" style="background:#E8F0FE" onclick="goInventory()">
+        <div class="tile-icon" style="background:#4A6FA5"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg></div>
+        <div class="tile-title">Inventory</div><div class="tile-sub">View tools &amp; equipment</div>
+      </button>
+      <button class="tile" style="background:#E3F2FD" onclick="goBorrow()">
+        <div class="tile-icon" style="background:#1976D2"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14,2 14,8 20,8"/></svg></div>
+        <div class="tile-title">Borrow Slip</div><div class="tile-sub">Issue tool to employee</div>
+      </button>
+      <button class="tile" style="background:#E8F5E9" onclick="goReturn()">
+        <div class="tile-icon" style="background:#388E3C"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><polyline points="1,4 1,10 7,10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg></div>
+        <div class="tile-title">Return Tool</div><div class="tile-sub">Confirm item returned</div>
+      </button>
+      <button class="tile" style="background:#FFF3E0" onclick="goTransfer()">
+        <div class="tile-icon" style="background:#F57C00"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12,5 19,12 12,19"/></svg></div>
+        <div class="tile-title">Transfer Out</div><div class="tile-sub">Send tool to another site</div>
+      </button>
+      <button class="tile" style="background:#F3E5F5" onclick="goReceive()">
+        <div class="tile-icon" style="background:#7B1FA2"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><polyline points="8,17 12,21 16,17"/><line x1="12" y1="3" x2="12" y2="21"/></svg></div>
+        <div class="tile-title">Receive Tools</div><div class="tile-sub">Confirm incoming tools</div>
+      </button>
+      <button class="tile" style="background:#FFEBEE" onclick="goRepair()">
+        <div class="tile-icon" style="background:#C62828"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94z"/></svg></div>
+        <div class="tile-title">For Repair</div><div class="tile-sub">Tag defective equipment</div>
+      </button>
+      <button class="tile" style="background:#FFF8E1" onclick="goRecords()">
+        <div class="tile-icon" style="background:#F9A825"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/></svg></div>
+        <div class="tile-title">All Records</div><div class="tile-sub">Borrow &amp; transfer logs</div>
+      </button>
+      <button class="tile" style="background:#E0F2F1" onclick="goSetup()">
+        <div class="tile-icon" style="background:#00695C"><svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 010 14.14M4.93 4.93a10 10 0 000 14.14"/></svg></div>
+        <div class="tile-title">Setup</div><div class="tile-sub">Register tools</div>
+      </button>
+    </div>
   </div>
 </div>
 
-<!-- ISSUE (single page) -->
-<div id="s-issue" class="screen">
-  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Issue Materials</div><div class="tsub">Complete all sections below</div></div><div style="width:38px"></div></div>
-  <div class="pc">
+<!-- INVENTORY -->
+<div id="s-inventory" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Inventory</div><div class="hdr-sub" id="inv-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <input class="search" id="inv-search" placeholder="Search tool name or code…" oninput="renderInventory()" />
+    <div id="inv-list"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
+<!-- BORROW -->
+<div id="s-borrow" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Borrow Slip</div><div class="hdr-sub" id="bw-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
     <div class="sec">
-      <div class="sec-h"><div class="sec-n">1</div><div><div class="sec-t">Vessel / project</div><div class="sec-s">Select the vessel you are issuing for</div></div></div>
-      <label class="fl">Project / Vessel <span class="req">*</span></label>
-      <select id="i-vessel" class="fi"></select>
-      <div id="i-vessel-empty" class="empty" style="display:none">No active vessels. Add/activate one in Coordinator first.</div>
-    </div>
-    <div class="sec">
-      <div class="sec-h"><div class="sec-n">2</div><div><div class="sec-t">Crew details</div><div class="sec-s">Who is receiving the materials</div></div></div>
-      <label class="fl">Issued to (crew) <span class="req">*</span></label>
-      <div class="combo">
-        <input id="i-emp" class="fi" placeholder="Type name or code, or tap to choose" autocomplete="off" oninput="onEmpInput()" onfocus="empSuggest()" onblur="hideEmpSug()"/>
-        <div id="i-emp-sug" class="sug"></div>
+      <div class="sec-h"><div class="sec-n">1</div><div><div class="sec-t">Borrower &amp; date</div><div class="sec-s">Who is borrowing, and when</div></div></div>
+      <label class="lbl">Borrower</label>
+      <div style="position:relative;margin-bottom:10px">
+        <input id="bw-emp" class="search" style="margin-bottom:0" placeholder="Type or tap to choose a borrower…" autocomplete="off" oninput="onEmpInput()" onfocus="empSuggest()" onblur="hideEmpSug()"/>
+        <div id="bw-emp-sug" class="vsug" style="display:none"></div>
       </div>
-      <label class="fl">Date <span class="req">*</span></label>
-      <input id="i-date" class="fi" type="date"/>
-      <label class="fl">Issued by <span class="req">*</span></label>
-      <input id="i-by" class="fi" placeholder="Storekeeper name"/>
+      <label class="lbl">Date</label>
+      <input id="bw-date" class="search" type="date"/>
     </div>
     <div class="sec">
-      <div class="sec-h"><div class="sec-n">3</div><div><div class="sec-t">Materials to issue</div><div class="sec-s">Add all items being issued</div></div></div>
-      <div id="i-rows"></div>
-      <button class="add-row" onclick="addRow()">+ Add item</button>
-      <div id="i-warn"></div>
+      <div class="sec-h"><div class="sec-n">2</div><div><div class="sec-t">Project / vessel</div><div class="sec-s">Where the tools are going</div></div></div>
+      <label class="lbl">Project / Vessel</label>
+      <div style="position:relative;margin-bottom:10px">
+        <input id="bw-vessel" class="search" style="margin-bottom:0" placeholder="Type or tap to choose a vessel…" autocomplete="off" oninput="vesselSuggest()" onfocus="vesselSuggest()" onblur="hideVsug()"/>
+        <div id="bw-vsug" class="vsug" style="display:none"></div>
+      </div>
+      <label class="lbl">Issued by</label>
+      <input id="bw-by" class="search" placeholder="Warehouse staff name"/>
     </div>
-    <button class="lbtn" onclick="reviewIssue()">Issue</button>
+    <div class="sec">
+      <div class="sec-h"><div class="sec-n">3</div><div><div class="sec-t">Tools to borrow</div><div class="sec-s">Add each tool and its unit</div></div></div>
+      <label class="lbl">Add tools to slip</label>
+      <select id="bw-tool" class="search" onchange="onToolChange()"></select>
+      <select id="bw-unit" class="search"></select>
+      <button class="lbtn" style="background:var(--p)" onclick="addToSlip()">+ Add to slip</button>
+      <div id="bw-cart" style="margin-top:12px"><div class="empty">No tools added yet.</div></div>
+    </div>
+    <button class="lbtn" style="background:var(--ok)" id="bw-submit" onclick="reviewBorrow()">Issue (0)</button>
   </div>
 </div>
 
-<!-- STOCK -->
-<div id="s-stock" class="screen">
-  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div class="ttitle">Carmen Stock</div><div style="width:38px"></div></div>
-  <div class="pc">
-    <div class="sec">
-      <div class="sec-h"><div class="sec-n" style="background:var(--b)">≡</div><div><div class="sec-t">On-hand stock</div><div class="sec-s">Updates automatically on receive &amp; issue</div></div></div>
-      <div id="stk-list"><div class="empty">Loading…</div></div>
+<!-- RETURN -->
+<div id="s-return" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Return Tool</div><div class="hdr-sub" id="rt-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap"><div id="rt-list"><div class="empty">Loading…</div></div></div>
+</div>
+
+<!-- FOR REPAIR -->
+<div id="s-repair" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">For Repair</div><div class="hdr-sub" id="rp-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <div class="card">
+      <label class="lbl">Date</label>
+      <input id="rp-date" class="search" type="date"/>
+      <label class="lbl">Transmitted by</label>
+      <input id="rp-by" class="search" placeholder="Who is sending it to repair"/>
+      <label class="lbl">Expected ready (ETA)</label>
+      <input id="rp-eta" class="search" type="date"/>
+    </div>
+    <div class="card">
+      <label class="lbl">Add tools to transmittal</label>
+      <select id="rp-tool" class="search" onchange="onRepairTool()"></select>
+      <select id="rp-unit" class="search"></select>
+      <input id="rp-defect" class="search" placeholder="Defect for this tool"/>
+      <button class="lbtn" style="background:var(--p)" onclick="addToRepair()">+ Add to transmittal</button>
+    </div>
+    <div class="card">
+      <label class="lbl">Transmittal</label>
+      <div id="rp-cart"><div class="empty">No tools added yet.</div></div>
+      <button class="lbtn" style="background:var(--r)" id="rp-submit" onclick="reviewRepair()">Send to repair (0)</button>
+    </div>
+    <div class="card">
+      <label class="lbl">Currently in repair</label>
+      <div id="rp-list"><div class="empty">Loading…</div></div>
     </div>
   </div>
 </div>
 
-<!-- SLIP CONFIRM -->
-<div id="mislip-modal" class="modal"><div class="card" style="max-height:92vh;overflow:auto">
-  <div id="mislip-body" style="margin:0 0 12px"></div>
-  <div style="font-size:11px;color:var(--tx2);line-height:1.5;background:var(--bg2);border-radius:10px;padding:10px 12px;margin-bottom:10px">By entering their PIN, the crew member confirms receipt of the materials listed above.</div>
-  <label class="fl">Crew passcode (PIN)</label>
-  <input id="i-pin" class="fi" type="password" inputmode="numeric" placeholder="Employee PIN"/>
-  <button class="lbtn" onclick="confirmIssue()">Confirm &amp; issue</button>
-  <button class="btn btn-sec" style="width:100%;margin-top:8px" onclick="document.getElementById('mislip-modal').style.display='none'">Back</button>
-</div></div>
-
-<!-- SUCCESS -->
-<div id="ok-modal" class="modal"><div class="card" style="text-align:center">
-  <div style="width:64px;height:64px;border-radius:50%;background:var(--pm);color:#fff;font-size:32px;display:flex;align-items:center;justify-content:center;margin:0 auto 12px">✓</div>
-  <div style="font-size:18px;font-weight:800">Materials issued</div>
-  <div id="ok-no" style="font-family:ui-monospace,monospace;font-size:15px;color:var(--p);margin:6px 0"></div>
-  <div id="ok-info" style="font-size:13px;color:var(--tx2)"></div>
-  <button class="lbtn" onclick="newIssue()">Issue more</button>
-</div></div>
-
+<!-- ALL RECORDS -->
+<div id="s-records" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">All Records</div><div class="hdr-sub" id="rc-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <div style="display:flex;gap:8px;margin:4px 0 12px">
+      <button class="rcf" id="rcf-all" onclick="setRecFilter('all')">All</button>
+      <button class="rcf" id="rcf-out" onclick="setRecFilter('out')">Out</button>
+      <button class="rcf" id="rcf-returned" onclick="setRecFilter('returned')">Returned</button>
+    </div>
+    <div id="rc-list"><div class="empty">Loading…</div></div>
+  </div>
 </div>
+
+<!-- SETUP / REGISTER -->
+<div id="s-setup" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Register Tools</div><div class="hdr-sub" id="su-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <div class="card">
+      <label class="lbl">Register a new tool</label>
+      <input id="su-name" class="search" placeholder="Tool name (e.g. Adjustable Wrench)"/>
+      <input id="su-prefix" class="search" placeholder="Code prefix (e.g. WR)"/>
+      <input id="su-qty" class="search" type="number" min="1" placeholder="Quantity (e.g. 10)"/>
+      <input id="su-unit" class="search" placeholder="Unit label (default: pcs)"/>
+      <button class="lbtn" style="background:var(--p)" onclick="registerNew()">Register tool</button>
+      <div class="tool-meta" style="margin-top:8px">Codes auto-generate: e.g. WR001, WR002… added to <b id="su-sitehint">this site</b>.</div>
+    </div>
+    <div class="card">
+      <label class="lbl">Add more units to an existing tool</label>
+      <select id="su-exist" class="search"></select>
+      <input id="su-more-qty" class="search" type="number" min="1" placeholder="How many to add"/>
+      <button class="lbtn" style="background:var(--ok)" onclick="addMore()">Add units</button>
+    </div>
+  </div>
+</div>
+
+<!-- TRANSFER OUT -->
+<div id="s-transfer" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Transfer Out</div><div class="hdr-sub" id="tf-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <div class="card">
+      <label class="lbl">Date</label>
+      <input id="tf-date" class="search" type="date"/>
+      <label class="lbl">Send to site</label>
+      <select id="tf-dest" class="search"></select>
+      <label class="lbl">Sent by</label>
+      <input id="tf-by" class="search" placeholder="Warehouse staff name"/>
+    </div>
+    <div class="card">
+      <label class="lbl">Add tools to transfer</label>
+      <select id="tf-tool" class="search" onchange="onTfTool()"></select>
+      <select id="tf-unit" class="search"></select>
+      <button class="lbtn" style="background:var(--p)" onclick="addToXfer()">+ Add to transfer</button>
+    </div>
+    <div class="card">
+      <label class="lbl">Transfer list</label>
+      <div id="tf-cart"><div class="empty">No tools added yet.</div></div>
+      <button class="lbtn" style="background:var(--warn);color:#3a2a00" id="tf-submit" onclick="reviewTransfer()">Transfer (0)</button>
+    </div>
+  </div>
+</div>
+
+<!-- RECEIVE TOOLS -->
+<div id="s-receive" class="screen">
+  <div class="app-header">
+    <button class="back" onclick="showScreen('s-home')">&#8592; Home</button>
+    <div class="hdr-info" style="text-align:center"><div class="hdr-site">Receive Tools</div><div class="hdr-sub" id="rv-site-sub">—</div></div>
+    <div style="width:60px"></div>
+  </div>
+  <div class="wrap">
+    <div class="card">
+      <label class="lbl">Received by</label>
+      <input id="rv-by" class="search" placeholder="Warehouse staff name"/>
+    </div>
+    <div id="rv-list"><div class="empty">Loading…</div></div>
+  </div>
+</div>
+
+<div id="bslip-modal" style="display:none;position:fixed;inset:0;background:rgba(15,25,40,.5);z-index:80;align-items:center;justify-content:center;padding:16px">
+  <div class="card" style="max-width:390px;width:100%;margin:0;max-height:92vh;overflow:auto">
+    <div id="bslip-body" style="margin:0 0 10px"></div>
+    <div style="background:#fff8e1;border:1px solid #f0e0a8;border-radius:10px;padding:10px;font-size:12px;color:#7a5c00;line-height:1.5;margin-bottom:10px">By entering the passcode below, the borrower confirms receipt of the listed tools and accepts responsibility to return them in good condition. Lost or damaged items are charged at the replacement value shown.</div>
+    <label class="lbl">Borrower passcode (sign here)</label>
+    <input id="bslip-pin" class="search" type="password" inputmode="numeric" placeholder="Enter passcode to confirm"/>
+    <button class="lbtn" style="background:var(--ok)" onclick="confirmBorrow()">Confirm &amp; sign</button>
+    <button class="lbtn" style="background:#fff;color:var(--tx2);border:1px solid var(--line);margin-top:8px" onclick="cancelBslip()">Back</button>
+  </div>
+</div>
+
+<div id="rslip-modal" style="display:none;position:fixed;inset:0;background:rgba(15,25,40,.5);z-index:80;align-items:center;justify-content:center;padding:16px">
+  <div class="card" style="max-width:390px;width:100%;margin:0;max-height:92vh;overflow:auto">
+    <div id="rslip-body" style="margin:0 0 12px"></div>
+    <button class="lbtn" style="background:var(--r)" onclick="confirmRepair()">Confirm transmittal</button>
+    <button class="lbtn" style="background:#fff;color:var(--tx2);border:1px solid var(--line);margin-top:8px" onclick="cancelRslip()">Back</button>
+  </div>
+</div>
+
+<div id="rback-modal" style="display:none;position:fixed;inset:0;background:rgba(15,25,40,.5);z-index:80;align-items:center;justify-content:center;padding:16px">
+  <div class="card" style="max-width:340px;width:100%;margin:0;text-align:center">
+    <div style="font-size:13px;color:var(--tx2)">Mark repaired</div>
+    <div id="rback-name" style="font-size:17px;font-weight:800;margin:4px 0 12px">—</div>
+    <label class="lbl" style="text-align:left">Return to site</label>
+    <select id="rback-site" class="search" onchange="onRbackSite()"></select>
+    <label class="lbl" id="rback-bylbl" style="text-align:left">Received back by</label>
+    <input id="rback-by" class="search" placeholder="Warehouse staff name"/>
+    <button class="lbtn" style="background:var(--ok)" onclick="confirmRepaired()">Confirm repaired</button>
+    <button class="lbtn" style="background:#fff;color:var(--tx2);border:1px solid var(--line);margin-top:8px" onclick="document.getElementById('rback-modal').style.display='none'">Cancel</button>
+  </div>
+</div>
+
+<div id="tslip-modal" style="display:none;position:fixed;inset:0;background:rgba(15,25,40,.5);z-index:80;align-items:center;justify-content:center;padding:16px">
+  <div class="card" style="max-width:390px;width:100%;margin:0;max-height:92vh;overflow:auto">
+    <div id="tslip-body" style="margin:0 0 12px"></div>
+    <button class="lbtn" style="background:var(--warn);color:#3a2a00" onclick="confirmTransfer()">Confirm transfer</button>
+    <button class="lbtn" style="background:#fff;color:var(--tx2);border:1px solid var(--line);margin-top:8px" onclick="cancelTslip()">Back</button>
+  </div>
+</div>
+
+<div id="slip-modal" style="display:none;position:fixed;inset:0;background:rgba(15,25,40,.45);z-index:80;align-items:center;justify-content:center;padding:20px">
+  <div class="card" style="max-width:340px;width:100%;text-align:center;margin:0">
+    <div style="font-size:36px">✅</div>
+    <div style="font-size:13px;color:var(--tx2);margin-top:2px">Borrow slip issued</div>
+    <div id="slip-no" style="font-size:24px;font-weight:800;font-family:ui-monospace,monospace;margin:6px 0;color:var(--p)">BS-000000</div>
+    <div id="slip-info" class="tool-meta" style="margin-bottom:14px">—</div>
+    <button class="lbtn" style="background:var(--p)" onclick="closeSlip()">Done</button>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
 
 <script>
+/* ══ CONFIG ══ */
 const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
 const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
-const sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
-const SITE='Carmen';
+const PIN_KEY='rsr_tools_pin', DEFAULT_PIN='1111', SITE_KEY='rsr_tools_site';
+let sb=null, sites=[], curSite='', invData=[];
 
-const ITEMS=[
-  {n:'Electrode handle',u:'pcs',th:3,iv:30},{n:'Welding gloves',u:'pair',th:3,iv:30},{n:'Cutting tip',u:'pcs',th:5,iv:30},
-  {n:'Dark glass',u:'pcs',th:3,iv:30},{n:'Clear glass',u:'pcs',th:3,iv:30},{n:'Trouble light',u:'pcs',th:2,iv:60},
-  {n:'Electrical tape',u:'pcs',th:5,iv:30},{n:'Chalk stone',u:'pcs',th:5,iv:30},{n:'Dry chalk',u:'pcs',th:5,iv:30},
-  {n:'Flint stone',u:'pcs',th:5,iv:30},{n:'Striker',u:'pcs',th:3,iv:30},{n:'Y-connector',u:'pcs',th:2,iv:90},
-  {n:'Cutting disk',u:'pcs',th:5,iv:30},{n:'Oxygen regulator',u:'unit',th:1,iv:0},{n:'LPG regulator',u:'unit',th:1,iv:0},{n:'Steel square',u:'pcs',th:1,iv:0}
-];
-function gu(n){return (ITEMS.find(i=>i.n===n)||{u:'pcs'}).u;}
-function giv(n){return (ITEMS.find(i=>i.n===n)||{iv:0}).iv;}
+/* ══ PIN ══ */
+let pinVal='';
+function pinTap(d){if(pinVal.length>=4)return;pinVal+=d;dots();}
+function pinClear(){pinVal='';dots();}
+function pinBack(){pinVal=pinVal.slice(0,-1);dots();}
+function dots(){for(let i=0;i<4;i++){const e=document.getElementById('pd'+i);if(e)e.className='pindot'+(i<pinVal.length?' on':'');}}
+async function savedPin(){
+  try{const{data}=await sb.from('settings').select('value').eq('key','issuance_pin').maybeSingle();return (data&&data.value)?data.value:DEFAULT_PIN;}
+  catch(e){return DEFAULT_PIN;}
+}
+async function doLogin(){
+  const want=await savedPin();
+  if(pinVal!==want){document.getElementById('pin-err').style.display='block';pinVal='';dots();return;}
+  document.getElementById('pin-err').style.display='none';pinVal='';dots();
+  await boot();
+}
+function doLogout(){showScreen('s-login');}
 
-let issuancePin='1111', employees=[], vessels=[], stockMap={}, empLast={}, selEmp=null, rc=0, pending=null, reservedNo='';
+/* ══ SCREENS ══ */
+function showScreen(id){
+  document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  window.scrollTo(0,0);
+}
+function toast(msg){const t=document.getElementById('toast');t.textContent=msg;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',2600);}
+function soon(){toast('Coming in the next update');}
+function showSlip(no,info){document.getElementById('slip-no').textContent=no;document.getElementById('slip-info').textContent=info;document.getElementById('slip-modal').style.display='flex';}
+function closeSlip(){document.getElementById('slip-modal').style.display='none';showScreen('s-home');}
 
-function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),2600);}
-function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo(0,0);}
-function todayYmd(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
-function fmtNice(y){if(!y)return '';return new Date(y+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'2-digit'});}
-
-(async function boot(){
-  try{const{data}=await sb.from('settings').select('value').eq('key','issuance_pin').single();if(data&&data.value)issuancePin=String(data.value);}catch(e){}
-})();
-
-function doLogin(){
-  const pin=document.getElementById('login-pin').value.trim();
-  if(pin!==issuancePin){toast('Wrong passcode');return;}
-  document.getElementById('login-pin').value='';
+/* ══ BOOT ══ */
+async function boot(){
+  await loadEmployees();
+  loadVessels();
+  const{data,error}=await sb.from('sites').select('id,name').order('name');
+  sites=data||[];
+  const sel=document.getElementById('site-select');
+  sel.innerHTML=sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  curSite=localStorage.getItem(SITE_KEY)||(sites[0]&&sites[0].id)||'';
+  if(curSite)sel.value=curSite;
+  updateSiteLabels();
   showScreen('s-home');
 }
-function logout(){showScreen('s-login');}
-
-/* ── data ── */
-async function loadStock(){
-  stockMap={};
-  try{const{data}=await sb.from('site_stock').select('item_name,qty').eq('site_key',SITE);(data||[]).forEach(r=>stockMap[r.item_name]=Number(r.qty)||0);}catch(e){}
+function onSiteChange(){
+  curSite=document.getElementById('site-select').value;
+  localStorage.setItem(SITE_KEY,curSite);
+  updateSiteLabels();
 }
-async function loadEmployees(){const{data}=await sb.from('employees').select('id,code,name,position,pin').order('name');employees=data||[];}
+function siteName(){const s=sites.find(x=>x.id===curSite);return s?s.name:'—';}
+const SITE_CODES={'Carmen':'CAR','Mandaue':'MAN','Lapu-Lapu':'LAP'};
+function siteCode(name){const n=name||siteName();return SITE_CODES[n]||((n||'XXX').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase());}
+function updateSiteLabels(){
+  document.getElementById('home-site-sub').textContent=siteName();
+  document.getElementById('inv-site-sub').textContent=siteName();
+}
+
+/* ══ INVENTORY ══ */
+async function goInventory(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-inventory');
+  document.getElementById('inv-list').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const ures=await sb.from('item_units')
+      .select('id,unit_code,status,item_id,items(name,item_code,unit)')
+      .eq('active',true).eq('site_id',curSite);
+    const units=ures.data||[];
+    const bres=await sb.from('borrow_issuance').select('unit_id').eq('status','out').eq('site_id',curSite);
+    const outSet=new Set((bres.data||[]).map(b=>b.unit_id));
+    /* group by item */
+    const map={};
+    units.forEach(u=>{
+      const k=u.item_id;
+      if(!map[k])map[k]={name:(u.items&&u.items.name)||'—',code:(u.items&&u.items.item_code)||'',units:[]};
+      let st=u.status==='repair'?'repair':(u.status==='transit'?'transit':(outSet.has(u.id)?'borrowed':'available'));
+      map[k].units.push({code:u.unit_code,st});
+    });
+    invData=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
+  }catch(e){invData=[];toast('Load failed: '+e.message);}
+  renderInventory();
+}
+function renderInventory(){
+  const q=(document.getElementById('inv-search').value||'').toLowerCase();
+  const list=q?invData.filter(t=>t.name.toLowerCase().includes(q)||(t.code||'').toLowerCase().includes(q)):invData;
+  const el=document.getElementById('inv-list');
+  if(!list.length){el.innerHTML='<div class="empty">No tools at this site yet.</div>';return;}
+  el.innerHTML='<div class="card">'+list.map(t=>{
+    const av=t.units.filter(u=>u.st==='available').length;
+    const bo=t.units.filter(u=>u.st==='borrowed').length;
+    const rp=t.units.filter(u=>u.st==='repair').length;
+    const tr=t.units.filter(u=>u.st==='transit').length;
+    return `<div class="tool-row">
+      <div class="tool-name">${t.name}</div>
+      <div class="countbar"><span>Avail <b>${av}</b></span><span>Out <b>${bo}</b></span><span>Repair <b>${rp}</b></span>${tr?`<span>Transit <b>${tr}</b></span>`:''}<span>Owned <b>${t.units.length}</b></span></div>
+      <div class="chips">${t.units.map(u=>`<span class="chip ${u.st}">${u.code}</span>`).join('')}</div>
+    </div>`;
+  }).join('')+'</div>';
+}
+
+/* ══ EMPLOYEES ══ */
+let employees=[], availTools=[], cart=[], retRows=[], vessels=[], selEmpId='', pendingSlip=null, reservedSlipNo='';
+function todayYmd2(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
+function fmtNice(ymd){if(!ymd)return '';const d=new Date(ymd+'T00:00:00');return d.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'2-digit'});}
+async function loadEmployees(){
+  const{data}=await sb.from('employees').select('id,code,name,pin').order('name');
+  employees=data||[];
+}
+function onEmpInput(){ selEmpId=''; empSuggest(); }
+function empSuggest(){
+  const q=(document.getElementById('bw-emp').value||'').toLowerCase().replace(/\s+/g,'');
+  const box=document.getElementById('bw-emp-sug');
+  let m=employees;
+  if(q)m=employees.filter(e=>{
+    const n=(e.name||'').toLowerCase().replace(/\s+/g,'');
+    const c=(e.code||'').toLowerCase().replace(/\s+/g,'');
+    return n.includes(q)||c.includes(q);
+  });
+  m=m.slice(0,12);
+  if(!m.length){box.style.display='none';box.innerHTML='';return;}
+  box.innerHTML=m.map(e=>`<div onmousedown="pickEmp(this)" data-id="${e.id}" data-name="${(e.name||'').replace(/"/g,'&quot;')}">${e.name}${e.code?`<span class="vc">${e.code}</span>`:''}</div>`).join('');
+  box.style.display='block';
+}
+function pickEmp(el){
+  document.getElementById('bw-emp').value=el.getAttribute('data-name')||'';
+  selEmpId=el.getAttribute('data-id')||'';
+  const b=document.getElementById('bw-emp-sug');b.style.display='none';b.innerHTML='';
+}
+function hideEmpSug(){setTimeout(()=>{const b=document.getElementById('bw-emp-sug');if(b)b.style.display='none';},180);}
 async function loadVessels(){
   try{
     const{data}=await sb.from('voyages').select('*').order('vessel_name');
     vessels=(data||[]).filter(v=>{
       if(!v.vessel_name)return false;
       if(v.status==='finished'||v.status==='not_active')return false;
-      const dry=(v.docking_date||v.status==='drydock')&&!v.undocking_date;
-      const afl=v.afloat_start&&!v.afloat_done;
-      const eme=v.emergency_start&&!v.emergency_end;
+      const dry=(v.docking_date||v.status==='drydock')&&!v.undocking_date;  // in drydock, not yet undocked
+      const afl=v.afloat_start&&!v.afloat_done;                              // afloat repair started, not done
+      const eme=v.emergency_start&&!v.emergency_end;                         // emergency repair started, not done
       return dry||afl||eme;
     });
   }catch(e){vessels=[];}
 }
-
-/* ── ISSUE (single page) ── */
-async function openIssue(){
-  selEmp=null; empLast={}; rc=0; pending=null; reservedNo='';
-  await Promise.all([loadEmployees(),loadVessels(),loadStock()]);
-  const vs=document.getElementById('i-vessel');
-  vs.innerHTML='<option value="">— Select vessel —</option>'+vessels.map(v=>`<option value="${(v.vessel_name||'').replace(/"/g,'&quot;')}" data-code="${(v.vessel_code||'').replace(/"/g,'&quot;')}">${v.vessel_name}${v.vessel_code?' · '+v.vessel_code:''}</option>`).join('');
-  document.getElementById('i-vessel-empty').style.display=vessels.length?'none':'block';
-  document.getElementById('i-emp').value='';
-  document.getElementById('i-emp-sug').innerHTML='';
-  const d=document.getElementById('i-date');d.min=todayYmd();d.value=todayYmd();
-  document.getElementById('i-by').value='';
-  document.getElementById('i-rows').innerHTML='';rc=0;addRow();
-  document.getElementById('i-warn').innerHTML='';
-  showScreen('s-issue');
-}
-function onEmpInput(){ selEmp=null; empLast={}; renderWarn(); empSuggest(); }
-function empSuggest(){
-  const q=(document.getElementById('i-emp').value||'').toLowerCase().replace(/\s+/g,'');
-  const box=document.getElementById('i-emp-sug');
-  let m=employees;
-  if(q)m=employees.filter(e=>((e.name||'').toLowerCase().replace(/\s+/g,'')).includes(q)||((e.code||'').toLowerCase().replace(/\s+/g,'')).includes(q));
+function vesselSuggest(){
+  const q=(document.getElementById('bw-vessel').value||'').toLowerCase().replace(/\s+/g,'');
+  const box=document.getElementById('bw-vsug');
+  let m=vessels;
+  if(q)m=vessels.filter(v=>{
+    const n=(v.vessel_name||'').toLowerCase().replace(/\s+/g,'');
+    const c=(v.vessel_code||'').toLowerCase().replace(/\s+/g,'');
+    return n.includes(q)||c.includes(q);
+  });
   m=m.slice(0,12);
   if(!m.length){box.style.display='none';box.innerHTML='';return;}
-  box.innerHTML=m.map(e=>`<div onmousedown="pickEmp('${e.id}')" data-id="${e.id}">${e.name}${e.code?`<span class="vc">${e.code}</span>`:''}</div>`).join('');
+  box.innerHTML=m.map(v=>`<div onmousedown="pickVessel(this)" data-name="${(v.vessel_name||'').replace(/"/g,'&quot;')}">${v.vessel_name}${v.vessel_code?`<span class="vc">${v.vessel_code}</span>`:''}</div>`).join('');
   box.style.display='block';
 }
-async function pickEmp(id){
-  selEmp=employees.find(e=>e.id===id)||null;
-  if(selEmp)document.getElementById('i-emp').value=selEmp.name||'';
-  const b=document.getElementById('i-emp-sug');b.style.display='none';b.innerHTML='';
-  await loadEmpLast();
+function pickVessel(el){
+  document.getElementById('bw-vessel').value=el.getAttribute('data-name')||'';
+  const b=document.getElementById('bw-vsug');b.style.display='none';b.innerHTML='';
 }
-function hideEmpSug(){setTimeout(()=>{const b=document.getElementById('i-emp-sug');if(b)b.style.display='none';},180);}
-async function loadEmpLast(){
-  empLast={};
-  if(selEmp){
-    try{const{data}=await sb.from('personnel_log').select('item_name,last_date').eq('site_key',SITE).eq('emp_name',selEmp.name);(data||[]).forEach(r=>empLast[r.item_name]=r.last_date);}catch(e){}
-  }
-  renderWarn();
+function hideVsug(){setTimeout(()=>{const b=document.getElementById('bw-vsug');if(b)b.style.display='none';},180);}
+
+/* ══ BORROW ══ */
+async function goBorrow(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-borrow');
+  document.getElementById('bw-site-sub').textContent=siteName();
+  cart=[]; renderCart();
+  document.getElementById('bw-emp').value=''; selEmpId='';
+  const es=document.getElementById('bw-emp-sug'); if(es){es.style.display='none';es.innerHTML='';}
+  const dEl=document.getElementById('bw-date'); dEl.min=todayYmd2(); dEl.value=todayYmd2();
+  await loadVessels();
+  document.getElementById('bw-vessel').value='';
+  const vb=document.getElementById('bw-vsug'); if(vb){vb.style.display='none';vb.innerHTML='';}
+  document.getElementById('bw-by').value='';
+  pendingSlip=null; reservedSlipNo='';
+  await loadAvail();
 }
-function addRow(name='',qty=1){
-  rc++;const id='ir-'+rc;
-  const div=document.createElement('div');div.className='irow';div.id=id;
-  div.innerHTML=`<select class="fi" onchange="document.getElementById('u-${id}').textContent=gu(this.value);renderWarn()"><option value="">— Item —</option>${ITEMS.map(x=>`<option value="${x.n}"${x.n===name?' selected':''}>${x.n}</option>`).join('')}</select>
-    <input class="fi" type="number" min="1" value="${qty}" style="text-align:center" oninput="renderWarn()"/>
-    <div class="iunit" id="u-${id}">${name?gu(name):''}</div>
-    <div class="rm" onclick="document.getElementById('${id}').remove();renderWarn()">×</div>`;
-  document.getElementById('i-rows').appendChild(div);
-}
-function getRows(){
-  const out=[];let empty=false;
-  document.querySelectorAll('#i-rows .irow').forEach(r=>{
-    const s=r.querySelector('select'),q=r.querySelector('input[type=number]');
-    if(s&&s.value&&q&&parseInt(q.value)>0)out.push({n:s.value,qty:parseInt(q.value),u:gu(s.value)});
-    else if(s&&!s.value)empty=true;
+async function loadAvail(){
+  const ures=await sb.from('item_units').select('id,unit_code,status,item_id,items(name,item_code,price)').eq('active',true).eq('site_id',curSite);
+  const units=ures.data||[];
+  const bres=await sb.from('borrow_issuance').select('unit_id').eq('status','out').eq('site_id',curSite);
+  const outSet=new Set((bres.data||[]).map(b=>b.unit_id));
+  const map={};
+  units.forEach(u=>{
+    if(u.status!=='available'||outSet.has(u.id))return;
+    const k=u.item_id;
+    if(!map[k])map[k]={itemId:k,name:(u.items&&u.items.name)||'—',price:(u.items&&u.items.price)||0,units:[]};
+    map[k].units.push({id:u.id,code:u.unit_code});
   });
-  return {out,empty};
+  availTools=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
+  renderToolSelect();
 }
-function renderWarn(){
-  const box=document.getElementById('i-warn');if(!box)return;
-  if(!selEmp){box.innerHTML='';return;}
-  const {out}=getRows();const today=new Date();const w=[];
-  out.forEach(it=>{
-    const iv=giv(it.n),last=empLast[it.n];
-    if(iv>0&&last){
-      const days=Math.floor((today-new Date(last+'T00:00:00'))/86400000);
-      if(days<iv)w.push(`${it.n}: last issued to ${selEmp.name} ${days} day(s) ago (every ${iv}d)`);
-    }
-    const onhand=stockMap[it.n]||0;
-    if(it.qty>onhand)w.push(`${it.n}: only ${onhand} ${it.u} in stock, issuing ${it.qty}`);
-  });
-  box.innerHTML=w.length?`<div class="warn"><b>Heads up</b><br>${w.join('<br>')}</div>`:'';
+function renderToolSelect(){
+  document.getElementById('bw-tool').innerHTML='<option value="">— Select tool —</option>'+availTools.filter(t=>t.units.length).map(t=>`<option value="${t.itemId}">${t.name} (${t.units.length} avail)</option>`).join('');
+  document.getElementById('bw-unit').innerHTML='<option value="">— unit —</option>';
 }
-async function reviewIssue(){
-  const vs=document.getElementById('i-vessel');
-  if(!vs.value){toast('Pick a vessel');return;}
-  if(!selEmp){
-    const typed=(document.getElementById('i-emp').value||'').trim().toLowerCase();
-    const m=employees.find(e=>(e.name||'').trim().toLowerCase()===typed);
-    if(m){selEmp=m;await loadEmpLast();}
+function onToolChange(){
+  const t=availTools.find(x=>x.itemId===document.getElementById('bw-tool').value);
+  document.getElementById('bw-unit').innerHTML='<option value="">— unit —</option>'+(t?t.units.map(u=>`<option value="${u.id}">${u.code}</option>`).join(''):'');
+}
+function addToSlip(){
+  const tid=document.getElementById('bw-tool').value, uid=document.getElementById('bw-unit').value;
+  if(!tid||!uid){toast('Pick a tool and unit');return;}
+  const t=availTools.find(x=>x.itemId===tid), u=t.units.find(x=>x.id===uid);
+  cart.push({unitId:uid,itemId:tid,code:u.code,name:t.name,price:t.price});
+  t.units=t.units.filter(x=>x.id!==uid);
+  renderToolSelect(); renderCart();
+}
+function removeFromSlip(uid){
+  const i=cart.findIndex(c=>c.unitId===uid); if(i<0)return;
+  const c=cart[i]; cart.splice(i,1);
+  const t=availTools.find(x=>x.itemId===c.itemId); if(t)t.units.push({id:c.unitId,code:c.code});
+  renderToolSelect(); renderCart();
+}
+function renderCart(){
+  const el=document.getElementById('bw-cart'), btn=document.getElementById('bw-submit');
+  if(!cart.length){el.innerHTML='<div class="empty">No tools added yet.</div>';btn.textContent='Issue (0)';return;}
+  let total=0;
+  el.innerHTML=cart.map(c=>{total+=Number(c.price)||0;return `<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center">
+    <div><div class="tool-name">${c.name}</div><div class="tool-meta"><span class="chip available">${c.code}</span>${c.price?' ₱'+Number(c.price).toLocaleString():''}</div></div>
+    <button class="back" style="color:var(--r)" onclick="removeFromSlip('${c.unitId}')">Remove</button></div>`;}).join('')
+    +`<div class="countbar" style="margin-top:8px">Total replacement value: <b>₱${total.toLocaleString()}</b></div>`;
+  btn.textContent='Issue ('+cart.length+')';
+}
+async function reviewBorrow(){
+  let empId=selEmpId;
+  const typedName=(document.getElementById('bw-emp').value||'').trim();
+  if(!empId){
+    const matches=employees.filter(e=>(e.name||'').trim().toLowerCase()===typedName.toLowerCase());
+    if(matches.length===1)empId=matches[0].id;
   }
-  if(!selEmp){toast('Choose the crew member from the list');return;}
-  const by=document.getElementById('i-by').value.trim();
-  const date=document.getElementById('i-date').value;
-  if(!date){toast('Pick a date');return;}
-  if(date<todayYmd()){toast('No back-dating allowed');return;}
-  if(!by){toast('Enter who is issuing');return;}
-  const {out,empty}=getRows();
-  if(empty){toast('Fill or remove the empty item row');return;}
-  if(!out.length){toast('Add at least one item');return;}
-  const opt=vs.options[vs.selectedIndex];
-  const vessel={name:vs.value,code:opt.getAttribute('data-code')||''};
-  if(!reservedNo){
-    let no='';try{const{data,error}=await sb.rpc('next_issuance_no');if(!error&&data)no=data;}catch(e){}
-    if(!no){const n=new Date(),z=x=>String(x).padStart(2,'0');no='MI-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
-    reservedNo=no;
+  const emp=employees.find(e=>e.id===empId);
+  const bdate=document.getElementById('bw-date').value;
+  const vessel=document.getElementById('bw-vessel').value.trim();
+  const by=document.getElementById('bw-by').value.trim();
+  if(!empId||!emp){toast('Select a borrower from the list');return;}
+  if(!bdate){toast('Pick a date');return;}
+  if(bdate<todayYmd2()){toast('No back-dating allowed');return;}
+  if(!vessel){toast('Select or enter a project/vessel');return;}
+  if(!by){toast('Enter who issued the tools');return;}
+  if(!cart.length){toast('Add at least one tool');return;}
+  if(!reservedSlipNo){
+    let sn='';
+    try{const{data,error}=await sb.rpc('next_no',{p_prefix:'BS',p_site:siteCode()}); if(!error&&data)sn=data;}catch(e){}
+    if(!sn){const n=new Date(),z=x=>String(x).padStart(2,'0');sn='BS-'+siteCode()+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+    reservedSlipNo=sn;
   }
-  pending={vessel,emp:selEmp,by,date,items:out,no:reservedNo};
-  document.getElementById('mislip-body').innerHTML=
-    `<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:12px;margin-bottom:12px">`
-    +`<div style="font-size:15px;font-weight:800">RSR — Material Issuance Slip</div>`
-    +`<div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--p);margin-top:2px">${reservedNo}</div>`
-    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(date)} · Carmen</div>`
+  let total=0; cart.forEach(c=>total+=Number(c.price)||0);
+  pendingSlip={empId,empName:emp.name,empCode:emp.code||'—',bdate,vessel,by,items:cart.slice(),total,slipNo:reservedSlipNo};
+  document.getElementById('bslip-body').innerHTML=
+    `<div style="text-align:center;border-bottom:1.5px dashed var(--tx3);padding-bottom:12px;margin-bottom:12px">`
+    +`<div style="font-size:15px;font-weight:800">RSR Tools — Borrow Slip</div>`
+    +`<div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--p);margin-top:2px">${reservedSlipNo}</div>`
+    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(bdate)} · ${siteName()}</div>`
     +`</div>`
     +`<div style="font-size:13px;line-height:1.9;color:var(--tx2);margin-bottom:12px">`
-    +`<div class="row2"><span>Vessel</span><b style="color:var(--tx)">${vessel.name}</b></div>`
-    +`<div class="row2"><span>Issued to</span><b style="color:var(--tx)">${selEmp.name}${selEmp.code?' · '+selEmp.code:''}</b></div>`
-    +`<div class="row2"><span>Issued by</span><b style="color:var(--tx)">${by}</b></div>`
+    +`<div style="display:flex;justify-content:space-between"><span>Borrower</span><b style="color:var(--tx)">${emp.name} <span class="vc">${emp.code||'—'}</span></b></div>`
+    +`<div style="display:flex;justify-content:space-between"><span>Project / Vessel</span><b style="color:var(--tx)">${vessel}</b></div>`
+    +`<div style="display:flex;justify-content:space-between"><span>Issued by</span><b style="color:var(--tx)">${by}</b></div>`
     +`</div>`
-    +`<div style="border-top:1.5px dashed var(--bd2);padding-top:10px">`
-    +`<div class="row2" style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:10px"><span>Material</span><span>Qty</span></div>`
-    +out.map(c=>`<div class="row2" style="align-items:baseline;margin-bottom:9px"><div style="font-size:15px;font-weight:700;color:var(--tx)">${c.n}</div><div style="font-size:14px;color:var(--tx2);white-space:nowrap">${c.qty} ${c.u}</div></div>`).join('')
-    +`<div class="row2" style="align-items:baseline;border-top:1.5px dashed var(--bd2);padding-top:11px;margin-top:2px"><div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx2)">Total</div><div style="font-size:22px;font-weight:900;color:var(--p)">${out.reduce((s,i)=>s+i.qty,0)}</div></div></div>`;
-  document.getElementById('i-pin').value='';
-  document.getElementById('mislip-modal').style.display='flex';
+    +`<div style="border-top:1.5px dashed var(--tx3);padding-top:10px">`
+    +`<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:10px"><span>Item</span><span>Repl. value</span></div>`
+    +cart.map(c=>`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:11px;gap:10px">
+        <div><div style="font-size:15px;font-weight:700;line-height:1.2">${c.name}</div><div style="font-family:ui-monospace,monospace;font-size:11px;color:var(--tx2);margin-top:2px">${c.code}</div></div>
+        <div style="font-size:17px;font-weight:800;white-space:nowrap">${c.price?'₱'+Number(c.price).toLocaleString():'—'}</div>
+      </div>`).join('')
+    +`<div style="display:flex;justify-content:space-between;align-items:baseline;border-top:1.5px dashed var(--tx3);padding-top:11px;margin-top:2px">
+        <div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx2)">Total</div>
+        <div style="font-size:22px;font-weight:900;color:var(--p)">₱${total.toLocaleString()}</div>
+      </div></div>`;
+  document.getElementById('bslip-pin').value='';
+  document.getElementById('bslip-modal').style.display='flex';
 }
-async function confirmIssue(){
-  if(!pending)return;
-  const pin=document.getElementById('i-pin').value.trim();
-  if(!pin){toast('Enter the crew PIN');return;}
-  try{const{data:ok,error}=await sb.rpc('verify_pin',{emp_id:pending.emp.id,pin_input:pin});if(error)throw error;if(!ok){toast('Wrong PIN');return;}}
-  catch(e){toast('PIN check failed: '+e.message);return;}
-  const n=new Date(),z=x=>String(x).padStart(2,'0');
-  const createdAt=new Date(pending.date+'T'+z(n.getHours())+':'+z(n.getMinutes())+':00').toISOString();
-  const itemsJson=pending.items.map(i=>({n:i.n,u:i.u,qty:i.qty}));
-  const row={id:pending.no,site_key:SITE,proj_name:pending.vessel.name,proj_code:pending.vessel.code||null,emp_name:pending.emp.name,date:pending.date,by_name:pending.by,items:itemsJson,slip_no:pending.no,created_at:createdAt};
+function cancelBslip(){document.getElementById('bslip-modal').style.display='none';}
+async function confirmBorrow(){
+  if(!pendingSlip)return;
+  const pin=(document.getElementById('bslip-pin').value||'').trim();
+  if(!pin){toast('Enter the borrower passcode');return;}
   try{
-    const{error}=await sb.from('issuances').insert([row]);if(error)throw error;
-    for(const it of pending.items){
-      const cur=stockMap[it.n]||0;const nq=Math.max(0,cur-it.qty);
-      await sb.from('site_stock').upsert({site_key:SITE,item_name:it.n,qty:nq,updated_at:new Date().toISOString()},{onConflict:'site_key,item_name'});
-      stockMap[it.n]=nq;
-      await sb.from('personnel_log').upsert({site_key:SITE,emp_name:pending.emp.name,item_name:it.n,last_date:pending.date,last_qty:it.qty},{onConflict:'site_key,emp_name,item_name'});
-    }
-    const no=pending.no,total=pending.items.reduce((s,i)=>s+i.qty,0),vn=pending.vessel.name;
-    pending=null;reservedNo='';
-    document.getElementById('mislip-modal').style.display='none';
-    document.getElementById('ok-no').textContent=no;
-    document.getElementById('ok-info').textContent=total+' item(s) to '+vn;
-    document.getElementById('ok-modal').style.display='flex';
+    const{data:ok,error}=await sb.rpc('verify_pin',{emp_id:pendingSlip.empId,pin_input:pin});
+    if(error)throw error; if(!ok){toast('Wrong passcode');return;}
+  }catch(e){toast('PIN check failed: '+e.message);return;}
+  const now=new Date(), z=n=>String(n).padStart(2,'0');
+  const borrowedAt=new Date(pendingSlip.bdate+'T'+z(now.getHours())+':'+z(now.getMinutes())+':00').toISOString();
+  const slipNo=pendingSlip.slipNo;
+  const batch=crypto.randomUUID();
+  const rows=pendingSlip.items.map(c=>({txn_type:'borrow',employee_id:pendingSlip.empId,item_id:c.itemId,unit_id:c.unitId,site_id:curSite,quantity:1,status:'out',issued_by:pendingSlip.by||null,project_vessel:pendingSlip.vessel||null,batch_id:batch,slip_no:slipNo,borrowed_at:borrowedAt}));
+  try{
+    const{error}=await sb.from('borrow_issuance').insert(rows);
+    if(error)throw error;
+    const count=pendingSlip.items.length, nm=pendingSlip.empName, ves=pendingSlip.vessel;
+    cart=[]; pendingSlip=null; reservedSlipNo='';
+    document.getElementById('bslip-modal').style.display='none';
+    showSlip(slipNo, count+' tool(s) to '+nm+(ves?' · '+ves:''));
   }catch(e){toast('Save failed: '+e.message);}
 }
-function newIssue(){document.getElementById('ok-modal').style.display='none';openIssue();}
 
-/* ── STOCK ── */
-async function openStock(){showScreen('s-stock');await loadStock();renderStock();}
-function renderStock(){
-  const el=document.getElementById('stk-list');
-  el.innerHTML=ITEMS.map(it=>{
-    const q=stockMap[it.n]||0,low=q<=it.th;
-    return `<div class="stk-row">
-      <div><div class="stk-name ${low?'stk-low':''}">${it.n}</div><div class="stk-meta">${it.u} · min ${it.th}${low?'  <span class="pill">LOW</span>':''}</div></div>
-      <div style="font-size:20px;font-weight:800;${low?'color:var(--r)':'color:var(--tx)'}">${q}</div>
-    </div>`;
-  }).join('');
+/* ══ RETURN ══ */
+async function goReturn(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-return');
+  document.getElementById('rt-site-sub').textContent=siteName();
+  document.getElementById('rt-list').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const{data}=await sb.from('borrow_issuance')
+      .select('id,unit_id,employee_id,slip_no,borrowed_at,project_vessel,items(name),employees(name),item_units(unit_code)')
+      .eq('status','out').eq('site_id',curSite).order('borrowed_at',{ascending:false});
+    retRows=data||[];
+  }catch(e){retRows=[];toast('Load failed: '+e.message);}
+  renderReturn();
 }
+function renderReturn(){
+  const groups={};
+  retRows.forEach(r=>{const k=r.employee_id;if(!groups[k])groups[k]={name:(r.employees&&r.employees.name)||'—',items:[]};groups[k].items.push(r);});
+  const keys=Object.keys(groups), el=document.getElementById('rt-list');
+  if(!keys.length){el.innerHTML='<div class="empty">Nothing is out right now.</div>';return;}
+  el.innerHTML=keys.map(k=>{const g=groups[k];return `<div class="card">
+    <div class="tool-name">${g.name}</div>
+    ${g.items.map(r=>`<label style="display:flex;align-items:center;gap:8px;padding:7px 0">
+      <input type="checkbox" class="rt-chk" data-emp="${k}" value="${r.id}" checked/>
+      <span>${(r.items&&r.items.name)||'—'} <span class="chip borrowed">${(r.item_units&&r.item_units.unit_code)||''}</span>${r.project_vessel?'<span class="tool-meta"> · '+r.project_vessel+'</span>':''}${r.slip_no?'<span class="tool-meta"> · '+r.slip_no+'</span>':''}</span></label>`).join('')}
+    <input class="search" id="rt-by-${k}" placeholder="Received by (warehouse staff)" style="margin-top:8px"/>
+    <input class="search" id="rt-pin-${k}" type="password" inputmode="numeric" placeholder="Borrower passcode" style="margin-top:8px"/>
+    <button class="lbtn" style="background:var(--ok)" onclick="returnPerson('${k}')">Return selected</button>
+  </div>`;}).join('');
+}
+async function returnPerson(empId){
+  const pin=((document.getElementById('rt-pin-'+empId)||{}).value||'').trim();
+  const recvBy=((document.getElementById('rt-by-'+empId)||{}).value||'').trim();
+  if(!pin){toast('Enter passcode');return;}
+  const ids=[...document.querySelectorAll('.rt-chk[data-emp="'+empId+'"]:checked')].map(c=>c.value);
+  if(!ids.length){toast('Select items to return');return;}
+  try{
+    const{data:ok,error}=await sb.rpc('verify_pin',{emp_id:empId,pin_input:pin});
+    if(error)throw error; if(!ok){toast('Wrong passcode');return;}
+  }catch(e){toast('PIN check failed: '+e.message);return;}
+  try{
+    for(const id of ids){const{error}=await sb.rpc('mark_returned',{txn_id:id,cond:'Returned',received:recvBy||null});if(error)throw error;}
+    toast('Returned '+ids.length+' item(s)'); goReturn();
+  }catch(e){toast('Return failed: '+e.message);}
+}
+
+/* ══ FOR REPAIR (transmittal) ══ */
+let repairTools=[], repairList=[], repairCart=[], pendingRepair=null, reservedRepairNo='';
+async function goRepair(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-repair');
+  document.getElementById('rp-site-sub').textContent=siteName();
+  repairCart=[]; pendingRepair=null; reservedRepairNo='';
+  document.getElementById('rp-by').value='';
+  const rd=document.getElementById('rp-date'); rd.min=todayYmd2(); rd.value=todayYmd2();
+  document.getElementById('rp-eta').value='';
+  document.getElementById('rp-eta').min=todayYmd2();
+  document.getElementById('rp-defect').value='';
+  const ures=await sb.from('item_units').select('id,unit_code,status,item_id,items(name)').eq('active',true).eq('site_id',curSite);
+  const units=ures.data||[];
+  const bres=await sb.from('borrow_issuance').select('unit_id').eq('status','out').eq('site_id',curSite);
+  const outSet=new Set((bres.data||[]).map(b=>b.unit_id));
+  const map={};
+  units.filter(u=>u.status==='available'&&!outSet.has(u.id)).forEach(u=>{const k=u.item_id;if(!map[k])map[k]={itemId:k,name:(u.items&&u.items.name)||'—',units:[]};map[k].units.push({id:u.id,code:u.unit_code});});
+  repairTools=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
+  repairList=units.filter(u=>u.status==='repair').map(u=>({id:u.id,itemId:u.item_id,code:u.unit_code,name:(u.items&&u.items.name)||'—'}));
+  renderRepairTool(); renderRepairCart(); renderRepairList();
+}
+function renderRepairTool(){
+  document.getElementById('rp-tool').innerHTML='<option value="">— Select tool —</option>'+repairTools.filter(t=>t.units.length).map(t=>`<option value="${t.itemId}">${t.name} (${t.units.length})</option>`).join('');
+  document.getElementById('rp-unit').innerHTML='<option value="">— unit —</option>';
+}
+function renderRepairList(){
+  const el=document.getElementById('rp-list');
+  el.innerHTML=repairList.length?repairList.map(u=>`<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center"><div><div class="tool-name">${u.name}</div><div class="tool-meta"><span class="chip repair">${u.code}</span></div></div><button class="back" style="color:var(--ok)" onclick="askRepaired('${u.id}','${u.itemId}','${(u.name||'').replace(/'/g,"\\'")} · ${u.code}')">Mark repaired</button></div>`).join(''):'<div class="empty">Nothing in repair.</div>';
+}
+function onRepairTool(){
+  const t=repairTools.find(x=>x.itemId===document.getElementById('rp-tool').value);
+  document.getElementById('rp-unit').innerHTML='<option value="">— unit —</option>'+(t?t.units.map(u=>`<option value="${u.id}">${u.code}</option>`).join(''):'');
+}
+function addToRepair(){
+  const tid=document.getElementById('rp-tool').value, uid=document.getElementById('rp-unit').value;
+  const defect=document.getElementById('rp-defect').value.trim();
+  if(!tid||!uid){toast('Pick a tool and unit');return;}
+  if(!defect){toast('Describe the defect for this tool');return;}
+  const t=repairTools.find(x=>x.itemId===tid), u=t.units.find(x=>x.id===uid);
+  repairCart.push({unitId:uid,itemId:tid,code:u.code,name:t.name,defect:defect});
+  t.units=t.units.filter(x=>x.id!==uid);
+  document.getElementById('rp-defect').value='';
+  renderRepairTool(); renderRepairCart();
+}
+function removeFromRepair(uid){
+  const i=repairCart.findIndex(c=>c.unitId===uid); if(i<0)return;
+  const c=repairCart[i]; repairCart.splice(i,1);
+  const t=repairTools.find(x=>x.itemId===c.itemId); if(t)t.units.push({id:c.unitId,code:c.code});
+  renderRepairTool(); renderRepairCart();
+}
+function renderRepairCart(){
+  const el=document.getElementById('rp-cart'), btn=document.getElementById('rp-submit');
+  if(!repairCart.length){el.innerHTML='<div class="empty">No tools added yet.</div>';btn.textContent='Send to repair (0)';return;}
+  el.innerHTML=repairCart.map(c=>`<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div class="tool-name">${c.name} <span class="chip repair">${c.code}</span></div><div class="tool-meta">${c.defect}</div></div><button class="back" style="color:var(--r)" onclick="removeFromRepair('${c.unitId}')">Remove</button></div>`).join('');
+  btn.textContent='Send to repair ('+repairCart.length+')';
+}
+async function reviewRepair(){
+  const by=document.getElementById('rp-by').value.trim();
+  const rdate=document.getElementById('rp-date').value;
+  const eta=document.getElementById('rp-eta').value||'';
+  if(!rdate){toast('Pick a date');return;}
+  if(rdate<todayYmd2()){toast('No back-dating allowed');return;}
+  if(!by){toast('Enter who is transmitting it');return;}
+  if(!repairCart.length){toast('Add at least one tool');return;}
+  if(!reservedRepairNo){
+    let rn='';
+    try{const{data,error}=await sb.rpc('next_no',{p_prefix:'RP',p_site:siteCode()}); if(!error&&data)rn=data;}catch(e){}
+    if(!rn){const n=new Date(),z=x=>String(x).padStart(2,'0');rn='RP-'+siteCode()+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+    reservedRepairNo=rn;
+  }
+  pendingRepair={by,rdate,eta,items:repairCart.slice(),repairNo:reservedRepairNo};
+  document.getElementById('rslip-body').innerHTML=
+    `<div style="text-align:center;border-bottom:1.5px dashed var(--tx3);padding-bottom:12px;margin-bottom:12px">`
+    +`<div style="font-size:15px;font-weight:800">RSR Tools — Repair Transmittal</div>`
+    +`<div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--p);margin-top:2px">${reservedRepairNo}</div>`
+    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(rdate)} · ${siteName()}</div>`
+    +`</div>`
+    +`<div style="font-size:13px;line-height:1.9;color:var(--tx2);margin-bottom:12px">`
+    +`<div style="display:flex;justify-content:space-between"><span>Transmitted by</span><b style="color:var(--tx)">${by}</b></div>`
+    +`<div style="display:flex;justify-content:space-between"><span>Expected ready</span><b style="color:var(--tx)">${eta?fmtNice(eta):'—'}</b></div>`
+    +`</div>`
+    +`<div style="border-top:1.5px dashed var(--tx3);padding-top:10px">`
+    +`<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:10px"><span>Item · defect</span><span>Unit</span></div>`
+    +repairCart.map(c=>`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:11px;gap:10px">
+        <div><div style="font-size:15px;font-weight:700">${c.name}</div><div style="font-size:12px;color:var(--tx2)">${c.defect}</div></div>
+        <div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--tx2);white-space:nowrap">${c.code}</div>
+      </div>`).join('')
+    +`<div style="display:flex;justify-content:space-between;align-items:baseline;border-top:1.5px dashed var(--tx3);padding-top:11px;margin-top:2px">
+        <div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx2)">Total units</div>
+        <div style="font-size:22px;font-weight:900;color:var(--p)">${repairCart.length}</div>
+      </div></div>`;
+  document.getElementById('rslip-modal').style.display='flex';
+}
+function cancelRslip(){document.getElementById('rslip-modal').style.display='none';}
+async function confirmRepair(){
+  if(!pendingRepair)return;
+  const n=new Date(), z=x=>String(x).padStart(2,'0');
+  const sentAt=new Date(pendingRepair.rdate+'T'+z(n.getHours())+':'+z(n.getMinutes())+':00').toISOString();
+  const logs=pendingRepair.items.map(c=>({transmittal_no:pendingRepair.repairNo,unit_id:c.unitId,item_id:c.itemId,site_id:curSite,defect:c.defect,repair_eta:pendingRepair.eta||null,transmitted_by:pendingRepair.by||null,status:'in_repair',sent_at:sentAt}));
+  try{
+    const{error}=await sb.from('repair_log').insert(logs); if(error)throw error;
+    const ids=pendingRepair.items.map(c=>c.unitId);
+    const{error:e2}=await sb.from('item_units').update({status:'repair',repair_eta:pendingRepair.eta||null}).in('id',ids); if(e2)throw e2;
+    const count=pendingRepair.items.length, rn=pendingRepair.repairNo;
+    repairCart=[]; pendingRepair=null; reservedRepairNo='';
+    document.getElementById('rslip-modal').style.display='none';
+    showSlip(rn, count+' tool(s) sent to repair');
+  }catch(e){toast('Failed: '+e.message);}
+}
+let repairBackUid='', repairBackItemId='';
+function askRepaired(uid,itemId,label){
+  repairBackUid=uid; repairBackItemId=itemId;
+  document.getElementById('rback-name').textContent=label;
+  document.getElementById('rback-by').value='';
+  document.getElementById('rback-site').innerHTML=sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  document.getElementById('rback-site').value=curSite;
+  onRbackSite();
+  document.getElementById('rback-modal').style.display='flex';
+}
+function onRbackSite(){
+  const site=document.getElementById('rback-site').value;
+  document.getElementById('rback-bylbl').textContent = site===curSite ? 'Received back by' : 'Sent by (ships to other site)';
+}
+async function confirmRepaired(){
+  const by=document.getElementById('rback-by').value.trim();
+  const dest=document.getElementById('rback-site').value;
+  if(!by){toast('Enter a name');return;}
+  const uid=repairBackUid, itemId=repairBackItemId;
+  try{
+    await sb.from('repair_log').update({status:'repaired',received_back_by:by,repaired_at:new Date().toISOString()}).eq('unit_id',uid).eq('status','in_repair');
+    if(dest===curSite){
+      const{error}=await sb.from('item_units').update({status:'available',defect:null,repair_eta:null}).eq('id',uid); if(error)throw error;
+      document.getElementById('rback-modal').style.display='none';
+      toast('Repaired · received back by '+by); goRepair();
+    } else {
+      let tn='';
+      try{const{data,error}=await sb.rpc('next_no',{p_prefix:'TR',p_site:siteCode()}); if(!error&&data)tn=data;}catch(e){}
+      if(!tn){const n=new Date(),z=x=>String(x).padStart(2,'0');tn='TR-'+siteCode()+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+      const{error}=await sb.from('tool_transfers').insert([{unit_id:uid,item_id:itemId,from_site:curSite,to_site:dest,status:'in_transit',sent_by:by,transfer_no:tn,note:'Repaired tool'}]); if(error)throw error;
+      const{error:e2}=await sb.from('item_units').update({status:'transit',defect:null,repair_eta:null}).eq('id',uid); if(e2)throw e2;
+      document.getElementById('rback-modal').style.display='none';
+      const dn=(sites.find(s=>s.id===dest)||{}).name||'site';
+      showSlip(tn, 'Repaired tool shipped to '+dn+' · awaiting receive');
+      goRepair();
+    }
+  }catch(e){toast('Failed: '+e.message);}
+}
+
+/* ══ ALL RECORDS ══ */
+let recRows=[], recFilter='all';
+async function goRecords(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-records');
+  document.getElementById('rc-site-sub').textContent=siteName();
+  document.getElementById('rc-list').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const{data}=await sb.from('borrow_issuance')
+      .select('id,status,slip_no,borrowed_at,returned_at,received_by,project_vessel,items(name),employees(name),item_units(unit_code)')
+      .eq('txn_type','borrow').eq('site_id',curSite).order('borrowed_at',{ascending:false}).limit(300);
+    recRows=data||[];
+  }catch(e){recRows=[];toast('Load failed: '+e.message);}
+  setRecFilter(recFilter);
+}
+function setRecFilter(f){
+  recFilter=f;
+  ['all','out','returned'].forEach(x=>{const b=document.getElementById('rcf-'+x);if(b)b.className='rcf'+(x===f?' on':'');});
+  const list=f==='all'?recRows:recRows.filter(r=>r.status===f);
+  const el=document.getElementById('rc-list');
+  if(!list.length){el.innerHTML='<div class="card"><div class="empty">No records.</div></div>';return;}
+  el.innerHTML='<div class="card">'+list.map(r=>{
+    const ret=r.status==='returned'&&r.returned_at;
+    const d=new Date(ret?r.returned_at:r.borrowed_at);
+    return `<div class="tool-row"><div class="tool-name">${(r.items&&r.items.name)||'—'} <span class="chip ${r.status==='out'?'borrowed':'available'}">${(r.item_units&&r.item_units.unit_code)||''}</span></div>
+      <div class="tool-meta">${r.slip_no?`<b style="font-family:ui-monospace,monospace;color:var(--p)">${r.slip_no}</b> · `:''}${(r.employees&&r.employees.name)||'—'}${r.project_vessel?' · '+r.project_vessel:''}</div><div class="tool-meta">Out ${new Date(r.borrowed_at).toLocaleDateString()}${ret?` · Returned ${new Date(r.returned_at).toLocaleDateString()}${r.received_by?' · recv by '+r.received_by:''}`:' · still out'}</div></div>`;
+  }).join('')+'</div>';
+}
+
+/* ══ SETUP / REGISTER ══ */
+let setupItems=[];
+async function goSetup(){
+  showScreen('s-setup');
+  document.getElementById('su-site-sub').textContent=siteName();
+  document.getElementById('su-sitehint').textContent=siteName();
+  const{data}=await sb.from('items').select('id,item_code,name').eq('active',true).order('name');
+  setupItems=data||[];
+  document.getElementById('su-exist').innerHTML='<option value="">— Select existing tool —</option>'+setupItems.map(i=>`<option value="${i.id}">${i.name} (${i.item_code})</option>`).join('');
+}
+async function nextCodeFor(prefix){
+  const{data}=await sb.from('item_units').select('unit_code').ilike('unit_code',prefix+'%');
+  let max=0;(data||[]).forEach(u=>{const n=parseInt((u.unit_code||'').slice(prefix.length),10);if(!isNaN(n)&&n>max)max=n;});
+  return max;
+}
+async function registerNew(){
+  const name=document.getElementById('su-name').value.trim();
+  const prefix=document.getElementById('su-prefix').value.trim().toUpperCase();
+  const qty=parseInt(document.getElementById('su-qty').value,10);
+  const unit=document.getElementById('su-unit').value.trim()||'pcs';
+  if(!name||!prefix||!qty||qty<1){toast('Fill name, prefix and quantity');return;}
+  try{
+    const max=await nextCodeFor(prefix);
+    const{data:item,error}=await sb.from('items').insert({item_code:prefix,name:name,unit:unit,track_type:'borrow',active:true}).select().single();
+    if(error)throw error;
+    const rows=[];for(let i=1;i<=qty;i++)rows.push({item_id:item.id,site_id:curSite,unit_code:prefix+String(max+i).padStart(3,'0'),status:'available',active:true});
+    const{error:e2}=await sb.from('item_units').insert(rows);if(e2)throw e2;
+    toast('Registered '+qty+' × '+name);
+    ['su-name','su-prefix','su-qty','su-unit'].forEach(id=>document.getElementById(id).value='');
+    goSetup();
+  }catch(e){toast('Failed: '+e.message);}
+}
+async function addMore(){
+  const itemId=document.getElementById('su-exist').value;
+  const qty=parseInt(document.getElementById('su-more-qty').value,10);
+  if(!itemId||!qty||qty<1){toast('Select a tool and quantity');return;}
+  const item=setupItems.find(i=>i.id===itemId);
+  const prefix=(item&&item.item_code)||'TL';
+  try{
+    const max=await nextCodeFor(prefix);
+    const rows=[];for(let i=1;i<=qty;i++)rows.push({item_id:itemId,site_id:curSite,unit_code:prefix+String(max+i).padStart(3,'0'),status:'available',active:true});
+    const{error}=await sb.from('item_units').insert(rows);if(error)throw error;
+    toast('Added '+qty+' unit(s) to '+item.name);
+    document.getElementById('su-more-qty').value='';
+  }catch(e){toast('Failed: '+e.message);}
+}
+
+/* ══ TRANSFER OUT ══ */
+let xferTools=[], xferCart=[], pendingXfer=null, reservedXferNo='';
+async function goTransfer(){
+  if(!curSite){toast('No site selected');return;}
+  if(sites.length<2){toast('Need a second site to transfer to');return;}
+  showScreen('s-transfer');
+  document.getElementById('tf-site-sub').textContent=siteName();
+  xferCart=[]; renderXfer();
+  pendingXfer=null; reservedXferNo='';
+  const td=document.getElementById('tf-date'); td.min=todayYmd2(); td.value=todayYmd2();
+  document.getElementById('tf-by').value='';
+  document.getElementById('tf-dest').innerHTML=sites.filter(s=>s.id!==curSite).map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
+  const ures=await sb.from('item_units').select('id,unit_code,status,item_id,items(name)').eq('active',true).eq('site_id',curSite);
+  const units=ures.data||[];
+  const bres=await sb.from('borrow_issuance').select('unit_id').eq('status','out').eq('site_id',curSite);
+  const outSet=new Set((bres.data||[]).map(b=>b.unit_id));
+  const map={};
+  units.forEach(u=>{ if(u.status!=='available'||outSet.has(u.id))return;
+    const k=u.item_id; if(!map[k])map[k]={itemId:k,name:(u.items&&u.items.name)||'—',units:[]};
+    map[k].units.push({id:u.id,code:u.unit_code});});
+  xferTools=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
+  renderXferTool();
+}
+function renderXferTool(){
+  document.getElementById('tf-tool').innerHTML='<option value="">— Select tool —</option>'+xferTools.filter(t=>t.units.length).map(t=>`<option value="${t.itemId}">${t.name} (${t.units.length} avail)</option>`).join('');
+  document.getElementById('tf-unit').innerHTML='<option value="">— unit —</option>';
+}
+function onTfTool(){
+  const t=xferTools.find(x=>x.itemId===document.getElementById('tf-tool').value);
+  document.getElementById('tf-unit').innerHTML='<option value="">— unit —</option>'+(t?t.units.map(u=>`<option value="${u.id}">${u.code}</option>`).join(''):'');
+}
+function addToXfer(){
+  const tid=document.getElementById('tf-tool').value, uid=document.getElementById('tf-unit').value;
+  if(!tid||!uid){toast('Pick a tool and unit');return;}
+  const t=xferTools.find(x=>x.itemId===tid), u=t.units.find(x=>x.id===uid);
+  xferCart.push({unitId:uid,itemId:tid,code:u.code,name:t.name});
+  t.units=t.units.filter(x=>x.id!==uid); renderXferTool(); renderXfer();
+}
+function removeFromXfer(uid){
+  const i=xferCart.findIndex(c=>c.unitId===uid); if(i<0)return;
+  const c=xferCart[i]; xferCart.splice(i,1);
+  const t=xferTools.find(x=>x.itemId===c.itemId); if(t)t.units.push({id:c.unitId,code:c.code});
+  renderXferTool(); renderXfer();
+}
+function renderXfer(){
+  const el=document.getElementById('tf-cart'), btn=document.getElementById('tf-submit');
+  if(!xferCart.length){el.innerHTML='<div class="empty">No tools added yet.</div>';btn.textContent='Transfer (0)';return;}
+  el.innerHTML=xferCart.map(c=>`<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center"><div><div class="tool-name">${c.name}</div><div class="tool-meta"><span class="chip available">${c.code}</span></div></div><button class="back" style="color:var(--r)" onclick="removeFromXfer('${c.unitId}')">Remove</button></div>`).join('');
+  btn.textContent='Transfer ('+xferCart.length+')';
+}
+async function reviewTransfer(){
+  const dest=document.getElementById('tf-dest').value;
+  const by=document.getElementById('tf-by').value.trim();
+  const tdate=document.getElementById('tf-date').value;
+  if(!tdate){toast('Pick a date');return;}
+  if(tdate<todayYmd2()){toast('No back-dating allowed');return;}
+  if(!dest){toast('Pick a destination site');return;}
+  if(!by){toast('Enter who is sending the tools');return;}
+  if(!xferCart.length){toast('Add at least one tool');return;}
+  if(!reservedXferNo){
+    let tn='';
+    try{const{data,error}=await sb.rpc('next_no',{p_prefix:'TR',p_site:siteCode()}); if(!error&&data)tn=data;}catch(e){}
+    if(!tn){const n=new Date(),z=x=>String(x).padStart(2,'0');tn='TR-'+siteCode()+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+    reservedXferNo=tn;
+  }
+  const destName=(sites.find(s=>s.id===dest)||{}).name||'—';
+  pendingXfer={dest,destName,by,tdate,items:xferCart.slice(),xferNo:reservedXferNo};
+  document.getElementById('tslip-body').innerHTML=
+    `<div style="text-align:center;border-bottom:1.5px dashed var(--tx3);padding-bottom:12px;margin-bottom:12px">`
+    +`<div style="font-size:15px;font-weight:800">RSR Tools — Transfer Slip</div>`
+    +`<div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--p);margin-top:2px">${reservedXferNo}</div>`
+    +`<div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(tdate)}</div>`
+    +`</div>`
+    +`<div style="font-size:13px;line-height:1.9;color:var(--tx2);margin-bottom:12px">`
+    +`<div style="display:flex;justify-content:space-between"><span>From</span><b style="color:var(--tx)">${siteName()}</b></div>`
+    +`<div style="display:flex;justify-content:space-between"><span>To</span><b style="color:var(--tx)">${destName}</b></div>`
+    +`<div style="display:flex;justify-content:space-between"><span>Sent by</span><b style="color:var(--tx)">${by}</b></div>`
+    +`</div>`
+    +`<div style="border-top:1.5px dashed var(--tx3);padding-top:10px">`
+    +`<div style="display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;color:var(--tx3);margin-bottom:10px"><span>Item</span><span>Unit</span></div>`
+    +xferCart.map(c=>`<div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:11px;gap:10px">
+        <div style="font-size:15px;font-weight:700">${c.name}</div>
+        <div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--tx2);white-space:nowrap">${c.code}</div>
+      </div>`).join('')
+    +`<div style="display:flex;justify-content:space-between;align-items:baseline;border-top:1.5px dashed var(--tx3);padding-top:11px;margin-top:2px">
+        <div style="font-size:13px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx2)">Total units</div>
+        <div style="font-size:22px;font-weight:900;color:var(--p)">${xferCart.length}</div>
+      </div></div>`;
+  document.getElementById('tslip-modal').style.display='flex';
+}
+function cancelTslip(){document.getElementById('tslip-modal').style.display='none';}
+async function confirmTransfer(){
+  if(!pendingXfer)return;
+  const n=new Date(), z=x=>String(x).padStart(2,'0');
+  const sentAt=new Date(pendingXfer.tdate+'T'+z(n.getHours())+':'+z(n.getMinutes())+':00').toISOString();
+  const rows=pendingXfer.items.map(c=>({unit_id:c.unitId,item_id:c.itemId,from_site:curSite,to_site:pendingXfer.dest,status:'in_transit',sent_by:pendingXfer.by||null,transfer_no:pendingXfer.xferNo,sent_at:sentAt}));
+  try{
+    const{error}=await sb.from('tool_transfers').insert(rows); if(error)throw error;
+    const ids=pendingXfer.items.map(c=>c.unitId);
+    const{error:e2}=await sb.from('item_units').update({status:'transit'}).in('id',ids); if(e2)throw e2;
+    const count=pendingXfer.items.length, dn=pendingXfer.destName, tn=pendingXfer.xferNo;
+    xferCart=[]; pendingXfer=null; reservedXferNo='';
+    document.getElementById('tslip-modal').style.display='none';
+    showSlip(tn, count+' tool(s) sent to '+dn);
+  }catch(e){toast('Transfer failed: '+e.message);}
+}
+
+/* ══ RECEIVE ══ */
+let recvRows=[];
+async function goReceive(){
+  if(!curSite){toast('No site selected');return;}
+  showScreen('s-receive');
+  document.getElementById('rv-site-sub').textContent=siteName();
+  document.getElementById('rv-by').value='';
+  document.getElementById('rv-list').innerHTML='<div class="empty">Loading…</div>';
+  try{
+    const{data}=await sb.from('tool_transfers')
+      .select('id,unit_id,sent_by,sent_at,from_site,transfer_no,items(name),item_units(unit_code)')
+      .eq('to_site',curSite).eq('status','in_transit').order('sent_at',{ascending:false});
+    recvRows=data||[];
+  }catch(e){recvRows=[];toast('Load failed: '+e.message);}
+  renderReceive();
+}
+function renderReceive(){
+  const el=document.getElementById('rv-list');
+  if(!recvRows.length){el.innerHTML='<div class="card"><div class="empty">No incoming tools.</div></div>';return;}
+  el.innerHTML='<div class="card">'+recvRows.map(r=>{
+    const from=(sites.find(s=>s.id===r.from_site)||{}).name||'—';
+    return `<label style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--line)">
+      <input type="checkbox" class="rv-chk" value="${r.id}" data-unit="${r.unit_id}" checked/>
+      <span><div class="tool-name">${(r.items&&r.items.name)||'—'} <span class="chip transit">${(r.item_units&&r.item_units.unit_code)||''}</span></div>
+      <div class="tool-meta">From ${from}${r.sent_by?' · sent by '+r.sent_by:''}${r.transfer_no?' · <b style="font-family:ui-monospace,monospace;color:var(--p)">'+r.transfer_no+'</b>':''}</div></span></label>`;
+  }).join('')+'<button class="lbtn" style="background:var(--ok);margin-top:10px" onclick="receiveSelected()">Receive selected</button></div>';
+}
+async function receiveSelected(){
+  const by=document.getElementById('rv-by').value.trim();
+  const checks=[...document.querySelectorAll('.rv-chk:checked')];
+  if(!checks.length){toast('Select tools to receive');return;}
+  try{
+    for(const c of checks){
+      const tid=c.value, uid=c.getAttribute('data-unit');
+      const{error}=await sb.from('tool_transfers').update({status:'received',received_at:new Date().toISOString(),received_by:by||null}).eq('id',tid); if(error)throw error;
+      const{error:e2}=await sb.from('item_units').update({site_id:curSite,status:'available'}).eq('id',uid); if(e2)throw e2;
+    }
+    toast('Received '+checks.length+' tool(s)'); goReceive();
+  }catch(e){toast('Receive failed: '+e.message);}
+}
+
+/* ══ INIT ══ */
+sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
 </script>
 </body>
 </html>
