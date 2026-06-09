@@ -171,7 +171,7 @@ async function upsertStock(name,qty,unit){
   return r.error;
 }
 async function loadPrices(){prices={};try{const{data}=await sb.from('item_prices').select('item_name,price');(data||[]).forEach(r=>prices[r.item_name]=Number(r.price)||0);}catch(e){}}
-async function refreshBadge(){let n=0;try{const{count}=await sb.from('requests').select('*',{count:'exact',head:true}).eq('status','Pending');n=count||0;}catch(e){}const d=document.getElementById('req-dot');if(d)d.style.display=n>0?'block':'none';}
+async function refreshBadge(){let n=0;try{const{count}=await sb.from('requests').select('*',{count:'exact',head:true}).in('status',['Pending','Partial']);n=count||0;}catch(e){}const d=document.getElementById('req-dot');if(d)d.style.display=n>0?'block':'none';}
 
 async function swTab(name){
  try{
@@ -204,10 +204,10 @@ async function renderStock(c){
 
 /* ── REQUESTS ── */
 async function renderRequests(c){
-  let rows=[];try{const{data}=await sb.from('requests').select('*').in('status',['Pending','Approved']).order('created_at',{ascending:false}).limit(100);rows=data||[];}catch(e){}
+  let rows=[];try{const{data}=await sb.from('requests').select('*').in('status',['Pending','Approved','Partial']).order('created_at',{ascending:false}).limit(100);rows=data||[];}catch(e){}
   window._reqs=rows;
   if(!rows.length){c.innerHTML='<div class="sc"><div class="empty">No open requests.</div></div>';return;}
-  const stBadge=s=>({Pending:'bwarn',Approved:'binfo',Dispatched:'binfo',Received:'bok',Cancelled:''}[s]||'');
+  const stBadge=s=>({Pending:'bwarn',Approved:'binfo',Partial:'bwarn',Dispatched:'binfo',Received:'bok',Cancelled:''}[s]||'');
   c.innerHTML=rows.map(r=>{
     const its=(r.items||[]);
     const total=its.reduce((s,i)=>s+(Number(i.qty)||0),0);
@@ -221,11 +221,12 @@ async function renderRequests(c){
       <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Requested by</span><span style="font-weight:600">${r.by_name||'—'}</span></div>
       <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Status</span><span class="badge ${stBadge(r.status)}">${(r.status||'').toUpperCase()}</span></div>
       ${r.urgent?'<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Priority</span><span class="badge bdanger">URGENT</span></div>':''}
+      ${r.status==='Partial'?'<div style="background:var(--al);color:var(--ad);font-size:12px;padding:8px 10px;border-radius:8px;margin-top:6px">⚠ Partially given — only the items below are still owed. The rest was already dispatched (see Dispatch log).</div>':''}
       ${r.remarks?`<div style="font-size:12px;color:var(--tx3);margin-top:4px">“${r.remarks}”</div>`:''}
-      <div style="border-top:1.5px dashed var(--bd2);margin:10px 0 8px;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Item</span><span>Qty</span></div>
+      <div style="border-top:1.5px dashed var(--bd2);margin:10px 0 8px;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>${r.status==='Partial'?'Still owed':'Item'}</span><span>Qty</span></div>
       ${itemRows}
       <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:baseline">
-        <span style="font-size:13px;font-weight:700;text-transform:uppercase;color:var(--tx2)">Total</span>
+        <span style="font-size:13px;font-weight:700;text-transform:uppercase;color:var(--tx2)">${r.status==='Partial'?'Outstanding':'Total'}</span>
         <span style="font-size:20px;font-weight:800;color:var(--p)">${total} units</span></div>
       <div class="btn-row">
         ${r.status!=='Dispatched'?`<button class="btn btn-secondary btn-sm" onclick="cancelReq('${r.id}')">Cancel</button><button class="btn btn-primary btn-sm" onclick="dispatchFromReq('${r.id}')">Dispatch →</button>`:'<span class="badge binfo">Dispatched · awaiting site receive</span>'}
@@ -294,17 +295,18 @@ async function renderDispatch(c){
     +'<div class="fr3"><div class="fg"><label class="fl">Destination site <span>*</span></label><select class="fi" id="dp-site">'+siteOpts+'</select></div>'
     +'<div class="fg"><label class="fl">Dispatched by <span>*</span></label><input class="fi" id="dp-by" placeholder="Your name"/></div></div>'
     +'<label class="fl">Items to dispatch <span>*</span></label>'
+    +(dpReqId?'<div style="font-size:12px;color:var(--tx2);margin:-2px 0 8px">Pre-filled with what was requested. To give less, lower a qty or remove a row — whatever isn\'t given keeps the request open as <b>Partial</b>.</div>':'')
     +'<div style="display:grid;grid-template-columns:minmax(0,2fr) 70px 38px;gap:8px;margin-bottom:6px"><span class="fl" style="margin:0">Item</span><span class="fl" style="margin:0">Qty</span><span></span></div>'
     +'<div id="dp-rows"></div><button class="add-row" onclick="addDpRow()">+ Add item</button>'
     +'<div class="btn-row"><button class="btn btn-secondary btn-sm" onclick="dispatchPrefill=null;swTab(\'dispatch\')">Clear</button><button class="btn btn-primary" onclick="saveDispatch()">Dispatch &amp; get DR no</button></div></div>';
-  if(dispatchPrefill&&(dispatchPrefill.items||[]).length)dispatchPrefill.items.forEach(it=>addDpRow(it.n,it.qty));else addDpRow();
+  if(dispatchPrefill&&(dispatchPrefill.items||[]).length)dispatchPrefill.items.forEach(it=>addDpRow(it.n,it.qty,it.qty));else addDpRow();
   dispatchPrefill=null;
 }
-function addDpRow(name,qty){
+function addDpRow(name,qty,reqQty){
   dpRows++;const id='dp-'+dpRows;
   const div=document.createElement('div');div.className='irow nop';div.id=id;
-  div.innerHTML=`<select class="fi" id="pn-${id}">${itemOpts(name||'')}</select>
-    <input class="fi" type="number" min="1" value="${qty||1}" id="pq-${id}" style="text-align:center"/>
+  div.innerHTML=`<div><select class="fi" id="pn-${id}">${itemOpts(name||'')}</select>${reqQty?`<div style="font-size:11px;color:var(--tx3);margin-top:3px">requested: ${reqQty}</div>`:''}</div>
+    <input class="fi" type="number" min="0" value="${qty||1}" id="pq-${id}" style="text-align:center"/>
     <div class="rm" onclick="document.getElementById('${id}').remove()">&#x2715;</div>`;
   document.getElementById('dp-rows').appendChild(div);
 }
@@ -327,8 +329,14 @@ async function saveDispatch(){
     await sb.from('dispatches').insert([{id,dr_no:drNo,site,request_id:dpReqId,items,dispatched_by:by,date:todayYmd(),created_at:new Date().toISOString()}]);
     for(const it of items){const cur=stockMap[it.n]||0;await sb.from('warehouse_stock').upsert({item_name:it.n,qty:Math.max(0,cur-it.qty),updated_at:new Date().toISOString()},{onConflict:'item_name'});}
     if(dpReqId){
-      let u=await sb.from('requests').update({status:'Dispatched',dr_no:drNo,updated_at:new Date().toISOString()}).eq('id',dpReqId);
-      if(u.error){await sb.from('requests').update({status:'Dispatched',updated_at:new Date().toISOString()}).eq('id',dpReqId);}
+      let reqItems=[];try{const{data}=await sb.from('requests').select('items').eq('id',dpReqId).single();reqItems=(data&&data.items)||[];}catch(e){}
+      const givenMap={};items.forEach(it=>{givenMap[it.n]=(givenMap[it.n]||0)+it.qty;});
+      const remaining=reqItems.map(ri=>({n:ri.n,u:ri.u,qty:Math.max(0,(Number(ri.qty)||0)-(givenMap[ri.n]||0))})).filter(ri=>ri.qty>0);
+      const done=remaining.length===0;
+      const patch=done?{status:'Dispatched',dr_no:drNo,updated_at:new Date().toISOString()}
+                       :{status:'Partial',items:remaining,dr_no:drNo,updated_at:new Date().toISOString()};
+      let u=await sb.from('requests').update(patch).eq('id',dpReqId);
+      if(u.error){const{dr_no,...p2}=patch;await sb.from('requests').update(p2).eq('id',dpReqId);}
     }
     const c=document.getElementById('main-content');
     c.innerHTML=`<div class="sc" style="text-align:center"><div style="font-size:40px">✅</div><div class="sc-title" style="margin-top:8px">Dispatch created</div>
