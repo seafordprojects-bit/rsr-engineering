@@ -233,6 +233,8 @@ const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
 const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
 const sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
 const SITE='Carmen';
+const SITE_CODES={'Carmen':'CAR','Mandaue':'MAN','Lapu-Lapu':'LAP'};
+const SITECODE=SITE_CODES[SITE]||SITE.slice(0,3).toUpperCase();
 
 const ITEMS=[
   {n:'Electrode handle',u:'pcs',th:3,iv:30},{n:'Welding gloves',u:'pair',th:3,iv:30},{n:'Cutting tip',u:'pcs',th:5,iv:30},
@@ -480,8 +482,9 @@ async function submitRequest(){
   const {out,empty}=getReqRows();
   if(empty){toast('Fill or remove the empty item row');return;}
   if(!out.length){toast('Add at least one item');return;}
-  const n=new Date(),z=x=>String(x).padStart(2,'0');
-  const id='REQ-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
+  let id='';
+  try{const{data,error}=await sb.rpc('next_request_no',{p_site:SITECODE,p_mode:'M'});if(!error&&data)id=data;}catch(e){}
+  if(!id){const n=new Date(),z=x=>String(x).padStart(2,'0');id='MR-'+SITECODE+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds())+'-M';}
   const row={id,site:SITE,by_name:by,date,remarks:remarks||null,items:out.map(i=>({n:i.n,u:i.u,qty:i.qty})),status:'Pending',urgent,created_at:new Date().toISOString(),updated_at:new Date().toISOString()};
   try{
     const{error}=await sb.from('requests').insert([row]);if(error)throw error;
@@ -516,8 +519,9 @@ async function autoRequestCheck(){
       }
     });
     if(!autoItems.length)return;
-    const n=new Date(),z=x=>String(x).padStart(2,'0');
-    const id='REQ-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds())+'-A';
+    let id='';
+    try{const{data,error}=await sb.rpc('next_request_no',{p_site:SITECODE,p_mode:'A'});if(!error&&data)id=data;}catch(e){}
+    if(!id){const n=new Date(),z=x=>String(x).padStart(2,'0');id='MR-'+SITECODE+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds())+'-A';}
     const anyZero=autoItems.some(a=>(stockMap[a.n]||0)<=0);
     const row={id,site:SITE,by_name:'System (auto)',date:todayYmd(),remarks:'Auto-generated · low / predicted stock',items:autoItems,status:'Pending',urgent:anyZero,created_at:new Date().toISOString(),updated_at:new Date().toISOString()};
     const{error}=await sb.from('requests').insert([row]);
