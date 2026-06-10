@@ -449,14 +449,20 @@ async function openRequest(){
 }
 async function renderOutstanding(){
   const el=document.getElementById('r-outstanding');if(!el)return;el.innerHTML='';
-  let rows=[];try{const{data}=await sb.from('requests').select('id,status,items').eq('site',SITE).in('status',['Pending','Partial']).order('created_at',{ascending:false});rows=data||[];}catch(e){return;}
+  let rows=[];try{const{data}=await sb.from('requests').select('id,status,items,date,created_at').eq('site',SITE).in('status',['Pending','Partial']).order('created_at',{ascending:false});rows=data||[];}catch(e){return;}
   if(!rows.length)return;
-  const names=[...new Set(rows.flatMap(r=>(r.items||[]).map(i=>i.n)))];
+  const list=rows.map(r=>{
+    const items=(r.items||[]).map(i=>`${i.n} ${i.qty}${i.u?' '+i.u:''}`).join(' · ');
+    const bg=r.status==='Partial'?'var(--b)':'var(--am)';
+    return `<div style="margin-top:8px;padding-top:8px;border-top:1px solid rgba(122,74,6,.25)">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><span style="font-family:ui-monospace,monospace;font-weight:700;color:#7a4a06;font-size:13px">${r.id}</span><span style="font-size:10px;font-weight:800;padding:2px 8px;border-radius:99px;background:${bg};color:#fff">${(r.status||'').toUpperCase()}</span></div>
+      <div style="font-size:12px;color:var(--tx2);margin-top:3px">${items}</div></div>`;
+  }).join('');
   el.innerHTML=`<div style="background:var(--al);border:1px solid var(--am);border-radius:12px;padding:12px 14px;margin-bottom:12px">
     <div style="font-weight:800;color:#7a4a06;font-size:14px">⏳ ${rows.length} request(s) still awaiting delivery</div>
-    <div style="font-size:12px;color:#7a4a06;margin-top:4px">These items are already requested and will be served once stock arrives — no need to request them again:</div>
-    <div style="font-size:12px;color:var(--tx2);margin-top:6px">${names.join(' · ')}</div>
-    <div style="font-size:12px;margin-top:8px"><a onclick="openReqHist()" style="color:var(--p);font-weight:700;cursor:pointer">View request history →</a></div>
+    <div style="font-size:12px;color:#7a4a06;margin-top:4px">Already requested — will be served once stock arrives. No need to request these again:</div>
+    ${list}
+    <div style="font-size:12px;margin-top:10px"><a onclick="openReqHist()" style="color:var(--p);font-weight:700;cursor:pointer">View request history →</a></div>
   </div>`;
 }
 function addReqRow(name='',qty=1){
