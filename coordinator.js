@@ -636,7 +636,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const [pinVals, setPinVals] = useState({}); const [pinErr, setPinErr] = useState({});
   const [cDate, setCDate] = useState(today()); const [cAmt, setCAmt] = useState(''); const [cCharge, setCCharge] = useState('Project'); const [cVes, setCVes] = useState(''); const [cRem, setCRem] = useState('');
   const [prs, setPrs] = useState([]); const [stockItems, setStockItems] = useState([]);
-  const [prTxt, setPrTxt] = useState(''); const [prBy, setPrBy] = useState('Raffy');
+  const [prTxt, setPrTxt] = useState(''); const [prBy, setPrBy] = useState('Raffy'); const [prSite, setPrSite] = useState('Carmen');
   const [mDate, setMDate] = useState(today()); const [mPr, setMPr] = useState(''); const [mItem, setMItem] = useState(''); const [mUnit, setMUnit] = useState('pc');
   const [mUC, setMUC] = useState(''); const [mQB, setMQB] = useState(''); const [mQU, setMQU] = useState('0');
   const [mVes, setMVes] = useState(''); const [mSite, setMSite] = useState('Carmen'); const [mOr, setMOr] = useState(''); const [mRem, setMRem] = useState('');
@@ -720,7 +720,13 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const createPR = async () => {
     if (!prTxt.trim()) { toast('Describe the items', true); return; }
     setBusy(true);
-    try { const no = await nextNo('PR', 'RSR'); await addPR({ id: uid(), pr_no: no, requested_by: prBy.trim() || null, date: today(), status: 'Pending', items: prTxt.trim(), created_at: new Date().toISOString() }); setPrTxt(''); loadRefs(); toast('PR created: ' + no); } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+    try {
+      const no = await nextNo('LPR', liqSiteCode(prSite));
+      const row = { id: uid(), pr_no: no, requested_by: prBy.trim() || null, date: today(), status: 'Pending', items: prTxt.trim(), site: prSite, created_at: new Date().toISOString() };
+      try { await addPR(row); }
+      catch (e) { if (/column/i.test(e.message || '')) { const { site, ...rest } = row; await addPR(rest); } else throw e; }
+      setPrTxt(''); loadRefs(); toast('PR created: ' + no);
+    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
   };
   const decidePR = async (p, status) => {
     const pinIn = prompt('Coordinator passcode to ' + status.toLowerCase() + ' ' + p.pr_no); if (pinIn === null) return;
@@ -851,18 +857,19 @@ function Liquidation({ voyages, employees, sites, toast }) {
         <label>Purchase requests (approve before buying)</label>
         <${Field} label="New PR — items / description"><input value=${prTxt} onInput=${e=>setPrTxt(e.target.value)} placeholder="e.g. welding gloves, dark glass" /><//>
         <div class="two"><${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
-        <div class="field"><label>\u00a0</label><button class="btn" style="margin:0" disabled=${busy} onClick=${createPR}>Create PR</button></div></div>
+        <${Field} label="Purchase site"><select value=${prSite} onChange=${e=>setPrSite(e.target.value)}>${siteNames.map(s=>html`<option>${s}</option>`)}</select><//></div>
+        <button class="btn" disabled=${busy} onClick=${createPR}>Create PR</button>
         ${prs.length ? prs.slice(0, 8).map(p => html`
           <div class="row" key=${p.id} style="align-items:flex-start">
             <div><div class="name" style="font-size:14px">${p.pr_no} · ${p.status}</div>
-              <div class="sub">${p.date || '—'}${p.requested_by ? ' · ' + p.requested_by : ''} · ${p.items || ''}</div></div>
+              <div class="sub">${p.date || '—'}${p.requested_by ? ' · ' + p.requested_by : ''}${p.site ? ' · ' + p.site : ''} · ${p.items || ''}</div></div>
             ${p.status === 'Pending' ? html`<span style="display:flex;gap:6px"><button style=${bSm} onClick=${()=>decidePR(p,'Approved')}>Approve</button><button style=${bSmAlt} onClick=${()=>decidePR(p,'Rejected')}>✕</button></span>` : ''}
           </div>`) : html`<div class="empty">No PRs yet.</div>`}
       </div>
       <div class="card">
         <label>Buy stock material (needs an approved PR)</label>
         <${Field} label="Purchase request">
-          <select value=${mPr} onChange=${e=>setMPr(e.target.value)}>
+          <select value=${mPr} onChange=${e=>{const p=prs.find(x=>x.pr_no===e.target.value);setMPr(e.target.value);if(p&&p.site)setMSite(p.site);}}>
             <option value="">— select approved PR —</option>
             ${prs.filter(p=>p.status==='Approved').map(p=>html`<option value=${p.pr_no}>${p.pr_no} · ${p.items ? p.items.slice(0,40) : ''}</option>`)}
           </select>
@@ -1041,17 +1048,19 @@ function App() {
     <div class="wrap">
       ${fatal && html`<div class="card" style="border-color:var(--warn)"><div class="note" style="color:#ffc7c0">Couldn't reach Supabase: ${fatal}.</div></div>`}
       <label style="margin:4px 2px 12px">Choose an area</label>
-      <div class="card" style="cursor:pointer" onClick=${() => setArea('vessels')}>
-        <div style="font-size:26px">🚢</div><div class="name" style="font-size:18px;margin-top:6px">Vessel Schedule</div>
-        <div class="sub">Dockings, status &amp; dates</div>
-      </div>
-      <div class="card" style="cursor:pointer" onClick=${() => { setArea('personnel'); setPdTab('personnel'); }}>
-        <div style="font-size:26px">👷</div><div class="name" style="font-size:18px;margin-top:6px">Personnel Data</div>
-        <div class="sub">Employees, leave &amp; straight duty</div>
-      </div>
-      <div class="card" style="cursor:pointer" onClick=${() => setArea('liquidation')}>
-        <div style="font-size:26px">💰</div><div class="name" style="font-size:18px;margin-top:6px">Liquidation</div>
-        <div class="sub">Cash advance · materials · tools · reconcile by project</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="card" style="cursor:pointer;margin:0" onClick=${() => setArea('vessels')}>
+          <div style="font-size:24px">🚢</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Vessel Schedule</div>
+          <div class="sub" style="font-size:12px;color:var(--ink-dim)">Dockings, status & dates</div>
+        </div>
+        <div class="card" style="cursor:pointer;margin:0" onClick=${() => { setArea('personnel'); setPdTab('personnel'); }}>
+          <div style="font-size:24px">👷</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Personnel Data</div>
+          <div class="sub" style="font-size:12px;color:var(--ink-dim)">Employees, leave & straight duty</div>
+        </div>
+        <div class="card" style="cursor:pointer;margin:0;grid-column:1/-1" onClick=${() => setArea('liquidation')}>
+          <div style="font-size:24px">💰</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Liquidation</div>
+          <div class="sub" style="font-size:12px;color:var(--ink-dim)">Cash advance · materials · tools · reconcile by project</div>
+        </div>
       </div>
     </div>
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}`;
