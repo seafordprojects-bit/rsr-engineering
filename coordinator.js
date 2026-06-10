@@ -72,6 +72,45 @@ async function addLiqLine(row) { const { error } = await supabase.from('liq_line
 async function updateLiqLine(id, fields) { const { error } = await supabase.from('liq_line').update(fields).eq('id', id); if (error) throw error; }
 async function delLiqLine(id) { const { error } = await supabase.from('liq_line').delete().eq('id', id); if (error) throw error; }
 async function verifyPin(empId, pin) { const { data, error } = await supabase.rpc('verify_pin', { emp_id: empId, pin_input: pin }); if (error) throw error; return data === true; }
+async function getPRs() { const { data, error } = await supabase.from('purchase_request').select('*').order('created_at', { ascending: false }).limit(300); if (error) throw error; return data || []; }
+async function addPR(row) { const { error } = await supabase.from('purchase_request').insert(row); if (error) throw error; }
+async function updatePR(id, fields) { const { error } = await supabase.from('purchase_request').update(fields).eq('id', id); if (error) throw error; }
+async function getStockItems() { const { data, error } = await supabase.from('stock_item').select('*').order('name'); if (error) throw error; return data || []; }
+async function addStockItem(row) { const { error } = await supabase.from('stock_item').insert(row); if (error) throw error; }
+async function nextNo(prefix, site) {
+  try { const { data, error } = await supabase.rpc('next_no', { p_prefix: prefix, p_site: site }); if (!error && data) return data; } catch (_) {}
+  const n = new Date(), z = x => String(x).padStart(2, '0');
+  return prefix + '-' + site + '-' + z(n.getHours()) + z(n.getMinutes()) + z(n.getSeconds());
+}
+const LIQ_SITE_CODES = { 'Carmen': 'CAR', 'Mandaue': 'MAN', 'Lapu-Lapu': 'LAP' };
+const liqSiteCode = (s) => LIQ_SITE_CODES[s] || (s || 'GEN').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
+// push leftover material into the site's stock (mirrors the material app's delivery)
+async function liqStockIn(line, custodian) {
+  const qty = Number(line.qty_to_stock) || 0; if (qty <= 0) return;
+  const id = await nextNo('DLV', liqSiteCode(line.site));
+  const { error: e1 } = await supabase.from('deliveries').insert([{ id, site: line.site, source: 'Liquidation', ref: line.id,
+    date: line.or_date || new Date().toISOString().slice(0, 10), received_by: custodian || 'Liquidation',
+    items: [{ n: line.item, u: line.unit || 'pc', qty }], created_at: new Date().toISOString() }]);
+  if (e1) throw e1;
+  const { data: cur } = await supabase.from('site_stock').select('qty').eq('site_key', line.site).eq('item_name', line.item).maybeSingle();
+  const nq = (cur ? Number(cur.qty) || 0 : 0) + qty;
+  const { error: e2 } = await supabase.from('site_stock').upsert({ site_key: line.site, item_name: line.item, qty: nq, updated_at: new Date().toISOString() }, { onConflict: 'site_key,item_name' });
+  if (e2) throw e2;
+  await updateLiqLine(line.id, { posted: true });
+}
+// register a bought tool into the Tools module (mirrors Setup → Register tool)
+async function liqToolIn(line, siteId, prefix) {
+  const qty = Math.max(1, parseInt(line.qty, 10) || 1);
+  const pfx = (prefix || '').trim().toUpperCase(); if (!pfx) throw new Error('Code prefix required');
+  if (!siteId) throw new Error('Site not found in sites table');
+  const { data: un } = await supabase.from('item_units').select('unit_code').ilike('unit_code', pfx + '%');
+  let max = 0; (un || []).forEach(u => { const n = parseInt((u.unit_code || '').slice(pfx.length), 10); if (!isNaN(n) && n > max) max = n; });
+  const { data: item, error } = await supabase.from('items').insert({ item_code: pfx, name: line.item, unit: 'pcs', track_type: 'borrow', active: true }).select().single();
+  if (error) throw error;
+  const rows = []; for (let i = 1; i <= qty; i++) rows.push({ item_id: item.id, site_id: siteId, unit_code: pfx + String(max + i).padStart(3, '0'), status: 'available', active: true });
+  const { error: e2 } = await supabase.from('item_units').insert(rows); if (e2) throw e2;
+  await updateLiqLine(line.id, { posted: true });
+}
 function todayPH() { return new Date().toLocaleDateString('en-PH', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
 async function fileLeave(row) {
   const { error } = await supabase.from('leave_requests').insert(row);
@@ -578,7 +617,7 @@ function Expenses({ voyages, toast }) {
 }
 
 // ---------- Liquidation (cash advance, reconcile by project) ----------
-function Liquidation({ voyages, employees, toast }) {
+function Liquidation({ voyages, employees, sites, toast }) {
   const peso = (n) => '₱' + Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const uid = () => 'L' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const today = () => new Date().toISOString().slice(0, 10);
@@ -595,11 +634,21 @@ function Liquidation({ voyages, employees, toast }) {
   const [alDate, setAlDate] = useState(today()); const [alRec, setAlRec] = useState(''); const [alAmt, setAlAmt] = useState(''); const [alVes, setAlVes] = useState(''); const [alRem, setAlRem] = useState('');
   const [pinVals, setPinVals] = useState({}); const [pinErr, setPinErr] = useState({});
   const [cDate, setCDate] = useState(today()); const [cAmt, setCAmt] = useState(''); const [cCharge, setCCharge] = useState('Project'); const [cVes, setCVes] = useState(''); const [cRem, setCRem] = useState('');
+  const [prs, setPrs] = useState([]); const [stockItems, setStockItems] = useState([]);
+  const [prTxt, setPrTxt] = useState(''); const [prBy, setPrBy] = useState('Raffy');
+  const [mDate, setMDate] = useState(today()); const [mPr, setMPr] = useState(''); const [mItem, setMItem] = useState(''); const [mUnit, setMUnit] = useState('pc');
+  const [mUC, setMUC] = useState(''); const [mQB, setMQB] = useState(''); const [mQU, setMQU] = useState('0');
+  const [mVes, setMVes] = useState(''); const [mSite, setMSite] = useState('Carmen'); const [mOr, setMOr] = useState(''); const [mRem, setMRem] = useState('');
+  const [niOpen, setNiOpen] = useState(false); const [niName, setNiName] = useState(''); const [niUnit, setNiUnit] = useState('pcs');
+  const [tDate, setTDate] = useState(today()); const [tItem, setTItem] = useState(''); const [tPfx, setTPfx] = useState(''); const [tUC, setTUC] = useState('');
+  const [tQ, setTQ] = useState('1'); const [tSite, setTSite] = useState('Carmen'); const [tVes, setTVes] = useState(''); const [tOr, setTOr] = useState(''); const [tRem, setTRem] = useState('');
   const [busy, setBusy] = useState(false);
 
   const vessels = (voyages || []).map(v => v.vessel_name).filter(Boolean);
+  const siteNames = (sites || []).length ? sites.map(s => s.name) : ['Carmen', 'Mandaue'];
+  const loadRefs = async () => { try { setPrs(await getPRs()); setStockItems(await getStockItems()); } catch (e) { toast('Refs load failed: ' + e.message, true); } };
   const loadAll = async (f) => { if (!f) return; try { setAdvs(await getAdvances(f.id)); setLines(await getLiqLines(f.id)); } catch (e) { toast('Load failed: ' + e.message, true); } };
-  useEffect(() => { (async () => { try { const f = await getOpenFund(); setFund(f); if (f) loadAll(f); } catch (e) { setFund(null); toast('Load failed: ' + e.message, true); } })(); }, []);
+  useEffect(() => { (async () => { try { const f = await getOpenFund(); setFund(f); if (f) loadAll(f); loadRefs(); } catch (e) { setFund(null); toast('Load failed: ' + e.message, true); } })(); }, []);
 
   const startFund = async () => {
     setBusy(true);
@@ -636,8 +685,82 @@ function Liquidation({ voyages, employees, toast }) {
     setBusy(true);
     try { await addLiqLine({ id: uid(), fund_id: fund.id, type: 'CONSUMABLE', or_date: cDate || today(), amount: Number(cAmt), charge_to: cCharge, vessel_div: cCharge === 'Project' ? cVes : null, remarks: cRem.trim() || null, created_at: new Date().toISOString() }); setCAmt(''); setCRem(''); loadAll(fund); toast('Consumable added'); } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
   };
-  const removeLine = async (id) => { if (!confirm('Delete this line?')) return; try { await delLiqLine(id); loadAll(fund); toast('Deleted'); } catch (e) { toast('Error: ' + e.message, true); } };
+  const removeLine = async (l) => {
+    if (l.posted && (l.type === 'TOOL' || Number(l.qty_to_stock) > 0)) { toast('Already pushed to ' + (l.type === 'TOOL' ? 'Tools' : 'site stock') + ' — adjust it there instead', true); return; }
+    if (!confirm('Delete this line?')) return;
+    try { await delLiqLine(l.id); loadAll(fund); toast('Deleted'); } catch (e) { toast('Error: ' + e.message, true); }
+  };
   const removeAdv = async (id) => { if (!confirm('Delete this advance?')) return; try { await delAdvance(id); loadAll(fund); toast('Deleted'); } catch (e) { toast('Error: ' + e.message, true); } };
+
+  // ---- purchase requests ----
+  const createPR = async () => {
+    if (!prTxt.trim()) { toast('Describe the items', true); return; }
+    setBusy(true);
+    try { const no = await nextNo('PR', 'RSR'); await addPR({ id: uid(), pr_no: no, requested_by: prBy.trim() || null, date: today(), status: 'Pending', items: prTxt.trim(), created_at: new Date().toISOString() }); setPrTxt(''); loadRefs(); toast('PR created: ' + no); } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+  };
+  const decidePR = async (p, status) => {
+    const pinIn = prompt('Coordinator passcode to ' + status.toLowerCase() + ' ' + p.pr_no); if (pinIn === null) return;
+    let saved = '1234'; try { const v = await getSetting('coordinator_pin'); if (v) saved = v; } catch (_) {}
+    if (pinIn !== saved) { toast('Wrong passcode', true); return; }
+    try { await updatePR(p.id, { status, approved_by: 'Coordinator', approved_at: new Date().toISOString() }); loadRefs(); toast(p.pr_no + ' ' + status); } catch (e) { toast('Error: ' + e.message, true); }
+  };
+  const saveNewItem = async () => {
+    if (!niName.trim()) { toast('Item name?', true); return; }
+    try { await addStockItem({ id: uid(), name: niName.trim(), unit: niUnit.trim() || 'pcs', default_site: mSite }); const nm = niName.trim(); setNiName(''); setNiOpen(false); await loadRefs(); setMItem(nm); setMUnit(niUnit.trim() || 'pcs'); toast('Item added'); } catch (e) { toast('Error: ' + e.message, true); }
+  };
+
+  // ---- materials (STOCK_MATERIAL) ----
+  const pushStock = async (l) => { try { await liqStockIn(l, fund.custodian); loadAll(fund); toast('Pushed to ' + l.site + ' stock'); } catch (e) { toast('Stock push failed: ' + e.message, true); } };
+  const addMaterial = async () => {
+    const pr = prs.find(p => p.pr_no === mPr);
+    if (!pr) { toast('Select an approved PR', true); return; }
+    if (pr.status !== 'Approved') { toast('PR ' + pr.pr_no + ' is not approved', true); return; }
+    if (pr.date && mDate && pr.date > mDate) { toast('PR must be dated on/before the OR date', true); return; }
+    if (!mItem) { toast('Select an item', true); return; }
+    const uc = Number(mUC), qb = Number(mQB), qu = mQU === '' ? 0 : Number(mQU);
+    if (!(uc > 0)) { toast('Unit cost must be > 0', true); return; }
+    if (!(qb > 0)) { toast('Qty bought must be > 0', true); return; }
+    if (qu < 0 || qu > qb) { toast('Qty used must be between 0 and qty bought', true); return; }
+    if (!mVes) { toast('Vessel / division is required', true); return; }
+    const qs = qb - qu;
+    const line = { id: uid(), fund_id: fund.id, type: 'STOCK_MATERIAL', or_date: mDate || today(), vessel_div: mVes, site: mSite,
+      item: mItem, unit: mUnit || 'pc', unit_cost: uc, qty_bought: qb, qty_used: qu, qty_to_stock: qs,
+      pr_ref: pr.pr_no, or_ref: mOr.trim() || null, remarks: mRem.trim() || null, posted: qs === 0, created_at: new Date().toISOString() };
+    setBusy(true);
+    try {
+      await addLiqLine(line);
+      if (qs > 0) { try { await liqStockIn(line, fund.custodian); toast('Material saved — ' + qs + ' ' + line.unit + ' added to ' + mSite + ' stock'); } catch (e) { toast('Saved, but stock push failed — use "Push to stock" on the line', true); } }
+      else toast('Material saved (fully used on job)');
+      setMUC(''); setMQB(''); setMQU('0'); setMOr(''); setMRem('');
+      loadAll(fund);
+    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+  };
+
+  // ---- tools (TOOL) ----
+  const pushTool = async (l) => {
+    const sid = (sites || []).find(s => s.name === l.site); const pfx = ((l.remarks || '').match(/\[pfx:([A-Z0-9]+)\]/) || [])[1] || (l.item || '').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
+    try { await liqToolIn(l, sid && sid.id, pfx); loadAll(fund); toast('Registered in Tools — ' + l.site); } catch (e) { toast('Tool push failed: ' + e.message, true); }
+  };
+  const addToolLine = async () => {
+    if (!tItem.trim()) { toast('Tool name?', true); return; }
+    const uc = Number(tUC), q = parseInt(tQ, 10);
+    if (!(uc > 0)) { toast('Unit cost must be > 0', true); return; }
+    if (!(q >= 1)) { toast('Qty must be at least 1', true); return; }
+    const pfx = (tPfx || tItem.replace(/[^A-Za-z]/g, '').slice(0, 3)).toUpperCase();
+    if (!pfx) { toast('Code prefix?', true); return; }
+    const line = { id: uid(), fund_id: fund.id, type: 'TOOL', or_date: tDate || today(), vessel_div: tVes || null, site: tSite,
+      item: tItem.trim(), unit: 'pcs', unit_cost: uc, qty: q, or_ref: tOr.trim() || null,
+      remarks: ((tRem.trim() ? tRem.trim() + ' ' : '') + '[pfx:' + pfx + ']'), posted: false, created_at: new Date().toISOString() };
+    setBusy(true);
+    try {
+      await addLiqLine(line);
+      const sid = (sites || []).find(s => s.name === tSite);
+      try { await liqToolIn(line, sid && sid.id, pfx); toast('Tool saved — registered in ' + tSite + ' Tools inventory'); }
+      catch (e) { toast('Saved, but Tools push failed — use "Register" on the line', true); }
+      setTItem(''); setTPfx(''); setTUC(''); setTQ('1'); setTOr(''); setTRem('');
+      loadAll(fund);
+    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+  };
 
   const advance = advs.reduce((s, a) => s + Number(a.amount || 0), 0);
   let allow = 0, consProj = 0, consAdm = 0, matUsed = 0, stockVal = 0, toolVal = 0;
@@ -677,6 +800,8 @@ function Liquidation({ voyages, employees, toast }) {
     </div>
     <div class="tabs">
       <button class=${tab==='fund'?'on':''} onClick=${() => setTab('fund')}>Fund</button>
+      <button class=${tab==='mat'?'on':''} onClick=${() => setTab('mat')}>Materials</button>
+      <button class=${tab==='tool'?'on':''} onClick=${() => setTab('tool')}>Tools</button>
       <button class=${tab==='allow'?'on':''} onClick=${() => setTab('allow')}>Allowance</button>
       <button class=${tab==='cons'?'on':''} onClick=${() => setTab('cons')}>Consumables</button>
       <button class=${tab==='sum'?'on':''} onClick=${() => setTab('sum')}>Summary</button>
@@ -695,6 +820,87 @@ function Liquidation({ voyages, employees, toast }) {
         ${advs.length ? advs.map(a => html`<div class="row" key=${a.id}><div><div class="name">${peso(a.amount)}</div><div class="sub">${a.date||'—'}${a.received_by?' · '+a.received_by:''}${a.remarks?' · '+a.remarks:''}</div></div><button class="ret" onClick=${()=>removeAdv(a.id)}>✕</button></div>`) : html`<div class="empty">No advances yet.</div>`}
       </div>`}
 
+    ${tab === 'mat' && html`
+      <div class="card">
+        <label>Purchase requests (approve before buying)</label>
+        <${Field} label="New PR — items / description"><input value=${prTxt} onInput=${e=>setPrTxt(e.target.value)} placeholder="e.g. welding gloves, dark glass" /><//>
+        <div class="two"><${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
+        <div class="field"><label>\u00a0</label><button class="btn" style="margin:0" disabled=${busy} onClick=${createPR}>Create PR</button></div></div>
+        ${prs.length ? prs.slice(0, 8).map(p => html`
+          <div class="row" key=${p.id} style="align-items:flex-start">
+            <div><div class="name" style="font-size:14px">${p.pr_no} · ${p.status}</div>
+              <div class="sub">${p.date || '—'}${p.requested_by ? ' · ' + p.requested_by : ''} · ${p.items || ''}</div></div>
+            ${p.status === 'Pending' ? html`<span style="display:flex;gap:6px"><button style=${bSm} onClick=${()=>decidePR(p,'Approved')}>Approve</button><button style=${bSmAlt} onClick=${()=>decidePR(p,'Rejected')}>✕</button></span>` : ''}
+          </div>`) : html`<div class="empty">No PRs yet.</div>`}
+      </div>
+      <div class="card">
+        <label>Buy stock material (needs an approved PR)</label>
+        <${Field} label="Purchase request">
+          <select value=${mPr} onChange=${e=>setMPr(e.target.value)}>
+            <option value="">— select approved PR —</option>
+            ${prs.filter(p=>p.status==='Approved').map(p=>html`<option value=${p.pr_no}>${p.pr_no} · ${p.items ? p.items.slice(0,40) : ''}</option>`)}
+          </select>
+        <//>
+        <${Field} label="Item">
+          <select value=${mItem} onChange=${e=>{const it=stockItems.find(s=>s.name===e.target.value);setMItem(e.target.value);if(it&&it.unit)setMUnit(it.unit);}}>
+            <option value="">— select item —</option>
+            ${stockItems.map(s=>html`<option value=${s.name}>${s.name}</option>`)}
+          </select>
+        <//>
+        ${niOpen ? html`<div class="two"><${Field} label="New item name"><input value=${niName} onInput=${e=>setNiName(e.target.value)} /><//>
+          <${Field} label="Unit"><input value=${niUnit} onInput=${e=>setNiUnit(e.target.value)} /><//></div>
+          <div style="display:flex;gap:8px;margin-bottom:6px"><button style=${bSm} onClick=${saveNewItem}>Save item</button><button style=${bSmAlt} onClick=${()=>setNiOpen(false)}>Cancel</button></div>`
+        : html`<button style=${bSmAlt} onClick=${()=>setNiOpen(true)}>＋ New item</button>`}
+        <div class="two" style="margin-top:8px"><${Field} label="OR date"><input type="date" value=${mDate} onInput=${e=>setMDate(e.target.value)} /><//>
+        <${Field} label="Receipt no. (OR)"><input value=${mOr} onInput=${e=>setMOr(e.target.value)} placeholder="OR ref" /><//></div>
+        <div class="two"><${Field} label=${'Unit cost ₱ / ' + mUnit}><input type="number" min="0" step="0.01" value=${mUC} onInput=${e=>setMUC(e.target.value)} /><//>
+        <${Field} label="Qty bought"><input type="number" min="0" value=${mQB} onInput=${e=>setMQB(e.target.value)} /><//></div>
+        <div class="two"><${Field} label="Qty used on job"><input type="number" min="0" value=${mQU} onInput=${e=>setMQU(e.target.value)} /><//>
+        <div class="field"><label>Qty to stock (auto)</label><input disabled value=${(Number(mQB)||0)-(mQU===''?0:Number(mQU))>=0?(Number(mQB)||0)-(mQU===''?0:Number(mQU)):'—'} /></div></div>
+        <div class="two"><${Field} label="Vessel / division"><select value=${mVes} onChange=${e=>setMVes(e.target.value)}><option value="">— select —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
+        <${Field} label="Site"><select value=${mSite} onChange=${e=>setMSite(e.target.value)}>${siteNames.map(s=>html`<option>${s}</option>`)}</select><//></div>
+        <div class="sub" style="margin:2px 0 4px">Used ₱${((mQU===''?0:Number(mQU))*(Number(mUC)||0)).toLocaleString('en-PH')} → project cost · To stock ₱${(((Number(mQB)||0)-(mQU===''?0:Number(mQU)))*(Number(mUC)||0)).toLocaleString('en-PH')} → ${mSite} stock</div>
+        <${Field} label="Remarks"><input value=${mRem} onInput=${e=>setMRem(e.target.value)} placeholder="optional" /><//>
+        <button class="btn" disabled=${busy} onClick=${addMaterial}>Add material line</button>
+      </div>
+      <div class="card"><label>Material lines</label>
+        ${lines.filter(l=>l.type==='STOCK_MATERIAL').length ? lines.filter(l=>l.type==='STOCK_MATERIAL').map(l => html`
+          <div class="row" key=${l.id} style="align-items:flex-start;flex-direction:column;gap:4px">
+            <div style="display:flex;justify-content:space-between;width:100%">
+              <div><div class="name" style="font-size:14px">${l.item} · ${l.qty_bought} ${l.unit} @ ${peso(l.unit_cost)}</div>
+                <div class="sub">${l.or_date||'—'} · ${l.pr_ref||'no PR'} · ${l.vessel_div||'—'} · ${l.site}${l.or_ref?'':' · '}${l.or_ref?'':html`<b style="color:var(--bad,#b0322a)">⚠ no receipt</b>`}</div></div>
+              <button class="ret" onClick=${()=>removeLine(l)}>✕</button>
+            </div>
+            <div class="sub">Used ${l.qty_used} = ${peso(Number(l.qty_used)*Number(l.unit_cost))} · To stock ${l.qty_to_stock} = ${peso(Number(l.qty_to_stock)*Number(l.unit_cost))}
+              ${Number(l.qty_to_stock)>0 ? (l.posted ? html` · <b style="color:var(--accent2,#1d9e75)">✓ in ${l.site} stock</b>` : html` · <button style=${bSm} onClick=${()=>pushStock(l)}>Push to stock</button>`) : ''}</div>
+          </div>`) : html`<div class="empty">None yet.</div>`}
+      </div>`}
+
+    ${tab === 'tool' && html`
+      <div class="card">
+        <label>Buy tool (registers into the Tools module)</label>
+        <${Field} label="Tool name"><input value=${tItem} onInput=${e=>{setTItem(e.target.value);if(!tPfx)setTPfx(e.target.value.replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase());}} placeholder="e.g. Angle grinder" /><//>
+        <div class="two"><${Field} label="Code prefix"><input value=${tPfx} onInput=${e=>setTPfx(e.target.value.toUpperCase())} placeholder="GRD" /><//>
+        <${Field} label="Qty"><input type="number" min="1" value=${tQ} onInput=${e=>setTQ(e.target.value)} /><//></div>
+        <div class="two"><${Field} label="Unit cost ₱"><input type="number" min="0" step="0.01" value=${tUC} onInput=${e=>setTUC(e.target.value)} /><//>
+        <${Field} label="OR date"><input type="date" value=${tDate} onInput=${e=>setTDate(e.target.value)} /><//></div>
+        <div class="two"><${Field} label="Site"><select value=${tSite} onChange=${e=>setTSite(e.target.value)}>${siteNames.map(s=>html`<option>${s}</option>`)}</select><//>
+        <${Field} label="Requested by job (optional)"><select value=${tVes} onChange=${e=>setTVes(e.target.value)}><option value="">—</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//></div>
+        <${Field} label="Receipt no. (OR)"><input value=${tOr} onInput=${e=>setTOr(e.target.value)} placeholder="OR ref" /><//>
+        <${Field} label="Remarks"><input value=${tRem} onInput=${e=>setTRem(e.target.value)} placeholder="optional" /><//>
+        <div class="sub" style="margin:2px 0 4px">Tool value ₱${((parseInt(tQ,10)||0)*(Number(tUC)||0)).toLocaleString('en-PH')} → on-hand asset (never consumed)</div>
+        <button class="btn" disabled=${busy} onClick=${addToolLine}>Add tool line</button>
+      </div>
+      <div class="card"><label>Tool lines</label>
+        ${lines.filter(l=>l.type==='TOOL').length ? lines.filter(l=>l.type==='TOOL').map(l => html`
+          <div class="row" key=${l.id} style="align-items:flex-start">
+            <div><div class="name" style="font-size:14px">${l.item} ×${l.qty} @ ${peso(l.unit_cost)} = ${peso(Number(l.qty)*Number(l.unit_cost))}</div>
+              <div class="sub">${l.or_date||'—'} · ${l.site}${l.vessel_div?' · '+l.vessel_div:''}${l.or_ref?'':' · '}${l.or_ref?'':html`<b style="color:var(--bad,#b0322a)">⚠ no receipt</b>`}</div>
+              <div class="sub">${l.posted ? html`<b style="color:var(--accent2,#1d9e75)">✓ in Tools inventory (${l.site})</b>` : html`<button style=${bSm} onClick=${()=>pushTool(l)}>Register in Tools</button>`}</div></div>
+            <button class="ret" onClick=${()=>removeLine(l)}>✕</button>
+          </div>`) : html`<div class="empty">None yet.</div>`}
+      </div>`}
+
     ${tab === 'allow' && html`
       <div class="card">
         <label>Personnel allowance — one row per person</label>
@@ -710,7 +916,7 @@ function Liquidation({ voyages, employees, toast }) {
           <div class="row" key=${l.id} style="align-items:flex-start;flex-direction:column;gap:6px">
             <div style="display:flex;justify-content:space-between;width:100%">
               <div><div class="name">${l.recipient} · ${peso(l.amount)}</div><div class="sub">${l.or_date||'—'} · ${l.vessel_div||'—'}</div></div>
-              <button class="ret" onClick=${()=>removeLine(l.id)}>✕</button>
+              <button class="ret" onClick=${()=>removeLine(l)}>✕</button>
             </div>
             ${l.confirmed ? html`<div class="sub" style="color:var(--accent2,#1d9e75);font-weight:700">✓ Confirmed${l.confirmed_at?' · '+l.confirmed_at.slice(0,10):''}</div>
               <div style="display:flex;gap:6px;align-items:center"><span class="sub">Deductible:</span>
@@ -734,7 +940,7 @@ function Liquidation({ voyages, employees, toast }) {
         <button class="btn" disabled=${busy} onClick=${addCons}>Add consumable</button>
       </div>
       <div class="card"><label>Consumables — Project ${peso(consProj)} · Admin ${peso(consAdm)}</label>
-        ${lines.filter(l=>l.type==='CONSUMABLE').length ? lines.filter(l=>l.type==='CONSUMABLE').map(l => html`<div class="row" key=${l.id}><div><div class="name">${peso(l.amount)} · ${l.charge_to}</div><div class="sub">${l.or_date||'—'}${l.vessel_div?' · '+l.vessel_div:''}${l.remarks?' · '+l.remarks:''}</div></div><button class="ret" onClick=${()=>removeLine(l.id)}>✕</button></div>`) : html`<div class="empty">No consumables yet.</div>`}
+        ${lines.filter(l=>l.type==='CONSUMABLE').length ? lines.filter(l=>l.type==='CONSUMABLE').map(l => html`<div class="row" key=${l.id}><div><div class="name">${peso(l.amount)} · ${l.charge_to}</div><div class="sub">${l.or_date||'—'}${l.vessel_div?' · '+l.vessel_div:''}${l.remarks?' · '+l.remarks:''}</div></div><button class="ret" onClick=${()=>removeLine(l)}>✕</button></div>`) : html`<div class="empty">No consumables yet.</div>`}
       </div>`}
 
     ${tab === 'sum' && html`
@@ -742,7 +948,7 @@ function Liquidation({ voyages, employees, toast }) {
         <label>Reconciliation</label>
         <div class="row"><div class="sub">Advance total</div><div class="name">${peso(advance)}</div></div>
         <div class="row"><div class="sub">Consumed</div><div class="name">${peso(consumed)}</div></div>
-        <div class="row"><div class="sub">On-hand assets (stock + tools)</div><div class="name">${peso(onhand)}</div></div>
+        <div class="row"><div class="sub">On-hand assets — stock ${peso(stockVal)} · tools ${peso(toolVal)}</div><div class="name">${peso(onhand)}</div></div>
         <div class="row" style="border-top:1px solid var(--line)"><div class="sub"><b>Cash that should be returned</b></div><div class="name">${peso(cashRet)}</div></div>
         ${cashRet < -0.005 ? html`<div class="note" style="color:var(--bad,#b0322a);font-weight:700;margin-top:8px">⚠ Overspent by ${peso(Math.abs(cashRet))} — fund short / missing top-up.</div>`
           : html`<div class="note" style="color:var(--accent2,#1d9e75);font-weight:700;margin-top:8px">✓ Balanced — advance = consumed + on-hand + cash returned.</div>`}
@@ -753,6 +959,13 @@ function Liquidation({ voyages, employees, toast }) {
       </div>
       <div class="card"><label>Allowance per person</label>
         ${Object.keys(perPerson).length ? Object.keys(perPerson).map(p=>html`<div class="row" key=${p}><div class="sub">${p}</div><div class="name">${peso(perPerson[p].confirmed)} / ${peso(perPerson[p].total)}</div></div>`) : html`<div class="empty">No allowances yet.</div>`}
+      </div>
+      <div class="card"><label>On-hand assets (must exist physically)</label>
+        ${lines.filter(l=>(l.type==='STOCK_MATERIAL'&&Number(l.qty_to_stock)>0)||l.type==='TOOL').length
+          ? lines.filter(l=>(l.type==='STOCK_MATERIAL'&&Number(l.qty_to_stock)>0)||l.type==='TOOL').map(l=>html`
+            <div class="row" key=${l.id}><div class="sub">${l.type==='TOOL'?'🔧':'📦'} ${l.item} · ${l.type==='TOOL'?l.qty:l.qty_to_stock} ${l.unit} · ${l.site}</div>
+            <div class="sub">${l.posted?html`<b style="color:var(--accent2,#1d9e75)">✓ recorded</b>`:html`<b style="color:var(--bad,#b0322a)">⚠ not pushed</b>`}</div></div>`)
+          : html`<div class="empty">No on-hand assets.</div>`}
       </div>`}
   `;
 }
@@ -808,13 +1021,9 @@ function App() {
         <div style="font-size:26px">👷</div><div class="name" style="font-size:18px;margin-top:6px">Personnel Data</div>
         <div class="sub">Employees, leave &amp; straight duty</div>
       </div>
-      <div class="card" style="cursor:pointer" onClick=${() => setArea('expenses')}>
-        <div style="font-size:26px">💰</div><div class="name" style="font-size:18px;margin-top:6px">Expenses</div>
-        <div class="sub">Per-vessel job costs</div>
-      </div>
       <div class="card" style="cursor:pointer" onClick=${() => setArea('liquidation')}>
-        <div style="font-size:26px">🧾</div><div class="name" style="font-size:18px;margin-top:6px">Liquidation</div>
-        <div class="sub">Cash advance · reconcile by project</div>
+        <div style="font-size:26px">💰</div><div class="name" style="font-size:18px;margin-top:6px">Liquidation</div>
+        <div class="sub">Cash advance · materials · tools · reconcile by project</div>
       </div>
     </div>
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}`;
@@ -825,7 +1034,7 @@ function App() {
     <div class="wrap">
       ${area === 'vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
       ${area === 'expenses' && html`<${Expenses} voyages=${voyages} toast=${flash} />`}
-      ${area === 'liquidation' && html`<${Liquidation} voyages=${voyages} employees=${employees} toast=${flash} />`}
+      ${area === 'liquidation' && html`<${Liquidation} voyages=${voyages} employees=${employees} sites=${sites} toast=${flash} />`}
       ${area === 'personnel' && html`
         <div class="tabs">
           <button class=${pdTab==='personnel'?'on':''} onClick=${() => setPdTab('personnel')}>Personnel</button>
