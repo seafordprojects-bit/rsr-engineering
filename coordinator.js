@@ -64,6 +64,7 @@ async function getOpenFund() {
   return (data && data[0]) || null;
 }
 async function createFund(row) { const { error } = await supabase.from('liq_fund').insert(row); if (error) throw error; }
+async function updateFund(id, fields) { const { error } = await supabase.from('liq_fund').update(fields).eq('id', id); if (error) throw error; }
 async function getAdvances(fundId) { const { data, error } = await supabase.from('liq_advance').select('*').eq('fund_id', fundId).order('created_at', { ascending: false }); if (error) throw error; return data || []; }
 async function addAdvance(row) { const { error } = await supabase.from('liq_advance').insert(row); if (error) throw error; }
 async function delAdvance(id) { const { error } = await supabase.from('liq_advance').delete().eq('id', id); if (error) throw error; }
@@ -630,8 +631,8 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const [tab, setTab] = useState('fund');
   const [cust, setCust] = useState('Raffy');
   const [pfrom, setPfrom] = useState(today());
-  const [aDate, setADate] = useState(today()); const [aAmt, setAAmt] = useState(''); const [aBy, setABy] = useState('Raffy'); const [aRem, setARem] = useState('');
-  const [alDate, setAlDate] = useState(today()); const [alRec, setAlRec] = useState(''); const [alAmt, setAlAmt] = useState(''); const [alVes, setAlVes] = useState(''); const [alRem, setAlRem] = useState('');
+  const [aDate, setADate] = useState(today()); const [aAmt, setAAmt] = useState(''); const [aBy, setABy] = useState('Raffy'); const [aRem, setARem] = useState(''); const [aMode, setAMode] = useState('Cash'); const [aRef, setARef] = useState('');
+  const [alDate, setAlDate] = useState(today()); const [alRec, setAlRec] = useState(''); const [alAmt, setAlAmt] = useState(''); const [alVes, setAlVes] = useState(''); const [alRem, setAlRem] = useState(''); const [alMode, setAlMode] = useState('Cash'); const [alRef, setAlRef] = useState('');
   const [pinVals, setPinVals] = useState({}); const [pinErr, setPinErr] = useState({});
   const [cDate, setCDate] = useState(today()); const [cAmt, setCAmt] = useState(''); const [cCharge, setCCharge] = useState('Project'); const [cVes, setCVes] = useState(''); const [cRem, setCRem] = useState('');
   const [prs, setPrs] = useState([]); const [stockItems, setStockItems] = useState([]);
@@ -655,18 +656,41 @@ function Liquidation({ voyages, employees, sites, toast }) {
     const row = { id: uid(), custodian: cust.trim() || '—', period_from: pfrom || null, period_to: null, status: 'open', created_at: new Date().toISOString() };
     try { await createFund(row); setFund(row); setAdvs([]); setLines([]); toast('Fund started'); } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
   };
+  const renameCustodian = async () => {
+    const nn = prompt('Custodian name', fund.custodian || ''); if (nn === null) return;
+    const v = nn.trim(); if (!v) { toast('Name required', true); return; }
+    try { await updateFund(fund.id, { custodian: v }); setFund({ ...fund, custodian: v }); toast('Custodian updated'); } catch (e) { toast('Error: ' + e.message, true); }
+  };
   const addAdv = async () => {
     if (aAmt === '' || isNaN(Number(aAmt))) { toast('Enter an amount', true); return; }
+    if (aMode === 'GCash' && !aRef.trim()) { toast('Enter the GCash transaction no.', true); return; }
     setBusy(true);
-    try { await addAdvance({ id: uid(), fund_id: fund.id, date: aDate || today(), amount: Number(aAmt), received_by: aBy.trim() || null, remarks: aRem.trim() || null, created_at: new Date().toISOString() }); setAAmt(''); setARem(''); loadAll(fund); toast('Advance added'); } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+    const row = { id: uid(), fund_id: fund.id, date: aDate || today(), amount: Number(aAmt), received_by: aBy.trim() || null,
+      mode: aMode, gcash_ref: aMode === 'GCash' ? aRef.trim() : null, remarks: aRem.trim() || null, created_at: new Date().toISOString() };
+    try {
+      let hint = false;
+      try { await addAdvance(row); }
+      catch (e) { if (/column|mode|gcash/i.test(e.message || '')) { const { mode, gcash_ref, ...rest } = row; await addAdvance(rest); hint = true; } else throw e; }
+      setAAmt(''); setARem(''); setARef(''); loadAll(fund);
+      toast(hint ? 'Advance added — run updated liquidation.sql to store the GCash details' : 'Advance added' + (aMode === 'GCash' ? ' (GCash)' : ''));
+    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
   };
   const addAllow = async () => {
     if (!alRec) { toast('Select a recipient', true); return; }
     if (alAmt === '' || isNaN(Number(alAmt))) { toast('Enter an amount', true); return; }
     if (!alVes) { toast('Vessel / division is required', true); return; }
+    if (alMode === 'GCash' && !alRef.trim()) { toast('Enter the GCash transaction no.', true); return; }
     const emp = employees.find(e => e.id === alRec);
     setBusy(true);
-    try { await addLiqLine({ id: uid(), fund_id: fund.id, type: 'ALLOWANCE', or_date: alDate || today(), vessel_div: alVes, recipient: emp ? emp.name : alRec, emp_id: emp ? emp.id : null, amount: Number(alAmt), confirmed: false, deductible: 'Pending', remarks: alRem.trim() || null, created_at: new Date().toISOString() }); setAlAmt(''); setAlRem(''); loadAll(fund); toast('Allowance added — awaiting passcode'); } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+    const row = { id: uid(), fund_id: fund.id, type: 'ALLOWANCE', or_date: alDate || today(), vessel_div: alVes, recipient: emp ? emp.name : alRec, emp_id: emp ? emp.id : null, amount: Number(alAmt),
+      mode: alMode, gcash_ref: alMode === 'GCash' ? alRef.trim() : null, confirmed: false, deductible: 'Pending', remarks: alRem.trim() || null, created_at: new Date().toISOString() };
+    try {
+      let hint = false;
+      try { await addLiqLine(row); }
+      catch (e) { if (/column|mode|gcash/i.test(e.message || '')) { const { mode, gcash_ref, ...rest } = row; await addLiqLine(rest); hint = true; } else throw e; }
+      setAlAmt(''); setAlRem(''); setAlRef(''); loadAll(fund);
+      toast(hint ? 'Added — run updated liquidation.sql to store the GCash details' : 'Allowance added — awaiting passcode');
+    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
   };
   const confirmAllow = async (l) => {
     const pin = (pinVals[l.id] || '').trim(); if (!pin) return;
@@ -795,7 +819,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
       <div style="display:flex;justify-content:space-between;align-items:baseline">
         <div><div style="font-size:12px;opacity:.85;text-transform:uppercase;letter-spacing:.5px">Cash on hand</div>
         <div style="font-size:24px;font-weight:800">${peso(balanceLeft)}</div></div>
-        <div style="text-align:right;font-size:12px;opacity:.9">Custodian: ${fund.custodian}<br/>Advance: ${peso(advance)}</div>
+        <div style="text-align:right;font-size:12px;opacity:.9">Custodian: ${fund.custodian} <button onClick=${renameCustodian} style="background:rgba(255,255,255,.22);border:none;color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer">✎ change</button><br/>Advance: ${peso(advance)}</div>
       </div>
     </div>
     <div class="tabs">
@@ -812,12 +836,14 @@ function Liquidation({ voyages, employees, sites, toast }) {
         <label>Cash advance (fund top-up)</label>
         <div class="two"><${Field} label="Date"><input type="date" value=${aDate} onInput=${e=>setADate(e.target.value)} /><//>
         <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${aAmt} onInput=${e=>setAAmt(e.target.value)} placeholder="10000" /><//></div>
+        <div class="two"><${Field} label="Mode"><select value=${aMode} onChange=${e=>setAMode(e.target.value)}><option>Cash</option><option>GCash</option></select><//>
+        ${aMode==='GCash' ? html`<${Field} label="GCash transaction no."><input value=${aRef} onInput=${e=>setARef(e.target.value)} placeholder="ref no." /><//>` : html`<div></div>`}</div>
         <${Field} label="Received by"><input value=${aBy} onInput=${e=>setABy(e.target.value)} /><//>
         <${Field} label="Remarks"><input value=${aRem} onInput=${e=>setARem(e.target.value)} placeholder="optional" /><//>
         <button class="btn" disabled=${busy} onClick=${addAdv}>Add advance</button>
       </div>
       <div class="card"><label>Advances — total ${peso(advance)}</label>
-        ${advs.length ? advs.map(a => html`<div class="row" key=${a.id}><div><div class="name">${peso(a.amount)}</div><div class="sub">${a.date||'—'}${a.received_by?' · '+a.received_by:''}${a.remarks?' · '+a.remarks:''}</div></div><button class="ret" onClick=${()=>removeAdv(a.id)}>✕</button></div>`) : html`<div class="empty">No advances yet.</div>`}
+        ${advs.length ? advs.map(a => html`<div class="row" key=${a.id}><div><div class="name">${peso(a.amount)}</div><div class="sub">${a.date||'—'}${a.mode==='GCash'?' · GCash'+(a.gcash_ref?' #'+a.gcash_ref:''):' · '+(a.mode||'Cash')}${a.received_by?' · '+a.received_by:''}${a.remarks?' · '+a.remarks:''}</div></div><button class="ret" onClick=${()=>removeAdv(a.id)}>✕</button></div>`) : html`<div class="empty">No advances yet.</div>`}
       </div>`}
 
     ${tab === 'mat' && html`
@@ -906,6 +932,8 @@ function Liquidation({ voyages, employees, sites, toast }) {
         <label>Personnel allowance — one row per person</label>
         <div class="two"><${Field} label="Date"><input type="date" value=${alDate} onInput=${e=>setAlDate(e.target.value)} /><//>
         <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${alAmt} onInput=${e=>setAlAmt(e.target.value)} placeholder="150" /><//></div>
+        <div class="two"><${Field} label="Mode"><select value=${alMode} onChange=${e=>setAlMode(e.target.value)}><option>Cash</option><option>GCash</option></select><//>
+        ${alMode==='GCash' ? html`<${Field} label="GCash transaction no."><input value=${alRef} onInput=${e=>setAlRef(e.target.value)} placeholder="ref no." /><//>` : html`<div></div>`}</div>
         <${Field} label="Recipient"><select value=${alRec} onChange=${e=>setAlRec(e.target.value)}><option value="">— select person —</option>${employees.map(e=>html`<option value=${e.id}>${e.name}</option>`)}</select><//>
         <${Field} label="Vessel / division"><select value=${alVes} onChange=${e=>setAlVes(e.target.value)}><option value="">— select —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
         <${Field} label="Remarks"><input value=${alRem} onInput=${e=>setAlRem(e.target.value)} placeholder="optional" /><//>
@@ -915,7 +943,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
         ${lines.filter(l=>l.type==='ALLOWANCE').length ? lines.filter(l=>l.type==='ALLOWANCE').map(l => html`
           <div class="row" key=${l.id} style="align-items:flex-start;flex-direction:column;gap:6px">
             <div style="display:flex;justify-content:space-between;width:100%">
-              <div><div class="name">${l.recipient} · ${peso(l.amount)}</div><div class="sub">${l.or_date||'—'} · ${l.vessel_div||'—'}</div></div>
+              <div><div class="name">${l.recipient} · ${peso(l.amount)}</div><div class="sub">${l.or_date||'—'} · ${l.vessel_div||'—'}${l.mode==='GCash'?' · GCash'+(l.gcash_ref?' #'+l.gcash_ref:''):''}</div></div>
               <button class="ret" onClick=${()=>removeLine(l)}>✕</button>
             </div>
             ${l.confirmed ? html`<div class="sub" style="color:var(--accent2,#1d9e75);font-weight:700">✓ Confirmed${l.confirmed_at?' · '+l.confirmed_at.slice(0,10):''}</div>
