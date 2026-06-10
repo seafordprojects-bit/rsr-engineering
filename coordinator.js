@@ -636,7 +636,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const [pinVals, setPinVals] = useState({}); const [pinErr, setPinErr] = useState({});
   const [cDate, setCDate] = useState(today()); const [cAmt, setCAmt] = useState(''); const [cCharge, setCCharge] = useState('Project'); const [cVes, setCVes] = useState(''); const [cRem, setCRem] = useState('');
   const [prs, setPrs] = useState([]); const [stockItems, setStockItems] = useState([]);
-  const [prTxt, setPrTxt] = useState(''); const [prBy, setPrBy] = useState('Raffy'); const [prSite, setPrSite] = useState('Carmen');
+  const [prItems, setPrItems] = useState([]); const [prPick, setPrPick] = useState(''); const [prBy, setPrBy] = useState('Raffy');
   const [mDate, setMDate] = useState(today()); const [mPr, setMPr] = useState(''); const [mItem, setMItem] = useState(''); const [mUnit, setMUnit] = useState('pc');
   const [mUC, setMUC] = useState(''); const [mQB, setMQB] = useState(''); const [mQU, setMQU] = useState('0');
   const [mVes, setMVes] = useState(''); const [mSite, setMSite] = useState('Carmen'); const [mOr, setMOr] = useState(''); const [mRem, setMRem] = useState('');
@@ -722,20 +722,18 @@ function Liquidation({ voyages, employees, sites, toast }) {
 
   // ---- purchase requests ----
   const createPR = async () => {
-    if (!prTxt.trim()) { toast('Describe the items', true); return; }
+    if (!prItems.length) { toast('Add at least one material', true); return; }
     setBusy(true);
     try {
-      const no = await nextNo('LPR', liqSiteCode(prSite));
-      const row = { id: uid(), pr_no: no, requested_by: prBy.trim() || null, date: today(), status: 'Pending', items: prTxt.trim(), site: prSite, created_at: new Date().toISOString() };
+      const no = await nextNo('LPR', liqSiteCode('Carmen'));
+      const row = { id: uid(), pr_no: no, requested_by: prBy.trim() || null, date: today(), status: 'Pending', items: prItems.join(', '), site: 'Carmen', created_at: new Date().toISOString() };
       try { await addPR(row); }
       catch (e) { if (/column/i.test(e.message || '')) { const { site, ...rest } = row; await addPR(rest); } else throw e; }
-      setPrTxt(''); loadRefs(); toast('PR created: ' + no);
+      setPrItems([]); setPrPick(''); loadRefs(); toast('PR created: ' + no);
     } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
   };
   const decidePR = async (p, status) => {
-    const pinIn = prompt('Coordinator passcode to ' + status.toLowerCase() + ' ' + p.pr_no); if (pinIn === null) return;
-    let saved = '1234'; try { const v = await getSetting('coordinator_pin'); if (v) saved = v; } catch (_) {}
-    if (pinIn !== saved) { toast('Wrong passcode', true); return; }
+    // Passcode gate temporarily removed for initial data entry — restore later.
     try { await updatePR(p.id, { status, approved_by: 'Coordinator', approved_at: new Date().toISOString() }); loadRefs(); toast(p.pr_no + ' ' + status); } catch (e) { toast('Error: ' + e.message, true); }
   };
   const saveNewItem = async () => {
@@ -859,9 +857,14 @@ function Liquidation({ voyages, employees, sites, toast }) {
     ${tab === 'mat' && html`
       <div class="card">
         <label>Purchase requests (approve before buying)</label>
-        <${Field} label="New PR — items / description"><input value=${prTxt} onInput=${e=>setPrTxt(e.target.value)} placeholder="e.g. welding gloves, dark glass" /><//>
-        <div class="two"><${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
-        <${Field} label="Purchase site"><select value=${prSite} onChange=${e=>setPrSite(e.target.value)}>${siteNames.map(s=>html`<option>${s}</option>`)}</select><//></div>
+        <${Field} label="New PR — add materials">
+          <select value=${prPick} onChange=${e=>{const v=e.target.value; if(v && !prItems.includes(v)) setPrItems([...prItems, v]); setPrPick('');}}>
+            <option value="">— add material —</option>
+            ${stockItems.map(s=>html`<option value=${s.name}>${s.name}</option>`)}
+          </select>
+        <//>
+        ${prItems.length ? html`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${prItems.map(it=>html`<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${it}<span style="cursor:pointer;font-weight:700;color:var(--ink-dim)" onClick=${()=>setPrItems(prItems.filter(x=>x!==it))}>✕</span></span>`)}</div>` : html`<div class="sub" style="margin:4px 0">Pick materials from the list to build the PR.</div>`}
+        <${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
         <button class="btn" disabled=${busy} onClick=${createPR}>Create PR</button>
         ${prs.length ? prs.slice(0, 8).map(p => html`
           <div class="row" key=${p.id} style="align-items:flex-start">
@@ -873,7 +876,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
       <div class="card">
         <label>Buy stock material (needs an approved PR)</label>
         <${Field} label="Purchase request">
-          <select value=${mPr} onChange=${e=>{const p=prs.find(x=>x.pr_no===e.target.value);setMPr(e.target.value);if(p&&p.site)setMSite(p.site);}}>
+          <select value=${mPr} onChange=${e=>{setMPr(e.target.value);}}>
             <option value="">— select approved PR —</option>
             ${prs.filter(p=>p.status==='Approved').map(p=>html`<option value=${p.pr_no}>${p.pr_no} · ${p.items ? p.items.slice(0,40) : ''}</option>`)}
           </select>
@@ -894,8 +897,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
         <${Field} label="Qty bought"><input type="number" min="0" value=${mQB} onInput=${e=>setMQB(e.target.value)} /><//></div>
         <div class="two"><${Field} label="Qty used on job"><input type="number" min="0" value=${mQU} onInput=${e=>setMQU(e.target.value)} /><//>
         <div class="field"><label>Qty to stock (auto)</label><input disabled value=${(Number(mQB)||0)-(mQU===''?0:Number(mQU))>=0?(Number(mQB)||0)-(mQU===''?0:Number(mQU)):'—'} /></div></div>
-        <div class="two"><${Field} label="Vessel / division"><select value=${mVes} onChange=${e=>setMVes(e.target.value)}><option value="">— select —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
-        <${Field} label="Site"><select value=${mSite} onChange=${e=>setMSite(e.target.value)}>${siteNames.map(s=>html`<option>${s}</option>`)}</select><//></div>
+        <${Field} label="Vessel / division"><select value=${mVes} onChange=${e=>setMVes(e.target.value)}><option value="">— select —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
         <div class="sub" style="margin:2px 0 4px">Used ₱${((mQU===''?0:Number(mQU))*(Number(mUC)||0)).toLocaleString('en-PH')} → project cost · To stock ₱${(((Number(mQB)||0)-(mQU===''?0:Number(mQU)))*(Number(mUC)||0)).toLocaleString('en-PH')} → ${mSite} stock</div>
         <${Field} label="Remarks"><input value=${mRem} onInput=${e=>setMRem(e.target.value)} placeholder="optional" /><//>
         <button class="btn" disabled=${busy} onClick=${addMaterial}>Add material line</button>
