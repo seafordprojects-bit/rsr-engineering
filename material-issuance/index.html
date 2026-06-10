@@ -133,6 +133,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 <div id="s-request" class="screen">
   <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Request Materials</div><div class="tsub">To warehouse · Carmen</div></div><button class="bk" style="width:auto;padding:0 14px;border-radius:18px;font-size:13px;font-weight:700" onclick="openReqHist()">History</button></div>
   <div class="pc">
+    <div id="r-outstanding"></div>
     <div class="sec">
       <div class="sec-h"><div class="sec-n">1</div><div><div class="sec-t">Request details</div><div class="sec-s">Who is requesting and any note</div></div></div>
       <label class="fl">Date</label>
@@ -253,6 +254,7 @@ function toast(m){const t=document.createElement('div');t.className='toast';t.te
 function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo(0,0);}
 function todayYmd(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
 function fmtNice(y){if(!y)return '';return new Date(y+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'2-digit'});}
+function fmtDT(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleString('en-PH',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});}
 
 (async function boot(){
   try{const{data}=await sb.from('settings').select('value').eq('key','issuance_pin').single();if(data&&data.value)issuancePin=String(data.value);}catch(e){}
@@ -442,7 +444,20 @@ async function openRequest(){
   document.getElementById('r-remarks').value='';
   document.getElementById('r-urgent').checked=false;
   document.getElementById('r-rows').innerHTML='';addReqRow();
+  renderOutstanding();
   showScreen('s-request');
+}
+async function renderOutstanding(){
+  const el=document.getElementById('r-outstanding');if(!el)return;el.innerHTML='';
+  let rows=[];try{const{data}=await sb.from('requests').select('id,status,items').eq('site',SITE).in('status',['Pending','Partial']).order('created_at',{ascending:false});rows=data||[];}catch(e){return;}
+  if(!rows.length)return;
+  const names=[...new Set(rows.flatMap(r=>(r.items||[]).map(i=>i.n)))];
+  el.innerHTML=`<div style="background:var(--al);border:1px solid var(--am);border-radius:12px;padding:12px 14px;margin-bottom:12px">
+    <div style="font-weight:800;color:#7a4a06;font-size:14px">⏳ ${rows.length} request(s) still awaiting delivery</div>
+    <div style="font-size:12px;color:#7a4a06;margin-top:4px">These items are already requested and will be served once stock arrives — no need to request them again:</div>
+    <div style="font-size:12px;color:var(--tx2);margin-top:6px">${names.join(' · ')}</div>
+    <div style="font-size:12px;margin-top:8px"><a onclick="openReqHist()" style="color:var(--p);font-weight:700;cursor:pointer">View request history →</a></div>
+  </div>`;
 }
 function addReqRow(name='',qty=1){
   rr++;const id='rr-'+rr;
@@ -499,7 +514,7 @@ async function autoRequestCheck(){
     await loadStock();
     // items already on an open request (avoid duplicates)
     const have=new Set();
-    try{const{data}=await sb.from('requests').select('items,status').eq('site',SITE).in('status',['Pending','Approved','Dispatched']);(data||[]).forEach(r=>(r.items||[]).forEach(it=>have.add(it.n||it.name)));}catch(e){}
+    try{const{data}=await sb.from('requests').select('items,status').eq('site',SITE).in('status',['Pending','Approved','Partial','Dispatched']);(data||[]).forEach(r=>(r.items||[]).forEach(it=>have.add(it.n||it.name)));}catch(e){}
     // daily usage from last 30 days of issuances
     const since=new Date(Date.now()-30*86400000).toISOString();
     const daily={};
@@ -541,11 +556,11 @@ async function openReqHist(){
     const its=(r.items||[]);
     const total=its.reduce((s,i)=>s+(Number(i.qty)||0),0);
     const itemRows=its.map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${i.n}</span><span style="font-family:ui-monospace,monospace;color:var(--tx2);white-space:nowrap">${i.qty}${i.u?' '+i.u:''}</span></div>`).join('');
-    const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${r.id}</div><div style="font-size:12px;color:var(--tx2)">${fmtNice(r.date)}${r.urgent?' · <span style=\"color:var(--r);font-weight:800\">URGENT</span>':''}</div></div>${stBadge(r.status)}`;
+    const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${r.id}</div><div style="font-size:12px;color:var(--tx2)">${fmtDT(r.created_at||r.date)}${r.urgent?' · <span style=\"color:var(--r);font-weight:800\">URGENT</span>':''}</div></div>${stBadge(r.status)}`;
     const body=`<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px">
         <div style="font-size:15px;font-weight:800;color:var(--p)">Material Request</div>
         <div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.id}${r.dr_no?' · '+r.dr_no:''}</div>
-        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(r.date)} · ${r.site||'—'}</div></div>
+        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtDT(r.created_at||r.date)} · ${r.site||'—'}</div></div>
       <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Requested by</span><span style="font-weight:700">${r.by_name||'—'}</span></div>
       ${r.remarks?`<div style="font-size:12px;color:var(--tx3);margin-top:4px">“${r.remarks}”</div>`:''}
       <div style="border-top:1.5px dashed var(--bd2);margin:10px 0 8px;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Item</span><span>Qty</span></div>
@@ -571,11 +586,11 @@ async function openReceive(){
     const its=(d.items||[]);
     const tu=its.reduce((s,x)=>s+(Number(x.qty)||0),0);
     const itemRows=its.map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${i.n}</span><span style="font-family:ui-monospace,monospace;color:var(--tx2)">${i.qty}${i.u?' '+i.u:''}</span></div>`).join('');
-    const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${d.dr_no||d.id}</div><div style="font-size:12px;color:var(--tx2)">${fmtNice(d.date)} · ${its.length} item(s)</div></div>`;
+    const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${d.dr_no||d.id}</div><div style="font-size:12px;color:var(--tx2)">${fmtDT(d.created_at||d.date)} · ${its.length} item(s)</div></div>`;
     const body=`<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px">
         <div style="font-size:14px;font-weight:800;color:var(--p)">Incoming Dispatch</div>
         <div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${d.dr_no||d.id}</div>
-        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(d.date)} · from Warehouse</div></div>
+        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtDT(d.created_at||d.date)} · from Warehouse</div></div>
       <div style="margin:0 0 8px;display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Sent</span><span>Qty</span></div>
       ${itemRows}
       <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:800;text-transform:uppercase;color:var(--tx2)">Total</span><span style="font-size:18px;font-weight:900;color:var(--p)">${tu} units</span></div>
@@ -650,8 +665,8 @@ async function confirmDelivery(){
   const recvMap={};out.forEach(it=>{recvMap[it.n]=(recvMap[it.n]||0)+it.qty;});
   let short=[];
   if(linkedDispatch){short=Object.keys(sentMap).map(nm=>({n:nm,u:gu(nm),qty:Math.max(0,(sentMap[nm]||0)-(recvMap[nm]||0))})).filter(x=>x.qty>0);}
-  const n=new Date(),z=x=>String(x).padStart(2,'0');
-  const id='DLV-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
+  let id='';try{const{data,error}=await sb.rpc('next_no',{p_prefix:'DLV',p_site:SITECODE});if(!error&&data)id=data;}catch(e){}
+  if(!id){const n=new Date(),z=x=>String(x).padStart(2,'0');id='DLV-'+SITECODE+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
   const base={id,site:SITE,source,ref:ref||null,date,received_by:by,items:out.map(i=>({n:i.n,u:i.u,qty:i.qty})),request_id:linkedReq,created_at:new Date().toISOString()};
   try{
     let ins=await sb.from('deliveries').insert([{...base,short:short,dr_no:ref||null,dispatch_id:linkedDispatch}]);
@@ -690,8 +705,8 @@ async function renderRecords(tab){
     catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
     if(!rows.length){el.innerHTML='<div class="empty">No issuances yet.</div>';return;}
     el.innerHTML=rows.map(r=>{
-      const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px">${r.proj_name||'—'}</div><div style="font-family:ui-monospace,monospace;font-size:12px;color:var(--p)">${r.slip_no||r.id||''}</div></div><div style="font-size:12px;color:var(--tx3);white-space:nowrap">${fmtNice(r.date)}</div>`;
-      const body=`<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px"><div style="font-size:15px;font-weight:800;color:var(--p)">Material Issuance</div><div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.slip_no||r.id||''}</div><div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(r.date)} · ${SITE}</div></div>
+      const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px">${r.proj_name||'—'}</div><div style="font-family:ui-monospace,monospace;font-size:12px;color:var(--p)">${r.slip_no||r.id||''}</div></div><div style="font-size:12px;color:var(--tx3);white-space:nowrap">${fmtDT(r.created_at||r.date)}</div>`;
+      const body=`<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px"><div style="font-size:15px;font-weight:800;color:var(--p)">Material Issuance</div><div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.slip_no||r.id||''}</div><div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtDT(r.created_at||r.date)} · ${SITE}</div></div>
         <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Project / vessel</span><span style="font-weight:700">${r.proj_name||'—'}</span></div>
         <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Issued to</span><span style="font-weight:700">${r.emp_name||'—'}</span></div>
         <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Issued by</span><span style="font-weight:700">${r.by_name||'—'}</span></div>
@@ -706,9 +721,16 @@ async function renderRecords(tab){
     if(!rows.length){el.innerHTML='<div class="empty">No deliveries yet.</div>';return;}
     el.innerHTML=rows.map(r=>{
       const short=(r.short||[]);
-      const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${r.dr_no||r.ref||r.id}</div><div style="font-size:12px;color:var(--tx2)">${r.source||'Delivery'} · ${fmtNice(r.date)}</div></div>${short.length?'<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:var(--r);color:#fff">SHORT</span>':'<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:var(--pm);color:#fff">OK</span>'}`;
+      const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${r.id}</div><div style="font-size:12px;color:var(--tx2)">${fmtDT(r.created_at||r.date)}</div></div>${short.length?'<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:var(--r);color:#fff">SHORT</span>':'<span style="font-size:11px;font-weight:800;padding:2px 9px;border-radius:99px;background:var(--pm);color:#fff">OK</span>'}`;
       const shortRows=short.length?`<div style="background:var(--rl);color:var(--r);font-size:12px;padding:9px 11px;border-radius:8px;margin-top:8px"><b>⚠ Short / not received</b><br>${short.map(s=>`${s.n} ${s.qty}${s.u?' '+s.u:''}`).join(' · ')}<br><span style="color:var(--tx2)">Sent back to the warehouse as still owed.</span></div>`:'';
-      const body=`<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px"><div style="font-size:15px;font-weight:800;color:var(--p)">Delivery Receipt</div><div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.dr_no||r.ref||r.id}</div><div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtNice(r.date)} · ${r.source||'Delivery'}</div></div>
+      const chain=`<div style="background:var(--bg3);border-radius:8px;padding:9px 11px;margin-bottom:10px;font-size:12px">
+        <div style="font-weight:800;color:var(--tx2);text-transform:uppercase;letter-spacing:.3px;font-size:10px;margin-bottom:4px">Traceability</div>
+        <div style="display:flex;justify-content:space-between;padding:1px 0"><span style="color:var(--tx2)">Request</span><span style="font-family:ui-monospace,monospace">${r.request_id||'— direct —'}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:1px 0"><span style="color:var(--tx2)">Dispatch</span><span style="font-family:ui-monospace,monospace">${r.dr_no||'—'}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:1px 0"><span style="color:var(--tx2)">Delivery</span><span style="font-family:ui-monospace,monospace;font-weight:700;color:var(--p)">${r.id}</span></div>
+      </div>`;
+      const body=`<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px"><div style="font-size:15px;font-weight:800;color:var(--p)">Delivery Receipt</div><div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.id}</div><div style="font-size:12px;color:var(--tx2);margin-top:2px">Received ${fmtDT(r.created_at||r.date)} · ${r.source||'Delivery'}</div></div>
+        ${chain}
         <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Received by</span><span style="font-weight:700">${r.received_by||'—'}</span></div>
         <div style="border-top:1.5px dashed var(--bd2);margin:10px 0 8px;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Received</span><span>Qty</span></div>
         ${itRows(r.items)}
@@ -728,10 +750,10 @@ async function renderRecords(tab){
     el.innerHTML=reqs.map(r=>{
       const myDisp=disps.filter(d=>d.request_id===r.id);
       const myDel=dels.filter(d=>d.request_id===r.id||myDisp.some(x=>x.id===d.dispatch_id));
-      const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${r.id}</div><div style="font-size:12px;color:var(--tx2)">${fmtNice(r.date)}${r.urgent?' · <span style=\"color:var(--r);font-weight:800\">URGENT</span>':''}</div></div>${bdg(r.status)}`;
+      const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px;font-family:ui-monospace,monospace;color:var(--p)">${r.id}</div><div style="font-size:12px;color:var(--tx2)">${fmtDT(r.created_at||r.date)}${r.urgent?' · <span style=\"color:var(--r);font-weight:800\">URGENT</span>':''}</div></div>${bdg(r.status)}`;
       const s1=step('1','var(--am)','Requested · by '+(r.by_name||'—'),itRows(r.items)||'<div style="font-size:12px;color:var(--tx3)">—</div>');
-      const s2=step('2','var(--b)','Dispatched',myDisp.length?myDisp.map(d=>`<div style="margin-bottom:6px"><div style="font-family:ui-monospace,monospace;font-size:12px;color:var(--b)">${d.dr_no||d.id} · ${fmtNice(d.date)}</div>${itRows(d.items)}</div>`).join(''):'<div style="font-size:12px;color:var(--tx3)">Not yet dispatched</div>');
-      const s3=step('3','var(--pm)','Received',myDel.length?myDel.map(d=>{const sh=(d.short||[]);return `<div style="margin-bottom:6px"><div style="font-size:12px;color:var(--tx2)">${fmtNice(d.date)} · by ${d.received_by||'—'}</div>${itRows(d.items)}${sh.length?`<div style="font-size:12px;color:var(--r);margin-top:3px">⚠ short: ${sh.map(s=>s.n+' '+s.qty).join(', ')}</div>`:''}</div>`;}).join(''):'<div style="font-size:12px;color:var(--tx3)">Not yet received</div>');
+      const s2=step('2','var(--b)','Dispatched',myDisp.length?myDisp.map(d=>`<div style="margin-bottom:6px"><div style="font-family:ui-monospace,monospace;font-size:12px;color:var(--b)">${d.dr_no||d.id} · ${fmtDT(d.created_at||d.date)}</div>${itRows(d.items)}</div>`).join(''):'<div style="font-size:12px;color:var(--tx3)">Not yet dispatched</div>');
+      const s3=step('3','var(--pm)','Received',myDel.length?myDel.map(d=>{const sh=(d.short||[]);return `<div style="margin-bottom:6px"><div style="font-size:12px;color:var(--tx2)">${fmtDT(d.created_at||d.date)} · by ${d.received_by||'—'}</div>${itRows(d.items)}${sh.length?`<div style="font-size:12px;color:var(--r);margin-top:3px">⚠ short: ${sh.map(s=>s.n+' '+s.qty).join(', ')}</div>`:''}</div>`;}).join(''):'<div style="font-size:12px;color:var(--tx3)">Not yet received</div>');
       return dd(head,s1+s2+s3);
     }).join('');
   }
