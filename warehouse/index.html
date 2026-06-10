@@ -96,11 +96,9 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
   </div>
   <div class="tabs">
     <button type="button" class="tab active" id="tab-stock" data-tab="stock">Stock</button>
-    <button type="button" class="tab" id="tab-requests" data-tab="requests">Requests<span class="dot" id="req-dot" style="display:none;background:var(--r)"></span></button>
-    <button type="button" class="tab" id="tab-delivery" data-tab="delivery">Record delivery</button>
-    <button type="button" class="tab" id="tab-dispatch" data-tab="dispatch">Create dispatch</button>
-    <button type="button" class="tab" id="tab-log" data-tab="log">Dispatch log</button>
     <button type="button" class="tab" id="tab-inventory" data-tab="inventory">Inventory</button>
+    <button type="button" class="tab" id="tab-delivery" data-tab="delivery">Record delivery</button>
+    <button type="button" class="tab" id="tab-flow" data-tab="flow">Supply<span class="dot" id="req-dot" style="display:none;background:var(--r)"></span></button>
   </div>
   <div class="pc" id="main-content"></div>
 </div>
@@ -176,16 +174,37 @@ async function refreshBadge(){let n=0;try{const{count}=await sb.from('requests')
 
 async function swTab(name){
  try{
-  ['stock','requests','delivery','dispatch','log','inventory'].forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.classList.toggle('active',t===name);});
+  ['stock','inventory','delivery','flow'].forEach(t=>{const el=document.getElementById('tab-'+t);if(el)el.classList.toggle('active',t===name);});
   const c=document.getElementById('main-content');c.scrollTop=0;c.innerHTML='<div class="empty">Loading…</div>';
   if(name==='stock')await renderStock(c);
-  else if(name==='requests')await renderRequests(c);
   else if(name==='delivery')renderDelivery(c);
-  else if(name==='dispatch')await renderDispatch(c);
-  else if(name==='log')await renderLog(c);
   else if(name==='inventory')await renderInventory(c);
+  else if(name==='flow')await renderFlow(c);
   refreshBadge();
  }catch(e){const c=document.getElementById('main-content');if(c)c.innerHTML='<div class="sc"><div class="empty">Could not open this tab.<br>'+(e&&e.message?e.message:e)+'</div></div>';}
+}
+
+/* ── DISPATCHING (combined: Requests → Create dispatch → Dispatch log) ── */
+let currentFlowSub='requests';
+function fsubCss(on){return 'flex:1;padding:9px 8px;font-size:12px;font-weight:700;border:none;border-radius:8px;cursor:pointer;font-family:inherit;white-space:nowrap;'+(on?'background:var(--p);color:#fff':'background:transparent;color:var(--tx2)');}
+async function renderFlow(c){
+  c.innerHTML=`<div style="display:flex;gap:6px;background:var(--bg2);border:1px solid var(--bd);border-radius:12px;padding:5px;margin-bottom:14px">
+    <button type="button" id="fsub-requests" style="${fsubCss(false)}" onclick="swFlow('requests')">Requests</button>
+    <button type="button" id="fsub-dispatch" style="${fsubCss(false)}" onclick="swFlow('dispatch')">Create dispatch</button>
+    <button type="button" id="fsub-log" style="${fsubCss(false)}" onclick="swFlow('log')">Dispatch log</button>
+  </div><div id="flow-content"></div>`;
+  await swFlow(currentFlowSub||'requests');
+}
+async function swFlow(sub){
+  try{
+    currentFlowSub=sub;
+    ['requests','dispatch','log'].forEach(t=>{const b=document.getElementById('fsub-'+t);if(b)b.style.cssText=fsubCss(t===sub);});
+    const fc=document.getElementById('flow-content');if(!fc)return;fc.scrollTop=0;fc.innerHTML='<div class="empty">Loading…</div>';
+    if(sub==='requests')await renderRequests(fc);
+    else if(sub==='dispatch')await renderDispatch(fc);
+    else if(sub==='log')await renderLog(fc);
+    refreshBadge();
+  }catch(e){const fc=document.getElementById('flow-content');if(fc)fc.innerHTML='<div class="sc"><div class="empty">Could not open.<br>'+(e&&e.message?e.message:e)+'</div></div>';}
 }
 
 /* ── STOCK ── */
@@ -235,8 +254,8 @@ async function renderRequests(c){
       </div></div>`;
   }).join('');
 }
-async function cancelReq(id){try{await sb.from('requests').update({status:'Cancelled',updated_at:new Date().toISOString()}).eq('id',id);toast('Request cancelled');swTab('requests');}catch(e){toast('Failed: '+e.message,'err');}}
-function dispatchFromReq(id){const r=(window._reqs||[]).find(x=>x.id===id);if(!r)return;dispatchPrefill=r;swTab('dispatch');}
+async function cancelReq(id){try{await sb.from('requests').update({status:'Cancelled',updated_at:new Date().toISOString()}).eq('id',id);toast('Request cancelled');swFlow('requests');}catch(e){toast('Failed: '+e.message,'err');}}
+function dispatchFromReq(id){const r=(window._reqs||[]).find(x=>x.id===id);if(!r)return;dispatchPrefill=r;currentFlowSub='dispatch';swTab('flow');}
 
 /* ── RECORD DELIVERY (supplier → warehouse) ── */
 let dcRows=0;
@@ -300,7 +319,7 @@ async function renderDispatch(c){
     +(dpReqId?'<div style="font-size:12px;color:var(--tx2);margin:-2px 0 8px">Pre-filled with what was requested. To give less, lower a qty or remove a row — whatever isn\'t given keeps the request open as <b>Partial</b>.</div>':'')
     +'<div style="display:grid;grid-template-columns:minmax(0,2fr) 70px 38px;gap:8px;margin-bottom:6px"><span class="fl" style="margin:0">Item</span><span class="fl" style="margin:0">Qty</span><span></span></div>'
     +'<div id="dp-rows"></div><button class="add-row" onclick="addDpRow()">+ Add item</button>'
-    +'<div class="btn-row"><button class="btn btn-secondary btn-sm" onclick="dispatchPrefill=null;swTab(\'dispatch\')">Clear</button><button class="btn btn-primary" onclick="saveDispatch()">Dispatch &amp; get DR no</button></div></div>';
+    +'<div class="btn-row"><button class="btn btn-secondary btn-sm" onclick="dispatchPrefill=null;swFlow(\'dispatch\')">Clear</button><button class="btn btn-primary" onclick="saveDispatch()">Dispatch &amp; get DR no</button></div></div>';
   if(dispatchPrefill&&(dispatchPrefill.items||[]).length)dispatchPrefill.items.forEach(it=>addDpRow(it.n,it.qty,it.qty));else addDpRow();
   dispatchPrefill=null;
 }
@@ -344,7 +363,7 @@ async function saveDispatch(){
     c.innerHTML=`<div class="sc" style="text-align:center"><div style="font-size:40px">✅</div><div class="sc-title" style="margin-top:8px">Dispatch created</div>
       <div class="disp-num-box" style="justify-content:center;margin-top:12px"><div class="disp-num">${drNo}</div></div>
       <div class="sc-sub">${items.reduce((s,i)=>s+i.qty,0)} item(s) to ${site}. The site can now receive it.</div>
-      <button class="btn btn-primary" onclick="swTab('log')">View dispatch log</button></div>`;
+      <button class="btn btn-primary" onclick="swFlow('log')">View dispatch log</button></div>`;
     toast('Dispatched '+drNo);
   }catch(e){toast('Failed: '+e.message,'err');}
 }
