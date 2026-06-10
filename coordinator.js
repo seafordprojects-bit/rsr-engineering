@@ -645,7 +645,11 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const [tQ, setTQ] = useState('1'); const [tSite, setTSite] = useState('Carmen'); const [tVes, setTVes] = useState(''); const [tOr, setTOr] = useState(''); const [tRem, setTRem] = useState('');
   const [busy, setBusy] = useState(false);
 
-  const vessels = (voyages || []).map(v => v.vessel_name).filter(Boolean);
+  // Vessel/division picker = only vessels currently in an ACTIVE repair phase.
+  // Appears once a START date is encoded (docking / afloat start / emergency start)
+  // and drops out the moment the MATCHING end date is encoded (undocking / afloat end / emergency end).
+  const isActiveRepair = (v) => (v.docking_date && !v.undocking_date) || (v.afloat_start && !v.afloat_done) || (v.emergency_start && !v.emergency_end);
+  const vessels = (voyages || []).filter(isActiveRepair).map(v => v.vessel_name).filter(Boolean);
   const siteNames = (sites || []).length ? sites.map(s => s.name) : ['Carmen', 'Mandaue'];
   const loadRefs = async () => { try { setPrs(await getPRs()); setStockItems(await getStockItems()); } catch (e) { toast('Refs load failed: ' + e.message, true); } };
   const loadAll = async (f) => { if (!f) return; try { setAdvs(await getAdvances(f.id)); setLines(await getLiqLines(f.id)); } catch (e) { toast('Load failed: ' + e.message, true); } };
