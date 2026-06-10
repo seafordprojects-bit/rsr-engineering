@@ -58,6 +58,20 @@ async function deleteExpense(id) {
   const { error } = await supabase.from('expenses').delete().eq('id', id);
   if (error) throw error;
 }
+// ---------- liquidation ----------
+async function getOpenFund() {
+  const { data } = await supabase.from('liq_fund').select('*').eq('status', 'open').order('created_at', { ascending: false }).limit(1);
+  return (data && data[0]) || null;
+}
+async function createFund(row) { const { error } = await supabase.from('liq_fund').insert(row); if (error) throw error; }
+async function getAdvances(fundId) { const { data, error } = await supabase.from('liq_advance').select('*').eq('fund_id', fundId).order('created_at', { ascending: false }); if (error) throw error; return data || []; }
+async function addAdvance(row) { const { error } = await supabase.from('liq_advance').insert(row); if (error) throw error; }
+async function delAdvance(id) { const { error } = await supabase.from('liq_advance').delete().eq('id', id); if (error) throw error; }
+async function getLiqLines(fundId) { const { data, error } = await supabase.from('liq_line').select('*').eq('fund_id', fundId).order('created_at', { ascending: false }); if (error) throw error; return data || []; }
+async function addLiqLine(row) { const { error } = await supabase.from('liq_line').insert(row); if (error) throw error; }
+async function updateLiqLine(id, fields) { const { error } = await supabase.from('liq_line').update(fields).eq('id', id); if (error) throw error; }
+async function delLiqLine(id) { const { error } = await supabase.from('liq_line').delete().eq('id', id); if (error) throw error; }
+async function verifyPin(empId, pin) { const { data, error } = await supabase.rpc('verify_pin', { emp_id: empId, pin_input: pin }); if (error) throw error; return data === true; }
 function todayPH() { return new Date().toLocaleDateString('en-PH', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
 async function fileLeave(row) {
   const { error } = await supabase.from('leave_requests').insert(row);
@@ -563,6 +577,186 @@ function Expenses({ voyages, toast }) {
     </div>`;
 }
 
+// ---------- Liquidation (cash advance, reconcile by project) ----------
+function Liquidation({ voyages, employees, toast }) {
+  const peso = (n) => '₱' + Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const uid = () => 'L' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const today = () => new Date().toISOString().slice(0, 10);
+  const bSm = 'padding:6px 12px;border:none;border-radius:8px;background:var(--accent,#0f6e56);color:#fff;font-size:13px;font-weight:700;cursor:pointer';
+  const bSmAlt = 'padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer';
+
+  const [fund, setFund] = useState(undefined);
+  const [advs, setAdvs] = useState([]);
+  const [lines, setLines] = useState([]);
+  const [tab, setTab] = useState('fund');
+  const [cust, setCust] = useState('Raffy');
+  const [pfrom, setPfrom] = useState(today());
+  const [aDate, setADate] = useState(today()); const [aAmt, setAAmt] = useState(''); const [aBy, setABy] = useState('Raffy'); const [aRem, setARem] = useState('');
+  const [alDate, setAlDate] = useState(today()); const [alRec, setAlRec] = useState(''); const [alAmt, setAlAmt] = useState(''); const [alVes, setAlVes] = useState(''); const [alRem, setAlRem] = useState('');
+  const [pinVals, setPinVals] = useState({}); const [pinErr, setPinErr] = useState({});
+  const [cDate, setCDate] = useState(today()); const [cAmt, setCAmt] = useState(''); const [cCharge, setCCharge] = useState('Project'); const [cVes, setCVes] = useState(''); const [cRem, setCRem] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const vessels = (voyages || []).map(v => v.vessel_name).filter(Boolean);
+  const loadAll = async (f) => { if (!f) return; try { setAdvs(await getAdvances(f.id)); setLines(await getLiqLines(f.id)); } catch (e) { toast('Load failed: ' + e.message, true); } };
+  useEffect(() => { (async () => { try { const f = await getOpenFund(); setFund(f); if (f) loadAll(f); } catch (e) { setFund(null); toast('Load failed: ' + e.message, true); } })(); }, []);
+
+  const startFund = async () => {
+    setBusy(true);
+    const row = { id: uid(), custodian: cust.trim() || '—', period_from: pfrom || null, period_to: null, status: 'open', created_at: new Date().toISOString() };
+    try { await createFund(row); setFund(row); setAdvs([]); setLines([]); toast('Fund started'); } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+  };
+  const addAdv = async () => {
+    if (aAmt === '' || isNaN(Number(aAmt))) { toast('Enter an amount', true); return; }
+    setBusy(true);
+    try { await addAdvance({ id: uid(), fund_id: fund.id, date: aDate || today(), amount: Number(aAmt), received_by: aBy.trim() || null, remarks: aRem.trim() || null, created_at: new Date().toISOString() }); setAAmt(''); setARem(''); loadAll(fund); toast('Advance added'); } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+  };
+  const addAllow = async () => {
+    if (!alRec) { toast('Select a recipient', true); return; }
+    if (alAmt === '' || isNaN(Number(alAmt))) { toast('Enter an amount', true); return; }
+    if (!alVes) { toast('Vessel / division is required', true); return; }
+    const emp = employees.find(e => e.id === alRec);
+    setBusy(true);
+    try { await addLiqLine({ id: uid(), fund_id: fund.id, type: 'ALLOWANCE', or_date: alDate || today(), vessel_div: alVes, recipient: emp ? emp.name : alRec, emp_id: emp ? emp.id : null, amount: Number(alAmt), confirmed: false, deductible: 'Pending', remarks: alRem.trim() || null, created_at: new Date().toISOString() }); setAlAmt(''); setAlRem(''); loadAll(fund); toast('Allowance added — awaiting passcode'); } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+  };
+  const confirmAllow = async (l) => {
+    const pin = (pinVals[l.id] || '').trim(); if (!pin) return;
+    const emp = employees.find(e => e.id === l.emp_id) || employees.find(e => e.name === l.recipient);
+    if (!emp) { setPinErr({ ...pinErr, [l.id]: 'Employee not found' }); return; }
+    try {
+      const ok = await verifyPin(emp.id, pin);
+      if (ok) { await updateLiqLine(l.id, { confirmed: true, confirmed_at: new Date().toISOString() }); setPinErr({ ...pinErr, [l.id]: '' }); setPinVals({ ...pinVals, [l.id]: '' }); loadAll(fund); toast('Allowance confirmed'); }
+      else setPinErr({ ...pinErr, [l.id]: 'Wrong passcode for ' + l.recipient });
+    } catch (e) { toast('Error: ' + e.message, true); }
+  };
+  const setDeduct = async (l, val) => { try { await updateLiqLine(l.id, { deductible: val, decided_at: new Date().toISOString(), decided_by: 'Payroller' }); loadAll(fund); toast('Set ' + val); } catch (e) { toast('Error: ' + e.message, true); } };
+  const addCons = async () => {
+    if (cAmt === '' || isNaN(Number(cAmt))) { toast('Enter an amount', true); return; }
+    if (cCharge === 'Project' && !cVes) { toast('Vessel required for Project charge', true); return; }
+    setBusy(true);
+    try { await addLiqLine({ id: uid(), fund_id: fund.id, type: 'CONSUMABLE', or_date: cDate || today(), amount: Number(cAmt), charge_to: cCharge, vessel_div: cCharge === 'Project' ? cVes : null, remarks: cRem.trim() || null, created_at: new Date().toISOString() }); setCAmt(''); setCRem(''); loadAll(fund); toast('Consumable added'); } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+  };
+  const removeLine = async (id) => { if (!confirm('Delete this line?')) return; try { await delLiqLine(id); loadAll(fund); toast('Deleted'); } catch (e) { toast('Error: ' + e.message, true); } };
+  const removeAdv = async (id) => { if (!confirm('Delete this advance?')) return; try { await delAdvance(id); loadAll(fund); toast('Deleted'); } catch (e) { toast('Error: ' + e.message, true); } };
+
+  const advance = advs.reduce((s, a) => s + Number(a.amount || 0), 0);
+  let allow = 0, consProj = 0, consAdm = 0, matUsed = 0, stockVal = 0, toolVal = 0;
+  lines.forEach(l => {
+    if (l.type === 'ALLOWANCE') allow += Number(l.amount || 0);
+    else if (l.type === 'CONSUMABLE') { if (l.charge_to === 'Project') consProj += Number(l.amount || 0); else consAdm += Number(l.amount || 0); }
+    else if (l.type === 'STOCK_MATERIAL') { matUsed += Number(l.qty_used || 0) * Number(l.unit_cost || 0); stockVal += Number(l.qty_to_stock || 0) * Number(l.unit_cost || 0); }
+    else if (l.type === 'TOOL') { toolVal += Number(l.qty || 0) * Number(l.unit_cost || 0); }
+  });
+  const consumed = allow + consProj + consAdm + matUsed;
+  const onhand = stockVal + toolVal;
+  const cashRet = advance - consumed - onhand;
+  const cashOut = lines.reduce((s, l) => { if (l.type === 'STOCK_MATERIAL') return s + Number(l.qty_bought || 0) * Number(l.unit_cost || 0); if (l.type === 'TOOL') return s + Number(l.qty || 0) * Number(l.unit_cost || 0); return s + Number(l.amount || 0); }, 0);
+  const balanceLeft = advance - cashOut;
+  const perVessel = {};
+  lines.forEach(l => { let amt = 0; if (l.type === 'ALLOWANCE') amt = Number(l.amount || 0); else if (l.type === 'CONSUMABLE' && l.charge_to === 'Project') amt = Number(l.amount || 0); else if (l.type === 'STOCK_MATERIAL') amt = Number(l.qty_used || 0) * Number(l.unit_cost || 0); if (amt > 0 && l.vessel_div) perVessel[l.vessel_div] = (perVessel[l.vessel_div] || 0) + amt; });
+  const perPerson = {};
+  lines.filter(l => l.type === 'ALLOWANCE').forEach(l => { const k = l.recipient || '—'; if (!perPerson[k]) perPerson[k] = { total: 0, confirmed: 0 }; perPerson[k].total += Number(l.amount || 0); if (l.confirmed) perPerson[k].confirmed += Number(l.amount || 0); });
+
+  if (fund === undefined) return html`<div class="card"><div class="empty">Loading…</div></div>`;
+  if (fund === null) return html`
+    <div class="card">
+      <label>Start a liquidation fund</label>
+      <p class="sub" style="margin:0 0 10px">One custodian fund over a period. Top it up with advances; reconcile by project.</p>
+      <${Field} label="Custodian"><input value=${cust} onInput=${e => setCust(e.target.value)} placeholder="Name" /><//>
+      <${Field} label="Period from"><input type="date" value=${pfrom} onInput=${e => setPfrom(e.target.value)} /><//>
+      <button class="btn" disabled=${busy} onClick=${startFund}>${busy ? 'Starting…' : 'Start fund'}</button>
+    </div>`;
+
+  return html`
+    <div class="card" style="background:var(--accent,#0f6e56);color:#fff">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <div><div style="font-size:12px;opacity:.85;text-transform:uppercase;letter-spacing:.5px">Cash on hand</div>
+        <div style="font-size:24px;font-weight:800">${peso(balanceLeft)}</div></div>
+        <div style="text-align:right;font-size:12px;opacity:.9">Custodian: ${fund.custodian}<br/>Advance: ${peso(advance)}</div>
+      </div>
+    </div>
+    <div class="tabs">
+      <button class=${tab==='fund'?'on':''} onClick=${() => setTab('fund')}>Fund</button>
+      <button class=${tab==='allow'?'on':''} onClick=${() => setTab('allow')}>Allowance</button>
+      <button class=${tab==='cons'?'on':''} onClick=${() => setTab('cons')}>Consumables</button>
+      <button class=${tab==='sum'?'on':''} onClick=${() => setTab('sum')}>Summary</button>
+    </div>
+
+    ${tab === 'fund' && html`
+      <div class="card">
+        <label>Cash advance (fund top-up)</label>
+        <div class="two"><${Field} label="Date"><input type="date" value=${aDate} onInput=${e=>setADate(e.target.value)} /><//>
+        <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${aAmt} onInput=${e=>setAAmt(e.target.value)} placeholder="10000" /><//></div>
+        <${Field} label="Received by"><input value=${aBy} onInput=${e=>setABy(e.target.value)} /><//>
+        <${Field} label="Remarks"><input value=${aRem} onInput=${e=>setARem(e.target.value)} placeholder="optional" /><//>
+        <button class="btn" disabled=${busy} onClick=${addAdv}>Add advance</button>
+      </div>
+      <div class="card"><label>Advances — total ${peso(advance)}</label>
+        ${advs.length ? advs.map(a => html`<div class="row" key=${a.id}><div><div class="name">${peso(a.amount)}</div><div class="sub">${a.date||'—'}${a.received_by?' · '+a.received_by:''}${a.remarks?' · '+a.remarks:''}</div></div><button class="ret" onClick=${()=>removeAdv(a.id)}>✕</button></div>`) : html`<div class="empty">No advances yet.</div>`}
+      </div>`}
+
+    ${tab === 'allow' && html`
+      <div class="card">
+        <label>Personnel allowance — one row per person</label>
+        <div class="two"><${Field} label="Date"><input type="date" value=${alDate} onInput=${e=>setAlDate(e.target.value)} /><//>
+        <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${alAmt} onInput=${e=>setAlAmt(e.target.value)} placeholder="150" /><//></div>
+        <${Field} label="Recipient"><select value=${alRec} onChange=${e=>setAlRec(e.target.value)}><option value="">— select person —</option>${employees.map(e=>html`<option value=${e.id}>${e.name}</option>`)}</select><//>
+        <${Field} label="Vessel / division"><select value=${alVes} onChange=${e=>setAlVes(e.target.value)}><option value="">— select —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
+        <${Field} label="Remarks"><input value=${alRem} onInput=${e=>setAlRem(e.target.value)} placeholder="optional" /><//>
+        <button class="btn" disabled=${busy} onClick=${addAllow}>Add allowance row</button>
+      </div>
+      <div class="card"><label>Allowance rows — total ${peso(allow)}</label>
+        ${lines.filter(l=>l.type==='ALLOWANCE').length ? lines.filter(l=>l.type==='ALLOWANCE').map(l => html`
+          <div class="row" key=${l.id} style="align-items:flex-start;flex-direction:column;gap:6px">
+            <div style="display:flex;justify-content:space-between;width:100%">
+              <div><div class="name">${l.recipient} · ${peso(l.amount)}</div><div class="sub">${l.or_date||'—'} · ${l.vessel_div||'—'}</div></div>
+              <button class="ret" onClick=${()=>removeLine(l.id)}>✕</button>
+            </div>
+            ${l.confirmed ? html`<div class="sub" style="color:var(--accent2,#1d9e75);font-weight:700">✓ Confirmed${l.confirmed_at?' · '+l.confirmed_at.slice(0,10):''}</div>
+              <div style="display:flex;gap:6px;align-items:center"><span class="sub">Deductible:</span>
+                ${l.deductible==='Pending' ? html`<button style=${bSm} onClick=${()=>setDeduct(l,'Yes')}>Yes</button><button style=${bSmAlt} onClick=${()=>setDeduct(l,'No')}>No</button>` : html`<b class="sub">${l.deductible}</b><button style=${bSmAlt} onClick=${()=>setDeduct(l,'Pending')}>change</button>`}
+              </div>`
+            : html`<div style="display:flex;gap:6px;width:100%">
+                <input type="password" inputmode="numeric" placeholder=${l.recipient + " passcode"} value=${pinVals[l.id]||''} onInput=${e=>setPinVals({...pinVals,[l.id]:e.target.value})} style="flex:1" />
+                <button style=${bSm} onClick=${()=>confirmAllow(l)}>Confirm</button></div>
+              ${pinErr[l.id] ? html`<div class="sub" style="color:var(--bad,#b0322a)">${pinErr[l.id]}</div>` : ''}`}
+          </div>`) : html`<div class="empty">No allowance rows yet.</div>`}
+      </div>`}
+
+    ${tab === 'cons' && html`
+      <div class="card">
+        <label>Consumable (tubig, food, fuel)</label>
+        <div class="two"><${Field} label="Date"><input type="date" value=${cDate} onInput=${e=>setCDate(e.target.value)} /><//>
+        <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${cAmt} onInput=${e=>setCAmt(e.target.value)} placeholder="0.00" /><//></div>
+        <${Field} label="Charge to"><select value=${cCharge} onChange=${e=>setCCharge(e.target.value)}><option>Project</option><option>Admin</option></select><//>
+        ${cCharge==='Project' && html`<${Field} label="Vessel / division"><select value=${cVes} onChange=${e=>setCVes(e.target.value)}><option value="">— select —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>`}
+        <${Field} label="Remarks"><input value=${cRem} onInput=${e=>setCRem(e.target.value)} placeholder="optional" /><//>
+        <button class="btn" disabled=${busy} onClick=${addCons}>Add consumable</button>
+      </div>
+      <div class="card"><label>Consumables — Project ${peso(consProj)} · Admin ${peso(consAdm)}</label>
+        ${lines.filter(l=>l.type==='CONSUMABLE').length ? lines.filter(l=>l.type==='CONSUMABLE').map(l => html`<div class="row" key=${l.id}><div><div class="name">${peso(l.amount)} · ${l.charge_to}</div><div class="sub">${l.or_date||'—'}${l.vessel_div?' · '+l.vessel_div:''}${l.remarks?' · '+l.remarks:''}</div></div><button class="ret" onClick=${()=>removeLine(l.id)}>✕</button></div>`) : html`<div class="empty">No consumables yet.</div>`}
+      </div>`}
+
+    ${tab === 'sum' && html`
+      <div class="card">
+        <label>Reconciliation</label>
+        <div class="row"><div class="sub">Advance total</div><div class="name">${peso(advance)}</div></div>
+        <div class="row"><div class="sub">Consumed</div><div class="name">${peso(consumed)}</div></div>
+        <div class="row"><div class="sub">On-hand assets (stock + tools)</div><div class="name">${peso(onhand)}</div></div>
+        <div class="row" style="border-top:1px solid var(--line)"><div class="sub"><b>Cash that should be returned</b></div><div class="name">${peso(cashRet)}</div></div>
+        ${cashRet < -0.005 ? html`<div class="note" style="color:var(--bad,#b0322a);font-weight:700;margin-top:8px">⚠ Overspent by ${peso(Math.abs(cashRet))} — fund short / missing top-up.</div>`
+          : html`<div class="note" style="color:var(--accent2,#1d9e75);font-weight:700;margin-top:8px">✓ Balanced — advance = consumed + on-hand + cash returned.</div>`}
+      </div>
+      <div class="card"><label>Project cost per vessel</label>
+        ${Object.keys(perVessel).length ? Object.keys(perVessel).sort((a,b)=>perVessel[b]-perVessel[a]).map(v=>html`<div class="row" key=${v}><div class="sub">${v}</div><div class="name">${peso(perVessel[v])}</div></div>`) : html`<div class="empty">No project costs yet.</div>`}
+        <div class="row" style="border-top:1px solid var(--line)"><div class="sub">Overhead (Admin)</div><div class="name">${peso(consAdm)}</div></div>
+      </div>
+      <div class="card"><label>Allowance per person</label>
+        ${Object.keys(perPerson).length ? Object.keys(perPerson).map(p=>html`<div class="row" key=${p}><div class="sub">${p}</div><div class="name">${peso(perPerson[p].confirmed)} / ${peso(perPerson[p].total)}</div></div>`) : html`<div class="empty">No allowances yet.</div>`}
+      </div>`}
+  `;
+}
+
 function App() {
   const [authed, setAuthed] = useState(sessionStorage.getItem('rsr_coord') === '1');
   const [area, setArea] = useState(null);          // null | 'vessels' | 'personnel' | 'expenses'
@@ -618,15 +812,20 @@ function App() {
         <div style="font-size:26px">💰</div><div class="name" style="font-size:18px;margin-top:6px">Expenses</div>
         <div class="sub">Per-vessel job costs</div>
       </div>
+      <div class="card" style="cursor:pointer" onClick=${() => setArea('liquidation')}>
+        <div style="font-size:26px">🧾</div><div class="name" style="font-size:18px;margin-top:6px">Liquidation</div>
+        <div class="sub">Cash advance · reconcile by project</div>
+      </div>
     </div>
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}`;
 
   // ---- areas ----
   return html`
-    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : 'PERSONNEL DATA')}
+    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'liquidation' ? 'LIQUIDATION' : 'PERSONNEL DATA')}
     <div class="wrap">
       ${area === 'vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
       ${area === 'expenses' && html`<${Expenses} voyages=${voyages} toast=${flash} />`}
+      ${area === 'liquidation' && html`<${Liquidation} voyages=${voyages} employees=${employees} toast=${flash} />`}
       ${area === 'personnel' && html`
         <div class="tabs">
           <button class=${pdTab==='personnel'?'on':''} onClick=${() => setPdTab('personnel')}>Personnel</button>
