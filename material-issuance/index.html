@@ -131,7 +131,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 
 <!-- REQUEST -->
 <div id="s-request" class="screen">
-  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Request Materials</div><div class="tsub">To warehouse · Carmen</div></div><button class="bk" style="width:auto;padding:0 14px;border-radius:18px;font-size:13px;font-weight:700" onclick="openReqHist()">History</button></div>
+  <div class="tb"><button class="bk" onclick="showScreen('s-home')">←</button><div style="flex:1;text-align:center"><div class="ttitle">Request Materials</div><div class="tsub">To warehouse · Carmen</div></div><div style="width:38px"></div></div>
   <div class="pc">
     <div id="r-outstanding"></div>
     <div class="sec">
@@ -462,7 +462,7 @@ async function renderOutstanding(){
     <div style="font-weight:800;color:#7a4a06;font-size:14px">⏳ ${rows.length} request(s) still awaiting delivery</div>
     <div style="font-size:12px;color:#7a4a06;margin-top:4px">Already requested — will be served once stock arrives. No need to request these again:</div>
     ${list}
-    <div style="font-size:12px;margin-top:10px"><a onclick="openReqHist()" style="color:var(--p);font-weight:700;cursor:pointer">View request history →</a></div>
+    <div style="font-size:12px;margin-top:10px"><a onclick="openRecords('tracking')" style="color:var(--p);font-weight:700;cursor:pointer">View in Records →</a></div>
   </div>`;
 }
 function addReqRow(name='',qty=1){
@@ -511,7 +511,7 @@ async function submitRequest(){
   try{
     const{error}=await sb.from('requests').insert([row]);if(error)throw error;
     toast('Request submitted'+(urgent?' (URGENT)':''));
-    openReqHist();
+    openRecords('tracking');
   }catch(e){toast('Save failed: '+e.message);}
 }
 /* ── AUTO-REQUEST (low + predicted) ── */
@@ -696,7 +696,7 @@ async function confirmDelivery(){
 }
 
 /* ── RECORDS ── */
-function openRecords(){showScreen('s-records');renderRecords('issued');}
+function openRecords(tab){showScreen('s-records');renderRecords(tab||'issued');}
 async function renderRecords(tab){
   ['issued','received','tracking'].forEach(t=>{const b=document.getElementById('rec-tab-'+t);if(b)b.className='btn '+(t===tab?'btn-p':'btn-sec');});
   const el=document.getElementById('rec-list');el.innerHTML='<div class="empty">Loading…</div>';
@@ -710,8 +710,8 @@ async function renderRecords(tab){
     let rows=[];try{const{data}=await sb.from('issuances').select('*').eq('site_key',SITE).order('created_at',{ascending:false}).limit(80);rows=data||[];}
     catch(e){el.innerHTML='<div class="empty">Load failed</div>';return;}
     if(!rows.length){el.innerHTML='<div class="empty">No issuances yet.</div>';return;}
-    el.innerHTML=rows.map(r=>{
-      const head=`<div style="min-width:0"><div style="font-weight:700;font-size:14px">${r.proj_name||'—'}</div><div style="font-family:ui-monospace,monospace;font-size:12px;color:var(--p)">${r.slip_no||r.id||''}</div></div><div style="font-size:12px;color:var(--tx3);white-space:nowrap">${fmtDT(r.created_at||r.date)}</div>`;
+    const slip=r=>{
+      const head=`<div style="min-width:0"><div style="font-weight:700;font-size:13px;font-family:ui-monospace,monospace;color:var(--p)">${r.slip_no||r.id||''}</div><div style="font-size:12px;color:var(--tx2)">to ${r.emp_name||'—'}</div></div><div style="font-size:12px;color:var(--tx3);white-space:nowrap">${fmtDT(r.created_at||r.date)}</div>`;
       const body=`<div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px"><div style="font-size:15px;font-weight:800;color:var(--p)">Material Issuance</div><div style="font-family:ui-monospace,monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.slip_no||r.id||''}</div><div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtDT(r.created_at||r.date)} · ${SITE}</div></div>
         <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Project / vessel</span><span style="font-weight:700">${r.proj_name||'—'}</span></div>
         <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Issued to</span><span style="font-weight:700">${r.emp_name||'—'}</span></div>
@@ -720,6 +720,18 @@ async function renderRecords(tab){
         ${itRows(r.items)}
         <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:800;text-transform:uppercase;color:var(--tx2)">Total</span><span style="font-size:20px;font-weight:900;color:var(--p)">${tot(r.items)} units</span></div>`;
       return dd(head,body);
+    };
+    const groups={};rows.forEach(r=>{const k=r.proj_name||'— No vessel —';(groups[k]=groups[k]||[]).push(r);});
+    el.innerHTML=Object.keys(groups).map(vessel=>{
+      const g=groups[vessel];
+      const totalUnits=g.reduce((s,r)=>s+tot(r.items),0);
+      return `<div style="margin-bottom:18px">
+        <div style="display:flex;justify-content:space-between;align-items:baseline;margin:2px 2px 8px;border-bottom:2px solid var(--p);padding-bottom:6px">
+          <div style="font-weight:800;font-size:15px;color:var(--p)">🚢 ${vessel}</div>
+          <div style="font-size:12px;color:var(--tx3);white-space:nowrap">${g.length} slip(s) · ${totalUnits} units</div>
+        </div>
+        ${g.map(slip).join('')}
+      </div>`;
     }).join('');
   } else if(tab==='received'){
     let rows=[];try{const{data}=await sb.from('deliveries').select('*').eq('site',SITE).order('created_at',{ascending:false}).limit(80);rows=data||[];}
