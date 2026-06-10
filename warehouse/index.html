@@ -124,6 +124,7 @@ function gth(n){const c=catalog.find(i=>i.n===n);if(c)return c.th;return (ITEMS.
 const peso=v=>'\u20b1'+(Number(v)||0).toLocaleString('en-PH',{maximumFractionDigits:2});
 function todayYmd(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
 function fmt(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});}
+function fmtDT(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleString('en-PH',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});}
 function itemOpts(sel){const list=catalog.length?catalog:ITEMS;return '<option value="">— Item —</option>'+list.map(i=>`<option value="${i.n}"${i.n===sel?' selected':''}>${i.n}</option>`).join('');}
 
 let WH_PIN='5555', stockMap={}, prices={}, sites=[], dispatchPrefill=null, unitMap={}, catalog=[];
@@ -217,7 +218,7 @@ async function renderRequests(c){
       <div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:12px;margin-bottom:10px">
         <div style="font-size:15px;font-weight:700;color:var(--p)">Material Request</div>
         <div style="font-family:monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.id}${r.dr_no?' · '+r.dr_no:''}</div>
-        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmt(r.date||r.created_at)} · ${r.site||'—'}</div>
+        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtDT(r.created_at||r.date)} · ${r.site||'—'}</div>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Requested by</span><span style="font-weight:600">${r.by_name||'—'}</span></div>
       <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Status</span><span class="badge ${stBadge(r.status)}">${(r.status||'').toUpperCase()}</span></div>
@@ -363,7 +364,7 @@ async function renderLog(c){
       <div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px">
         <div style="font-size:14px;font-weight:800;color:var(--p)">Dispatch Receipt</div>
         <div style="font-family:monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.dr_no||r.id}</div>
-        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmt(r.date||r.created_at)} · to ${r.site||'—'}</div>
+        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtDT(r.created_at||r.date)} · to ${r.site||'—'}</div>
       </div>
       <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Dispatched by</span><span style="font-weight:700">${r.dispatched_by||'—'}</span></div>
       <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Status</span>${recv}</div>
