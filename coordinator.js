@@ -637,8 +637,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const [cDate, setCDate] = useState(today()); const [cAmt, setCAmt] = useState(''); const [cCharge, setCCharge] = useState('Project'); const [cVes, setCVes] = useState(''); const [cRem, setCRem] = useState('');
   const [prs, setPrs] = useState([]); const [stockItems, setStockItems] = useState([]);
   const [prItems, setPrItems] = useState([]); const [prPick, setPrPick] = useState(''); const [prBy, setPrBy] = useState('Raffy');
-  const [mDate, setMDate] = useState(today()); const [mPr, setMPr] = useState(''); const [mItem, setMItem] = useState(''); const [mUnit, setMUnit] = useState('pc');
-  const [mUC, setMUC] = useState(''); const [mQB, setMQB] = useState(''); const [mQU, setMQU] = useState('0');
+  const [mDate, setMDate] = useState(today()); const [mPr, setMPr] = useState(''); const [buyRows, setBuyRows] = useState([]);
   const [mVes, setMVes] = useState(''); const [mSite, setMSite] = useState('Carmen'); const [mOr, setMOr] = useState(''); const [mRem, setMRem] = useState('');
   const [niOpen, setNiOpen] = useState(false); const [niName, setNiName] = useState(''); const [niUnit, setNiUnit] = useState('pcs');
   const [tDate, setTDate] = useState(today()); const [tItem, setTItem] = useState(''); const [tPfx, setTPfx] = useState(''); const [tUC, setTUC] = useState('');
@@ -650,6 +649,8 @@ function Liquidation({ voyages, employees, sites, toast }) {
   // and drops out the moment the MATCHING end date is encoded (undocking / afloat end / emergency end).
   const isActiveRepair = (v) => (v.docking_date && !v.undocking_date) || (v.afloat_start && !v.afloat_done) || (v.emergency_start && !v.emergency_end);
   const vessels = (voyages || []).filter(isActiveRepair).map(v => v.vessel_name).filter(Boolean);
+  const tdy = today();
+  const yday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);  // one day back
   const siteNames = (sites || []).length ? sites.map(s => s.name) : ['Carmen', 'Mandaue'];
   const loadRefs = async () => { try { setPrs(await getPRs()); setStockItems(await getStockItems()); } catch (e) { toast('Refs load failed: ' + e.message, true); } };
   const loadAll = async (f) => { if (!f) return; try { setAdvs(await getAdvances(f.id)); setLines(await getLiqLines(f.id)); } catch (e) { toast('Load failed: ' + e.message, true); } };
@@ -737,34 +738,36 @@ function Liquidation({ voyages, employees, sites, toast }) {
     try { await updatePR(p.id, { status, approved_by: 'Coordinator', approved_at: new Date().toISOString() }); loadRefs(); toast(p.pr_no + ' ' + status); } catch (e) { toast('Error: ' + e.message, true); }
   };
   const saveNewItem = async () => {
-    if (!niName.trim()) { toast('Item name?', true); return; }
-    try { await addStockItem({ id: uid(), name: niName.trim(), unit: niUnit.trim() || 'pcs', default_site: mSite }); const nm = niName.trim(); setNiName(''); setNiOpen(false); await loadRefs(); setMItem(nm); setMUnit(niUnit.trim() || 'pcs'); toast('Item added'); } catch (e) { toast('Error: ' + e.message, true); }
+    if (!niName.trim()) { toast('Material name?', true); return; }
+    const nm = niName.trim();
+    try { await addStockItem({ id: uid(), name: nm, unit: niUnit.trim() || 'pcs', default_site: mSite }); setNiName(''); setNiOpen(false); await loadRefs(); if (!prItems.includes(nm)) setPrItems([...prItems, nm]); toast('Material added to request'); } catch (e) { toast('Error: ' + e.message, true); }
   };
 
   // ---- materials (STOCK_MATERIAL) ----
   const pushStock = async (l) => { try { await liqStockIn(l, fund.custodian); loadAll(fund); toast('Pushed to ' + l.site + ' stock'); } catch (e) { toast('Stock push failed: ' + e.message, true); } };
-  const addMaterial = async () => {
+  const buyRequest = async () => {
     const pr = prs.find(p => p.pr_no === mPr);
-    if (!pr) { toast('Select an approved PR', true); return; }
-    if (pr.status !== 'Approved') { toast('PR ' + pr.pr_no + ' is not approved', true); return; }
-    if (pr.date && mDate && pr.date > mDate) { toast('PR must be dated on/before the OR date', true); return; }
-    if (!mItem) { toast('Select an item', true); return; }
-    const uc = Number(mUC), qb = Number(mQB), qu = mQU === '' ? 0 : Number(mQU);
-    if (!(uc > 0)) { toast('Unit cost must be > 0', true); return; }
-    if (!(qb > 0)) { toast('Qty bought must be > 0', true); return; }
-    if (qu < 0 || qu > qb) { toast('Qty used must be between 0 and qty bought', true); return; }
-    if (!mVes) { toast('Vessel / division is required', true); return; }
-    const qs = qb - qu;
-    const line = { id: uid(), fund_id: fund.id, type: 'STOCK_MATERIAL', or_date: mDate || today(), vessel_div: mVes, site: mSite,
-      item: mItem, unit: mUnit || 'pc', unit_cost: uc, qty_bought: qb, qty_used: qu, qty_to_stock: qs,
-      pr_ref: pr.pr_no, or_ref: mOr.trim() || null, remarks: mRem.trim() || null, posted: qs === 0, created_at: new Date().toISOString() };
+    if (!pr) { toast('Select an approved request', true); return; }
+    if (pr.status !== 'Approved') { toast('Request ' + pr.pr_no + ' is not approved', true); return; }
+    if (pr.date && mDate && pr.date > mDate) { toast('OR date must be on/after the request date', true); return; }
+    const buys = buyRows.filter(r => Number(r.qty) > 0 && Number(r.cost) > 0);
+    if (!buys.length) { toast('Enter qty and price for at least one item', true); return; }
     setBusy(true);
     try {
-      await addLiqLine(line);
-      if (qs > 0) { try { await liqStockIn(line, fund.custodian); toast('Material saved — ' + qs + ' ' + line.unit + ' added to ' + mSite + ' stock'); } catch (e) { toast('Saved, but stock push failed — use "Push to stock" on the line', true); } }
-      else toast('Material saved (fully used on job)');
-      setMUC(''); setMQB(''); setMQU('0'); setMOr(''); setMRem('');
-      loadAll(fund);
+      const dt = mDate || today(), orRef = mOr.trim() || null, ves = mVes || null, rem = mRem.trim() || null;
+      let failed = 0;
+      for (const r of buys) {
+        const qb = Number(r.qty), uc = Number(r.cost);
+        const line = { id: uid(), fund_id: fund.id, type: 'STOCK_MATERIAL', or_date: dt, vessel_div: ves, site: mSite,
+          item: r.name, unit: r.unit || 'pc', unit_cost: uc, qty_bought: qb, qty_used: 0, qty_to_stock: qb,
+          pr_ref: pr.pr_no, or_ref: orRef, remarks: rem, posted: false, created_at: new Date().toISOString() };
+        await addLiqLine(line);
+        try { await liqStockIn(line, fund.custodian); } catch (e) { failed++; }
+      }
+      try { await updatePR(pr.id, { status: 'Bought' }); } catch (e) {}
+      toast(buys.length + ' item(s) bought → ' + mSite + ' stock' + (failed ? ' (' + failed + ' need manual Push to stock)' : ''));
+      setMPr(''); setBuyRows([]); setMOr(''); setMRem(''); setMVes('');
+      loadAll(fund); loadRefs();
     } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
   };
 
@@ -857,15 +860,19 @@ function Liquidation({ voyages, employees, sites, toast }) {
     ${tab === 'mat' && html`
       <div class="card">
         <label>Purchase requests (approve before buying)</label>
-        <${Field} label="New PR — add materials">
+        <${Field} label="New request — add materials">
           <select value=${prPick} onChange=${e=>{const v=e.target.value; if(v && !prItems.includes(v)) setPrItems([...prItems, v]); setPrPick('');}}>
             <option value="">— add material —</option>
             ${stockItems.map(s=>html`<option value=${s.name}>${s.name}</option>`)}
           </select>
         <//>
-        ${prItems.length ? html`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${prItems.map(it=>html`<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${it}<span style="cursor:pointer;font-weight:700;color:var(--ink-dim)" onClick=${()=>setPrItems(prItems.filter(x=>x!==it))}>✕</span></span>`)}</div>` : html`<div class="sub" style="margin:4px 0">Pick materials from the list to build the PR.</div>`}
+        ${niOpen ? html`<div class="two"><${Field} label="New material name"><input value=${niName} onInput=${e=>setNiName(e.target.value)} /><//>
+          <${Field} label="Unit"><input value=${niUnit} onInput=${e=>setNiUnit(e.target.value)} /><//></div>
+          <div style="display:flex;gap:8px;margin-bottom:6px"><button style=${bSm} onClick=${saveNewItem}>Add to request</button><button style=${bSmAlt} onClick=${()=>setNiOpen(false)}>Cancel</button></div>`
+        : html`<button style=${bSmAlt} onClick=${()=>setNiOpen(true)}>＋ New material (not in list)</button>`}
+        ${prItems.length ? html`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${prItems.map(it=>html`<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${it}<span style="cursor:pointer;font-weight:700;color:var(--ink-dim)" onClick=${()=>setPrItems(prItems.filter(x=>x!==it))}>✕</span></span>`)}</div>` : html`<div class="sub" style="margin:4px 0">Pick materials (or add new ones) to build the request — no price needed yet.</div>`}
         <${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
-        <button class="btn" disabled=${busy} onClick=${createPR}>Create PR</button>
+        <button class="btn" disabled=${busy} onClick=${createPR}>Create request</button>
         ${prs.length ? prs.slice(0, 8).map(p => html`
           <div class="row" key=${p.id} style="align-items:flex-start">
             <div><div class="name" style="font-size:14px">${p.pr_no} · ${p.status}</div>
@@ -874,33 +881,29 @@ function Liquidation({ voyages, employees, sites, toast }) {
           </div>`) : html`<div class="empty">No PRs yet.</div>`}
       </div>
       <div class="card">
-        <label>Buy stock material (needs an approved PR)</label>
-        <${Field} label="Purchase request">
-          <select value=${mPr} onChange=${e=>{setMPr(e.target.value);}}>
-            <option value="">— select approved PR —</option>
+        <label>Buy stock material (encode actual qty & price)</label>
+        <${Field} label="Approved request">
+          <select value=${mPr} onChange=${e=>{const no=e.target.value;setMPr(no);const p=prs.find(x=>x.pr_no===no);const names=p&&p.items?p.items.split(',').map(s=>s.trim()).filter(Boolean):[];setBuyRows(names.map(n=>{const s=stockItems.find(x=>x.name===n);return {name:n,unit:(s&&s.unit)||'pc',qty:'',cost:''};}));}}>
+            <option value="">— select approved request —</option>
             ${prs.filter(p=>p.status==='Approved').map(p=>html`<option value=${p.pr_no}>${p.pr_no} · ${p.items ? p.items.slice(0,40) : ''}</option>`)}
           </select>
         <//>
-        <${Field} label="Item">
-          <select value=${mItem} onChange=${e=>{const it=stockItems.find(s=>s.name===e.target.value);setMItem(e.target.value);if(it&&it.unit)setMUnit(it.unit);}}>
-            <option value="">— select item —</option>
-            ${stockItems.map(s=>html`<option value=${s.name}>${s.name}</option>`)}
-          </select>
-        <//>
-        ${niOpen ? html`<div class="two"><${Field} label="New item name"><input value=${niName} onInput=${e=>setNiName(e.target.value)} /><//>
-          <${Field} label="Unit"><input value=${niUnit} onInput=${e=>setNiUnit(e.target.value)} /><//></div>
-          <div style="display:flex;gap:8px;margin-bottom:6px"><button style=${bSm} onClick=${saveNewItem}>Save item</button><button style=${bSmAlt} onClick=${()=>setNiOpen(false)}>Cancel</button></div>`
-        : html`<button style=${bSmAlt} onClick=${()=>setNiOpen(true)}>＋ New item</button>`}
-        <div class="two" style="margin-top:8px"><${Field} label="OR date"><input type="date" value=${mDate} onInput=${e=>setMDate(e.target.value)} /><//>
-        <${Field} label="Receipt no. (OR)"><input value=${mOr} onInput=${e=>setMOr(e.target.value)} placeholder="OR ref" /><//></div>
-        <div class="two"><${Field} label=${'Unit cost ₱ / ' + mUnit}><input type="number" min="0" step="0.01" value=${mUC} onInput=${e=>setMUC(e.target.value)} /><//>
-        <${Field} label="Qty bought"><input type="number" min="0" value=${mQB} onInput=${e=>setMQB(e.target.value)} /><//></div>
-        <div class="two"><${Field} label="Qty used on job"><input type="number" min="0" value=${mQU} onInput=${e=>setMQU(e.target.value)} /><//>
-        <div class="field"><label>Qty to stock (auto)</label><input disabled value=${(Number(mQB)||0)-(mQU===''?0:Number(mQU))>=0?(Number(mQB)||0)-(mQU===''?0:Number(mQU)):'—'} /></div></div>
-        <${Field} label="Vessel / division"><select value=${mVes} onChange=${e=>setMVes(e.target.value)}><option value="">— select —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
-        <div class="sub" style="margin:2px 0 4px">Used ₱${((mQU===''?0:Number(mQU))*(Number(mUC)||0)).toLocaleString('en-PH')} → project cost · To stock ₱${(((Number(mQB)||0)-(mQU===''?0:Number(mQU)))*(Number(mUC)||0)).toLocaleString('en-PH')} → ${mSite} stock</div>
-        <${Field} label="Remarks"><input value=${mRem} onInput=${e=>setMRem(e.target.value)} placeholder="optional" /><//>
-        <button class="btn" disabled=${busy} onClick=${addMaterial}>Add material line</button>
+        ${mPr && buyRows.length ? html`
+          <div class="sub" style="margin:8px 0 2px">Requested items — enter the real qty bought and unit price:</div>
+          ${buyRows.map((r,idx)=>html`
+            <div key=${r.name} style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:6px">
+              <div style="font-weight:600;font-size:14px;margin-bottom:4px">${r.name} <span class="sub">(${r.unit})</span></div>
+              <div class="two"><${Field} label="Qty bought"><input type="number" min="0" value=${r.qty} onInput=${e=>{const v=e.target.value;setBuyRows(buyRows.map((x,i)=>i===idx?{...x,qty:v}:x));}} /><//>
+              <${Field} label="Unit price ₱"><input type="number" min="0" step="0.01" value=${r.cost} onInput=${e=>{const v=e.target.value;setBuyRows(buyRows.map((x,i)=>i===idx?{...x,cost:v}:x));}} /><//></div>
+              <div class="sub">Line total: ₱${((Number(r.qty)||0)*(Number(r.cost)||0)).toLocaleString('en-PH')}</div>
+            </div>`)}
+          <div class="two" style="margin-top:4px"><${Field} label="OR date"><input type="date" value=${mDate} min=${yday} max=${tdy} onInput=${e=>setMDate(e.target.value)} /><//>
+          <${Field} label="Receipt no. (OR)"><input value=${mOr} onInput=${e=>setMOr(e.target.value)} placeholder="OR ref" /><//></div>
+          <${Field} label="Vessel / division (optional)"><select value=${mVes} onChange=${e=>setMVes(e.target.value)}><option value="">— none —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
+          <${Field} label="Remarks"><input value=${mRem} onInput=${e=>setMRem(e.target.value)} placeholder="optional" /><//>
+          <div class="sub" style="margin:2px 0 6px">Total to ${mSite} stock: ₱${buyRows.reduce((a,r)=>a+(Number(r.qty)||0)*(Number(r.cost)||0),0).toLocaleString('en-PH')}</div>
+          <button class="btn" disabled=${busy} onClick=${buyRequest}>Save purchase → stock</button>
+        ` : html`<div class="sub" style="margin:8px 0">Select an approved request to encode the purchase.</div>`}
       </div>
       <div class="card"><label>Material lines</label>
         ${lines.filter(l=>l.type==='STOCK_MATERIAL').length ? lines.filter(l=>l.type==='STOCK_MATERIAL').map(l => html`
@@ -910,7 +913,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
                 <div class="sub">${l.or_date||'—'} · ${l.pr_ref||'no PR'} · ${l.vessel_div||'—'} · ${l.site}${l.or_ref?'':' · '}${l.or_ref?'':html`<b style="color:var(--bad,#b0322a)">⚠ no receipt</b>`}</div></div>
               <button class="ret" onClick=${()=>removeLine(l)}>✕</button>
             </div>
-            <div class="sub">Used ${l.qty_used} = ${peso(Number(l.qty_used)*Number(l.unit_cost))} · To stock ${l.qty_to_stock} = ${peso(Number(l.qty_to_stock)*Number(l.unit_cost))}
+            <div class="sub">${Number(l.qty_used)>0?('Used '+l.qty_used+' = '+peso(Number(l.qty_used)*Number(l.unit_cost))+' · '):''}To stock ${l.qty_to_stock} = ${peso(Number(l.qty_to_stock)*Number(l.unit_cost))}
               ${Number(l.qty_to_stock)>0 ? (l.posted ? html` · <b style="color:var(--accent2,#1d9e75)">✓ in ${l.site} stock</b>` : html` · <button style=${bSm} onClick=${()=>pushStock(l)}>Push to stock</button>`) : ''}</div>
           </div>`) : html`<div class="empty">None yet.</div>`}
       </div>`}
