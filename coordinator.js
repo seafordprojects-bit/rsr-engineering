@@ -628,7 +628,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const [fund, setFund] = useState(undefined);
   const [advs, setAdvs] = useState([]);
   const [lines, setLines] = useState([]);
-  const [tab, setTab] = useState('fund');
+  const [tab, setTab] = useState('fund'); const [matView, setMatView] = useState('request');
   const [cust, setCust] = useState('Raffy');
   const [pfrom, setPfrom] = useState(today());
   const [aDate, setADate] = useState(today()); const [aAmt, setAAmt] = useState(''); const [aBy, setABy] = useState('Raffy'); const [aRem, setARem] = useState(''); const [aMode, setAMode] = useState('Cash'); const [aRef, setARef] = useState('');
@@ -858,6 +858,11 @@ function Liquidation({ voyages, employees, sites, toast }) {
       </div>`}
 
     ${tab === 'mat' && html`
+      <div class="tabs" style="margin-bottom:10px">
+        <button class=${matView==='request'?'on':''} onClick=${() => setMatView('request')}>Request</button>
+        <button class=${matView==='buy'?'on':''} onClick=${() => setMatView('buy')}>Buy stock</button>
+      </div>
+      ${matView === 'request' ? html`
       <div class="card">
         <label>Purchase requests (approve before buying)</label>
         <${Field} label="New request — add materials">
@@ -890,7 +895,8 @@ function Liquidation({ voyages, employees, sites, toast }) {
             ${p.status === 'Pending' ? html`<div style="display:flex;gap:6px;margin-top:8px"><button style=${bSm} onClick=${()=>decidePR(p,'Approved')}>Approve</button><button style=${bSmAlt} onClick=${()=>decidePR(p,'Rejected')}>Reject</button></div>` : ''}
           </div>`;
         }) : html`<div class="empty">No requests yet.</div>`}
-      </div>
+      </div>` : ''}
+      ${matView === 'buy' ? html`
       <div class="card">
         <label>Buy stock material (encode actual qty & price)</label>
         <${Field} label="Approved request">
@@ -927,7 +933,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
             <div class="sub">${Number(l.qty_used)>0?('Used '+l.qty_used+' = '+peso(Number(l.qty_used)*Number(l.unit_cost))+' · '):''}To stock ${l.qty_to_stock} = ${peso(Number(l.qty_to_stock)*Number(l.unit_cost))}
               ${Number(l.qty_to_stock)>0 ? (l.posted ? html` · <b style="color:var(--accent2,#1d9e75)">✓ in ${l.site} stock</b>` : html` · <button style=${bSm} onClick=${()=>pushStock(l)}>Push to stock</button>`) : ''}</div>
           </div>`) : html`<div class="empty">None yet.</div>`}
-      </div>`}
+      </div>` : ''}`}
 
     ${tab === 'tool' && html`
       <div class="card">
