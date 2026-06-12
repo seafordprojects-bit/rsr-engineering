@@ -873,12 +873,23 @@ function Liquidation({ voyages, employees, sites, toast }) {
         ${prItems.length ? html`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${prItems.map(it=>html`<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${it}<span style="cursor:pointer;font-weight:700;color:var(--ink-dim)" onClick=${()=>setPrItems(prItems.filter(x=>x!==it))}>✕</span></span>`)}</div>` : html`<div class="sub" style="margin:4px 0">Pick materials (or add new ones) to build the request — no price needed yet.</div>`}
         <${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
         <button class="btn" disabled=${busy} onClick=${createPR}>Create request</button>
-        ${prs.length ? prs.slice(0, 8).map(p => html`
-          <div class="row" key=${p.id} style="align-items:flex-start">
-            <div><div class="name" style="font-size:14px">${p.pr_no} · ${p.status}</div>
-              <div class="sub">${p.date || '—'}${p.requested_by ? ' · ' + p.requested_by : ''}${p.site ? ' · ' + p.site : ''} · ${p.items || ''}</div></div>
-            ${p.status === 'Pending' ? html`<span style="display:flex;gap:6px"><button style=${bSm} onClick=${()=>decidePR(p,'Approved')}>Approve</button><button style=${bSmAlt} onClick=${()=>decidePR(p,'Rejected')}>✕</button></span>` : ''}
-          </div>`) : html`<div class="empty">No PRs yet.</div>`}
+        ${prs.length ? prs.slice(0, 8).map(p => {
+          const its = p.items ? p.items.split(',').map(s=>s.trim()).filter(Boolean) : [];
+          const bg = p.status==='Approved' ? '#1d9e75' : p.status==='Rejected' ? '#c0392b' : p.status==='Bought' ? '#2d6cdf' : '#b8860b';
+          return html`
+          <div key=${p.id} style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px;background:var(--panel,#161a22)">
+            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:6px">
+              <span style="font-weight:800;letter-spacing:.5px;font-size:12px">MATERIAL REQUEST</span>
+              <span style="font-size:11px;font-weight:700;color:#fff;background:${bg};padding:2px 9px;border-radius:10px">${p.status}</span>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-size:14px"><b>${p.pr_no}</b><span class="sub">${p.date || '—'}</span></div>
+            <div class="sub" style="margin:2px 0 6px">Requested by ${p.requested_by || '—'}${p.site ? ' · ' + p.site : ''}</div>
+            <table style="width:100%;border-collapse:collapse;font-size:13px">
+              ${its.length ? its.map((it,i)=>html`<tr><td style="width:22px;padding:3px 0;color:var(--ink-dim)">${i+1}.</td><td style="padding:3px 0">${it}</td></tr>`) : html`<tr><td class="sub">No items listed</td></tr>`}
+            </table>
+            ${p.status === 'Pending' ? html`<div style="display:flex;gap:6px;margin-top:8px"><button style=${bSm} onClick=${()=>decidePR(p,'Approved')}>Approve</button><button style=${bSmAlt} onClick=${()=>decidePR(p,'Rejected')}>Reject</button></div>` : ''}
+          </div>`;
+        }) : html`<div class="empty">No requests yet.</div>`}
       </div>
       <div class="card">
         <label>Buy stock material (encode actual qty & price)</label>
