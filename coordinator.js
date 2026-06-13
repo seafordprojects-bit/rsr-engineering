@@ -635,6 +635,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const [alDate, setAlDate] = useState(today()); const [alRec, setAlRec] = useState(''); const [alAmt, setAlAmt] = useState(''); const [alVes, setAlVes] = useState(''); const [alRem, setAlRem] = useState(''); const [alMode, setAlMode] = useState('Cash'); const [alRef, setAlRef] = useState('');
   const [pinVals, setPinVals] = useState({}); const [pinErr, setPinErr] = useState({}); const [pinModal, setPinModal] = useState(null);
   const [cDate, setCDate] = useState(today()); const [cAmt, setCAmt] = useState(''); const [cCharge, setCCharge] = useState('Project'); const [cVes, setCVes] = useState(''); const [cRem, setCRem] = useState('');
+  const [mxDate, setMxDate] = useState(today()); const [mxCat, setMxCat] = useState('Clinic / Medical'); const [mxAmt, setMxAmt] = useState(''); const [mxEmp, setMxEmp] = useState(''); const [mxVes, setMxVes] = useState(''); const [mxOr, setMxOr] = useState(''); const [mxRem, setMxRem] = useState('');
   const [prs, setPrs] = useState([]); const [stockItems, setStockItems] = useState([]);
   const [prItems, setPrItems] = useState([]); const [prPick, setPrPick] = useState(''); const [prBy, setPrBy] = useState('Raffy');
   const [mDate, setMDate] = useState(today()); const [mPr, setMPr] = useState(''); const [buyRows, setBuyRows] = useState([]);
@@ -707,6 +708,20 @@ function Liquidation({ voyages, employees, sites, toast }) {
       if (ok) { await updateLiqLine(l.id, { confirmed: true, confirmed_at: new Date().toISOString() }); setPinErr({ ...pinErr, [l.id]: '' }); setPinVals({ ...pinVals, [l.id]: '' }); setPinModal(null); loadAll(fund); toast('Allowance confirmed'); }
       else setPinErr({ ...pinErr, [l.id]: 'Wrong passcode for ' + l.recipient });
     } catch (e) { toast('Error: ' + e.message, true); }
+  };
+  const MISC_CATS = ['Clinic / Medical', 'Medicine', 'Transport', 'Supplies', 'Other'];
+  const addMisc = async () => {
+    if (mxAmt === '' || isNaN(Number(mxAmt)) || Number(mxAmt) <= 0) { toast('Enter an amount', true); return; }
+    const emp = employees.find(e => e.id === mxEmp);
+    setBusy(true);
+    const row = { id: uid(), fund_id: fund.id, type: 'MISC', or_date: mxDate || today(), vessel_div: mxVes || null, site: 'Carmen',
+      item: mxCat, amount: Number(mxAmt), recipient: emp ? emp.name : null, emp_id: emp ? emp.id : null,
+      or_ref: mxOr.trim() || null, remarks: mxRem.trim() || null, created_at: new Date().toISOString() };
+    try {
+      await addLiqLine(row);
+      setMxAmt(''); setMxOr(''); setMxRem(''); setMxEmp(''); loadAll(fund);
+      toast('Expense added');
+    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
   };
   const setDeduct = async (l, val) => { try { await updateLiqLine(l.id, { deductible: val, decided_at: new Date().toISOString(), decided_by: 'Payroller' }); loadAll(fund); toast('Set ' + val); } catch (e) { toast('Error: ' + e.message, true); } };
   const addCons = async () => {
@@ -853,20 +868,21 @@ function Liquidation({ voyages, employees, sites, toast }) {
   };
 
   const advance = advs.reduce((s, a) => s + Number(a.amount || 0), 0);
-  let allow = 0, consProj = 0, consAdm = 0, matUsed = 0, stockVal = 0, toolVal = 0;
+  let allow = 0, consProj = 0, consAdm = 0, matUsed = 0, stockVal = 0, toolVal = 0, misc = 0;
   lines.forEach(l => {
     if (l.type === 'ALLOWANCE') allow += Number(l.amount || 0);
     else if (l.type === 'CONSUMABLE') { if (l.charge_to === 'Project') consProj += Number(l.amount || 0); else consAdm += Number(l.amount || 0); }
     else if (l.type === 'STOCK_MATERIAL') { matUsed += Number(l.qty_used || 0) * Number(l.unit_cost || 0); stockVal += Number(l.qty_to_stock || 0) * Number(l.unit_cost || 0); }
     else if (l.type === 'TOOL') { toolVal += Number(l.qty || 0) * Number(l.unit_cost || 0); }
+    else if (l.type === 'MISC') { misc += Number(l.amount || 0); }
   });
-  const consumed = allow + consProj + consAdm + matUsed;
+  const consumed = allow + consProj + consAdm + matUsed + misc;
   const onhand = stockVal + toolVal;
   const cashRet = advance - consumed - onhand;
   const cashOut = lines.reduce((s, l) => { if (l.type === 'STOCK_MATERIAL') return s + Number(l.qty_bought || 0) * Number(l.unit_cost || 0); if (l.type === 'TOOL') return s + Number(l.qty || 0) * Number(l.unit_cost || 0); return s + Number(l.amount || 0); }, 0);
   const balanceLeft = advance - cashOut;
   const perVessel = {};
-  lines.forEach(l => { let amt = 0; if (l.type === 'ALLOWANCE') amt = Number(l.amount || 0); else if (l.type === 'CONSUMABLE' && l.charge_to === 'Project') amt = Number(l.amount || 0); else if (l.type === 'STOCK_MATERIAL') amt = Number(l.qty_used || 0) * Number(l.unit_cost || 0); if (amt > 0 && l.vessel_div) perVessel[l.vessel_div] = (perVessel[l.vessel_div] || 0) + amt; });
+  lines.forEach(l => { let amt = 0; if (l.type === 'ALLOWANCE') amt = Number(l.amount || 0); else if (l.type === 'CONSUMABLE' && l.charge_to === 'Project') amt = Number(l.amount || 0); else if (l.type === 'STOCK_MATERIAL') amt = Number(l.qty_used || 0) * Number(l.unit_cost || 0); else if (l.type === 'MISC') amt = Number(l.amount || 0); if (amt > 0 && l.vessel_div) perVessel[l.vessel_div] = (perVessel[l.vessel_div] || 0) + amt; });
   const perPerson = {};
   lines.filter(l => l.type === 'ALLOWANCE').forEach(l => { const k = l.recipient || '—'; if (!perPerson[k]) perPerson[k] = { total: 0, confirmed: 0 }; perPerson[k].total += Number(l.amount || 0); if (l.confirmed) perPerson[k].confirmed += Number(l.amount || 0); });
 
@@ -894,6 +910,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
       <button class=${tab==='tool'?'on':''} onClick=${() => setTab('tool')}>Tools</button>
       <button class=${tab==='allow'?'on':''} onClick=${() => setTab('allow')}>Allowance</button>
       <button class=${tab==='cons'?'on':''} onClick=${() => setTab('cons')}>Consumables</button>
+      <button class=${tab==='misc'?'on':''} onClick=${() => setTab('misc')}>Misc</button>
       <button class=${tab==='sum'?'on':''} onClick=${() => setTab('sum')}>Summary</button>
     </div>
 
@@ -1081,11 +1098,32 @@ function Liquidation({ voyages, employees, sites, toast }) {
         ${lines.filter(l=>l.type==='CONSUMABLE').length ? lines.filter(l=>l.type==='CONSUMABLE').map(l => html`<div class="row" key=${l.id}><div><div class="name">${peso(l.amount)} · ${l.charge_to}</div><div class="sub">${l.or_date||'—'}${l.vessel_div?' · '+l.vessel_div:''}${l.remarks?' · '+l.remarks:''}</div></div><button class="ret" onClick=${()=>removeLine(l)}>✕</button></div>`) : html`<div class="empty">No consumables yet.</div>`}
       </div>`}
 
+    ${tab === 'misc' && html`
+      <div class="card">
+        <label>Other expenses (clinic / medical & incidentals)</label>
+        <div class="two"><${Field} label="Date"><input type="date" value=${mxDate} max=${tdy} onInput=${e=>setMxDate(e.target.value)} /><//>
+        <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${mxAmt} onInput=${e=>setMxAmt(e.target.value)} placeholder="0" /><//></div>
+        <${Field} label="Category"><select value=${mxCat} onChange=${e=>setMxCat(e.target.value)}>${MISC_CATS.map(c=>html`<option>${c}</option>`)}</select><//>
+        <${Field} label="For (person, optional)"><select value=${mxEmp} onChange=${e=>setMxEmp(e.target.value)}><option value="">—</option>${employees.map(e=>html`<option value=${e.id}>${e.name}</option>`)}</select><//>
+        <${Field} label="Vessel / division (optional)"><select value=${mxVes} onChange=${e=>setMxVes(e.target.value)}><option value="">—</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
+        <${Field} label="Receipt no. (OR)"><input value=${mxOr} onInput=${e=>setMxOr(e.target.value)} placeholder="OR ref" /><//>
+        <${Field} label="Remarks"><input value=${mxRem} onInput=${e=>setMxRem(e.target.value)} placeholder="e.g. first-aid at clinic" /><//>
+        <button class="btn" disabled=${busy} onClick=${addMisc}>Add expense</button>
+      </div>
+      <div class="card"><label>Miscellaneous expenses — total ${peso(misc)}</label>
+        ${lines.filter(l=>l.type==='MISC').length ? lines.filter(l=>l.type==='MISC').map(l => html`
+          <div class="row" key=${l.id} style="align-items:flex-start">
+            <div><div class="name" style="font-size:14px">${l.item} · ${peso(l.amount)}</div>
+              <div class="sub">${l.or_date||'—'}${l.recipient?' · '+l.recipient:''}${l.vessel_div?' · '+l.vessel_div:''}${l.or_ref?'':' · '}${l.or_ref?'':html`<b style="color:var(--bad,#b0322a)">⚠ no receipt</b>`}${l.remarks?' · '+l.remarks:''}</div></div>
+            <button class="ret" onClick=${()=>removeLine(l)}>✕</button>
+          </div>`) : html`<div class="empty">No expenses yet.</div>`}
+      </div>`}
     ${tab === 'sum' && html`
       <div class="card">
         <label>Reconciliation</label>
         <div class="row"><div class="sub">Advance total</div><div class="name">${peso(advance)}</div></div>
         <div class="row"><div class="sub">Consumed</div><div class="name">${peso(consumed)}</div></div>
+        ${misc>0?html`<div class="row"><div class="sub" style="padding-left:10px">• Miscellaneous (clinic / other)</div><div class="name">${peso(misc)}</div></div>`:''}
         <div class="row"><div class="sub">On-hand assets — stock ${peso(stockVal)} · tools ${peso(toolVal)}</div><div class="name">${peso(onhand)}</div></div>
         <div class="row" style="border-top:1px solid var(--line)"><div class="sub"><b>Cash that should be returned</b></div><div class="name">${peso(cashRet)}</div></div>
         ${cashRet < -0.005 ? html`<div class="note" style="color:var(--bad,#b0322a);font-weight:700;margin-top:8px">⚠ Overspent by ${peso(Math.abs(cashRet))} — fund short / missing top-up.</div>`
