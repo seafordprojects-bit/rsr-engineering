@@ -181,10 +181,12 @@ async function saveReorderQty(name,v){
 async function autoReorderCheck(names){
   let open={};
   try{
-    const{data}=await sb.from('requisitions').select('item,status')
+    const{data,error}=await sb.from('requisitions').select('item,status')
       .in('status',['for_purchase','accepted','ordered']);
+    if(error) throw error;
     (data||[]).forEach(r=>{open[(r.item||'').toLowerCase()]=true;});
-  }catch(e){ return; } // table not set up yet → skip silently
+  }catch(e){ toast('Auto-reorder skipped: '+(e&&e.message?e.message:'requisitions table not found'),'err'); return; }
+  let made=0;
   for(const name of names){
     const th=gth(name); if(!(th>0)) continue;            // no threshold = never auto-reorder
     const q=stockMap[name]||0; if(q>th) continue;         // still above the line
@@ -194,12 +196,14 @@ async function autoReorderCheck(names){
     try{const{data}=await sb.from('requisitions').select('ref').like('ref','REQ-%').order('ref',{ascending:false}).limit(1);
       let nn=1; if(data&&data[0]){const m=(data[0].ref||'').match(/(\d+)\s*$/); if(m) nn=parseInt(m[1],10)+1;} ref='REQ-'+String(nn).padStart(4,'0');}catch(e){ ref='REQ-'+Date.now().toString().slice(-6); }
     try{
-      await sb.from('requisitions').insert({id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+      const{error}=await sb.from('requisitions').insert({id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),
         ref, date:todayYmd(), item:name, unit:gu(name), qty:want, job:'Stock replenishment',
         by:'Warehouse (reorder)', status:'for_purchase', created_at:new Date().toISOString()});
-      open[(name||'').toLowerCase()]=true; // guard within this same run
-    }catch(e){}
+      if(error) throw error;
+      open[(name||'').toLowerCase()]=true; made++; // guard within this same run
+    }catch(e){ toast('Reorder failed for '+name+': '+(e&&e.message?e.message:e),'err'); }
   }
+  if(made>0) toast('Auto-request sent to Purchasing ('+made+' item'+(made>1?'s':'')+')');
 }
 async function loadPrices(){prices={};try{const{data}=await sb.from('item_prices').select('item_name,price');(data||[]).forEach(r=>prices[r.item_name]=Number(r.price)||0);}catch(e){}}
 async function refreshBadge(){let n=0;try{const{count}=await sb.from('requests').select('*',{count:'exact',head:true}).in('status',['Pending','Partial']);n=count||0;}catch(e){}const d=document.getElementById('req-dot');if(d)d.style.display=n>0?'block':'none';}
@@ -484,6 +488,7 @@ async function saveInv(idx){
   const err=await upsertStock(it.n,v,it.u);
   if(err){toast('Failed: '+err.message,'err');return;}
   stockMap[it.n]=v;toast(it.n+' set to '+v);
+  try{ await autoReorderCheck([it.n]); }catch(e){}
 }
 async function saveNewItem(){
   const name=document.getElementById('ni-name').value.trim();
