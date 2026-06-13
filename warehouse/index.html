@@ -198,7 +198,7 @@ async function autoReorderCheck(names){
     try{
       const{error}=await sb.from('requisitions').insert({id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),
         ref, date:todayYmd(), item:name, unit:gu(name), qty:want, job:'Stock replenishment',
-        by:'Warehouse (reorder)', status:'for_purchase', created_at:new Date().toISOString()});
+        requested_by:'Warehouse (reorder)', status:'for_purchase', created_at:new Date().toISOString()});
       if(error) throw error;
       open[(name||'').toLowerCase()]=true; made++; // guard within this same run
     }catch(e){ toast('Reorder failed for '+name+': '+(e&&e.message?e.message:e),'err'); }
