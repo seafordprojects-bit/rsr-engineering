@@ -557,7 +557,7 @@ function App() {
     if (!authed || !onAdminPage) return;
     const iso30 = new Date(Date.now() - 30 * 864e5).toISOString();
     (async () => {
-      const [toolsOut, inRepair, issued30, vessels, people, pendingReqs, liqPending] = await Promise.all([
+      const [toolsOut, inRepair, issued30, vessels, people, pendingReqs, liqPending, poInbox] = await Promise.all([
         countRows('borrow_issuance', q => q.eq('txn_type', 'borrow').eq('status', 'out')),
         countRows('item_units', q => q.eq('active', true).eq('status', 'repair')),
         countRows('issuances', q => q.gte('created_at', iso30)),
@@ -565,8 +565,9 @@ function App() {
         countRows('employees', q => q),
         countRows('requests', q => q.eq('status', 'Pending')),
         countRows('purchase_request', q => q.eq('status', 'Pending')),
+        countRows('requisitions', q => q.eq('status', 'for_purchase')),
       ]);
-      setM({ toolsOut, inRepair, issued30, vessels, people, pendingReqs, liqPending });
+      setM({ toolsOut, inRepair, issued30, vessels, people, pendingReqs, liqPending, poInbox });
       try {
         const recs = await getAttendance(todayPH());
         const c = (f) => recs.filter(f).length;
@@ -661,6 +662,7 @@ function App() {
     { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', onClick:() => setAdminTab('issued') },
     { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse',        href:'../warehouse/' },
     { ico:'🧾', num:m.liqPending, unit:'to approve',       title:'Material Requests', onClick:() => setAdminTab('matreq') },
+    { ico:'🛒', num:m.poInbox,    unit:'to purchase',      title:'Purchasing',        href:'../purchasing/' },
     { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  onClick:() => setAdminTab('vessels') },
     { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
