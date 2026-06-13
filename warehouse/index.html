@@ -119,7 +119,7 @@ function fmt(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocale
 function fmtDT(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleString('en-PH',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});}
 function itemOpts(sel){const list=catalog.length?catalog:ITEMS;return '<option value="">— Item —</option>'+list.map(i=>`<option value="${i.n}"${i.n===sel?' selected':''}>${i.n}</option>`).join('');}
 
-let WH_PIN='5555', stockMap={}, prices={}, sites=[], dispatchPrefill=null, unitMap={}, catalog=[];
+let WH_PIN='5555', stockMap={}, prices={}, sites=[], dispatchPrefill=null, unitMap={}, catalog=[], reorderMap={};
 const SITE_CODES={'Carmen':'CAR','Mandaue':'MAN','Lapu-Lapu':'LAP'};
 function siteCode(name){return SITE_CODES[name]||((name||'XXX').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase());}
 
@@ -149,11 +149,11 @@ async function doLogin(){
 }
 
 async function loadStock(){
-  stockMap={};unitMap={};
+  stockMap={};unitMap={};reorderMap={};
   let rows=[];
-  try{const{data,error}=await sb.from('warehouse_stock').select('item_name,qty,unit');if(error)throw error;rows=data||[];}
-  catch(e){try{const{data}=await sb.from('warehouse_stock').select('item_name,qty');rows=data||[];}catch(e2){}}
-  rows.forEach(r=>{stockMap[r.item_name]=Number(r.qty)||0;if(r.unit)unitMap[r.item_name]=r.unit;});
+  try{const{data,error}=await sb.from('warehouse_stock').select('item_name,qty,unit,reorder_qty');if(error)throw error;rows=data||[];}
+  catch(e){try{const{data}=await sb.from('warehouse_stock').select('item_name,qty,unit');rows=data||[];}catch(e2){try{const{data}=await sb.from('warehouse_stock').select('item_name,qty');rows=data||[];}catch(e3){}}}
+  rows.forEach(r=>{stockMap[r.item_name]=Number(r.qty)||0;if(r.unit)unitMap[r.item_name]=r.unit;if(r.reorder_qty!=null)reorderMap[r.item_name]=Number(r.reorder_qty)||0;});
   const baseNames=ITEMS.map(i=>i.n);
   const extra=rows.map(r=>r.item_name).filter(n=>n&&!baseNames.includes(n)).sort((a,b)=>a.localeCompare(b));
   catalog=ITEMS.concat(extra.map(n=>({n,u:unitMap[n]||'pcs',th:0})));
@@ -162,6 +162,44 @@ async function upsertStock(name,qty,unit){
   let r=await sb.from('warehouse_stock').upsert({item_name:name,qty:qty,unit:unit,updated_at:new Date().toISOString()},{onConflict:'item_name'});
   if(r.error){r=await sb.from('warehouse_stock').upsert({item_name:name,qty:qty,updated_at:new Date().toISOString()},{onConflict:'item_name'});}
   return r.error;
+}
+/* save the per-item reorder qty (blank clears it) */
+async function saveReorderQty(name,v){
+  const val=(v===''||v==null)?null:(parseInt(v,10)||0);
+  reorderMap[name]=val==null?undefined:val;
+  try{
+    const{error}=await sb.from('warehouse_stock').upsert({item_name:name,reorder_qty:val,updated_at:new Date().toISOString()},{onConflict:'item_name'});
+    if(error) throw error;
+    toast(val==null?'Reorder qty cleared':'Reorder qty saved');
+  }catch(e){ toast('Could not save reorder qty: '+(e&&e.message?e.message:e),'err'); }
+}
+/* WAREHOUSE → PURCHASING auto-reorder.
+   For each item whose new on-hand <= its low threshold (th), write ONE
+   requisition into the Purchasing inbox — unless an open requisition for
+   that item already exists (dedup). Requested qty = the item's reorder
+   qty, or the threshold if none set. Never blocks the dispatch. */
+async function autoReorderCheck(names){
+  let open={};
+  try{
+    const{data}=await sb.from('requisitions').select('item,status')
+      .in('status',['for_purchase','accepted','ordered']);
+    (data||[]).forEach(r=>{open[(r.item||'').toLowerCase()]=true;});
+  }catch(e){ return; } // table not set up yet → skip silently
+  for(const name of names){
+    const th=gth(name); if(!(th>0)) continue;            // no threshold = never auto-reorder
+    const q=stockMap[name]||0; if(q>th) continue;         // still above the line
+    if(open[(name||'').toLowerCase()]) continue;          // already an open request → dedup
+    const want=(reorderMap[name]!=null&&reorderMap[name]>0)?reorderMap[name]:th;
+    let ref='';
+    try{const{data}=await sb.from('requisitions').select('ref').like('ref','REQ-%').order('ref',{ascending:false}).limit(1);
+      let nn=1; if(data&&data[0]){const m=(data[0].ref||'').match(/(\d+)\s*$/); if(m) nn=parseInt(m[1],10)+1;} ref='REQ-'+String(nn).padStart(4,'0');}catch(e){ ref='REQ-'+Date.now().toString().slice(-6); }
+    try{
+      await sb.from('requisitions').insert({id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),
+        ref, date:todayYmd(), item:name, unit:gu(name), qty:want, job:'Stock replenishment',
+        by:'Warehouse (reorder)', status:'for_purchase', created_at:new Date().toISOString()});
+      open[(name||'').toLowerCase()]=true; // guard within this same run
+    }catch(e){}
+  }
 }
 async function loadPrices(){prices={};try{const{data}=await sb.from('item_prices').select('item_name,price');(data||[]).forEach(r=>prices[r.item_name]=Number(r.price)||0);}catch(e){}}
 async function refreshBadge(){let n=0;try{const{count}=await sb.from('requests').select('*',{count:'exact',head:true}).in('status',['Pending','Partial']);n=count||0;}catch(e){}const d=document.getElementById('req-dot');if(d)d.style.display=n>0?'block':'none';}
@@ -228,9 +266,10 @@ async function renderStock(c){
     +`<div class="mbox"><div class="mv">${total}</div><div class="ml">Total on hand</div></div>`
     +`<div class="mbox" style="border-color:var(--am)"><div class="mv" style="color:var(--ad)">${low}</div><div class="ml">Low stock</div></div>`
     +`<div class="mbox" style="border-color:var(--rm)"><div class="mv" style="color:var(--r)">${zero}</div><div class="ml">Out of stock</div></div></div>`
-    +'<div class="sc"><table class="tbl"><thead><tr><th>Item</th><th>Unit</th><th style="text-align:right">On hand</th><th>Min</th><th>Status</th></tr></thead><tbody>'
+    +'<div class="sc"><table class="tbl"><thead><tr><th>Item</th><th>Unit</th><th style="text-align:right">On hand</th><th>Min</th><th>Reorder qty</th><th>Status</th></tr></thead><tbody>'
     +catalog.map(i=>{const q=stockMap[i.n]||0;const b=q<=0?'<span class="badge bdanger">Out</span>':(i.th>0&&q<=i.th)?'<span class="badge bwarn">Low</span>':'<span class="badge bok">OK</span>';
-      return `<tr><td style="font-weight:600">${i.n}</td><td style="color:var(--tx2)">${i.u}</td><td style="text-align:right;font-size:16px;font-weight:700;color:${q<=0?'var(--r)':(i.th>0&&q<=i.th)?'var(--ad)':'var(--tx)'}">${q}</td><td style="color:var(--tx2)">${i.th>0?i.th:'—'}</td><td>${b}</td></tr>`;}).join('')
+      const rq=reorderMap[i.n]!=null?reorderMap[i.n]:'';
+      return `<tr><td style="font-weight:600">${i.n}</td><td style="color:var(--tx2)">${i.u}</td><td style="text-align:right;font-size:16px;font-weight:700;color:${q<=0?'var(--r)':(i.th>0&&q<=i.th)?'var(--ad)':'var(--tx)'}">${q}</td><td style="color:var(--tx2)">${i.th>0?i.th:'—'}</td><td><input type="number" min="0" value="${rq}" placeholder="${i.th>0?i.th:'—'}" onchange="saveReorderQty('${i.n.replace(/'/g,"\\'")}',this.value)" style="width:62px;padding:5px 6px;border:1px solid var(--bd);border-radius:7px;background:var(--bg2);color:var(--tx);font-family:inherit;font-size:13px" /></td><td>${b}</td></tr>`;}).join('')
     +'</tbody></table></div>';
 }
 
@@ -360,7 +399,8 @@ async function saveDispatch(){
   const id='DSP-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
   try{
     await sb.from('dispatches').insert([{id,dr_no:drNo,site,request_id:dpReqId,items,dispatched_by:by,date:todayYmd(),created_at:new Date().toISOString()}]);
-    for(const it of items){const cur=stockMap[it.n]||0;await sb.from('warehouse_stock').upsert({item_name:it.n,qty:Math.max(0,cur-it.qty),updated_at:new Date().toISOString()},{onConflict:'item_name'});}
+    for(const it of items){const cur=stockMap[it.n]||0;const nq=Math.max(0,cur-it.qty);stockMap[it.n]=nq;await sb.from('warehouse_stock').upsert({item_name:it.n,qty:nq,updated_at:new Date().toISOString()},{onConflict:'item_name'});}
+    try{ await autoReorderCheck(items.map(it=>it.n)); }catch(e){}
     if(dpReqId){
       let reqItems=[];try{const{data}=await sb.from('requests').select('items').eq('id',dpReqId).single();reqItems=(data&&data.items)||[];}catch(e){}
       const givenMap={};items.forEach(it=>{givenMap[it.n]=(givenMap[it.n]||0)+it.qty;});
