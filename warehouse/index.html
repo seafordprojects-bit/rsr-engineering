@@ -146,6 +146,8 @@ async function doLogin(){
   pv='';upd();
   try{const{data}=await sb.from('sites').select('name').order('name');sites=(data||[]).map(s=>s.name);}catch(e){sites=['Carmen','Mandaue'];}
   renderHome();
+  // automatic reorder sweep once on login (no button needed)
+  try{ await loadStock(); await autoReorderCheck(catalog.map(i=>i.n)); }catch(e){}
 }
 
 async function loadStock(){
@@ -186,12 +188,27 @@ async function autoReorderCheck(names){
     if(error) throw error;
     (data||[]).forEach(r=>{open[(r.item||'').toLowerCase()]=true;});
   }catch(e){ toast('Auto-reorder skipped: '+(e&&e.message?e.message:'requisitions table not found'),'err'); return; }
+  // daily usage from last 30 days of dispatches (for prediction, same as site issuance)
+  const daily={};
+  try{
+    const since=new Date(Date.now()-30*86400000).toISOString();
+    const{data}=await sb.from('dispatches').select('items,created_at').gte('created_at',since).limit(500);
+    const use={};(data||[]).forEach(r=>(r.items||[]).forEach(it=>{const nm=it.n||it.name;use[nm]=(use[nm]||0)+(it.qty||0);}));
+    Object.keys(use).forEach(k=>daily[k]=use[k]/30);
+  }catch(e){}
+  const H=14; // forecast horizon (days)
   let made=0;
   for(const name of names){
     const th=gth(name); if(!(th>0)) continue;            // no threshold = never auto-reorder
-    const q=stockMap[name]||0; if(q>th) continue;         // still above the line
     if(open[(name||'').toLowerCase()]) continue;          // already an open request → dedup
-    const want=(reorderMap[name]!=null&&reorderMap[name]>0)?reorderMap[name]:th;
+    const cur=stockMap[name]||0, du=daily[name]||0;
+    const lowNow=cur<=th;
+    const predLow=du>0 && (cur-du*H)<=th;                 // predicted to fall to/below Min within H days
+    if(!(lowNow||predLow)) continue;
+    // qty: prefer the item's reorder field; else size to cover Min + forecast usage
+    const want=(reorderMap[name]!=null&&reorderMap[name]>0)
+      ? reorderMap[name]
+      : Math.max(1, Math.max(th*2, Math.ceil(du*H)+th) - cur);
     let ref='';
     try{const{data}=await sb.from('requisitions').select('ref').like('ref','REQ-%').order('ref',{ascending:false}).limit(1);
       let nn=1; if(data&&data[0]){const m=(data[0].ref||'').match(/(\d+)\s*$/); if(m) nn=parseInt(m[1],10)+1;} ref='REQ-'+String(nn).padStart(4,'0');}catch(e){ ref='REQ-'+Date.now().toString().slice(-6); }
@@ -288,6 +305,8 @@ async function renderStock(c){
       const rq=reorderMap[i.n]!=null?reorderMap[i.n]:'';
       return `<tr><td style="font-weight:600">${i.n}</td><td style="color:var(--tx2)">${i.u}</td><td style="text-align:right;font-size:16px;font-weight:700;color:${q<=0?'var(--r)':(i.th>0&&q<=i.th)?'var(--ad)':'var(--tx)'}">${q}</td><td style="color:var(--tx2)">${i.th>0?i.th:'—'}</td><td><input type="number" min="0" value="${rq}" placeholder="${i.th>0?i.th:'—'}" onchange="saveReorderQty('${i.n.replace(/'/g,"\\'")}',this.value)" style="width:62px;padding:5px 6px;border:1px solid var(--bd);border-radius:7px;background:var(--bg2);color:var(--tx);font-family:inherit;font-size:13px" /></td><td>${b}</td></tr>`;}).join('')
     +'</tbody></table></div>';
+  // automatic reorder sweep whenever the Stock tab opens (no button needed)
+  setTimeout(()=>{ autoReorderCheck(catalog.map(i=>i.n)).catch(()=>{}); }, 50);
 }
 
 /* ── REQUESTS ── */
