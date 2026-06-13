@@ -628,7 +628,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const [fund, setFund] = useState(undefined);
   const [advs, setAdvs] = useState([]);
   const [lines, setLines] = useState([]);
-  const [tab, setTab] = useState('fund'); const [matView, setMatView] = useState('request');
+  const [tab, setTab] = useState('fund'); const [matView, setMatView] = useState('request'); const [toolView, setToolView] = useState('request'); const [openPr, setOpenPr] = useState({});
   const [cust, setCust] = useState('Raffy');
   const [pfrom, setPfrom] = useState(today());
   const [aDate, setADate] = useState(today()); const [aAmt, setAAmt] = useState(''); const [aBy, setABy] = useState('Raffy'); const [aRem, setARem] = useState(''); const [aMode, setAMode] = useState('Cash'); const [aRef, setARef] = useState('');
@@ -642,6 +642,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const [niOpen, setNiOpen] = useState(false); const [niName, setNiName] = useState(''); const [niUnit, setNiUnit] = useState('pcs');
   const [tDate, setTDate] = useState(today()); const [tItem, setTItem] = useState(''); const [tPfx, setTPfx] = useState(''); const [tUC, setTUC] = useState('');
   const [tQ, setTQ] = useState('1'); const [tSite, setTSite] = useState('Carmen'); const [tVes, setTVes] = useState(''); const [tOr, setTOr] = useState(''); const [tRem, setTRem] = useState('');
+  const [toolPick, setToolPick] = useState(''); const [toolItems, setToolItems] = useState([]); const [tPr, setTPr] = useState(''); const [toolBuyRows, setToolBuyRows] = useState([]);
   const [busy, setBusy] = useState(false);
 
   // Vessel/division picker = only vessels currently in an ACTIVE repair phase.
@@ -737,6 +738,35 @@ function Liquidation({ voyages, employees, sites, toast }) {
     // Passcode gate temporarily removed for initial data entry — restore later.
     try { await updatePR(p.id, { status, approved_by: 'Coordinator', approved_at: new Date().toISOString() }); loadRefs(); toast(p.pr_no + ' ' + status); } catch (e) { toast('Error: ' + e.message, true); }
   };
+  const createToolPR = async () => {
+    if (!toolItems.length) { toast('Add at least one tool', true); return; }
+    setBusy(true);
+    try {
+      const no = await nextNo('LTR', liqSiteCode('Carmen'));
+      const row = { id: uid(), pr_no: no, requested_by: prBy.trim() || null, date: today(), status: 'Pending', items: toolItems.join(', '), site: 'Carmen', created_at: new Date().toISOString() };
+      try { await addPR(row); } catch (e) { if (/column/i.test(e.message || '')) { const { site, ...rest } = row; await addPR(rest); } else throw e; }
+      setToolItems([]); setToolPick(''); loadRefs(); toast('Request created: ' + no);
+    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+  };
+  const prSlip = (p) => {
+    const open = !!openPr[p.id];
+    const its = p.items ? p.items.split(',').map(s=>s.trim()).filter(Boolean) : [];
+    const bg = p.status==='Approved'?'#1d9e75':p.status==='Rejected'?'#c0392b':p.status==='Bought'?'#2d6cdf':'#b8860b';
+    return html`
+    <div key=${p.id} style="border:1px solid var(--line);border-radius:10px;margin-top:8px;background:var(--panel,#161a22);overflow:hidden">
+      <div onClick=${()=>setOpenPr(o=>({...o,[p.id]:!o[p.id]}))} style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;cursor:pointer">
+        <span style="font-weight:700;font-size:14px">${open?'▾':'▸'} ${p.pr_no}</span>
+        <span style="font-size:11px;font-weight:700;color:#fff;background:${bg};padding:2px 9px;border-radius:10px">${p.status}</span>
+      </div>
+      ${open ? html`<div style="padding:0 12px 10px">
+        <div class="sub" style="margin:0 0 6px">${p.date||'—'} · Requested by ${p.requested_by||'—'}${p.site?' · '+p.site:''}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          ${its.length?its.map((it,i)=>html`<tr><td style="width:22px;padding:3px 0;color:var(--ink-dim)">${i+1}.</td><td style="padding:3px 0">${it}</td></tr>`):html`<tr><td class="sub">No items</td></tr>`}
+        </table>
+        ${p.status==='Pending'?html`<div style="display:flex;gap:6px;margin-top:8px"><button style=${bSm} onClick=${(e)=>{e.stopPropagation();decidePR(p,'Approved');}}>Approve</button><button style=${bSmAlt} onClick=${(e)=>{e.stopPropagation();decidePR(p,'Rejected');}}>Reject</button></div>`:''}
+      </div>`:''}
+    </div>`;
+  };
   const saveNewItem = async () => {
     if (!niName.trim()) { toast('Material name?', true); return; }
     const nm = niName.trim();
@@ -794,6 +824,31 @@ function Liquidation({ voyages, employees, sites, toast }) {
       catch (e) { toast('Saved, but Tools push failed — use "Register" on the line', true); }
       setTItem(''); setTPfx(''); setTUC(''); setTQ('1'); setTOr(''); setTRem('');
       loadAll(fund);
+    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+  };
+  const buyToolRequest = async () => {
+    const pr = prs.find(p => p.pr_no === tPr);
+    if (!pr) { toast('Select an approved request', true); return; }
+    if (pr.status !== 'Approved') { toast('Request ' + pr.pr_no + ' is not approved', true); return; }
+    if (pr.date && tDate && pr.date > tDate) { toast('OR date must be on/after the request date', true); return; }
+    const buys = toolBuyRows.filter(r => (parseInt(r.qty,10)||0) > 0 && Number(r.cost) > 0);
+    if (!buys.length) { toast('Enter qty and price for at least one tool', true); return; }
+    setBusy(true);
+    try {
+      const dt = tDate || today(), orRef = tOr.trim() || null, ves = tVes || null, sid = (sites || []).find(s => s.name === tSite);
+      let failed = 0;
+      for (const r of buys) {
+        const q = parseInt(r.qty,10)||0, uc = Number(r.cost), pfx = (r.prefix || r.name.replace(/[^A-Za-z]/g,'').slice(0,3)).toUpperCase();
+        const line = { id: uid(), fund_id: fund.id, type: 'TOOL', or_date: dt, vessel_div: ves, site: tSite,
+          item: r.name, unit: 'pcs', unit_cost: uc, qty: q, or_ref: orRef,
+          remarks: ((tRem.trim() ? tRem.trim() + ' ' : '') + '[pfx:' + pfx + ']'), pr_ref: pr.pr_no, posted: false, created_at: new Date().toISOString() };
+        await addLiqLine(line);
+        try { await liqToolIn(line, sid && sid.id, pfx); } catch (e) { failed++; }
+      }
+      try { await updatePR(pr.id, { status: 'Bought' }); } catch (e) {}
+      toast(buys.length + ' tool(s) bought → Tools inventory' + (failed ? ' (' + failed + ' need manual Register)' : ''));
+      setTPr(''); setToolBuyRows([]); setTOr(''); setTRem(''); setTVes('');
+      loadAll(fund); loadRefs();
     } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
   };
 
@@ -878,23 +933,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
         ${prItems.length ? html`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${prItems.map(it=>html`<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${it}<span style="cursor:pointer;font-weight:700;color:var(--ink-dim)" onClick=${()=>setPrItems(prItems.filter(x=>x!==it))}>✕</span></span>`)}</div>` : html`<div class="sub" style="margin:4px 0">Pick materials (or add new ones) to build the request — no price needed yet.</div>`}
         <${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
         <button class="btn" disabled=${busy} onClick=${createPR}>Create request</button>
-        ${prs.length ? prs.slice(0, 8).map(p => {
-          const its = p.items ? p.items.split(',').map(s=>s.trim()).filter(Boolean) : [];
-          const bg = p.status==='Approved' ? '#1d9e75' : p.status==='Rejected' ? '#c0392b' : p.status==='Bought' ? '#2d6cdf' : '#b8860b';
-          return html`
-          <div key=${p.id} style="border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:10px;background:var(--panel,#161a22)">
-            <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid var(--line);padding-bottom:6px;margin-bottom:6px">
-              <span style="font-weight:800;letter-spacing:.5px;font-size:12px">MATERIAL REQUEST</span>
-              <span style="font-size:11px;font-weight:700;color:#fff;background:${bg};padding:2px 9px;border-radius:10px">${p.status}</span>
-            </div>
-            <div style="display:flex;justify-content:space-between;font-size:14px"><b>${p.pr_no}</b><span class="sub">${p.date || '—'}</span></div>
-            <div class="sub" style="margin:2px 0 6px">Requested by ${p.requested_by || '—'}${p.site ? ' · ' + p.site : ''}</div>
-            <table style="width:100%;border-collapse:collapse;font-size:13px">
-              ${its.length ? its.map((it,i)=>html`<tr><td style="width:22px;padding:3px 0;color:var(--ink-dim)">${i+1}.</td><td style="padding:3px 0">${it}</td></tr>`) : html`<tr><td class="sub">No items listed</td></tr>`}
-            </table>
-            ${p.status === 'Pending' ? html`<div style="display:flex;gap:6px;margin-top:8px"><button style=${bSm} onClick=${()=>decidePR(p,'Approved')}>Approve</button><button style=${bSmAlt} onClick=${()=>decidePR(p,'Rejected')}>Reject</button></div>` : ''}
-          </div>`;
-        }) : html`<div class="empty">No requests yet.</div>`}
+        ${(()=>{const list=prs.filter(p=>!(p.pr_no||'').startsWith('LTR'));return list.length?list.slice(0,15).map(prSlip):html`<div class="empty">No requests yet.</div>`;})()}
       </div>` : ''}
       ${matView === 'buy' ? html`
       <div class="card">
@@ -902,7 +941,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
         <${Field} label="Approved request">
           <select value=${mPr} onChange=${e=>{const no=e.target.value;setMPr(no);const p=prs.find(x=>x.pr_no===no);const names=p&&p.items?p.items.split(',').map(s=>s.trim()).filter(Boolean):[];setBuyRows(names.map(n=>{const s=stockItems.find(x=>x.name===n);return {name:n,unit:(s&&s.unit)||'pc',qty:'',cost:''};}));}}>
             <option value="">— select approved request —</option>
-            ${prs.filter(p=>p.status==='Approved').map(p=>html`<option value=${p.pr_no}>${p.pr_no} · ${p.items ? p.items.slice(0,40) : ''}</option>`)}
+            ${prs.filter(p=>p.status==='Approved'&&!(p.pr_no||'').startsWith('LTR')).map(p=>html`<option value=${p.pr_no}>${p.pr_no} · ${p.items ? p.items.slice(0,40) : ''}</option>`)}
           </select>
         <//>
         ${mPr && buyRows.length ? html`
@@ -936,19 +975,49 @@ function Liquidation({ voyages, employees, sites, toast }) {
       </div>` : ''}`}
 
     ${tab === 'tool' && html`
+      <div class="tabs" style="margin-bottom:10px">
+        <button class=${toolView==='request'?'on':''} onClick=${() => setToolView('request')}>Request</button>
+        <button class=${toolView==='buy'?'on':''} onClick=${() => setToolView('buy')}>Buy tool</button>
+      </div>
+      ${toolView === 'request' ? html`
       <div class="card">
-        <label>Buy tool (registers into the Tools module)</label>
-        <${Field} label="Tool name"><input value=${tItem} onInput=${e=>{setTItem(e.target.value);if(!tPfx)setTPfx(e.target.value.replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase());}} placeholder="e.g. Angle grinder" /><//>
-        <div class="two"><${Field} label="Code prefix"><input value=${tPfx} onInput=${e=>setTPfx(e.target.value.toUpperCase())} placeholder="GRD" /><//>
-        <${Field} label="Qty"><input type="number" min="1" value=${tQ} onInput=${e=>setTQ(e.target.value)} /><//></div>
-        <div class="two"><${Field} label="Unit cost ₱"><input type="number" min="0" step="0.01" value=${tUC} onInput=${e=>setTUC(e.target.value)} /><//>
-        <${Field} label="OR date"><input type="date" value=${tDate} onInput=${e=>setTDate(e.target.value)} /><//></div>
-        <div class="two"><${Field} label="Site"><select value=${tSite} onChange=${e=>setTSite(e.target.value)}>${siteNames.map(s=>html`<option>${s}</option>`)}</select><//>
-        <${Field} label="Requested by job (optional)"><select value=${tVes} onChange=${e=>setTVes(e.target.value)}><option value="">—</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//></div>
-        <${Field} label="Receipt no. (OR)"><input value=${tOr} onInput=${e=>setTOr(e.target.value)} placeholder="OR ref" /><//>
-        <${Field} label="Remarks"><input value=${tRem} onInput=${e=>setTRem(e.target.value)} placeholder="optional" /><//>
-        <div class="sub" style="margin:2px 0 4px">Tool value ₱${((parseInt(tQ,10)||0)*(Number(tUC)||0)).toLocaleString('en-PH')} → on-hand asset (never consumed)</div>
-        <button class="btn" disabled=${busy} onClick=${addToolLine}>Add tool line</button>
+        <label>Tool requests (approve before buying)</label>
+        <${Field} label="New request — add tools">
+          <input value=${toolPick} onInput=${e=>setToolPick(e.target.value)} onKeyDown=${e=>{if(e.key==='Enter'){e.preventDefault();const v=toolPick.trim();if(v&&!toolItems.includes(v))setToolItems([...toolItems,v]);setToolPick('');}}} placeholder="type a tool name" />
+        <//>
+        <div style="margin:6px 0"><button style=${bSm} onClick=${()=>{const v=toolPick.trim();if(v&&!toolItems.includes(v))setToolItems([...toolItems,v]);setToolPick('');}}>＋ Add tool</button></div>
+        ${toolItems.length?html`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${toolItems.map(it=>html`<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${it}<span style="cursor:pointer;font-weight:700;color:var(--ink-dim)" onClick=${()=>setToolItems(toolItems.filter(x=>x!==it))}>✕</span></span>`)}</div>`:html`<div class="sub" style="margin:4px 0">Add the tools you need — no price yet.</div>`}
+        <${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
+        <button class="btn" disabled=${busy} onClick=${createToolPR}>Create request</button>
+        ${(()=>{const list=prs.filter(p=>(p.pr_no||'').startsWith('LTR'));return list.length?list.slice(0,15).map(prSlip):html`<div class="empty">No requests yet.</div>`;})()}
+      </div>` : ''}
+      ${toolView === 'buy' ? html`
+      <div class="card">
+        <label>Buy tool (encode actual qty & price)</label>
+        <${Field} label="Approved request">
+          <select value=${tPr} onChange=${e=>{const no=e.target.value;setTPr(no);const p=prs.find(x=>x.pr_no===no);const names=p&&p.items?p.items.split(',').map(s=>s.trim()).filter(Boolean):[];setToolBuyRows(names.map(n=>({name:n,prefix:n.replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase(),qty:'1',cost:''})));}}>
+            <option value="">— select approved request —</option>
+            ${prs.filter(p=>p.status==='Approved'&&(p.pr_no||'').startsWith('LTR')).map(p=>html`<option value=${p.pr_no}>${p.pr_no} · ${p.items ? p.items.slice(0,40) : ''}</option>`)}
+          </select>
+        <//>
+        ${tPr && toolBuyRows.length ? html`
+          <div class="sub" style="margin:8px 0 2px">Requested tools — enter qty, unit price, and code prefix:</div>
+          ${toolBuyRows.map((r,idx)=>html`
+            <div key=${r.name} style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:6px">
+              <div style="font-weight:600;font-size:14px;margin-bottom:4px">${r.name}</div>
+              <div class="two"><${Field} label="Code prefix"><input value=${r.prefix} onInput=${e=>{const v=e.target.value.toUpperCase();setToolBuyRows(toolBuyRows.map((x,i)=>i===idx?{...x,prefix:v}:x));}} /><//>
+              <${Field} label="Qty"><input type="number" min="1" value=${r.qty} onInput=${e=>{const v=e.target.value;setToolBuyRows(toolBuyRows.map((x,i)=>i===idx?{...x,qty:v}:x));}} /><//></div>
+              <${Field} label="Unit price ₱"><input type="number" min="0" step="0.01" value=${r.cost} onInput=${e=>{const v=e.target.value;setToolBuyRows(toolBuyRows.map((x,i)=>i===idx?{...x,cost:v}:x));}} /><//>
+              <div class="sub">Line total: ₱${((parseInt(r.qty,10)||0)*(Number(r.cost)||0)).toLocaleString('en-PH')}</div>
+            </div>`)}
+          <div class="two" style="margin-top:4px"><${Field} label="OR date"><input type="date" value=${tDate} min=${yday} max=${tdy} onInput=${e=>setTDate(e.target.value)} /><//>
+          <${Field} label="Receipt no. (OR)"><input value=${tOr} onInput=${e=>setTOr(e.target.value)} placeholder="OR ref" /><//></div>
+          <div class="two"><${Field} label="Site"><select value=${tSite} onChange=${e=>setTSite(e.target.value)}>${siteNames.map(s=>html`<option>${s}</option>`)}</select><//>
+          <${Field} label="For job (optional)"><select value=${tVes} onChange=${e=>setTVes(e.target.value)}><option value="">—</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//></div>
+          <${Field} label="Remarks"><input value=${tRem} onInput=${e=>setTRem(e.target.value)} placeholder="optional" /><//>
+          <div class="sub" style="margin:2px 0 6px">Total tool value ₱${toolBuyRows.reduce((a,r)=>a+(parseInt(r.qty,10)||0)*(Number(r.cost)||0),0).toLocaleString('en-PH')} → on-hand asset</div>
+          <button class="btn" disabled=${busy} onClick=${buyToolRequest}>Save purchase → Tools</button>
+        ` : html`<div class="sub" style="margin:8px 0">Select an approved request to encode the purchase.</div>`}
       </div>
       <div class="card"><label>Tool lines</label>
         ${lines.filter(l=>l.type==='TOOL').length ? lines.filter(l=>l.type==='TOOL').map(l => html`
@@ -958,7 +1027,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
               <div class="sub">${l.posted ? html`<b style="color:var(--accent2,#1d9e75)">✓ in Tools inventory (${l.site})</b>` : html`<button style=${bSm} onClick=${()=>pushTool(l)}>Register in Tools</button>`}</div></div>
             <button class="ret" onClick=${()=>removeLine(l)}>✕</button>
           </div>`) : html`<div class="empty">None yet.</div>`}
-      </div>`}
+      </div>` : ''}`}
 
     ${tab === 'allow' && html`
       <div class="card">
