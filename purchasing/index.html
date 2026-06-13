@@ -207,7 +207,7 @@ async function saveDirect(){
   if(!item||!(qty>0)){ toast('Enter item and qty'); return; }
   const ref=await seq('REQ');
   await DB.insert('requisitions',{ref, date:today(), status:'accepted', accepted_at:today(),
-    item, unit:val('d_unit')||'pc', qty, job:val('d_job')||'—', by:'Purchasing (direct)'});
+    item, unit:val('d_unit')||'pc', qty, job:val('d_job')||'—', requested_by:'Purchasing (direct)'});
   closeModal(); toast('Added to To buy'); render();
 }
 
@@ -307,7 +307,7 @@ function viewInbox(){
           <div class="sub">${r.ref} · ${r.job}</div></div>
         ${statusPill(r.status)}
       </div>
-      <div class="meta">Requested by <b>${r.by}</b> · ${r.date}</div>
+      <div class="meta">Requested by <b>${r.requested_by||r.by||'—'}</b> · ${r.date}</div>
       <div class="actions btn-pair">
         <button class="btn small" onclick="acceptReq('${r.id}')">Accept</button>
         <button class="btn ghost small" onclick="openReturn('${r.id}')">Return</button>
@@ -329,7 +329,7 @@ function viewBuy(){
           <div class="sub">${r.ref} · ${r.job}</div></div>
         ${statusPill(r.status)}
       </div>
-      <div class="meta">By <b>${r.by}</b>${r.accepted_at?' · accepted '+r.accepted_at:''}</div>
+      <div class="meta">By <b>${r.requested_by||r.by||'—'}</b>${r.accepted_at?' · accepted '+r.accepted_at:''}</div>
       <div class="actions btn-pair">
         <button class="btn small" onclick="openPO('${r.id}')">Online · PO</button>
         <button class="btn teal small" onclick="openStore('${r.id}')">Store buy</button>
