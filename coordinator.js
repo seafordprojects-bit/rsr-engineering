@@ -88,15 +88,19 @@ const liqSiteCode = (s) => LIQ_SITE_CODES[s] || (s || 'GEN').replace(/[^A-Za-z]/
 // push leftover material into the site's stock (mirrors the material app's delivery)
 async function liqStockIn(line, custodian) {
   const qty = Number(line.qty_to_stock) || 0; if (qty <= 0) return;
-  const id = await nextNo('DLV', liqSiteCode(line.site));
-  const { error: e1 } = await supabase.from('deliveries').insert([{ id, site: line.site, source: 'Liquidation', ref: line.id,
-    date: line.or_date || new Date().toISOString().slice(0, 10), received_by: custodian || 'Liquidation',
-    items: [{ n: line.item, u: line.unit || 'pc', qty }], created_at: new Date().toISOString() }]);
-  if (e1) throw e1;
-  const { data: cur } = await supabase.from('site_stock').select('qty').eq('site_key', line.site).eq('item_name', line.item).maybeSingle();
+  const item = (line.item || '').trim();
+  // update the on-hand stock first (this is what Material Issuance reads)
+  const { data: cur } = await supabase.from('site_stock').select('qty').eq('site_key', line.site).eq('item_name', item).maybeSingle();
   const nq = (cur ? Number(cur.qty) || 0 : 0) + qty;
-  const { error: e2 } = await supabase.from('site_stock').upsert({ site_key: line.site, item_name: line.item, qty: nq, updated_at: new Date().toISOString() }, { onConflict: 'site_key,item_name' });
+  const { error: e2 } = await supabase.from('site_stock').upsert({ site_key: line.site, item_name: item, qty: nq, updated_at: new Date().toISOString() }, { onConflict: 'site_key,item_name' });
   if (e2) throw e2;
+  // delivery log is best-effort; never let it block the stock update
+  try {
+    const id = await nextNo('DLV', liqSiteCode(line.site));
+    await supabase.from('deliveries').insert([{ id, site: line.site, source: 'Liquidation', ref: line.id,
+      date: line.or_date || new Date().toISOString().slice(0, 10), received_by: custodian || 'Liquidation',
+      items: [{ n: item, u: line.unit || 'pc', qty }], created_at: new Date().toISOString() }]);
+  } catch (e) {}
   await updateLiqLine(line.id, { posted: true });
 }
 // register a bought tool into the Tools module (mirrors Setup → Register tool)
@@ -618,6 +622,12 @@ function Expenses({ voyages, toast }) {
 }
 
 // ---------- Liquidation (cash advance, reconcile by project) ----------
+const stepHead = (n, t, s) => html`
+  <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
+    <div style="width:30px;height:30px;border-radius:50%;background:var(--accent,#0f6e56);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex:0 0 30px">${n}</div>
+    <div><div class="name" style="font-size:15px;font-weight:800">${t}</div>
+    <div class="sub" style="font-size:12px;color:var(--ink-dim)">${s}</div></div>
+  </div>`;
 function Liquidation({ voyages, employees, sites, toast }) {
   const peso = (n) => '₱' + Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const uid = () => 'L' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -800,17 +810,18 @@ function Liquidation({ voyages, employees, sites, toast }) {
     setBusy(true);
     try {
       const dt = mDate || today(), orRef = mOr.trim() || null, ves = mVes || null, rem = mRem.trim() || null;
-      let failed = 0;
+      const errs = [];
       for (const r of buys) {
         const qb = Number(r.qty), uc = Number(r.cost);
         const line = { id: uid(), fund_id: fund.id, type: 'STOCK_MATERIAL', or_date: dt, vessel_div: ves, site: mSite,
           item: r.name, unit: r.unit || 'pc', unit_cost: uc, qty_bought: qb, qty_used: 0, qty_to_stock: qb,
           pr_ref: pr.pr_no, or_ref: orRef, remarks: rem, posted: false, created_at: new Date().toISOString() };
         await addLiqLine(line);
-        try { await liqStockIn(line, fund.custodian); } catch (e) { failed++; }
+        try { await liqStockIn(line, fund.custodian); } catch (e) { errs.push(r.name + ': ' + e.message); }
       }
       try { await updatePR(pr.id, { status: 'Bought' }); } catch (e) {}
-      toast(buys.length + ' item(s) bought → ' + mSite + ' stock' + (failed ? ' (' + failed + ' need manual Push to stock)' : ''));
+      if (errs.length) toast('Stock update failed → ' + errs.join(' | '), true);
+      else toast(buys.length + ' item(s) bought → ' + mSite + ' stock');
       setMPr(''); setBuyRows([]); setMOr(''); setMRem(''); setMVes('');
       loadAll(fund); loadRefs();
     } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
@@ -933,11 +944,14 @@ function Liquidation({ voyages, employees, sites, toast }) {
 
     ${tab === 'fund' && html`
       <div class="card">
-        <label>Cash advance (fund top-up)</label>
+        ${stepHead(1, 'Advance details', 'Date, amount & payment mode')}
         <div class="two"><${Field} label="Date"><input type="date" value=${aDate} onInput=${e=>setADate(e.target.value)} /><//>
         <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${aAmt} onInput=${e=>setAAmt(e.target.value)} placeholder="10000" /><//></div>
         <div class="two"><${Field} label="Mode"><select value=${aMode} onChange=${e=>setAMode(e.target.value)}><option>Cash</option><option>GCash</option></select><//>
         ${aMode==='GCash' ? html`<${Field} label="GCash transaction no."><input value=${aRef} onInput=${e=>setARef(e.target.value)} placeholder="ref no." /><//>` : html`<div></div>`}</div>
+      </div>
+      <div class="card">
+        ${stepHead(2, 'Received by', 'Who received the cash, then save')}
         <${Field} label="Received by"><input value=${aBy} onInput=${e=>setABy(e.target.value)} /><//>
         <${Field} label="Remarks"><input value=${aRem} onInput=${e=>setARem(e.target.value)} placeholder="optional" /><//>
         <button class="btn" disabled=${busy} onClick=${addAdv}>Add advance</button>
@@ -953,8 +967,12 @@ function Liquidation({ voyages, employees, sites, toast }) {
       </div>
       ${matView === 'request' ? html`
       <div class="card">
-        <label>Purchase requests (approve before buying)</label>
-        <${Field} label="New request — add materials">
+        ${stepHead(1, 'Request details', 'Who is requesting')}
+        <${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
+      </div>
+      <div class="card">
+        ${stepHead(2, 'Items needed', 'Add the materials to request — no price yet')}
+        <${Field} label="Add materials">
           <select value=${prPick} onChange=${e=>{const v=e.target.value; if(v && !prItems.includes(v)) setPrItems([...prItems, v]); setPrPick('');}}>
             <option value="">— add material —</option>
             ${stockItems.map(s=>html`<option value=${s.name}>${s.name}</option>`)}
@@ -965,36 +983,42 @@ function Liquidation({ voyages, employees, sites, toast }) {
           <div style="display:flex;gap:8px;margin-bottom:6px"><button style=${bSm} onClick=${saveNewItem}>Add to request</button><button style=${bSmAlt} onClick=${()=>setNiOpen(false)}>Cancel</button></div>`
         : html`<button style=${bSmAlt} onClick=${()=>setNiOpen(true)}>＋ New material (not in list)</button>`}
         ${prItems.length ? html`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${prItems.map(it=>html`<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${it}<span style="cursor:pointer;font-weight:700;color:var(--ink-dim)" onClick=${()=>setPrItems(prItems.filter(x=>x!==it))}>✕</span></span>`)}</div>` : html`<div class="sub" style="margin:4px 0">Pick materials (or add new ones) to build the request — no price needed yet.</div>`}
-        <${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
         <button class="btn" disabled=${busy} onClick=${createPR}>Create request</button>
+      </div>
+      <div class="card"><label>Request history</label>
         ${(()=>{const list=prs.filter(p=>!(p.pr_no||'').startsWith('LTR'));return list.length?list.slice(0,15).map(prSlip):html`<div class="empty">No requests yet.</div>`;})()}
       </div>` : ''}
       ${matView === 'buy' ? html`
       <div class="card">
-        <label>Buy stock material (encode actual qty & price)</label>
+        ${stepHead(1, 'Pick approved request', 'Only admin-approved requests appear here')}
         <${Field} label="Approved request">
           <select value=${mPr} onChange=${e=>{const no=e.target.value;setMPr(no);const p=prs.find(x=>x.pr_no===no);const names=p&&p.items?p.items.split(',').map(s=>s.trim()).filter(Boolean):[];setBuyRows(names.map(n=>{const s=stockItems.find(x=>x.name===n);return {name:n,unit:(s&&s.unit)||'pc',qty:'',cost:''};}));}}>
             <option value="">— select approved request —</option>
             ${prs.filter(p=>p.status==='Approved'&&!(p.pr_no||'').startsWith('LTR')).map(p=>html`<option value=${p.pr_no}>${p.pr_no} · ${p.items ? p.items.slice(0,40) : ''}</option>`)}
           </select>
         <//>
-        ${mPr && buyRows.length ? html`
-          <div class="sub" style="margin:8px 0 2px">Requested items — enter the real qty bought and unit price:</div>
-          ${buyRows.map((r,idx)=>html`
-            <div key=${r.name} style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:6px">
-              <div style="font-weight:600;font-size:14px;margin-bottom:4px">${r.name} <span class="sub">(${r.unit})</span></div>
-              <div class="two"><${Field} label="Qty bought"><input type="number" min="0" value=${r.qty} onInput=${e=>{const v=e.target.value;setBuyRows(buyRows.map((x,i)=>i===idx?{...x,qty:v}:x));}} /><//>
-              <${Field} label="Unit price ₱"><input type="number" min="0" step="0.01" value=${r.cost} onInput=${e=>{const v=e.target.value;setBuyRows(buyRows.map((x,i)=>i===idx?{...x,cost:v}:x));}} /><//></div>
-              <div class="sub">Line total: ₱${((Number(r.qty)||0)*(Number(r.cost)||0)).toLocaleString('en-PH')}</div>
-            </div>`)}
-          <div class="two" style="margin-top:4px"><${Field} label="OR date"><input type="date" value=${mDate} min=${yday} max=${tdy} onInput=${e=>setMDate(e.target.value)} /><//>
-          <${Field} label="Receipt no. (OR)"><input value=${mOr} onInput=${e=>setMOr(e.target.value)} placeholder="OR ref" /><//></div>
-          <${Field} label="Vessel / division (optional)"><select value=${mVes} onChange=${e=>setMVes(e.target.value)}><option value="">— none —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
-          <${Field} label="Remarks"><input value=${mRem} onInput=${e=>setMRem(e.target.value)} placeholder="optional" /><//>
-          <div class="sub" style="margin:2px 0 6px">Total to ${mSite} stock: ₱${buyRows.reduce((a,r)=>a+(Number(r.qty)||0)*(Number(r.cost)||0),0).toLocaleString('en-PH')}</div>
-          <button class="btn" disabled=${busy} onClick=${buyRequest}>Save purchase → stock</button>
-        ` : html`<div class="sub" style="margin:8px 0">Select an approved request to encode the purchase.</div>`}
+        ${mPr && buyRows.length ? '' : html`<div class="sub" style="margin:8px 0">Select an approved request to encode the purchase.</div>`}
       </div>
+      ${mPr && buyRows.length ? html`
+      <div class="card">
+        ${stepHead(2, 'Encode qty & price', 'Real quantity bought and unit price per item')}
+        ${buyRows.map((r,idx)=>html`
+          <div key=${r.name} style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:6px">
+            <div style="font-weight:600;font-size:14px;margin-bottom:4px">${r.name} <span class="sub">(${r.unit})</span></div>
+            <div class="two"><${Field} label="Qty bought"><input type="number" min="0" value=${r.qty} onInput=${e=>{const v=e.target.value;setBuyRows(buyRows.map((x,i)=>i===idx?{...x,qty:v}:x));}} /><//>
+            <${Field} label="Unit price ₱"><input type="number" min="0" step="0.01" value=${r.cost} onInput=${e=>{const v=e.target.value;setBuyRows(buyRows.map((x,i)=>i===idx?{...x,cost:v}:x));}} /><//></div>
+            <div class="sub">Line total: ₱${((Number(r.qty)||0)*(Number(r.cost)||0)).toLocaleString('en-PH')}</div>
+          </div>`)}
+      </div>
+      <div class="card">
+        ${stepHead(3, 'Receipt & save', 'Official receipt details, then save to stock')}
+        <div class="two"><${Field} label="OR date"><input type="date" value=${mDate} min=${yday} max=${tdy} onInput=${e=>setMDate(e.target.value)} /><//>
+        <${Field} label="Receipt no. (OR)"><input value=${mOr} onInput=${e=>setMOr(e.target.value)} placeholder="OR ref" /><//></div>
+        <${Field} label="Vessel / division (optional)"><select value=${mVes} onChange=${e=>setMVes(e.target.value)}><option value="">— none —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
+        <${Field} label="Remarks"><input value=${mRem} onInput=${e=>setMRem(e.target.value)} placeholder="optional" /><//>
+        <div class="sub" style="margin:2px 0 6px">Total to ${mSite} stock: ₱${buyRows.reduce((a,r)=>a+(Number(r.qty)||0)*(Number(r.cost)||0),0).toLocaleString('en-PH')}</div>
+        <button class="btn" disabled=${busy} onClick=${buyRequest}>Save purchase → stock</button>
+      </div>` : ''}
       <div class="card"><label>Material lines</label>
         ${lines.filter(l=>l.type==='STOCK_MATERIAL').length ? lines.filter(l=>l.type==='STOCK_MATERIAL').map(l => html`
           <div class="row" key=${l.id} style="align-items:flex-start;flex-direction:column;gap:4px">
@@ -1015,44 +1039,54 @@ function Liquidation({ voyages, employees, sites, toast }) {
       </div>
       ${toolView === 'request' ? html`
       <div class="card">
-        <label>Tool requests (approve before buying)</label>
-        <${Field} label="New request — add tools">
+        ${stepHead(1, 'Request details', 'Who is requesting')}
+        <${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
+      </div>
+      <div class="card">
+        ${stepHead(2, 'Tools needed', 'Type tool names — no price yet')}
+        <${Field} label="Add tools">
           <input value=${toolPick} onInput=${e=>setToolPick(e.target.value)} onKeyDown=${e=>{if(e.key==='Enter'){e.preventDefault();const v=toolPick.trim();if(v&&!toolItems.includes(v))setToolItems([...toolItems,v]);setToolPick('');}}} placeholder="type a tool name" />
         <//>
         <div style="margin:6px 0"><button style=${bSm} onClick=${()=>{const v=toolPick.trim();if(v&&!toolItems.includes(v))setToolItems([...toolItems,v]);setToolPick('');}}>＋ Add tool</button></div>
         ${toolItems.length?html`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${toolItems.map(it=>html`<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${it}<span style="cursor:pointer;font-weight:700;color:var(--ink-dim)" onClick=${()=>setToolItems(toolItems.filter(x=>x!==it))}>✕</span></span>`)}</div>`:html`<div class="sub" style="margin:4px 0">Add the tools you need — no price yet.</div>`}
-        <${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
         <button class="btn" disabled=${busy} onClick=${createToolPR}>Create request</button>
+      </div>
+      <div class="card"><label>Request history</label>
         ${(()=>{const list=prs.filter(p=>(p.pr_no||'').startsWith('LTR'));return list.length?list.slice(0,15).map(prSlip):html`<div class="empty">No requests yet.</div>`;})()}
       </div>` : ''}
       ${toolView === 'buy' ? html`
       <div class="card">
-        <label>Buy tool (encode actual qty & price)</label>
+        ${stepHead(1, 'Pick approved request', 'Only admin-approved tool requests appear here')}
         <${Field} label="Approved request">
           <select value=${tPr} onChange=${e=>{const no=e.target.value;setTPr(no);const p=prs.find(x=>x.pr_no===no);const names=p&&p.items?p.items.split(',').map(s=>s.trim()).filter(Boolean):[];setToolBuyRows(names.map(n=>({name:n,prefix:n.replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase(),qty:'1',cost:''})));}}>
             <option value="">— select approved request —</option>
             ${prs.filter(p=>p.status==='Approved'&&(p.pr_no||'').startsWith('LTR')).map(p=>html`<option value=${p.pr_no}>${p.pr_no} · ${p.items ? p.items.slice(0,40) : ''}</option>`)}
           </select>
         <//>
-        ${tPr && toolBuyRows.length ? html`
-          <div class="sub" style="margin:8px 0 2px">Requested tools — enter qty, unit price, and code prefix:</div>
-          ${toolBuyRows.map((r,idx)=>html`
-            <div key=${r.name} style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:6px">
-              <div style="font-weight:600;font-size:14px;margin-bottom:4px">${r.name}</div>
-              <div class="two"><${Field} label="Code prefix"><input value=${r.prefix} onInput=${e=>{const v=e.target.value.toUpperCase();setToolBuyRows(toolBuyRows.map((x,i)=>i===idx?{...x,prefix:v}:x));}} /><//>
-              <${Field} label="Qty"><input type="number" min="1" value=${r.qty} onInput=${e=>{const v=e.target.value;setToolBuyRows(toolBuyRows.map((x,i)=>i===idx?{...x,qty:v}:x));}} /><//></div>
-              <${Field} label="Unit price ₱"><input type="number" min="0" step="0.01" value=${r.cost} onInput=${e=>{const v=e.target.value;setToolBuyRows(toolBuyRows.map((x,i)=>i===idx?{...x,cost:v}:x));}} /><//>
-              <div class="sub">Line total: ₱${((parseInt(r.qty,10)||0)*(Number(r.cost)||0)).toLocaleString('en-PH')}</div>
-            </div>`)}
-          <div class="two" style="margin-top:4px"><${Field} label="OR date"><input type="date" value=${tDate} min=${yday} max=${tdy} onInput=${e=>setTDate(e.target.value)} /><//>
-          <${Field} label="Receipt no. (OR)"><input value=${tOr} onInput=${e=>setTOr(e.target.value)} placeholder="OR ref" /><//></div>
-          <div class="two"><${Field} label="Site"><select value=${tSite} onChange=${e=>setTSite(e.target.value)}>${siteNames.map(s=>html`<option>${s}</option>`)}</select><//>
-          <${Field} label="For job (optional)"><select value=${tVes} onChange=${e=>setTVes(e.target.value)}><option value="">—</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//></div>
-          <${Field} label="Remarks"><input value=${tRem} onInput=${e=>setTRem(e.target.value)} placeholder="optional" /><//>
-          <div class="sub" style="margin:2px 0 6px">Total tool value ₱${toolBuyRows.reduce((a,r)=>a+(parseInt(r.qty,10)||0)*(Number(r.cost)||0),0).toLocaleString('en-PH')} → on-hand asset</div>
-          <button class="btn" disabled=${busy} onClick=${buyToolRequest}>Save purchase → Tools</button>
-        ` : html`<div class="sub" style="margin:8px 0">Select an approved request to encode the purchase.</div>`}
+        ${tPr && toolBuyRows.length ? '' : html`<div class="sub" style="margin:8px 0">Select an approved request to encode the purchase.</div>`}
       </div>
+      ${tPr && toolBuyRows.length ? html`
+      <div class="card">
+        ${stepHead(2, 'Encode qty & price', 'Code prefix, quantity and unit price per tool')}
+        ${toolBuyRows.map((r,idx)=>html`
+          <div key=${r.name} style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:6px">
+            <div style="font-weight:600;font-size:14px;margin-bottom:4px">${r.name}</div>
+            <div class="two"><${Field} label="Code prefix"><input value=${r.prefix} onInput=${e=>{const v=e.target.value.toUpperCase();setToolBuyRows(toolBuyRows.map((x,i)=>i===idx?{...x,prefix:v}:x));}} /><//>
+            <${Field} label="Qty"><input type="number" min="1" value=${r.qty} onInput=${e=>{const v=e.target.value;setToolBuyRows(toolBuyRows.map((x,i)=>i===idx?{...x,qty:v}:x));}} /><//></div>
+            <${Field} label="Unit price ₱"><input type="number" min="0" step="0.01" value=${r.cost} onInput=${e=>{const v=e.target.value;setToolBuyRows(toolBuyRows.map((x,i)=>i===idx?{...x,cost:v}:x));}} /><//>
+            <div class="sub">Line total: ₱${((parseInt(r.qty,10)||0)*(Number(r.cost)||0)).toLocaleString('en-PH')}</div>
+          </div>`)}
+      </div>
+      <div class="card">
+        ${stepHead(3, 'Receipt & save', 'Official receipt details, then register the tools')}
+        <div class="two"><${Field} label="OR date"><input type="date" value=${tDate} min=${yday} max=${tdy} onInput=${e=>setTDate(e.target.value)} /><//>
+        <${Field} label="Receipt no. (OR)"><input value=${tOr} onInput=${e=>setTOr(e.target.value)} placeholder="OR ref" /><//></div>
+        <div class="two"><${Field} label="Site"><select value=${tSite} onChange=${e=>setTSite(e.target.value)}>${siteNames.map(s=>html`<option>${s}</option>`)}</select><//>
+        <${Field} label="For job (optional)"><select value=${tVes} onChange=${e=>setTVes(e.target.value)}><option value="">—</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//></div>
+        <${Field} label="Remarks"><input value=${tRem} onInput=${e=>setTRem(e.target.value)} placeholder="optional" /><//>
+        <div class="sub" style="margin:2px 0 6px">Total tool value ₱${toolBuyRows.reduce((a,r)=>a+(parseInt(r.qty,10)||0)*(Number(r.cost)||0),0).toLocaleString('en-PH')} → on-hand asset</div>
+        <button class="btn" disabled=${busy} onClick=${buyToolRequest}>Save purchase → Tools</button>
+      </div>` : ''}
       <div class="card"><label>Tool lines</label>
         ${lines.filter(l=>l.type==='TOOL').length ? lines.filter(l=>l.type==='TOOL').map(l => html`
           <div class="row" key=${l.id} style="align-items:flex-start">
@@ -1065,11 +1099,14 @@ function Liquidation({ voyages, employees, sites, toast }) {
 
     ${tab === 'allow' && html`
       <div class="card">
-        <label>Personnel allowance — one row per person</label>
+        ${stepHead(1, 'Allowance details', 'Date, amount & payment mode')}
         <div class="two"><${Field} label="Date"><input type="date" value=${alDate} onInput=${e=>setAlDate(e.target.value)} /><//>
         <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${alAmt} onInput=${e=>setAlAmt(e.target.value)} placeholder="150" /><//></div>
         <div class="two"><${Field} label="Mode"><select value=${alMode} onChange=${e=>setAlMode(e.target.value)}><option>Cash</option><option>GCash</option></select><//>
         ${alMode==='GCash' ? html`<${Field} label="GCash transaction no."><input value=${alRef} onInput=${e=>setAlRef(e.target.value)} placeholder="ref no." /><//>` : html`<div></div>`}</div>
+      </div>
+      <div class="card">
+        ${stepHead(2, 'Recipient', 'One row per person — they confirm by passcode')}
         <${Field} label="Recipient"><select value=${alRec} onChange=${e=>setAlRec(e.target.value)}><option value="">— select person —</option>${employees.map(e=>html`<option value=${e.id}>${e.name}</option>`)}</select><//>
         <${Field} label="Vessel / division"><select value=${alVes} onChange=${e=>setAlVes(e.target.value)}><option value="">— select —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
         <${Field} label="Remarks"><input value=${alRem} onInput=${e=>setAlRem(e.target.value)} placeholder="optional" /><//>
@@ -1103,9 +1140,12 @@ function Liquidation({ voyages, employees, sites, toast }) {
 
     ${tab === 'cons' && html`
       <div class="card">
-        <label>Consumable (tubig, food, fuel)</label>
+        ${stepHead(1, 'Expense details', 'Date & amount (tubig, food, fuel)')}
         <div class="two"><${Field} label="Date"><input type="date" value=${cDate} onInput=${e=>setCDate(e.target.value)} /><//>
         <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${cAmt} onInput=${e=>setCAmt(e.target.value)} placeholder="0.00" /><//></div>
+      </div>
+      <div class="card">
+        ${stepHead(2, 'Charge & save', 'Where to charge it, then save')}
         <${Field} label="Charge to"><select value=${cCharge} onChange=${e=>setCCharge(e.target.value)}><option>Project</option><option>Admin</option></select><//>
         ${cCharge==='Project' && html`<${Field} label="Vessel / division"><select value=${cVes} onChange=${e=>setCVes(e.target.value)}><option value="">— select —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>`}
         <${Field} label="Remarks"><input value=${cRem} onInput=${e=>setCRem(e.target.value)} placeholder="optional" /><//>
@@ -1117,10 +1157,13 @@ function Liquidation({ voyages, employees, sites, toast }) {
 
     ${tab === 'misc' && html`
       <div class="card">
-        <label>Other expenses (clinic / medical & incidentals)</label>
+        ${stepHead(1, 'Expense details', 'Date, amount & category')}
         <div class="two"><${Field} label="Date"><input type="date" value=${mxDate} max=${tdy} onInput=${e=>setMxDate(e.target.value)} /><//>
         <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${mxAmt} onInput=${e=>setMxAmt(e.target.value)} placeholder="0" /><//></div>
         <${Field} label="Category"><select value=${mxCat} onChange=${e=>setMxCat(e.target.value)}>${MISC_CATS.map(c=>html`<option>${c}</option>`)}</select><//>
+      </div>
+      <div class="card">
+        ${stepHead(2, 'Charge & reference', 'Person, vessel, receipt & remarks, then save')}
         <${Field} label="For (person, optional)"><select value=${mxEmp} onChange=${e=>setMxEmp(e.target.value)}><option value="">—</option>${employees.map(e=>html`<option value=${e.id}>${e.name}</option>`)}</select><//>
         <${Field} label="Vessel / division (optional)"><select value=${mxVes} onChange=${e=>setMxVes(e.target.value)}><option value="">—</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
         <${Field} label="Receipt no. (OR)"><input value=${mxOr} onInput=${e=>setMxOr(e.target.value)} placeholder="OR ref" /><//>
