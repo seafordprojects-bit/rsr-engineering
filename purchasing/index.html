@@ -28,7 +28,7 @@
   header h1{font-size:16px; margin:0; font-weight:700; color:var(--purple); letter-spacing:.2px}
   header p{margin:1px 0 0; font-size:12px; color:var(--purple-mid,#7b73c9)}
   .reset{background:transparent; border:1.5px solid var(--purple); color:var(--purple);
-    font-size:13px; font-weight:600; padding:8px 14px; border-radius:8px; cursor:pointer; text-decoration:none}
+    font-size:13px; font-weight:600; padding:8px 14px; border-radius:8px; cursor:pointer; text-decoration:none; display:inline-block}
   main{padding:16px 14px}
   .tabhead{font-size:13px; color:var(--muted); margin:2px 0 12px; font-weight:500}
   .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
@@ -99,7 +99,7 @@
       <div class="hdr-ico">🛒</div>
       <div><h1>RSR Purchasing</h1><p>Procurement</p></div>
     </div>
-    <button class="reset" onclick="refresh(this)">↻ Refresh</button>
+    <a class="reset" href="../admin/">← Admin</a>
   </header>
   <main id="view"></main>
 </div>
@@ -413,8 +413,7 @@ function render(){
     let badge=0; if(t.id==='inbox') badge=nNew; if(t.id==='buy') badge=nBuy;
     return `<button class="${t.id===TAB?'on':''}" onclick="go('${t.id}')">${t.label}${badge?`<span class="badge">${badge}</span>`:''}</button>`;
   }).join('')+`</div>`;
-  const bar=`<div style="margin:0 0 12px"><button type="button" onclick="refresh(this)" style="width:100%;padding:11px;border:none;border-radius:10px;background:var(--purple,#534ab7);color:#fff;font-weight:700;font-family:inherit;font-size:14px;cursor:pointer">↻ Check for new requests</button></div>`;
-  document.getElementById('view').innerHTML=pills+bar+map[TAB]();
+  document.getElementById('view').innerHTML=pills+map[TAB]();
   window.scrollTo(0,0);
 }
 function go(tab){ TAB=tab; render(); }
