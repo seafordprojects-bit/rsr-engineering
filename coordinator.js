@@ -628,7 +628,7 @@ const stepHead = (n, t, s) => html`
     <div><div class="name" style="font-size:15px;font-weight:800">${t}</div>
     <div class="sub" style="font-size:12px;color:var(--ink-dim)">${s}</div></div>
   </div>`;
-function Liquidation({ voyages, employees, sites, toast }) {
+function Liquidation({ voyages, employees, sites, toast, tab, setTab }) {
   const peso = (n) => '₱' + Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const uid = () => 'L' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   const today = () => new Date().toISOString().slice(0, 10);
@@ -638,7 +638,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const [fund, setFund] = useState(undefined);
   const [advs, setAdvs] = useState([]);
   const [lines, setLines] = useState([]);
-  const [tab, setTab] = useState(null); const [matView, setMatView] = useState('request'); const [toolView, setToolView] = useState('request'); const [openPr, setOpenPr] = useState({});
+  const [matView, setMatView] = useState('request'); const [toolView, setToolView] = useState('request'); const [openPr, setOpenPr] = useState({});
   const [cust, setCust] = useState('Raffy');
   const [pfrom, setPfrom] = useState(today());
   const [aDate, setADate] = useState(today()); const [aAmt, setAAmt] = useState(''); const [aBy, setABy] = useState('Raffy'); const [aRem, setARem] = useState(''); const [aMode, setAMode] = useState('Cash'); const [aRef, setARef] = useState('');
@@ -936,12 +936,6 @@ function Liquidation({ voyages, employees, sites, toast }) {
         </div>`)}
     `}
 
-    ${tab !== null && html`
-      <div style="display:flex;align-items:center;gap:10px;margin:2px 0 12px">
-        <button onClick=${() => setTab(null)} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer;padding:4px 0">← Liquidation menu</button>
-        <div class="name" style="font-size:15px;font-weight:800">${tab==='fund'?'Fund':tab==='mat'?'Materials':tab==='tool'?'Tools':tab==='allow'?'Allowance':tab==='cons'?'Consumables':tab==='misc'?'Misc':'Summary'}</div>
-      </div>`}
-
     ${tab === 'fund' && html`
       <div class="card">
         ${stepHead(1, 'Advance details', 'Date, amount & payment mode')}
@@ -1209,6 +1203,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
 function App() {
   const [authed, setAuthed] = useState(sessionStorage.getItem('rsr_coord') === '1');
   const [area, setArea] = useState(null);          // null | 'vessels' | 'personnel' | 'expenses'
+  const [liqTab, setLiqTab] = useState(null);       // null (menu) | fund | mat | tool | allow | cons | misc | sum
   const [pdTab, setPdTab] = useState('personnel');  // personnel | leave | duty
   const [employees, setEmployees] = useState([]);
   const [voyages, setVoyages] = useState([]);
@@ -1237,6 +1232,7 @@ function App() {
       <div class="wrap"><div class="brand" style="display:flex;align-items:center;justify-content:space-between">
         <span><b>RSR</b><span class="tag">${title}</span></span>
         <span style="display:flex;gap:14px;align-items:center">
+          ${area === 'liquidation' && liqTab && html`<button onClick=${() => setLiqTab(null)} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Liquidation menu</button>`}
           ${area && html`<button onClick=${() => setArea(null)} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Menu</button>`}
           <a href="../" onClick=${() => sessionStorage.removeItem('rsr_coord')} style="color:var(--ink-dim);text-decoration:none;font-size:13px;font-weight:700">⌂ Home</a>
         </span>
@@ -1258,7 +1254,7 @@ function App() {
           <div style="font-size:24px">👷</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Personnel Data</div>
           <div class="sub" style="font-size:12px;color:var(--ink-dim)">Employees, leave & straight duty</div>
         </div>
-        <div class="card" style="cursor:pointer;margin:0;grid-column:1/-1" onClick=${() => setArea('liquidation')}>
+        <div class="card" style="cursor:pointer;margin:0;grid-column:1/-1" onClick=${() => { setArea('liquidation'); setLiqTab(null); }}>
           <div style="font-size:24px">💰</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Liquidation</div>
           <div class="sub" style="font-size:12px;color:var(--ink-dim)">Cash advance · materials · tools · reconcile by project</div>
         </div>
@@ -1268,11 +1264,11 @@ function App() {
 
   // ---- areas ----
   return html`
-    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'liquidation' ? 'LIQUIDATION' : 'PERSONNEL DATA')}
+    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISC':'SUMMARY') : '')) : 'PERSONNEL DATA')}
     <div class="wrap">
       ${area === 'vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
       ${area === 'expenses' && html`<${Expenses} voyages=${voyages} toast=${flash} />`}
-      ${area === 'liquidation' && html`<${Liquidation} voyages=${voyages} employees=${employees} sites=${sites} toast=${flash} />`}
+      ${area === 'liquidation' && html`<${Liquidation} voyages=${voyages} employees=${employees} sites=${sites} toast=${flash} tab=${liqTab} setTab=${setLiqTab} />`}
       ${area === 'personnel' && html`
         <div class="tabs">
           <button class=${pdTab==='personnel'?'on':''} onClick=${() => setPdTab('personnel')}>Personnel</button>
