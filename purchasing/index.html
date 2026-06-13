@@ -1,0 +1,440 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>RSR Purchasing</title>
+<style>
+  :root{
+    --bg:#f4f6f5; --surface:#ffffff; --surface-2:#fbfcfb;
+    --ink:#16211e; --muted:#6a756f; --line:#e4e8e6;
+    --teal:#0f6e56; --teal-soft:#e1f5ee; --teal-ink:#085041;
+    --purple:#534ab7; --purple-soft:#eeedfe; --purple-ink:#3c3489;
+    --amber:#ba7517; --amber-soft:#faeeda; --amber-ink:#854f0b;
+    --green:#3b6d11; --green-soft:#eaf3de; --green-ink:#27500a;
+    --gray-soft:#f1efe8; --gray-ink:#5f5e5a;
+    --radius:12px; --shadow:0 1px 2px rgba(20,33,30,.06),0 1px 8px rgba(20,33,30,.04);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); line-height:1.5; -webkit-font-smoothing:antialiased; padding-bottom:84px}
+  .wrap{max-width:540px; margin:0 auto; min-height:100vh}
+  header{background:var(--ink); color:#fff; padding:16px 18px 18px; position:sticky; top:0; z-index:5}
+  header h1{font-size:17px; margin:0; font-weight:600; letter-spacing:.2px}
+  header p{margin:2px 0 0; font-size:12px; color:#b3a9e0}
+  .reset{position:absolute; top:16px; right:16px; background:none; border:1px solid #33433e;
+    color:#9fb3ad; font-size:11px; padding:5px 9px; border-radius:8px}
+  main{padding:16px 14px}
+  .tabhead{font-size:13px; color:var(--muted); margin:2px 0 12px; font-weight:500}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:14px; margin-bottom:12px; box-shadow:var(--shadow)}
+  label{display:block; font-size:12px; color:var(--muted); margin:0 0 5px; font-weight:500}
+  input,select,textarea{width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:10px;
+    font-size:15px; background:var(--surface-2); color:var(--ink); font-family:inherit}
+  textarea{resize:vertical; min-height:64px}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--purple); outline-offset:1px; border-color:var(--purple)}
+  .field{margin-bottom:12px}
+  .row2{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+  button{cursor:pointer; font-family:inherit}
+  .btn{width:100%; padding:13px; border:none; border-radius:10px; font-size:15px; font-weight:600;
+    background:var(--purple); color:#fff}
+  .btn:active{opacity:.85}
+  .btn.ghost{background:var(--surface); color:var(--ink); border:1px solid var(--line)}
+  .btn.teal{background:var(--teal)}
+  .btn.small{width:auto; padding:9px 13px; font-size:13px}
+  .btn-pair{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+  .item-row{display:flex; justify-content:space-between; align-items:flex-start; gap:10px}
+  .item-row .ttl{font-weight:600; font-size:15px}
+  .item-row .sub{font-size:12.5px; color:var(--muted); margin-top:2px}
+  .pill{font-size:11px; font-weight:600; padding:3px 9px; border-radius:20px; white-space:nowrap}
+  .pill.teal{background:var(--teal-soft); color:var(--teal-ink)}
+  .pill.purple{background:var(--purple-soft); color:var(--purple-ink)}
+  .pill.amber{background:var(--amber-soft); color:var(--amber-ink)}
+  .pill.green{background:var(--green-soft); color:var(--green-ink)}
+  .pill.gray{background:var(--gray-soft); color:var(--gray-ink)}
+  .pill.tag{font-size:10px; padding:2px 7px; margin-right:6px; vertical-align:middle}
+  .meta{font-size:12px; color:var(--muted); margin-top:8px; line-height:1.6}
+  .meta b{color:var(--ink); font-weight:600}
+  .meta a{color:var(--purple-ink); font-weight:600; text-decoration:none}
+  .actions{margin-top:12px}
+  .empty{text-align:center; color:var(--muted); padding:34px 18px; font-size:14px}
+  .empty .big{font-size:15px; color:var(--ink); font-weight:600; margin-bottom:4px}
+  .addbar{display:flex; justify-content:flex-end; margin-bottom:10px}
+  .srcrow{display:flex; justify-content:space-between; align-items:flex-start; gap:10px;
+    padding:10px 0; border-bottom:1px dashed var(--line)}
+  .srcrow:last-child{border-bottom:none}
+  .src a{color:var(--purple-ink); font-weight:600; text-decoration:none; font-size:14px}
+  .src .nolink{font-weight:600; font-size:14px}
+  .srcsub{font-size:12px; color:var(--muted); margin-top:3px}
+  .srcprice{text-align:right; white-space:nowrap}
+  .up{font-weight:700; font-size:15px}
+  .up .per{font-weight:500; font-size:11px; color:var(--muted)}
+  .srcprice .pill{margin-top:4px; display:inline-block}
+  nav{position:fixed; bottom:0; left:0; right:0; background:var(--surface); border-top:1px solid var(--line);
+    display:flex; max-width:540px; margin:0 auto; z-index:6; padding-bottom:env(safe-area-inset-bottom)}
+  nav button{flex:1; background:none; border:none; padding:10px 2px 12px; color:var(--muted);
+    font-size:10.5px; font-weight:600; position:relative}
+  nav button .ic{display:block; font-size:18px; margin-bottom:2px}
+  nav button.on{color:var(--purple)}
+  nav .badge{position:absolute; top:5px; left:50%; margin-left:6px; background:var(--amber);
+    color:#fff; font-size:10px; min-width:16px; height:16px; line-height:16px; border-radius:9px; padding:0 4px}
+  .modal-bg{position:fixed; inset:0; background:rgba(20,33,30,.5); display:flex; align-items:flex-end;
+    justify-content:center; z-index:20}
+  .modal{background:var(--surface); width:100%; max-width:540px; border-radius:18px 18px 0 0;
+    padding:18px 16px 24px; max-height:90vh; overflow:auto}
+  .modal h2{font-size:16px; margin:0 0 4px}
+  .modal .msub{font-size:12.5px; color:var(--muted); margin:0 0 16px}
+  .toast{position:fixed; bottom:96px; left:50%; transform:translateX(-50%); background:var(--ink);
+    color:#fff; padding:11px 16px; border-radius:24px; font-size:13.5px; z-index:30;
+    box-shadow:var(--shadow); max-width:90%; text-align:center}
+  .hint{font-size:12px; color:var(--muted); background:var(--gray-soft); padding:10px 12px;
+    border-radius:10px; margin-bottom:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>RSR Purchasing</h1>
+    <p>Requests → accept → buy</p>
+    <button class="reset" onclick="refresh()">↻ Refresh</button>
+  </header>
+  <main id="view"></main>
+</div>
+<nav id="nav"></nav>
+<div id="modal-root"></div>
+<div id="toast-root"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
+<script>
+/* =====================================================================
+   DATA LAYER — Supabase (shared DB with the warehouse app).
+     requisitions : warehouse writes (short-stock / reorder). Purchasing
+                    reads + updates status: for_purchase→accepted→ordered/bought.
+     purchases    : purchasing writes. Both online + store rows carry
+                    party, unit_price and amount, so Prices can compare
+                    every source per item. Online rows also carry a website.
+   The app reads from an in-memory CACHE (so views stay synchronous);
+   every write goes to Supabase then reloads the cache and re-renders.
+   ===================================================================== */
+const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
+const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
+const sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
+
+let CACHE={ requisitions:[], purchases:[] };
+const DB = {
+  get(t){ return CACHE[t]||[]; },
+  async load(){
+    const [r,p]=await Promise.all([
+      sb.from('requisitions').select('*').order('created_at',{ascending:true}),
+      sb.from('purchases').select('*').order('created_at',{ascending:true}),
+    ]);
+    if(r.error) toast('Load requisitions failed: '+r.error.message);
+    if(p.error) toast('Load purchases failed: '+p.error.message);
+    CACHE.requisitions=r.data||[];
+    CACHE.purchases=p.data||[];
+  },
+  async insert(t,row){ if(!row.id) row.id=uid();
+    const {error}=await sb.from(t).insert(row);
+    if(error){ toast('Save failed: '+error.message); throw error; }
+    await DB.load(); return row; },
+  async update(t,id,patch){
+    const {error}=await sb.from(t).update(patch).eq('id',id);
+    if(error){ toast('Update failed: '+error.message); throw error; }
+    await DB.load(); return (CACHE[t]||[]).find(x=>x.id===id); }
+};
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+function today(){ return new Date().toISOString().slice(0,10); }
+/* next ref number for a prefix, derived from the live table (no per-device counters) */
+async function seq(prefix){
+  const table = (prefix==='REQ') ? 'requisitions' : 'purchases';
+  const {data}=await sb.from(table).select('ref').like('ref',prefix+'-%')
+    .order('ref',{ascending:false}).limit(1);
+  let n=1;
+  if(data && data[0]){ const m=(data[0].ref||'').match(/(\d+)\s*$/); if(m) n=parseInt(m[1],10)+1; }
+  return prefix+'-'+String(n).padStart(4,'0');
+}
+function domain(u){ try{ return new URL(u).hostname.replace(/^www\./,''); }catch(e){ return u; } }
+/* effective unit price: use entered unit price, else derive from total ÷ qty */
+function unitOf(p){ if(p.unit_price>0) return p.unit_price; if(p.amount>0 && p.qty>0) return p.amount/p.qty; return 0; }
+function isApprox(p){ return !(p.unit_price>0) && p.amount>0 && p.qty>0; }
+
+
+/* =====================================================================
+   ACTIONS
+   ===================================================================== */
+async function acceptReq(reqId){
+  await DB.update('requisitions',reqId,{status:'accepted', accepted_at:today()});
+  toast('Request accepted — see To buy'); render();
+}
+function openReturn(reqId){
+  const r=DB.get('requisitions').find(x=>x.id===reqId);
+  modal(`
+    <h2>Return request</h2>
+    <p class="msub">${r.ref} · ${r.item} · ${r.qty} ${r.unit} — send back to the warehouse</p>
+    <div class="field"><label>Reason</label>
+      <select id="rt_reason"><option>Already in stock</option><option>Duplicate request</option>
+      <option>Wrong item / qty</option><option>Needs approval first</option><option>Other</option></select></div>
+    <div class="field"><label>Note (optional)</label><textarea id="rt_note" placeholder="Anything the warehouse should know"></textarea></div>
+    <div class="btn-pair">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="saveReturn('${reqId}')">Return request</button>
+    </div>`);
+}
+async function saveReturn(reqId){
+  await DB.update('requisitions',reqId,{status:'returned', return_reason:val('rt_reason'),
+    return_note:val('rt_note'), returned_at:today()});
+  closeModal(); toast('Returned to warehouse'); render();
+}
+
+function openDirect(){
+  modal(`
+    <h2>Direct purchase</h2>
+    <p class="msub">A buy with no warehouse requisition. It goes straight to To buy (already accepted).</p>
+    <div class="field"><label>Item</label><input id="d_item" placeholder="Material name"></div>
+    <div class="row2">
+      <div class="field"><label>Qty</label><input id="d_qty" type="number" inputmode="decimal" placeholder="0"></div>
+      <div class="field"><label>Unit</label><input id="d_unit" placeholder="pc / kg / L"></div>
+    </div>
+    <div class="field"><label>For (vessel / job)</label><input id="d_job" placeholder="Optional"></div>
+    <div class="btn-pair">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="saveDirect()">Add to To buy</button>
+    </div>`);
+}
+async function saveDirect(){
+  const item=val('d_item'), qty=parseFloat(val('d_qty'));
+  if(!item||!(qty>0)){ toast('Enter item and qty'); return; }
+  const ref=await seq('REQ');
+  await DB.insert('requisitions',{ref, date:today(), status:'accepted', accepted_at:today(),
+    item, unit:val('d_unit')||'pc', qty, job:val('d_job')||'—', by:'Purchasing (direct)'});
+  closeModal(); toast('Added to To buy'); render();
+}
+
+function openPO(reqId){
+  const r=DB.get('requisitions').find(x=>x.id===reqId);
+  modal(`
+    <h2>Create purchase order</h2>
+    <p class="msub">${r.ref} · ${r.item} · ${r.qty} ${r.unit}</p>
+    <div class="field"><label>Supplier / store name</label><input id="po_sup" placeholder="e.g. WeldPro on Lazada"></div>
+    <div class="field"><label>Website / link</label><input id="po_url" type="url" inputmode="url" placeholder="https://..."></div>
+    <div class="row2">
+      <div class="field"><label>Unit price (₱)</label><input id="po_unit" type="number" inputmode="decimal" placeholder="0.00"></div>
+      <div class="field"><label>Expected delivery</label><input id="po_eta" type="date" value="${today()}"></div>
+    </div>
+    <div class="field"><label>Payment terms</label>
+      <select id="po_terms"><option>COD</option><option>15 days</option><option selected>30 days</option><option>60 days</option></select></div>
+    <div class="hint">The link and unit price are saved to the Prices tab so you can canvass websites for this item later.</div>
+    <div class="btn-pair">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="savePO('${reqId}')">Send PO</button>
+    </div>`);
+}
+async function savePO(reqId){
+  const r=DB.get('requisitions').find(x=>x.id===reqId);
+  const sup=val('po_sup'); if(!sup){ toast('Enter a supplier / store'); return; }
+  const unit=parseFloat(val('po_unit'))||0;
+  const ref=await seq('PO');
+  await DB.insert('purchases',{ref, requisition_id:reqId, item:r.item, unit:r.unit, qty:r.qty, job:r.job,
+    type:'online', party:sup, website:val('po_url'), unit_price:unit, amount:unit*r.qty,
+    terms:val('po_terms'), expected:val('po_eta'), status:'ordered', date:today()});
+  await DB.update('requisitions',reqId,{status:'ordered'});
+  closeModal(); toast('PO '+ref+' sent to '+sup); render();
+}
+
+function openStore(reqId){
+  const r=DB.get('requisitions').find(x=>x.id===reqId);
+  modal(`
+    <h2>Record store purchase</h2>
+    <p class="msub">${r.ref} · ${r.item} · ${r.qty} ${r.unit} — already bought over the counter</p>
+    <div class="field"><label>Store / vendor</label><input id="st_store" placeholder="e.g. ACE Hardware Mandaue"></div>
+    <div class="row2">
+      <div class="field"><label>Unit price (₱)</label><input id="st_unit" type="number" inputmode="decimal" placeholder="0.00"></div>
+      <div class="field"><label>Amount paid (₱)</label><input id="st_amt" type="number" inputmode="decimal" placeholder="receipt total"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>OR / invoice no.</label><input id="st_or" placeholder="OR no."></div>
+      <div class="field"><label>Paid with</label>
+        <select id="st_pay"><option>Cash</option><option>Petty cash</option><option>Company card</option></select></div>
+    </div>
+    <div class="field"><label>Bought by</label><input id="st_by" placeholder="Name"></div>
+    <div class="hint">Store and unit price go to the Prices tab for canvass. If you only enter the receipt total, the unit price is worked out as total ÷ qty. Your warehouse app stocks the goods in from this record.</div>
+    <div class="btn-pair">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn teal" onclick="saveStore('${reqId}')">Save purchase</button>
+    </div>`);
+}
+async function saveStore(reqId){
+  const r=DB.get('requisitions').find(x=>x.id===reqId);
+  const store=val('st_store'), orno=val('st_or'); if(!store||!orno){ toast('Enter store and OR no.'); return; }
+  const unit=parseFloat(val('st_unit'))||0;
+  const amt=parseFloat(val('st_amt'))|| (unit*r.qty) ||0;
+  const ref=await seq('SP');
+  await DB.insert('purchases',{ref, requisition_id:reqId, item:r.item, unit:r.unit, qty:r.qty, job:r.job,
+    type:'store', party:store, or_no:orno, unit_price:unit, amount:amt,
+    payment:val('st_pay'), bought_by:val('st_by'), status:'bought', date:today()});
+  await DB.update('requisitions',reqId,{status:'bought'});
+  closeModal(); toast('Store purchase recorded — '+ref); render();
+}
+
+/* =====================================================================
+   RENDER
+   ===================================================================== */
+let TAB='inbox';
+const TABS=[
+  {id:'inbox',  label:'Requests',  ic:'📨'},
+  {id:'buy',    label:'To buy',    ic:'🧾'},
+  {id:'po',     label:'Purchases', ic:'📑'},
+  {id:'prices', label:'Prices',    ic:'🏷️'},
+];
+
+function statusPill(s){
+  const map={ for_purchase:['amber','New'], accepted:['teal','Accepted'],
+    ordered:['purple','PO sent'], bought:['teal','Bought'],
+    received:['green','Received'], returned:['gray','Returned'] };
+  const [c,t]=map[s]||['gray',s]; return `<span class="pill ${c}">${t}</span>`;
+}
+function money(n){ return n? '₱'+Number(n).toLocaleString('en-PH',{minimumFractionDigits:2}) : ''; }
+
+function viewInbox(){
+  const reqs=DB.get('requisitions').filter(r=>r.status==='for_purchase').slice().reverse();
+  let h=`<div class="hint">New material requests from your warehouse app — including low-stock reorders. Accept one to move it into buying, or return it to the warehouse with a reason.</div>`;
+  if(!reqs.length){ return h+`<div class="empty"><div class="big">Inbox empty</div>New requests from the warehouse arrive here.</div>`; }
+  reqs.forEach(r=>{
+    h+=`<div class="card">
+      <div class="item-row">
+        <div><div class="ttl">${r.item} · ${r.qty} ${r.unit}</div>
+          <div class="sub">${r.ref} · ${r.job}</div></div>
+        ${statusPill(r.status)}
+      </div>
+      <div class="meta">Requested by <b>${r.by}</b> · ${r.date}</div>
+      <div class="actions btn-pair">
+        <button class="btn small" onclick="acceptReq('${r.id}')">Accept</button>
+        <button class="btn ghost small" onclick="openReturn('${r.id}')">Return</button>
+      </div>
+    </div>`;
+  });
+  return h;
+}
+
+function viewBuy(){
+  const reqs=DB.get('requisitions').filter(r=>r.status==='accepted').slice().reverse();
+  let h=`<div class="tabhead">Requests you've accepted. Buy each online (with a PO) or record a store purchase already made.</div>
+    <div class="addbar"><button class="btn small ghost" onclick="openDirect()">+ Direct purchase</button></div>`;
+  if(!reqs.length){ return h+`<div class="empty"><div class="big">Nothing to buy yet</div>Accept a request in the inbox first.</div>`; }
+  reqs.forEach(r=>{
+    h+=`<div class="card">
+      <div class="item-row">
+        <div><div class="ttl">${r.item} · ${r.qty} ${r.unit}</div>
+          <div class="sub">${r.ref} · ${r.job}</div></div>
+        ${statusPill(r.status)}
+      </div>
+      <div class="meta">By <b>${r.by}</b>${r.accepted_at?' · accepted '+r.accepted_at:''}</div>
+      <div class="actions btn-pair">
+        <button class="btn small" onclick="openPO('${r.id}')">Online · PO</button>
+        <button class="btn teal small" onclick="openStore('${r.id}')">Store buy</button>
+      </div>
+    </div>`;
+  });
+  return h;
+}
+
+function viewPO(){
+  const ps=DB.get('purchases').slice().reverse();
+  let h=`<div class="tabhead">Everything purchasing has bought. Online POs wait for the warehouse to receive; store buys are already in hand.</div>`;
+  if(!ps.length){ return h+`<div class="empty"><div class="big">No purchases yet</div>Buy an accepted request from the To buy tab.</div>`; }
+  ps.forEach(p=>{
+    const typePill = p.type==='online'?`<span class="pill purple">Online PO</span>`:`<span class="pill teal">Store</span>`;
+    let detail, extra='';
+    if(p.type==='online'){
+      detail=`Supplier <b>${p.party}</b> · terms ${p.terms} · expected ${p.expected}`;
+      extra=`<div class="meta">🔗 ${p.website?`<a href="${p.website}" target="_blank" rel="noopener">${domain(p.website)}</a>`:'no link'}`
+        +`${p.unit_price?' · '+money(p.unit_price)+'/'+p.unit:''}${p.amount?' · total '+money(p.amount):''}</div>`;
+    }else{
+      detail=`Store <b>${p.party}</b> · OR ${p.or_no} · ${p.payment}`;
+      extra=`<div class="meta">${p.unit_price?money(p.unit_price)+'/'+p.unit+' · ':''}total ${money(p.amount)}${p.bought_by?' · by '+p.bought_by:''}</div>`;
+    }
+    h+=`<div class="card">
+      <div class="item-row">
+        <div><div class="ttl">${p.item} · ${p.qty} ${p.unit}</div>
+          <div class="sub">${p.ref} · ${p.job}</div></div>
+        ${typePill}
+      </div>
+      <div class="meta">${detail}</div>${extra}
+      <div class="meta">Status: ${statusPill(p.type==='online'?'ordered':'bought')}
+        <span style="color:var(--muted)">${p.type==='online'?'awaiting delivery (warehouse receives)':'goods in hand (warehouse stocks in)'}</span></div>
+    </div>`;
+  });
+  return h;
+}
+
+function viewPrices(){
+  const buys=DB.get('purchases').filter(p=>p.item);
+  let h=`<div class="tabhead">Price reference for canvassing — every material you've bought, grouped by item, online and store together. Each source shows its unit price; the cheapest is flagged. Tap a website to reorder.</div>`;
+  if(!buys.length){ return h+`<div class="empty"><div class="big">No price history yet</div>Online POs and store buys land here grouped by material.</div>`; }
+  const groups={};
+  buys.forEach(p=>{ const k=(p.item||'').trim().toLowerCase(); (groups[k]=groups[k]||[]).push(p); });
+  Object.keys(groups).sort().forEach(k=>{
+    const list=groups[k].slice().sort((a,b)=>(unitOf(a)||1e12)-(unitOf(b)||1e12));
+    const name=list[0].item;
+    const prices=list.map(unitOf).filter(n=>n>0);
+    const min=prices.length?Math.min(...prices):null;
+    h+=`<div class="card">
+      <div class="item-row"><div class="ttl">${name}</div>
+        <span class="pill gray">${list.length} ${list.length>1?'sources':'source'}</span></div>`;
+    list.forEach(p=>{
+      const u=unitOf(p);
+      const low=(min!==null && u===min && prices.length>1);
+      const tag=p.type==='online'?'<span class="pill purple tag">Online</span>':'<span class="pill teal tag">Store</span>';
+      const src=p.type==='online'
+        ? (p.website?`<a href="${p.website}" target="_blank" rel="noopener">${domain(p.website)}</a>`:`<span class="nolink">${p.party||'—'}</span>`)
+        : `<span class="nolink">${p.party||'—'}</span>`;
+      const sub=`${p.type==='online'&&p.party?p.party+' · ':''}${p.qty} ${p.unit} · ${p.date}${p.type==='store'&&p.or_no?' · OR '+p.or_no:''}`;
+      h+=`<div class="srcrow">
+        <div class="src"><div>${tag}${src}</div><div class="srcsub">${sub}</div></div>
+        <div class="srcprice">
+          <div class="up">${u?(isApprox(p)?'~':'')+money(u):'—'}${u?'<span class="per">/'+p.unit+'</span>':''}</div>
+          ${low?'<span class="pill green">lowest</span>':''}
+        </div>
+      </div>`;
+    });
+    h+=`</div>`;
+  });
+  return h;
+}
+
+function render(){
+  const map={inbox:viewInbox, buy:viewBuy, po:viewPO, prices:viewPrices};
+  document.getElementById('view').innerHTML=map[TAB]();
+  const reqs=DB.get('requisitions');
+  const nNew=reqs.filter(r=>r.status==='for_purchase').length;
+  const nBuy=reqs.filter(r=>r.status==='accepted').length;
+  document.getElementById('nav').innerHTML=TABS.map(t=>{
+    let badge=0; if(t.id==='inbox') badge=nNew; if(t.id==='buy') badge=nBuy;
+    return `<button class="${t.id===TAB?'on':''}" onclick="go('${t.id}')">
+      <span class="ic">${t.ic}</span>${t.label}${badge?`<span class="badge">${badge}</span>`:''}</button>`;
+  }).join('');
+  window.scrollTo(0,0);
+}
+function go(tab){ TAB=tab; render(); }
+
+/* ---- utils ---- */
+function val(id){ const e=document.getElementById(id); return e? e.value.trim():''; }
+function modal(html){ document.getElementById('modal-root').innerHTML=
+  `<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal">${html}</div></div>`; }
+function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
+function toast(msg){ const r=document.getElementById('toast-root');
+  r.innerHTML=`<div class="toast">${msg}</div>`; clearTimeout(window._tt);
+  window._tt=setTimeout(()=>r.innerHTML='',2600); }
+async function refresh(){ toast('Refreshing…'); await DB.load(); render(); toast('Up to date'); }
+
+async function boot(){
+  document.getElementById('view').innerHTML='<div class="empty"><div class="big">Loading…</div>Fetching from the database.</div>';
+  document.getElementById('nav').innerHTML='';
+  await DB.load();
+  render();
+}
+boot();
+</script>
+</body>
+</html>
