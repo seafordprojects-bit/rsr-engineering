@@ -9,7 +9,9 @@
     --bg:#f4f6f5; --surface:#ffffff; --surface-2:#fbfcfb;
     --ink:#16211e; --muted:#6a756f; --line:#e4e8e6;
     --teal:#0f6e56; --teal-soft:#e1f5ee; --teal-ink:#085041;
-    --purple:#534ab7; --purple-soft:#eeedfe; --purple-ink:#3c3489;
+    --purple:#534ab7;
+--purple-light:#ECEAF9;
+--purple-mid:#7b73c9; --purple-soft:#eeedfe; --purple-ink:#3c3489;
     --amber:#ba7517; --amber-soft:#faeeda; --amber-ink:#854f0b;
     --green:#3b6d11; --green-soft:#eaf3de; --green-ink:#27500a;
     --gray-soft:#f1efe8; --gray-ink:#5f5e5a;
@@ -18,13 +20,15 @@
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    background:var(--bg); color:var(--ink); line-height:1.5; -webkit-font-smoothing:antialiased; padding-bottom:84px}
+    background:var(--bg); color:var(--ink); line-height:1.5; -webkit-font-smoothing:antialiased}
   .wrap{max-width:540px; margin:0 auto; min-height:100vh}
-  header{background:var(--ink); color:#fff; padding:16px 18px 18px; position:sticky; top:0; z-index:5}
-  header h1{font-size:17px; margin:0; font-weight:600; letter-spacing:.2px}
-  header p{margin:2px 0 0; font-size:12px; color:#b3a9e0}
-  .reset{position:absolute; top:16px; right:16px; background:none; border:1px solid #33433e;
-    color:#9fb3ad; font-size:11px; padding:5px 9px; border-radius:8px}
+  header{background:var(--purple-light,#ECEAF9); border-bottom:1.5px solid var(--purple); padding:13px 16px; position:sticky; top:0; z-index:5; display:flex; align-items:center; justify-content:space-between}
+  .hdr-l{display:flex; align-items:center; gap:10px}
+  .hdr-ico{width:38px; height:38px; border-radius:50%; background:#fff; border:2px solid var(--purple); display:flex; align-items:center; justify-content:center; font-size:18px; flex:0 0 38px}
+  header h1{font-size:16px; margin:0; font-weight:700; color:var(--purple); letter-spacing:.2px}
+  header p{margin:1px 0 0; font-size:12px; color:var(--purple-mid,#7b73c9)}
+  .reset{background:transparent; border:1.5px solid var(--purple); color:var(--purple);
+    font-size:13px; font-weight:600; padding:8px 14px; border-radius:8px; cursor:pointer; text-decoration:none}
   main{padding:16px 14px}
   .tabhead{font-size:13px; color:var(--muted); margin:2px 0 12px; font-weight:500}
   .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
@@ -71,14 +75,10 @@
   .up{font-weight:700; font-size:15px}
   .up .per{font-weight:500; font-size:11px; color:var(--muted)}
   .srcprice .pill{margin-top:4px; display:inline-block}
-  nav{position:fixed; bottom:0; left:0; right:0; background:var(--surface); border-top:1px solid var(--line);
-    display:flex; max-width:540px; margin:0 auto; z-index:6; padding-bottom:env(safe-area-inset-bottom)}
-  nav button{flex:1; background:none; border:none; padding:10px 2px 12px; color:var(--muted);
-    font-size:10.5px; font-weight:600; position:relative}
-  nav button .ic{display:block; font-size:18px; margin-bottom:2px}
-  nav button.on{color:var(--purple)}
-  nav .badge{position:absolute; top:5px; left:50%; margin-left:6px; background:var(--amber);
-    color:#fff; font-size:10px; min-width:16px; height:16px; line-height:16px; border-radius:9px; padding:0 4px}
+  .pillbar{display:flex; gap:6px; background:var(--bg2,#f4f6f5); border:1px solid var(--line); border-radius:12px; padding:5px; margin:0 0 14px}
+  .pillbar button{flex:1; padding:9px 8px; font-size:12px; font-weight:700; border:none; border-radius:8px; cursor:pointer; font-family:inherit; white-space:nowrap; background:transparent; color:var(--muted); position:relative}
+  .pillbar button.on{background:var(--purple); color:#fff}
+  .pillbar .badge{display:inline-block; margin-left:5px; background:var(--amber); color:#fff; font-size:10px; min-width:16px; height:16px; line-height:16px; border-radius:9px; padding:0 4px; vertical-align:middle}
   .modal-bg{position:fixed; inset:0; background:rgba(20,33,30,.5); display:flex; align-items:flex-end;
     justify-content:center; z-index:20}
   .modal{background:var(--surface); width:100%; max-width:540px; border-radius:18px 18px 0 0;
@@ -95,13 +95,14 @@
 <body>
 <div class="wrap">
   <header>
-    <h1>RSR Purchasing</h1>
-    <p>Requests → accept → buy</p>
-    <button class="reset" onclick="refresh()">↻ Refresh</button>
+    <div class="hdr-l">
+      <div class="hdr-ico">🛒</div>
+      <div><h1>RSR Purchasing</h1><p>Procurement</p></div>
+    </div>
+    <button class="reset" onclick="refresh(this)">↻ Refresh</button>
   </header>
   <main id="view"></main>
 </div>
-<nav id="nav"></nav>
 <div id="modal-root"></div>
 <div id="toast-root"></div>
 
@@ -405,15 +406,15 @@ function viewPrices(){
 
 function render(){
   const map={inbox:viewInbox, buy:viewBuy, po:viewPO, prices:viewPrices};
-  document.getElementById('view').innerHTML=map[TAB]();
   const reqs=DB.get('requisitions');
   const nNew=reqs.filter(r=>r.status==='for_purchase').length;
   const nBuy=reqs.filter(r=>r.status==='accepted').length;
-  document.getElementById('nav').innerHTML=TABS.map(t=>{
+  const pills=`<div class="pillbar">`+TABS.map(t=>{
     let badge=0; if(t.id==='inbox') badge=nNew; if(t.id==='buy') badge=nBuy;
-    return `<button class="${t.id===TAB?'on':''}" onclick="go('${t.id}')">
-      <span class="ic">${t.ic}</span>${t.label}${badge?`<span class="badge">${badge}</span>`:''}</button>`;
-  }).join('');
+    return `<button class="${t.id===TAB?'on':''}" onclick="go('${t.id}')">${t.label}${badge?`<span class="badge">${badge}</span>`:''}</button>`;
+  }).join('')+`</div>`;
+  const bar=`<div style="margin:0 0 12px"><button type="button" onclick="refresh(this)" style="width:100%;padding:11px;border:none;border-radius:10px;background:var(--purple,#534ab7);color:#fff;font-weight:700;font-family:inherit;font-size:14px;cursor:pointer">↻ Check for new requests</button></div>`;
+  document.getElementById('view').innerHTML=pills+bar+map[TAB]();
   window.scrollTo(0,0);
 }
 function go(tab){ TAB=tab; render(); }
@@ -426,11 +427,14 @@ function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
 function toast(msg){ const r=document.getElementById('toast-root');
   r.innerHTML=`<div class="toast">${msg}</div>`; clearTimeout(window._tt);
   window._tt=setTimeout(()=>r.innerHTML='',2600); }
-async function refresh(){ toast('Refreshing…'); await DB.load(); render(); toast('Up to date'); }
+async function refresh(btn){
+  if(btn){btn.disabled=true;btn.textContent='Checking…';}
+  try{ await DB.load(); render(); toast('Up to date'); }
+  catch(e){ toast('Refresh failed: '+(e&&e.message?e.message:e)); if(btn){btn.disabled=false;btn.textContent='↻ Check for new requests';} }
+}
 
 async function boot(){
   document.getElementById('view').innerHTML='<div class="empty"><div class="big">Loading…</div>Fetching from the database.</div>';
-  document.getElementById('nav').innerHTML='';
   await DB.load();
   render();
 }
