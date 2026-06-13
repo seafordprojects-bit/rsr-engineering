@@ -628,7 +628,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const [fund, setFund] = useState(undefined);
   const [advs, setAdvs] = useState([]);
   const [lines, setLines] = useState([]);
-  const [tab, setTab] = useState('fund'); const [matView, setMatView] = useState('request'); const [toolView, setToolView] = useState('request'); const [openPr, setOpenPr] = useState({});
+  const [tab, setTab] = useState(null); const [matView, setMatView] = useState('request'); const [toolView, setToolView] = useState('request'); const [openPr, setOpenPr] = useState({});
   const [cust, setCust] = useState('Raffy');
   const [pfrom, setPfrom] = useState(today());
   const [aDate, setADate] = useState(today()); const [aAmt, setAAmt] = useState(''); const [aBy, setABy] = useState('Raffy'); const [aRem, setARem] = useState(''); const [aMode, setAMode] = useState('Cash'); const [aRef, setARef] = useState('');
@@ -904,15 +904,32 @@ function Liquidation({ voyages, employees, sites, toast }) {
         <div style="text-align:right;font-size:12px;opacity:.9">Custodian: ${fund.custodian} <button onClick=${renameCustodian} style="background:rgba(255,255,255,.22);border:none;color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer">✎ change</button><br/>Advance: ${peso(advance)}</div>
       </div>
     </div>
-    <div class="tabs">
-      <button class=${tab==='fund'?'on':''} onClick=${() => setTab('fund')}>Fund</button>
-      <button class=${tab==='mat'?'on':''} onClick=${() => setTab('mat')}>Materials</button>
-      <button class=${tab==='tool'?'on':''} onClick=${() => setTab('tool')}>Tools</button>
-      <button class=${tab==='allow'?'on':''} onClick=${() => setTab('allow')}>Allowance</button>
-      <button class=${tab==='cons'?'on':''} onClick=${() => setTab('cons')}>Consumables</button>
-      <button class=${tab==='misc'?'on':''} onClick=${() => setTab('misc')}>Misc</button>
-      <button class=${tab==='sum'?'on':''} onClick=${() => setTab('sum')}>Summary</button>
-    </div>
+    ${tab === null && html`
+      <label style="margin:4px 2px 10px;display:block">Liquidation</label>
+      ${[
+        { id:'fund',  ico:'💵', bg:'#e8f4ee', t:'Fund',        s:'Cash advances & top-ups · ' + peso(advance) },
+        { id:'mat',   ico:'🧱', bg:'#fdeee4', t:'Materials',   s:'Request & buy stock materials' },
+        { id:'tool',  ico:'🛠️', bg:'#e9eef8', t:'Tools',       s:'Request & buy tools' },
+        { id:'allow', ico:'👷', bg:'#fdf3e0', t:'Allowance',   s:'Crew allowance · confirm by passcode' },
+        { id:'cons',  ico:'🧾', bg:'#f0eafa', t:'Consumables', s:'Project & admin consumables' },
+        { id:'misc',  ico:'🏥', bg:'#fde9ec', t:'Misc',        s:'Clinic / medical & other expenses' },
+        { id:'sum',   ico:'📊', bg:'#e6f2f5', t:'Summary',     s:'Reconciliation & totals' },
+      ].map(x => html`
+        <div class="card" key=${x.id} onClick=${() => setTab(x.id)}
+          style="cursor:pointer;display:flex;align-items:center;gap:14px;padding:16px 14px;margin:0 0 12px">
+          <div style=${'width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex:0 0 44px;background:'+x.bg}>${x.ico}</div>
+          <div style="min-width:0">
+            <div class="name" style="font-size:15px;font-weight:800">${x.t}</div>
+            <div class="sub" style="font-size:12px;color:var(--ink-dim)">${x.s}</div>
+          </div>
+        </div>`)}
+    `}
+
+    ${tab !== null && html`
+      <div style="display:flex;align-items:center;gap:10px;margin:2px 0 12px">
+        <button onClick=${() => setTab(null)} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer;padding:4px 0">← Liquidation menu</button>
+        <div class="name" style="font-size:15px;font-weight:800">${tab==='fund'?'Fund':tab==='mat'?'Materials':tab==='tool'?'Tools':tab==='allow'?'Allowance':tab==='cons'?'Consumables':tab==='misc'?'Misc':'Summary'}</div>
+      </div>`}
 
     ${tab === 'fund' && html`
       <div class="card">
