@@ -633,7 +633,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
   const [pfrom, setPfrom] = useState(today());
   const [aDate, setADate] = useState(today()); const [aAmt, setAAmt] = useState(''); const [aBy, setABy] = useState('Raffy'); const [aRem, setARem] = useState(''); const [aMode, setAMode] = useState('Cash'); const [aRef, setARef] = useState('');
   const [alDate, setAlDate] = useState(today()); const [alRec, setAlRec] = useState(''); const [alAmt, setAlAmt] = useState(''); const [alVes, setAlVes] = useState(''); const [alRem, setAlRem] = useState(''); const [alMode, setAlMode] = useState('Cash'); const [alRef, setAlRef] = useState('');
-  const [pinVals, setPinVals] = useState({}); const [pinErr, setPinErr] = useState({});
+  const [pinVals, setPinVals] = useState({}); const [pinErr, setPinErr] = useState({}); const [pinModal, setPinModal] = useState(null);
   const [cDate, setCDate] = useState(today()); const [cAmt, setCAmt] = useState(''); const [cCharge, setCCharge] = useState('Project'); const [cVes, setCVes] = useState(''); const [cRem, setCRem] = useState('');
   const [prs, setPrs] = useState([]); const [stockItems, setStockItems] = useState([]);
   const [prItems, setPrItems] = useState([]); const [prPick, setPrPick] = useState(''); const [prBy, setPrBy] = useState('Raffy');
@@ -704,7 +704,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
     if (!emp) { setPinErr({ ...pinErr, [l.id]: 'Employee not found' }); return; }
     try {
       const ok = await verifyPin(emp.id, pin);
-      if (ok) { await updateLiqLine(l.id, { confirmed: true, confirmed_at: new Date().toISOString() }); setPinErr({ ...pinErr, [l.id]: '' }); setPinVals({ ...pinVals, [l.id]: '' }); loadAll(fund); toast('Allowance confirmed'); }
+      if (ok) { await updateLiqLine(l.id, { confirmed: true, confirmed_at: new Date().toISOString() }); setPinErr({ ...pinErr, [l.id]: '' }); setPinVals({ ...pinVals, [l.id]: '' }); setPinModal(null); loadAll(fund); toast('Allowance confirmed'); }
       else setPinErr({ ...pinErr, [l.id]: 'Wrong passcode for ' + l.recipient });
     } catch (e) { toast('Error: ' + e.message, true); }
   };
@@ -763,7 +763,7 @@ function Liquidation({ voyages, employees, sites, toast }) {
         <table style="width:100%;border-collapse:collapse;font-size:13px">
           ${its.length?its.map((it,i)=>html`<tr><td style="width:22px;padding:3px 0;color:var(--ink-dim)">${i+1}.</td><td style="padding:3px 0">${it}</td></tr>`):html`<tr><td class="sub">No items</td></tr>`}
         </table>
-        ${p.status==='Pending'?html`<div style="display:flex;gap:6px;margin-top:8px"><button style=${bSm} onClick=${(e)=>{e.stopPropagation();decidePR(p,'Approved');}}>Approve</button><button style=${bSmAlt} onClick=${(e)=>{e.stopPropagation();decidePR(p,'Rejected');}}>Reject</button></div>`:''}
+        ${p.status==='Pending'?html`<div class="sub" style="margin-top:8px;font-style:italic">Awaiting admin approval</div>`:''}
       </div>`:''}
     </div>`;
   };
@@ -1052,12 +1052,20 @@ function Liquidation({ voyages, employees, sites, toast }) {
               <div style="display:flex;gap:6px;align-items:center"><span class="sub">Deductible:</span>
                 ${l.deductible==='Pending' ? html`<button style=${bSm} onClick=${()=>setDeduct(l,'Yes')}>Yes</button><button style=${bSmAlt} onClick=${()=>setDeduct(l,'No')}>No</button>` : html`<b class="sub">${l.deductible}</b><button style=${bSmAlt} onClick=${()=>setDeduct(l,'Pending')}>change</button>`}
               </div>`
-            : html`<div style="display:flex;gap:6px;width:100%">
-                <input type="password" inputmode="numeric" placeholder=${l.recipient + " passcode"} value=${pinVals[l.id]||''} onInput=${e=>setPinVals({...pinVals,[l.id]:e.target.value})} style="flex:1" />
-                <button style=${bSm} onClick=${()=>confirmAllow(l)}>Confirm</button></div>
-              ${pinErr[l.id] ? html`<div class="sub" style="color:var(--bad,#b0322a)">${pinErr[l.id]}</div>` : ''}`}
+            : html`<button style=${bSm} onClick=${()=>{setPinErr({...pinErr,[l.id]:''});setPinModal(l.id);}}>Enter passcode →</button>`}
           </div>`) : html`<div class="empty">No allowance rows yet.</div>`}
-      </div>`}
+      </div>
+      ${pinModal ? (()=>{const l=lines.find(x=>x.id===pinModal);if(!l)return '';return html`
+        <div onClick=${()=>setPinModal(null)} style="position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px">
+          <div onClick=${e=>e.stopPropagation()} style="background:var(--panel,#161a22);border:1px solid var(--line);border-radius:14px;padding:18px;max-width:340px;width:100%">
+            <div style="font-weight:800;font-size:15px;margin-bottom:2px">Confirm allowance</div>
+            <div class="sub" style="margin-bottom:10px">Have ${l.recipient} enter their passcode privately, then pass the phone to the next person.</div>
+            <div style="display:flex;justify-content:space-between;align-items:center;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px"><span>${l.recipient}</span><b style="font-size:16px">${peso(l.amount)}</b></div>
+            <input type="password" inputmode="numeric" autofocus placeholder="passcode" value=${pinVals[l.id]||''} onInput=${e=>setPinVals({...pinVals,[l.id]:e.target.value})} style="width:100%;box-sizing:border-box;margin-bottom:8px" />
+            ${pinErr[l.id] ? html`<div class="sub" style="color:var(--bad,#b0322a);margin-bottom:8px">${pinErr[l.id]}</div>` : ''}
+            <div style="display:flex;gap:8px"><button class="btn" style="flex:1" disabled=${busy} onClick=${()=>confirmAllow(l)}>Confirm</button><button style=${bSmAlt} onClick=${()=>setPinModal(null)}>Cancel</button></div>
+          </div>
+        </div>`;})() : ''}`}
 
     ${tab === 'cons' && html`
       <div class="card">
