@@ -1,23 +1,139 @@
 // ============================================================
-//  coordinator.js — RSR Coordinator panel
-//  PIN-gated admin page for encoding personnel + vessel schedules.
-//  Reuses the same Supabase project as the tool app.
+//  home.js — RSR Engineering admin dashboard (the start page)
+//  PIN-gated. Shows live summaries; links into each module.
 // ============================================================
 import { html, render } from 'htm/preact';
-import { useState, useEffect, useCallback } from 'preact/hooks';
-import { supabase, getSites } from './supabase.js';
+import { useState, useEffect } from 'preact/hooks';
+import { supabase } from './supabase.js';
 
-// ---------- data ----------
+const SESSION_KEY = 'rsr_admin';
+const onAdminPage = location.pathname.includes('/admin');  // admin lives on its own page
+const PIN_KEY = 'rsr_admin_pin';          // changeable PIN (default 1234)
+
+// count helper — returns a number, or null if the table/column isn't ready
+async function countRows(table, build) {
+  try {
+    let q = supabase.from(table).select('*', { count: 'exact', head: true });
+    if (build) q = build(q);
+    const { count, error } = await q;
+    if (error) throw error;
+    return count || 0;
+  } catch (_) { return null; }
+}
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, code, name, dept, position, phone, network, home_site, pin, started_on, sl_balance, vl_balance, is_suspended')
-    .order('name').limit(2000);
+    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
-async function addEmployee(row) {
-  const { error } = await supabase.from('employees').insert(row);
+async function getSalaryHistory(empId) {
+  const { data, error } = await supabase.from('salary_history')
+    .select('id, daily_rate, effective_date, note').eq('employee_id', empId)
+    .order('effective_date', { ascending: false }).limit(100);
   if (error) throw error;
+  return data;
+}
+async function addSalaryChange(empId, rate, date, note) {
+  const { error } = await supabase.from('salary_history')
+    .insert({ employee_id: empId, daily_rate: rate, effective_date: date || null, note: note || null });
+  if (error) throw error;
+  await supabase.from('employees').update({ daily_rate: rate }).eq('id', empId);  // current rate
+}
+async function getBorrowedNow() {
+  const { data, error } = await supabase.from('borrow_issuance')
+    .select('id, quantity, borrowed_at, project_vessel, items(name, item_code, unit), employees(name), item_units(unit_code), sites(name)')
+    .eq('status', 'out').order('borrowed_at', { ascending: false }).limit(500);
+  if (error) throw error;
+  return data;
+}
+async function getRepairUnits() {
+  const { data, error } = await supabase.from('item_units')
+    .select('id, unit_code, defect, repair_eta, items(name, item_code), sites(name)')
+    .eq('status', 'repair').eq('active', true).order('unit_code').limit(500);
+  if (error) throw error;
+  return data;
+}
+async function getRepairLog() {
+  const { data, error } = await supabase.from('repair_log')
+    .select('id, transmittal_no, defect, transmitted_by, status, received_back_by, sent_at, repaired_at, repair_eta, items(name), item_units(unit_code)')
+    .order('sent_at', { ascending: false }).limit(500);
+  if (error) throw error;
+  return data || [];
+}
+async function getInventory() {
+  const { data: units, error: e1 } = await supabase.from('item_units')
+    .select('item_id, site_id, status, items(name), sites(name)').eq('active', true).limit(5000);
+  if (e1) throw e1;
+  const { data: outs, error: e2 } = await supabase.from('borrow_issuance')
+    .select('item_id, site_id').eq('status', 'out').limit(5000);
+  if (e2) throw e2;
+  return { units, outs };
+}
+async function getIssued() {
+  const { data, error } = await supabase.from('issuances')
+    .select('id, proj_name, proj_code, emp_name, date, by_name, items, created_at')
+    .order('created_at', { ascending: false }).limit(500);
+  if (error) throw error;
+  return data || [];
+}
+async function getVoyagesMon() {
+  const { data, error } = await supabase.from('voyages')
+    .select('*, sites(name)').order('created_at', { ascending: false }).limit(500);
+  if (error) throw error;
+  return data || [];
+}
+// attendance dates are stored in PH format (MM/DD/YYYY) by the kiosk
+const MAT_CATALOG = ['Electrode handle','Welding gloves','Cutting tip','Dark glass','Clear glass','Trouble light','Electrical tape','Chalk stone','Dry chalk','Flint stone','Striker','Y-connector','Cutting disk','Oxygen regulator','LPG regulator','Steel square'];
+async function getMatUsage() {
+  const { data, error } = await supabase.from('material_usage').select('item_name,usage_days');
+  if (error) throw error;
+  return data || [];
+}
+async function upsertMatUsage(rows) {
+  const { error } = await supabase.from('material_usage').upsert(rows, { onConflict: 'item_name' });
+  if (error) throw error;
+}
+function todayPH() { return new Date().toLocaleDateString('en-PH', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
+function todayYmd() { const d = new Date(), z = n => String(n).padStart(2, '0'); return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())}`; }
+function ymdToPH(ymd) { if (!ymd) return todayPH(); const [y, m, d] = ymd.split('-'); return `${m}/${d}/${y}`; }
+async function getAttendance(dateStr) {
+  const { data, error } = await supabase.from('attendance_records').select('*').eq('date', dateStr).order('employee_name');
+  if (error) throw error;
+  return data || [];
+}
+async function getLeaves() {
+  const { data, error } = await supabase.from('leave_requests').select('*').order('created_at', { ascending: false }).limit(100);
+  if (error) throw error;
+  return data || [];
+}
+async function getApprovals() {
+  const { data, error } = await supabase.from('pending_approvals').select('*').order('created_at', { ascending: false }).limit(100);
+  if (error) throw error;
+  return data || [];
+}
+async function getLiqRequests() {
+  const { data, error } = await supabase.from('purchase_request').select('*').order('created_at', { ascending: false }).limit(200);
+  if (error) throw error;
+  return data || [];
+}
+async function decideLiqRequest(id, status) {
+  const { error } = await supabase.from('purchase_request').update({ status, approved_by: 'Admin', approved_at: new Date().toISOString() }).eq('id', id);
+  if (error) throw error;
+}
+async function getStraightDuty() {
+  const { data, error } = await supabase.from('straight_duty').select('*').order('created_at', { ascending: false }).limit(50);
+  if (error) throw error;
+  return data || [];
+}
+async function getViolations() {
+  const { data, error } = await supabase.from('violations').select('*').order('count', { ascending: false }).limit(200);
+  if (error) throw error;
+  return data || [];
+}
+async function getSmsLog() {
+  const { data, error } = await supabase.from('sms_log').select('*').order('created_at', { ascending: false }).limit(100);
+  if (error) throw error;
+  return data || [];
 }
 async function updateEmployee(id, fields) {
   const { error } = await supabase.from('employees').update(fields).eq('id', id);
@@ -27,1260 +143,1008 @@ async function getSetting(key) {
   const { data } = await supabase.from('settings').select('value').eq('key', key).maybeSingle();
   return data ? data.value : null;
 }
-async function getVoyages() {
-  const { data, error } = await supabase.from('voyages')
-    .select('*, sites(name)').order('created_at', { ascending: false }).limit(500);
-  if (error) throw error;
-  return data;
-}
-async function addVoyage(row) {
-  const { error } = await supabase.from('voyages').insert(row);
-  if (error) throw error;
-}
-async function updateVoyage(id, fields) {
-  const { error } = await supabase.from('voyages').update(fields).eq('id', id);
-  if (error) throw error;
-}
-async function deleteVoyage(id) {
-  const { error } = await supabase.from('voyages').delete().eq('id', id);
-  if (error) throw error;
-}
-async function getExpenses() {
-  const { data, error } = await supabase.from('expenses').select('*').order('created_at', { ascending: false }).limit(1000);
-  if (error) throw error;
-  return data || [];
-}
-async function addExpense(row) {
-  const { error } = await supabase.from('expenses').insert(row);
-  if (error) throw error;
-}
-async function deleteExpense(id) {
-  const { error } = await supabase.from('expenses').delete().eq('id', id);
-  if (error) throw error;
-}
-// ---------- liquidation ----------
-async function getOpenFund() {
-  const { data } = await supabase.from('liq_fund').select('*').eq('status', 'open').order('created_at', { ascending: false }).limit(1);
-  return (data && data[0]) || null;
-}
-async function createFund(row) { const { error } = await supabase.from('liq_fund').insert(row); if (error) throw error; }
-async function updateFund(id, fields) { const { error } = await supabase.from('liq_fund').update(fields).eq('id', id); if (error) throw error; }
-async function getAdvances(fundId) { const { data, error } = await supabase.from('liq_advance').select('*').eq('fund_id', fundId).order('created_at', { ascending: false }); if (error) throw error; return data || []; }
-async function addAdvance(row) { const { error } = await supabase.from('liq_advance').insert(row); if (error) throw error; }
-async function delAdvance(id) { const { error } = await supabase.from('liq_advance').delete().eq('id', id); if (error) throw error; }
-async function getLiqLines(fundId) { const { data, error } = await supabase.from('liq_line').select('*').eq('fund_id', fundId).order('created_at', { ascending: false }); if (error) throw error; return data || []; }
-async function addLiqLine(row) { const { error } = await supabase.from('liq_line').insert(row); if (error) throw error; }
-async function updateLiqLine(id, fields) { const { error } = await supabase.from('liq_line').update(fields).eq('id', id); if (error) throw error; }
-async function delLiqLine(id) { const { error } = await supabase.from('liq_line').delete().eq('id', id); if (error) throw error; }
-async function verifyPin(empId, pin) { const { data, error } = await supabase.rpc('verify_pin', { emp_id: empId, pin_input: pin }); if (error) throw error; return data === true; }
-async function getPRs() { const { data, error } = await supabase.from('purchase_request').select('*').order('created_at', { ascending: false }).limit(300); if (error) throw error; return data || []; }
-async function addPR(row) { const { error } = await supabase.from('purchase_request').insert(row); if (error) throw error; }
-async function updatePR(id, fields) { const { error } = await supabase.from('purchase_request').update(fields).eq('id', id); if (error) throw error; }
-async function getStockItems() { const { data, error } = await supabase.from('stock_item').select('*').order('name'); if (error) throw error; return data || []; }
-async function addStockItem(row) { const { error } = await supabase.from('stock_item').insert(row); if (error) throw error; }
-async function nextNo(prefix, site) {
-  try { const { data, error } = await supabase.rpc('next_no', { p_prefix: prefix, p_site: site }); if (!error && data) return data; } catch (_) {}
-  const n = new Date(), z = x => String(x).padStart(2, '0');
-  return prefix + '-' + site + '-' + z(n.getHours()) + z(n.getMinutes()) + z(n.getSeconds());
-}
-const LIQ_SITE_CODES = { 'Carmen': 'CAR', 'Mandaue': 'MAN', 'Lapu-Lapu': 'LAP' };
-const liqSiteCode = (s) => LIQ_SITE_CODES[s] || (s || 'GEN').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
-// push leftover material into the site's stock (mirrors the material app's delivery)
-async function liqStockIn(line, custodian) {
-  const qty = Number(line.qty_to_stock) || 0; if (qty <= 0) return;
-  const item = (line.item || '').trim();
-  // update the on-hand stock first (this is what Material Issuance reads)
-  const { data: cur } = await supabase.from('site_stock').select('qty').eq('site_key', line.site).eq('item_name', item).maybeSingle();
-  const nq = (cur ? Number(cur.qty) || 0 : 0) + qty;
-  const { error: e2 } = await supabase.from('site_stock').upsert({ site_key: line.site, item_name: item, qty: nq, updated_at: new Date().toISOString() }, { onConflict: 'site_key,item_name' });
-  if (e2) throw e2;
-  // delivery log is best-effort; never let it block the stock update
-  try {
-    const id = await nextNo('DLV', liqSiteCode(line.site));
-    await supabase.from('deliveries').insert([{ id, site: line.site, source: 'Liquidation', ref: line.id,
-      date: line.or_date || new Date().toISOString().slice(0, 10), received_by: custodian || 'Liquidation',
-      items: [{ n: item, u: line.unit || 'pc', qty }], created_at: new Date().toISOString() }]);
-  } catch (e) {}
-  await updateLiqLine(line.id, { posted: true });
-}
-// register a bought tool into the Tools module (mirrors Setup → Register tool)
-async function liqToolIn(line, siteId, prefix) {
-  const qty = Math.max(1, parseInt(line.qty, 10) || 1);
-  const pfx = (prefix || '').trim().toUpperCase(); if (!pfx) throw new Error('Code prefix required');
-  if (!siteId) throw new Error('Site not found in sites table');
-  const { data: un } = await supabase.from('item_units').select('unit_code').ilike('unit_code', pfx + '%');
-  let max = 0; (un || []).forEach(u => { const n = parseInt((u.unit_code || '').slice(pfx.length), 10); if (!isNaN(n) && n > max) max = n; });
-  const { data: item, error } = await supabase.from('items').insert({ item_code: pfx, name: line.item, unit: 'pcs', track_type: 'borrow', active: true }).select().single();
-  if (error) throw error;
-  const rows = []; for (let i = 1; i <= qty; i++) rows.push({ item_id: item.id, site_id: siteId, unit_code: pfx + String(max + i).padStart(3, '0'), status: 'available', active: true });
-  const { error: e2 } = await supabase.from('item_units').insert(rows); if (e2) throw e2;
-  await updateLiqLine(line.id, { posted: true });
-}
-function todayPH() { return new Date().toLocaleDateString('en-PH', { year: 'numeric', month: '2-digit', day: '2-digit' }); }
-async function fileLeave(row) {
-  const { error } = await supabase.from('leave_requests').insert(row);
-  if (error) throw error;
-}
-async function getRecentLeaves() {
-  const { data, error } = await supabase.from('leave_requests')
-    .select('*').eq('filed_by', 'Coordinator').order('created_at', { ascending: false }).limit(10);
-  if (error) throw error;
-  return data || [];
-}
-async function fileDuty(row) {
-  const { error } = await supabase.from('straight_duty').insert(row);
-  if (error) throw error;
-}
-async function getRecentDuties() {
-  const { data, error } = await supabase.from('straight_duty')
-    .select('*').order('created_at', { ascending: false }).limit(20);
-  if (error) throw error;
-  return data || [];
-}
-// notify managers on Telegram (same flow the kiosk uses); silently no-ops if unconfigured
-async function notifyTg(text, buttons) {
-  try {
-    const token = await getSetting('tg_token');
-    const mgr = await getSetting('mgr_ids');
-    if (!token || !mgr) return;
-    const ids = mgr.split(',').map(s => s.trim()).filter(Boolean);
-    const reply_markup = buttons ? { inline_keyboard: [buttons] } : undefined;
-    await Promise.all(ids.map(id => fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: id, text, parse_mode: 'HTML', reply_markup }),
-    }).catch(() => {})));
-  } catch (_) {}
+async function setSetting(key, value) {
+  const { data } = await supabase.from('settings').select('id').eq('key', key).maybeSingle();
+  if (data) { const { error } = await supabase.from('settings').update({ value }).eq('key', key); if (error) throw error; }
+  else { const { error } = await supabase.from('settings').insert({ key, value }); if (error) throw error; }
 }
 
-// ---------- small ui ----------
 function Field({ label, children }) {
   return html`<div class="field"><label>${label}</label>${children}</div>`;
 }
 
-// ---------- PIN gate (coordinator's own passcode, set by admin, stored in DB) ----------
-function Lock({ onUnlock, toast }) {
+function Lock({ onUnlock, onBack, toast }) {
   const [pin, setPin] = useState('');
-  const [busy, setBusy] = useState(false);
-  const tryUnlock = async () => {
-    setBusy(true);
-    let saved = '1234';                       // default until the admin sets one
-    try { const v = await getSetting('coordinator_pin'); if (v) saved = v; } catch (_) {}
-    setBusy(false);
-    if (pin === saved) { sessionStorage.setItem('rsr_coord', '1'); onUnlock(); }
-    else toast('Wrong passcode', true);
+  const tryUnlock = () => {
+    const admin = localStorage.getItem(PIN_KEY) || '1234';
+    if (pin === admin) { sessionStorage.setItem(SESSION_KEY, '1'); onUnlock(); }
+    else toast('Wrong PIN');
   };
   return html`
-    <div class="card lock">
-      <div class="brand" style="justify-content:center;margin-bottom:14px"><b>RSR</b><span class="tag">COORDINATOR</span></div>
-      <${Field} label="Enter coordinator passcode">
-        <input type="password" inputmode="numeric" value=${pin}
-          onInput=${e => setPin(e.target.value)} placeholder="passcode"
-          onKeyDown=${e => { if (e.key === 'Enter') tryUnlock(); }} />
-      <//>
-      <button class="btn" disabled=${busy} onClick=${tryUnlock}>${busy ? 'Checking…' : 'Unlock'}</button>
-    </div>`;
-}
-
-// ---------- Personnel ----------
-function Personnel({ employees, onReload, toast }) {
-  const [code, setCode] = useState('');           // holds existing code when editing
-  const [editKey, setEditKey] = useState(null);   // holds the row uuid when editing
-  const [empType, setEmpType] = useState('RSR');   // RSR = regular, PEM = pakyaw
-  const [name, setName] = useState('');
-  const [position, setPosition] = useState('');
-  const [phone, setPhone] = useState('');
-  const [started, setStarted] = useState('');
-  const [editId, setEditId] = useState(null);
-  const [saving, setSaving] = useState(false);
-
-  // next code in a series, e.g. "RSR 0001" → "RSR 0002"
-  const nextCode = (prefix) => {
-    let max = 0;
-    (employees || []).forEach(e => {
-      const c = e.code || '';
-      if (c.startsWith(prefix + ' ')) {
-        const n = parseInt(c.slice(prefix.length + 1), 10);
-        if (!isNaN(n) && n > max) max = n;
-      }
-    });
-    return prefix + ' ' + String(max + 1).padStart(4, '0');
-  };
-  const autoCode = nextCode(empType);              // shown while adding
-  const shownCode = editId ? code : autoCode;
-
-  const reset = () => { setCode(''); setEditKey(null); setEmpType('RSR'); setName(''); setPosition(''); setPhone(''); setStarted(''); setEditId(null); };
-
-  const submit = async () => {
-    if (!name.trim()) { toast('Enter a name', true); return; }
-    setSaving(true);
-    try {
-      if (editId) {
-        await updateEmployee(editKey, { name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null });
-        toast('Employee updated');
-      } else {
-        await addEmployee({ id: crypto.randomUUID(), code: autoCode, name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null, sl_balance: 0, vl_balance: 0 });
-        toast('Employee added · ' + autoCode);
-      }
-      reset(); onReload();
-    } catch (e) { toast('Error: ' + e.message, true); }
-    finally { setSaving(false); }
-  };
-
-  const edit = (e) => { setEditId(e.code || e.id); setEditKey(e.id); setCode(e.code || ''); setName(e.name || ''); setPosition(e.position || ''); setPhone(e.phone || ''); setStarted(e.started_on || ''); };
-
-  return html`
-    <div class="card">
-      <${Field} label="Full name">
-        <input value=${name} onInput=${e => setName(e.target.value)} placeholder="e.g. Juan Dela Cruz" />
-      <//>
-      ${!editId && html`
-        <${Field} label="Employee type">
-          <select value=${empType} onChange=${e => setEmpType(e.target.value)}>
-            <option value="RSR">Regular (RSR)</option>
-            <option value="PEM">Pakyaw (PEM)</option>
-          </select>
-        <//>`}
-      <${Field} label="Employee code (auto)">
-        <input value=${shownCode} disabled placeholder="auto-generated" />
-      <//>
-      <${Field} label="Position">
-        <input value=${position} onInput=${e => setPosition(e.target.value)} placeholder="e.g. Fitter" />
-      <//>
-      <${Field} label="Contact number">
-        <input type="tel" inputmode="tel" value=${phone} onInput=${e => setPhone(e.target.value)} placeholder="e.g. 0917 123 4567" />
-      <//>
-      <${Field} label="Date started working">
-        <input type="date" value=${started} onInput=${e => setStarted(e.target.value)} />
-      <//>
-      <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Saving…' : (editId ? 'Update Employee' : 'Add Employee')}</button>
-      ${editId && html`<button class="btn ghost" style="margin-top:8px" onClick=${reset}>Cancel edit</button>`}
-    </div>
-
-    <div class="card">
-      <label>Personnel (${employees.length})</label>
-      ${employees.length ? employees.map(e => html`
-        <div class="row" key=${e.id}>
-          <div>
-            <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.code || '—'}</span></div>
-            <div class="sub">${e.position || '—'}${e.phone ? ' · ' + e.phone : ''}${e.started_on ? ' · since ' + e.started_on : ''}</div>
-            <div class="sub" style="color:var(--ink-dim)">Sick leave: ${e.sl_balance ?? 0} · Vacation: ${e.vl_balance ?? 0}</div>
-          </div>
-          <button class="ret" onClick=${() => edit(e)}>Edit</button>
-        </div>`) : html`<div class="empty">No personnel yet.</div>`}
-    </div>`;
-}
-
-// ---------- Vessel schedule ----------
-const STATUS = [['drydock','Drydock'], ['afloat','Afloat repair'], ['emergency','Emergency repair'], ['not_active','Not active'], ['finished','Project finished']];
-function Vessels({ voyages, sites, onReload, toast }) {
-  const [vessel, setVessel] = useState('');
-  const [vcode, setVcode] = useState('');
-  const [siteId, setSiteId] = useState('');
-  const [status, setStatus] = useState('drydock');
-  const [docking, setDocking] = useState('');
-  const [undocking, setUndocking] = useState('');
-  const [departure, setDeparture] = useState('');
-  const [afloatStart, setAfloatStart] = useState('');
-  const [afloatDone, setAfloatDone] = useState('');
-  const [emergStart, setEmergStart] = useState('');
-  const [emergEnd, setEmergEnd] = useState('');
-  const [notes, setNotes] = useState('');
-  const [editId, setEditId] = useState(null);
-  const [saving, setSaving] = useState(false);
-
-  const reset = () => { setVessel(''); setVcode(''); setSiteId(''); setStatus('drydock'); setDocking(''); setUndocking('');
-    setDeparture(''); setAfloatStart(''); setAfloatDone(''); setEmergStart(''); setEmergEnd(''); setNotes(''); setEditId(null); };
-
-  const submit = async () => {
-    if (!vessel.trim()) { toast('Enter a vessel name', true); return; }
-    setSaving(true);
-    const row = {
-      vessel_name: vessel.trim(), vessel_code: vcode.trim() || null, site_id: siteId || null, status,
-      docking_date: docking || null, undocking_date: undocking || null, departure_date: departure || null,
-      afloat_start: afloatStart || null, afloat_done: afloatDone || null,
-      emergency_start: emergStart || null, emergency_end: emergEnd || null, notes: notes || null,
-    };
-    try {
-      if (editId) { await updateVoyage(editId, row); toast('Schedule updated'); }
-      else { await addVoyage(row); toast('Vessel scheduled'); }
-      reset(); onReload();
-    } catch (e) { toast('Error: ' + e.message, true); }
-    finally { setSaving(false); }
-  };
-
-  const edit = (v) => {
-    setEditId(v.id); setVessel(v.vessel_name); setVcode(v.vessel_code || ''); setSiteId(v.site_id || ''); setStatus(v.status || 'drydock');
-    setDocking(v.docking_date || ''); setUndocking(v.undocking_date || ''); setDeparture(v.departure_date || '');
-    setAfloatStart(v.afloat_start || ''); setAfloatDone(v.afloat_done || '');
-    setEmergStart(v.emergency_start || ''); setEmergEnd(v.emergency_end || ''); setNotes(v.notes || '');
-  };
-  const remove = async (v) => {
-    if (!confirm(`Delete schedule for "${v.vessel_name}"?`)) return;
-    try { await deleteVoyage(v.id); toast('Deleted'); onReload(); }
-    catch (e) { toast('Error: ' + e.message, true); }
-  };
-
-  const isDry = status === 'drydock';
-  const isAfloat = status === 'afloat';
-  const isEmergency = status === 'emergency';
-
-  return html`
-    <div class="card">
-      <div class="two">
-        <${Field} label="Vessel name">
-          <input value=${vessel} onInput=${e => setVessel(e.target.value)} placeholder="e.g. MV SF Trinity" />
+    <div class="wrap">
+      <div class="card lock">
+        <div class="brand" style="justify-content:center;margin-bottom:6px"><b>RSR</b><span class="tag">ADMIN</span></div>
+        <p class="note" style="margin:0 0 14px">Admin login</p>
+        <${Field} label="Enter admin PIN">
+          <input type="password" inputmode="numeric" value=${pin}
+            onInput=${e => setPin(e.target.value)} placeholder="default 1234"
+            onKeyDown=${e => { if (e.key === 'Enter') tryUnlock(); }} />
         <//>
-        <${Field} label="Vessel code">
-          <input value=${vcode} onInput=${e => setVcode(e.target.value)} placeholder="e.g. SFT-2026-01" />
-        <//>
+        <button class="btn" onClick=${tryUnlock}>Unlock</button>
+        ${onBack && html`<button class="btn ghost" style="margin-top:8px" onClick=${onBack}>← Back</button>`}
       </div>
-      <div class="two">
-        <${Field} label="Location">
-          <select value=${siteId} onChange=${e => setSiteId(e.target.value)}>
-            <option value="">Select…</option>
-            ${sites.map(s => html`<option value=${s.id}>${s.name}</option>`)}
-          </select>
-        <//>
-        <${Field} label="Status">
-          <select value=${status} onChange=${e => setStatus(e.target.value)}>
-            ${STATUS.map(([v, l]) => html`<option value=${v}>${l}</option>`)}
-          </select>
-        <//>
-      </div>
-
-      <label style="margin-top:6px">Drydock dates ${isDry ? '' : html`<span style="font-weight:400;color:var(--ink-dim)">(if applicable)</span>`}</label>
-      <div class="two">
-        <${Field} label="Docking date"><input type="date" value=${docking} onInput=${e => setDocking(e.target.value)} /><//>
-        <${Field} label="Undocking date"><input type="date" value=${undocking} onInput=${e => setUndocking(e.target.value)} /><//>
-      </div>
-      <${Field} label="Departure date"><input type="date" value=${departure} onInput=${e => setDeparture(e.target.value)} /><//>
-
-      <label style="margin-top:6px">Afloat repair dates <span style="font-weight:400;color:var(--ink-dim)">(if applicable)</span></label>
-      <div class="two">
-        <${Field} label="Afloat start"><input type="date" value=${afloatStart} onInput=${e => setAfloatStart(e.target.value)} /><//>
-        <${Field} label="Afloat end"><input type="date" value=${afloatDone} onInput=${e => setAfloatDone(e.target.value)} /><//>
-      </div>
-
-      <label style="margin-top:6px">Emergency repair dates <span style="font-weight:400;color:var(--ink-dim)">(if applicable)</span></label>
-      <div class="two">
-        <${Field} label="Emergency repair start"><input type="date" value=${emergStart} onInput=${e => setEmergStart(e.target.value)} /><//>
-        <${Field} label="Emergency repair end"><input type="date" value=${emergEnd} onInput=${e => setEmergEnd(e.target.value)} /><//>
-      </div>
-
-      <${Field} label="Notes">
-        <textarea rows="2" value=${notes} onInput=${e => setNotes(e.target.value)}></textarea>
-      <//>
-      <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Saving…' : (editId ? 'Update Schedule' : 'Add to Schedule')}</button>
-      ${editId && html`<button class="btn ghost" style="margin-top:8px" onClick=${reset}>Cancel edit</button>`}
-    </div>
-
-    <div class="card">
-      <label>Vessel schedule (${voyages.length})</label>
-      ${voyages.length ? voyages.map(v => html`
-        <div class="row" key=${v.id}>
-          <div>
-            <div class="name">${v.vessel_name} ${v.vessel_code ? html`<span class="mono" style="color:var(--hivis);font-weight:600">${v.vessel_code}</span> ` : ''}<span class="pill">${(STATUS.find(s=>s[0]===v.status)||['','?'])[1]}</span></div>
-            <div class="sub">${v.sites?.name || '—'}${v.undocking_date ? ' · undock ' + v.undocking_date : ''}${v.departure_date ? ' · departs ' + v.departure_date : ''}</div>
-          </div>
-          <div style="display:flex;gap:6px">
-            <button class="ret" onClick=${() => edit(v)}>Edit</button>
-            <button class="ret" style="color:var(--warn)" onClick=${() => remove(v)}>✕</button>
-          </div>
-        </div>`) : html`<div class="empty">No vessels scheduled.</div>`}
     </div>`;
 }
 
-// ---------- Settings ----------
-function Settings({ toast }) {
-  const [cur, setCur] = useState('');
-  const [next, setNext] = useState('');
-  const save = () => {
-    const admin = localStorage.getItem('rsr_admin_pin') || '1234';
-    if (cur !== admin) { toast('Current PIN is wrong', true); return; }
-    if (!next.trim()) { toast('Enter a new PIN', true); return; }
-    localStorage.setItem('rsr_admin_pin', next.trim());
-    setCur(''); setNext(''); toast('PIN changed');
-  };
-  return html`
-    <div class="card">
-      <${Field} label="Current PIN"><input type="password" value=${cur} onInput=${e => setCur(e.target.value)} /><//>
-      <${Field} label="New PIN"><input type="password" value=${next} onInput=${e => setNext(e.target.value)} /><//>
-      <button class="btn" onClick=${save}>Change PIN</button>
-      <p class="note" style="margin-top:10px">The PIN is stored on this device. It's a light gate, not full security.</p>
-    </div>`;
+function Tile({ ico, num, unit, title, href, onClick }) {
+  const showNum = num !== undefined;
+  const inner = html`
+    <div class="ico">${ico}</div>
+    ${showNum ? html`<div class=${'num' + (num == null ? ' dim' : '')}>${num == null ? '—' : num}</div>` : ''}
+    <h3 style=${showNum ? '' : 'margin-top:8px'}>${title}</h3>
+    ${unit ? html`<div class="unit">${unit}</div>` : ''}`;
+  if (onClick) return html`<div class="tile" style="cursor:pointer" onClick=${onClick}>${inner}</div>`;
+  return href
+    ? html`<a class="tile" href=${href}>${inner}</a>`
+    : html`<div class="tile soon">${ico ? html`<div class="ico">${ico}</div>` : ''}<h3 style="margin-top:8px">${title}</h3><span class="badge">COMING SOON</span></div>`;
 }
 
-// ---------- App ----------
-function FileLeave({ employees, toast }) {
-  const [emp, setEmp] = useState('');
-  const [type, setType] = useState('Sick Leave');
-  const [start, setStart] = useState('');
-  const [end, setEnd] = useState('');
-  const [reason, setReason] = useState('');
+function MatUsage({ toast, onBack }) {
+  const [map, setMap] = useState({});
+  const [extra, setExtra] = useState([]);
+  const [newName, setNewName] = useState('');
   const [saving, setSaving] = useState(false);
-  const [recent, setRecent] = useState([]);
-  const reload = () => getRecentLeaves().then(setRecent).catch(() => {});
-  useEffect(() => { reload(); }, []);
-
-  const picked = employees.find(e => e.code === emp);
-  const bal = type === 'Sick Leave' ? (picked && picked.sl_balance) || 0
-            : type === 'Vacation Leave' ? (picked && picked.vl_balance) || 0 : null;
-  const hint = !picked ? '' :
-    type === 'Leave Without Pay' ? 'LWP — unlimited, not counted as absent.'
-    : type === 'Emergency Leave' ? 'Emergency leave — same day allowed.'
-    : `Available: ${bal} day(s)` + (bal === 0 ? ' — exhausted, file LWP' : '');
-
-  const submit = async () => {
-    if (!emp) { toast('Select an employee', true); return; }
-    if (!start || !end) { toast('Select dates', true); return; }
-    const days = Math.ceil((new Date(end) - new Date(start)) / 86400000) + 1;
-    if (days < 1) { toast('End date is before start', true); return; }
-    if ((type === 'Sick Leave' || type === 'Vacation Leave') && bal < days) {
-      toast(`Insufficient balance (${bal} day). File LWP instead.`, true); return;
-    }
+  useEffect(() => {
+    getMatUsage().then(rows => {
+      const mm = {}, ex = [];
+      rows.forEach(r => { mm[r.item_name] = String(r.usage_days ?? ''); if (!MAT_CATALOG.includes(r.item_name)) ex.push(r.item_name); });
+      setMap(mm); setExtra(ex);
+    }).catch(() => {});
+  }, []);
+  const names = [...MAT_CATALOG, ...extra];
+  const setDays = (n, v) => setMap(p => ({ ...p, [n]: v.replace(/[^0-9]/g, '') }));
+  const addCustom = () => { const n = newName.trim(); if (!n) return; if (names.includes(n)) { toast('Already listed'); return; } setExtra(e => [...e, n]); setNewName(''); };
+  const save = async () => {
+    const rows = names.filter(n => map[n] !== undefined && map[n] !== '').map(n => ({ item_name: n, usage_days: parseInt(map[n], 10), updated_at: new Date().toISOString() }));
+    if (!rows.length) { toast('Set at least one value'); return; }
     setSaving(true);
-    try {
-      await fileLeave({ employee_code: emp, employee_name: picked.name, type, start_date: start,
-        end_date: end, days, reason: reason.trim() || '', status: 'Pending', filed_by: 'Coordinator', filed_on: todayPH() });
-      notifyTg(`📋 <b>Leave Request</b>\n👤 ${picked.name}\n📝 ${type}\n📅 ${start} → ${end} (${days} day${days !== 1 ? 's' : ''})\n💬 "${reason.trim()}"\n👩‍💼 Filed by: Coordinator`,
-        [{ text: '✅ Approve', callback_data: 'approve_leave' }, { text: '❌ Reject', callback_data: 'reject_leave' }]);
-      toast('Leave filed for ' + picked.name + ' — pending approval');
-      setEmp(''); setReason(''); setStart(''); setEnd(''); reload();
-    } catch (e) { toast('Error: ' + e.message, true); }
-    finally { setSaving(false); }
+    try { await upsertMatUsage(rows); toast('Saved usage life'); } catch (e) { toast('Error: ' + e.message); } finally { setSaving(false); }
   };
-
   return html`
-    <div class="card">
-      <label>File leave on behalf of an employee</label>
-      <${Field} label="Employee">
-        <select value=${emp} onChange=${e => setEmp(e.target.value)}>
-          <option value="">Select employee…</option>
-          ${employees.map(e => html`<option value=${e.code}>${e.name}${e.dept ? ' · ' + e.dept : ''}</option>`)}
-        </select>
-      <//>
-      <${Field} label="Leave type">
-        <select value=${type} onChange=${e => setType(e.target.value)}>
-          <option>Sick Leave</option><option>Vacation Leave</option>
-          <option>Leave Without Pay</option><option>Emergency Leave</option>
-        </select>
-      <//>
-      ${hint && html`<p class="note" style="margin:-6px 0 12px;color:var(--ink-dim)">${hint}</p>`}
-      <div class="two">
-        <${Field} label="Start date"><input type="date" value=${start} onInput=${e => setStart(e.target.value)} /><//>
-        <${Field} label="End date"><input type="date" value=${end} onInput=${e => setEnd(e.target.value)} /><//>
+    <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+      <span><b>RSR</b><span class="tag">MATERIAL USAGE</span></span>
+      <button onClick=${onBack} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
+    </div></div></header>
+    <div class="wrap">
+      <div class="card">
+        <label>Usage life per material (days)</label>
+        <p class="note" style="margin:2px 0 12px">Set here by admin only and re-adjustable. This is the expected service life used to flag when an issued material is due for replacement.</p>
+        ${names.map(n => html`
+          <div class="row" key=${n} style="align-items:center">
+            <div class="name">${n}</div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <input type="number" min="0" inputmode="numeric" value=${map[n] ?? ''} onInput=${e => setDays(n, e.target.value)} style="width:84px;text-align:right" placeholder="days" />
+              <span class="unit">days</span>
+            </div>
+          </div>`)}
+        <div class="row" style="align-items:center;border-top:1px solid var(--line);margin-top:6px;padding-top:10px">
+          <input value=${newName} onInput=${e => setNewName(e.target.value)} placeholder="Add other material…" style="flex:1" />
+          <button class="btn" style="width:auto;padding:10px 14px" onClick=${addCustom}>+ Add</button>
+        </div>
+        <button class="btn" disabled=${saving} onClick=${save} style="margin-top:12px">${saving ? 'Saving…' : 'Save usage life'}</button>
       </div>
-      <${Field} label="Reason"><textarea rows="2" value=${reason} onInput=${e => setReason(e.target.value)} placeholder="Reason for leave…"></textarea><//>
-      <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Filing…' : 'Submit leave request'}</button>
-    </div>
-    <div class="card">
-      <label>Recently filed</label>
-      ${recent.length ? recent.map(r => html`
-        <div class="row" key=${r.id} style="align-items:flex-start">
-          <div><div class="name">${r.employee_name}</div>
-            <div class="sub">${r.type} · ${r.start_date} → ${r.end_date} · ${r.days} day(s)</div>
-            ${r.reason ? html`<div class="sub" style="color:var(--ink-dim)">"${r.reason}"</div>` : ''}</div>
-          <span class="pill" style=${'background:' + (r.status === 'Approved' ? '#12B89E' : r.status === 'Rejected' ? '#D64045' : 'var(--hivis)') + ';color:#000'}>${r.status}</span>
-        </div>`) : html`<div class="empty">No leaves filed yet.</div>`}
     </div>`;
 }
 
-function FileDuty({ employees, toast }) {
-  const [emp, setEmp] = useState('');
-  const [date, setDate] = useState('');
-  const [reason, setReason] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [recent, setRecent] = useState([]);
-  const reload = () => getRecentDuties().then(setRecent).catch(() => {});
-  useEffect(() => { reload(); }, []);
-
-  const submit = async (breakType) => {
-    const picked = employees.find(e => e.code === emp);
-    if (!picked) { toast('Select an employee', true); return; }
-    if (!date) { toast('Select a date', true); return; }
-    if (!reason.trim()) { toast('Enter a reason', true); return; }
-    const breakLabel = breakType === 'lunch' ? 'Lunch (12:00–1:00 PM)' : 'PM Break (5:00–6:00 PM)';
-    setSaving(true);
-    try {
-      await fileDuty({ employee_code: emp, employee_name: picked.name, employee_dept: picked.dept || '—',
-        break_type: breakType, break_label: breakLabel, date, reason: reason.trim(), status: 'Pending', filed_on: todayPH() });
-      const emoji = breakType === 'lunch' ? '🍽️' : '☕';
-      notifyTg(`${emoji} <b>Straight Duty Request</b>\n👤 ${picked.name}\n💼 ${picked.dept || '—'}\n📅 ${date}\n⏰ ${breakLabel}\n📝 "${reason.trim()}"`,
-        [{ text: '✅ Approve', callback_data: 'approve_sd_' + breakType }, { text: '❌ Reject', callback_data: 'reject_sd_' + breakType }]);
-      toast('Straight duty request sent');
-      setEmp(''); setReason(''); reload();
-    } catch (e) { toast('Error: ' + e.message, true); }
-    finally { setSaving(false); }
-  };
-
+function RepairHistory() {
+  const [rows, setRows] = useState(null);
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  useEffect(() => { getRepairLog().then(setRows).catch(() => setRows([])); }, []);
+  const dt = (s) => s ? new Date(s).toLocaleDateString() : '—';
+  const repaired = (rows || []).filter(r => r.status === 'repaired');
+  const ql = q.trim().toLowerCase();
+  const list = ql ? repaired.filter(r => (((r.items && r.items.name) || '').toLowerCase().includes(ql)) || (((r.item_units && r.item_units.unit_code) || '').toLowerCase().includes(ql))) : repaired;
   return html`
     <div class="card">
-      <label>File straight duty (emergency work during break)</label>
-      <p class="note" style="margin:0 0 12px;color:var(--ink-dim)">Admin approves via Telegram.</p>
-      <${Field} label="Employee">
-        <select value=${emp} onChange=${e => setEmp(e.target.value)}>
-          <option value="">Select employee…</option>
-          ${employees.map(e => html`<option value=${e.code}>${e.name}${e.dept ? ' · ' + e.dept : ''}</option>`)}
-        </select>
-      <//>
-      <${Field} label="Date"><input type="date" value=${date} onInput=${e => setDate(e.target.value)} /><//>
-      <${Field} label="Reason"><textarea rows="2" value=${reason} onInput=${e => setReason(e.target.value)} placeholder="e.g. Emergency repair works"></textarea><//>
-      <div class="two">
-        <button class="btn" disabled=${saving} onClick=${() => submit('lunch')}>🍽️ Lunch straight duty</button>
-        <button class="btn" disabled=${saving} onClick=${() => submit('pm')}>☕ PM straight duty</button>
+      <div onClick=${() => setOpen(o => !o)} style="display:flex;align-items:center;justify-content:space-between;cursor:pointer">
+        <label style="margin:0;cursor:pointer">Repair history${rows ? ` (${repaired.length})` : ''}</label>
+        <span style="color:var(--ink-dim);font-weight:700;font-size:13px">${open ? '▲ Hide' : '▼ View'}</span>
       </div>
-    </div>
-    <div class="card">
-      <label>Recent straight duties</label>
-      ${recent.length ? recent.map(r => html`
-        <div class="row" key=${r.id} style="align-items:flex-start">
-          <div><div class="name">${r.break_type === 'lunch' ? '🍽️' : '☕'} ${r.employee_name}</div>
-            <div class="sub">${r.break_label} · ${r.date}</div>
-            ${r.reason ? html`<div class="sub" style="color:var(--ink-dim)">"${r.reason}"</div>` : ''}</div>
-          <span class="pill" style=${'background:' + (r.status === 'Approved' ? '#12B89E' : r.status === 'Rejected' ? '#D64045' : 'var(--hivis)') + ';color:#000'}>${r.status}</span>
-        </div>`) : html`<div class="empty">No straight duties filed yet.</div>`}
-    </div>`;
-}
-
-function Expenses({ voyages, toast }) {
-  const [voyage, setVoyage] = useState('');
-  const [cat, setCat] = useState('Materials');
-  const [amount, setAmount] = useState('');
-  const [date, setDate] = useState('');
-  const [paidBy, setPaidBy] = useState('');
-  const [note, setNote] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [rows, setRows] = useState([]);
-  const reload = () => getExpenses().then(setRows).catch(() => {});
-  useEffect(() => { reload(); }, []);
-
-  const peso = (n) => '₱' + Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
-  const submit = async () => {
-    if (!voyage) { toast('Select a vessel', true); return; }
-    if (amount === '' || isNaN(Number(amount))) { toast('Enter an amount', true); return; }
-    const v = voyages.find(x => x.id === voyage);
-    setSaving(true);
-    try {
-      await addExpense({ voyage_id: voyage, vessel_name: v ? v.vessel_name : null, category: cat,
-        amount: Number(amount), spent_on: date || null, paid_by: paidBy.trim() || null, note: note.trim() || null });
-      toast('Expense added');
-      setAmount(''); setNote(''); setPaidBy(''); setDate('');
-      reload();
-    } catch (e) { toast('Error: ' + e.message, true); }
-    finally { setSaving(false); }
-  };
-  const remove = async (id) => {
-    if (!confirm('Delete this expense?')) return;
-    try { await deleteExpense(id); reload(); toast('Deleted'); } catch (e) { toast('Error: ' + e.message, true); }
-  };
-
-  // group by vessel
-  const groups = {};
-  rows.forEach(r => { const k = r.voyage_id || 'none'; if (!groups[k]) groups[k] = { name: r.vessel_name || 'Unassigned', items: [], total: 0 }; groups[k].items.push(r); groups[k].total += Number(r.amount) || 0; });
-  const grand = rows.reduce((s, r) => s + (Number(r.amount) || 0), 0);
-
-  return html`
-    <div class="card">
-      <label>Add a vessel expense</label>
-      <${Field} label="Vessel / project">
-        <select value=${voyage} onChange=${e => setVoyage(e.target.value)}>
-          <option value="">— Select vessel —</option>
-          ${voyages.map(v => html`<option value=${v.id}>${v.vessel_name}${v.vessel_code ? ' (' + v.vessel_code + ')' : ''}</option>`)}
-        </select>
-      <//>
-      <div class="two">
-        <${Field} label="Category">
-          <select value=${cat} onChange=${e => setCat(e.target.value)}>
-            <option>Materials</option><option>Labor</option><option>Equipment</option>
-            <option>Subcontractor</option><option>Transport</option><option>Consumables</option><option>Other</option>
-          </select>
-        <//>
-        <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${amount} onInput=${e => setAmount(e.target.value)} placeholder="0.00" /><//>
-      </div>
-      <div class="two">
-        <${Field} label="Date"><input type="date" value=${date} onInput=${e => setDate(e.target.value)} /><//>
-        <${Field} label="Paid by"><input value=${paidBy} onInput=${e => setPaidBy(e.target.value)} placeholder="Name" /><//>
-      </div>
-      <${Field} label="Note (optional)"><input value=${note} onInput=${e => setNote(e.target.value)} placeholder="What was it for?" /><//>
-      <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Saving…' : 'Add expense'}</button>
-    </div>
-
-    <div class="card">
-      <label>Costs by vessel — total ${peso(grand)}</label>
-      ${Object.keys(groups).length ? Object.values(groups).sort((a, b) => b.total - a.total).map(g => html`
-        <div style="margin-bottom:14px">
-          <div class="row" style="border-bottom:1px solid var(--line)"><div class="name">${g.name}</div><div class="name">${peso(g.total)}</div></div>
-          ${g.items.map(r => html`
+      ${open && html`
+        <input placeholder="Search tool name or code (e.g. GR001)" value=${q} onInput=${e => setQ(e.target.value)} style="width:100%;margin-top:12px" />
+        ${ql ? html`<div class="unit" style="margin:10px 0 2px;font-weight:700;color:var(--ink)">${list.length} repair${list.length === 1 ? '' : 's'} found${list.length ? ` for "${q}"` : ''}</div>` : ''}
+        ${rows == null ? html`<div class="empty">Loading…</div>`
+          : list.length ? list.map(r => html`
             <div class="row" key=${r.id} style="align-items:flex-start">
-              <div><div class="sub"><b>${r.category || '—'}</b> · ${peso(r.amount)}</div>
-                <div class="sub" style="color:var(--ink-dim)">${r.spent_on || '—'}${r.paid_by ? ' · ' + r.paid_by : ''}${r.note ? ' · ' + r.note : ''}</div></div>
-              <button class="ret" onClick=${() => remove(r.id)}>✕</button>
-            </div>`)}
-        </div>`) : html`<div class="empty">No expenses logged yet.</div>`}
+              <div>
+                <div class="name">${r.items ? r.items.name : '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.item_units ? r.item_units.unit_code : ''}</span></div>
+                <div class="unit">${r.transmittal_no ? r.transmittal_no + ' · ' : ''}${r.defect || '—'}</div>
+                <div class="unit">Sent by ${r.transmitted_by || '—'} · ${dt(r.sent_at)}</div>
+                <div class="unit">Repaired ${dt(r.repaired_at)}${r.received_back_by ? ' · recv by ' + r.received_back_by : ''}</div>
+              </div>
+              <span class="badge" style="background:#12B89E;color:#000">REPAIRED</span>
+            </div>`)
+          : html`<div class="empty">${ql ? 'No repairs found for that tool.' : 'No repair history yet.'}</div>`}
+      `}
     </div>`;
 }
 
-// ---------- Liquidation (cash advance, reconcile by project) ----------
-const stepHead = (n, t, s) => html`
-  <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">
-    <div style="width:30px;height:30px;border-radius:50%;background:var(--accent,#0f6e56);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px;flex:0 0 30px">${n}</div>
-    <div><div class="name" style="font-size:15px;font-weight:800">${t}</div>
-    <div class="sub" style="font-size:12px;color:var(--ink-dim)">${s}</div></div>
-  </div>`;
-function Liquidation({ voyages, employees, sites, toast, tab, setTab }) {
-  const peso = (n) => '₱' + Number(n || 0).toLocaleString('en-PH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  const uid = () => 'L' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-  const today = () => new Date().toISOString().slice(0, 10);
-  const bSm = 'padding:6px 12px;border:none;border-radius:8px;background:var(--accent,#0f6e56);color:#fff;font-size:13px;font-weight:700;cursor:pointer';
-  const bSmAlt = 'padding:6px 12px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer';
+const MAT_TH = {'Electrode handle':3,'Welding gloves':3,'Cutting tip':5,'Dark glass':3,'Clear glass':3,'Trouble light':2,'Electrical tape':5,'Chalk stone':5,'Dry chalk':5,'Flint stone':5,'Striker':3,'Y-connector':2,'Cutting disk':5,'Oxygen regulator':1,'LPG regulator':1,'Steel square':1};
+function muUnit(n){return ({'Welding gloves':'pair','Oxygen regulator':'unit','LPG regulator':'unit'})[n]||'pcs';}
+const peso = (v) => '\u20b1' + (Number(v)||0).toLocaleString('en-PH',{maximumFractionDigits:2});
 
-  const [fund, setFund] = useState(undefined);
-  const [advs, setAdvs] = useState([]);
-  const [lines, setLines] = useState([]);
-  const [matView, setMatView] = useState('request'); const [toolView, setToolView] = useState('request'); const [openPr, setOpenPr] = useState({});
-  const [cust, setCust] = useState('Raffy');
-  const [pfrom, setPfrom] = useState(today());
-  const [aDate, setADate] = useState(today()); const [aAmt, setAAmt] = useState(''); const [aBy, setABy] = useState('Raffy'); const [aRem, setARem] = useState(''); const [aMode, setAMode] = useState('Cash'); const [aRef, setARef] = useState('');
-  const [alDate, setAlDate] = useState(today()); const [alRec, setAlRec] = useState(''); const [alAmt, setAlAmt] = useState(''); const [alVes, setAlVes] = useState(''); const [alRem, setAlRem] = useState(''); const [alMode, setAlMode] = useState('Cash'); const [alRef, setAlRef] = useState('');
-  const [pinVals, setPinVals] = useState({}); const [pinErr, setPinErr] = useState({}); const [pinModal, setPinModal] = useState(null);
-  const [cDate, setCDate] = useState(today()); const [cAmt, setCAmt] = useState(''); const [cCharge, setCCharge] = useState('Project'); const [cVes, setCVes] = useState(''); const [cRem, setCRem] = useState('');
-  const [mxDate, setMxDate] = useState(today()); const [mxCat, setMxCat] = useState('Clinic / Medical'); const [mxAmt, setMxAmt] = useState(''); const [mxEmp, setMxEmp] = useState(''); const [mxVes, setMxVes] = useState(''); const [mxOr, setMxOr] = useState(''); const [mxRem, setMxRem] = useState('');
-  const [prs, setPrs] = useState([]); const [stockItems, setStockItems] = useState([]);
-  const [prItems, setPrItems] = useState([]); const [prPick, setPrPick] = useState(''); const [prBy, setPrBy] = useState('Raffy');
-  const [mDate, setMDate] = useState(today()); const [mPr, setMPr] = useState(''); const [buyRows, setBuyRows] = useState([]);
-  const [mVes, setMVes] = useState(''); const [mSite, setMSite] = useState('Carmen'); const [mOr, setMOr] = useState(''); const [mRem, setMRem] = useState('');
-  const [niOpen, setNiOpen] = useState(false); const [niName, setNiName] = useState(''); const [niUnit, setNiUnit] = useState('pcs');
-  const [tDate, setTDate] = useState(today()); const [tItem, setTItem] = useState(''); const [tPfx, setTPfx] = useState(''); const [tUC, setTUC] = useState('');
-  const [tQ, setTQ] = useState('1'); const [tSite, setTSite] = useState('Carmen'); const [tVes, setTVes] = useState(''); const [tOr, setTOr] = useState(''); const [tRem, setTRem] = useState('');
-  const [toolPick, setToolPick] = useState(''); const [toolItems, setToolItems] = useState([]); const [tPr, setTPr] = useState(''); const [toolBuyRows, setToolBuyRows] = useState([]);
-  const [busy, setBusy] = useState(false);
+function Warehouse({ onBack }) {
+  const [tab, setTab] = useState('requests');
+  const [reqs, setReqs] = useState(null);
+  const [stock, setStock] = useState({});
+  const [prices, setPrices] = useState({});
+  const [edit, setEdit] = useState({});
+  const [purch, setPurch] = useState(null);
+  const [rep, setRep] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [slip, setSlip] = useState(null);
+  // purchase form
+  const [pSup, setPSup] = useState('');
+  const [pInv, setPInv] = useState('');
+  const [pDate, setPDate] = useState(new Date().toISOString().slice(0,10));
+  const [pBy, setPBy] = useState('');
+  const [pRows, setPRows] = useState([{ n:'', qty:1, price:0 }]);
+  const flash = (m) => { setMsg(m); setTimeout(() => setMsg(null), 2400); };
 
-  // Vessel/division picker = only vessels currently in an ACTIVE repair phase.
-  // Appears once a START date is encoded (docking / afloat start / emergency start)
-  // and drops out the moment the MATCHING end date is encoded (undocking / afloat end / emergency end).
-  const isActiveRepair = (v) => (v.docking_date && !v.undocking_date) || (v.afloat_start && !v.afloat_done) || (v.emergency_start && !v.emergency_end);
-  const vessels = (voyages || []).filter(isActiveRepair).map(v => v.vessel_name).filter(Boolean);
-  const tdy = today();
-  const yday = new Date(Date.now() - 86400000).toISOString().slice(0, 10);  // one day back
-  const siteNames = (sites || []).length ? sites.map(s => s.name) : ['Carmen', 'Mandaue'];
-  const loadRefs = async () => { try { setPrs(await getPRs()); setStockItems(await getStockItems()); } catch (e) { toast('Refs load failed: ' + e.message, true); } };
-  const loadAll = async (f) => { if (!f) return; try { setAdvs(await getAdvances(f.id)); setLines(await getLiqLines(f.id)); } catch (e) { toast('Load failed: ' + e.message, true); } };
-  useEffect(() => { (async () => { try { const f = await getOpenFund(); setFund(f); if (f) loadAll(f); loadRefs(); } catch (e) { setFund(null); toast('Load failed: ' + e.message, true); } })(); }, []);
+  const loadCore = async () => {
+    try { const { data:rq } = await supabase.from('requests').select('*').in('status',['Pending','Approved','Dispatched']).order('created_at',{ascending:false}).limit(100); setReqs(rq||[]); } catch(e){ setReqs([]); }
+    try { const { data:ws } = await supabase.from('warehouse_stock').select('item_name,qty'); const m={}; (ws||[]).forEach(r=>m[r.item_name]=Number(r.qty)||0); setStock(m); const ed={}; MAT_CATALOG.forEach(n=>ed[n]=String(m[n]??0)); setEdit(ed); } catch(e){}
+    try { const { data:pr } = await supabase.from('item_prices').select('item_name,price'); const m={}; (pr||[]).forEach(r=>m[r.item_name]=Number(r.price)||0); setPrices(m); } catch(e){}
+  };
+  useEffect(() => { loadCore(); }, []);
 
-  const startFund = async () => {
-    setBusy(true);
-    const row = { id: uid(), custodian: cust.trim() || '—', period_from: pfrom || null, period_to: null, status: 'open', created_at: new Date().toISOString() };
-    try { await createFund(row); setFund(row); setAdvs([]); setLines([]); toast('Fund started'); } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
-  };
-  const renameCustodian = async () => {
-    const nn = prompt('Custodian name', fund.custodian || ''); if (nn === null) return;
-    const v = nn.trim(); if (!v) { toast('Name required', true); return; }
-    try { await updateFund(fund.id, { custodian: v }); setFund({ ...fund, custodian: v }); toast('Custodian updated'); } catch (e) { toast('Error: ' + e.message, true); }
-  };
-  const addAdv = async () => {
-    if (aAmt === '' || isNaN(Number(aAmt))) { toast('Enter an amount', true); return; }
-    if (aMode === 'GCash' && !aRef.trim()) { toast('Enter the GCash transaction no.', true); return; }
-    setBusy(true);
-    const row = { id: uid(), fund_id: fund.id, date: aDate || today(), amount: Number(aAmt), received_by: aBy.trim() || null,
-      mode: aMode, gcash_ref: aMode === 'GCash' ? aRef.trim() : null, remarks: aRem.trim() || null, created_at: new Date().toISOString() };
-    try {
-      let hint = false;
-      try { await addAdvance(row); }
-      catch (e) { if (/column|mode|gcash/i.test(e.message || '')) { const { mode, gcash_ref, ...rest } = row; await addAdvance(rest); hint = true; } else throw e; }
-      setAAmt(''); setARem(''); setARef(''); loadAll(fund);
-      toast(hint ? 'Advance added — run updated liquidation.sql to store the GCash details' : 'Advance added' + (aMode === 'GCash' ? ' (GCash)' : ''));
-    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
-  };
-  const addAllow = async () => {
-    if (!alRec) { toast('Select a recipient', true); return; }
-    if (alAmt === '' || isNaN(Number(alAmt))) { toast('Enter an amount', true); return; }
-    if (!alVes) { toast('Vessel / division is required', true); return; }
-    if (alMode === 'GCash' && !alRef.trim()) { toast('Enter the GCash transaction no.', true); return; }
-    const emp = employees.find(e => e.id === alRec);
-    setBusy(true);
-    const row = { id: uid(), fund_id: fund.id, type: 'ALLOWANCE', or_date: alDate || today(), vessel_div: alVes, recipient: emp ? emp.name : alRec, emp_id: emp ? emp.id : null, amount: Number(alAmt),
-      mode: alMode, gcash_ref: alMode === 'GCash' ? alRef.trim() : null, confirmed: false, deductible: 'Pending', remarks: alRem.trim() || null, created_at: new Date().toISOString() };
-    try {
-      let hint = false;
-      try { await addLiqLine(row); }
-      catch (e) { if (/column|mode|gcash/i.test(e.message || '')) { const { mode, gcash_ref, ...rest } = row; await addLiqLine(rest); hint = true; } else throw e; }
-      setAlAmt(''); setAlRem(''); setAlRef(''); loadAll(fund);
-      toast(hint ? 'Added — run updated liquidation.sql to store the GCash details' : 'Allowance added — awaiting passcode');
-    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
-  };
-  const confirmAllow = async (l) => {
-    const pin = (pinVals[l.id] || '').trim(); if (!pin) return;
-    const emp = employees.find(e => e.id === l.emp_id) || employees.find(e => e.name === l.recipient);
-    if (!emp) { setPinErr({ ...pinErr, [l.id]: 'Employee not found' }); return; }
-    try {
-      const ok = await verifyPin(emp.id, pin);
-      if (ok) { await updateLiqLine(l.id, { confirmed: true, confirmed_at: new Date().toISOString() }); setPinErr({ ...pinErr, [l.id]: '' }); setPinVals({ ...pinVals, [l.id]: '' }); setPinModal(null); loadAll(fund); toast('Allowance confirmed'); }
-      else setPinErr({ ...pinErr, [l.id]: 'Wrong passcode for ' + l.recipient });
-    } catch (e) { toast('Error: ' + e.message, true); }
-  };
-  const MISC_CATS = ['Clinic / Medical', 'Medicine', 'Transport', 'Supplies', 'Other'];
-  const addMisc = async () => {
-    if (mxAmt === '' || isNaN(Number(mxAmt)) || Number(mxAmt) <= 0) { toast('Enter an amount', true); return; }
-    const emp = employees.find(e => e.id === mxEmp);
-    setBusy(true);
-    const row = { id: uid(), fund_id: fund.id, type: 'MISC', or_date: mxDate || today(), vessel_div: mxVes || null, site: 'Carmen',
-      item: mxCat, amount: Number(mxAmt), recipient: emp ? emp.name : null, emp_id: emp ? emp.id : null,
-      or_ref: mxOr.trim() || null, remarks: mxRem.trim() || null, created_at: new Date().toISOString() };
-    try {
-      await addLiqLine(row);
-      setMxAmt(''); setMxOr(''); setMxRem(''); setMxEmp(''); loadAll(fund);
-      toast('Expense added');
-    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
-  };
-  const setDeduct = async (l, val) => { try { await updateLiqLine(l.id, { deductible: val, decided_at: new Date().toISOString(), decided_by: 'Payroller' }); loadAll(fund); toast('Set ' + val); } catch (e) { toast('Error: ' + e.message, true); } };
-  const addCons = async () => {
-    if (cAmt === '' || isNaN(Number(cAmt))) { toast('Enter an amount', true); return; }
-    if (cCharge === 'Project' && !cVes) { toast('Vessel required for Project charge', true); return; }
-    setBusy(true);
-    try { await addLiqLine({ id: uid(), fund_id: fund.id, type: 'CONSUMABLE', or_date: cDate || today(), amount: Number(cAmt), charge_to: cCharge, vessel_div: cCharge === 'Project' ? cVes : null, remarks: cRem.trim() || null, created_at: new Date().toISOString() }); setCAmt(''); setCRem(''); loadAll(fund); toast('Consumable added'); } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
-  };
-  const removeLine = async (l) => {
-    if (l.posted && (l.type === 'TOOL' || Number(l.qty_to_stock) > 0)) { toast('Already pushed to ' + (l.type === 'TOOL' ? 'Tools' : 'site stock') + ' — adjust it there instead', true); return; }
-    if (!confirm('Delete this line?')) return;
-    try { await delLiqLine(l.id); loadAll(fund); toast('Deleted'); } catch (e) { toast('Error: ' + e.message, true); }
-  };
-  const removeAdv = async (id) => { if (!confirm('Delete this advance?')) return; try { await delAdvance(id); loadAll(fund); toast('Deleted'); } catch (e) { toast('Error: ' + e.message, true); } };
+  const itemsTxt = (r) => (Array.isArray(r.items)?r.items:[]).map(it=>(it.n||it.name)+' \u00d7'+it.qty).join(', ')||'\u2014';
+  const badge = (s) => { const c={Pending:'#e8a330',Approved:'#378ADD',Dispatched:'#378ADD',Received:'#12B89E',Cancelled:'#9A9890'}[s]||'#9A9890'; return html`<span class="badge" style="background:${c};color:#fff">${(s||'').toUpperCase()}</span>`; };
 
-  // ---- purchase requests ----
-  const createPR = async () => {
-    if (!prItems.length) { toast('Add at least one material', true); return; }
-    setBusy(true);
+  // ---- dispatch ----
+  const dispatch = async (r) => {
     try {
-      const no = await nextNo('LPR', liqSiteCode('Carmen'));
-      const row = { id: uid(), pr_no: no, requested_by: prBy.trim() || null, date: today(), status: 'Pending', items: prItems.join(', '), site: 'Carmen', created_at: new Date().toISOString() };
-      try { await addPR(row); }
-      catch (e) { if (/column/i.test(e.message || '')) { const { site, ...rest } = row; await addPR(rest); } else throw e; }
-      setPrItems([]); setPrPick(''); loadRefs(); toast('PR created: ' + no);
-    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+      let drNo=''; try { const { data, error } = await supabase.rpc('next_dispatch_no'); if(!error&&data) drNo=data; } catch(e){}
+      if(!drNo){ const n=new Date(),z=x=>String(x).padStart(2,'0'); drNo='DR-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds()); }
+      for (const it of (r.items||[])) { const nm=it.n||it.name; const cur=stock[nm]||0; const nq=Math.max(0,cur-(it.qty||0)); await supabase.from('warehouse_stock').upsert({item_name:nm,qty:nq,updated_at:new Date().toISOString()},{onConflict:'item_name'}); }
+      await supabase.from('requests').update({ status:'Dispatched', dr_no:drNo, updated_at:new Date().toISOString() }).eq('id', r.id);
+      setSlip({ drNo, site:r.site, date:new Date().toISOString().slice(0,10), items:(r.items||[]).map(it=>({ n:it.n||it.name, u:it.u||muUnit(it.n||it.name), qty:it.qty })) });
+      loadCore();
+    } catch (e) { flash('Failed: ' + e.message); }
   };
-  const decidePR = async (p, status) => {
-    // Passcode gate temporarily removed for initial data entry — restore later.
-    try { await updatePR(p.id, { status, approved_by: 'Coordinator', approved_at: new Date().toISOString() }); loadRefs(); toast(p.pr_no + ' ' + status); } catch (e) { toast('Error: ' + e.message, true); }
-  };
-  const createToolPR = async () => {
-    if (!toolItems.length) { toast('Add at least one tool', true); return; }
-    setBusy(true);
+  const cancel = async (r) => { try { await supabase.from('requests').update({status:'Cancelled',updated_at:new Date().toISOString()}).eq('id',r.id); flash('Cancelled'); loadCore(); } catch(e){ flash('Failed: '+e.message); } };
+
+  // ---- stock ----
+  const saveStock = async (name) => { const v=parseInt(edit[name],10); if(isNaN(v)||v<0){flash('Enter a valid qty');return;} try{ await supabase.from('warehouse_stock').upsert({item_name:name,qty:v,updated_at:new Date().toISOString()},{onConflict:'item_name'}); flash(name+' set to '+v); loadCore(); }catch(e){ flash('Failed: '+e.message); } };
+
+  // ---- purchasing ----
+  const pTotal = pRows.reduce((s,r)=>s+((parseFloat(r.qty)||0)*(parseFloat(r.price)||0)),0);
+  const setRow = (i,k,v) => setPRows(rows => rows.map((r,j)=>j===i?{...r,[k]:v}:r));
+  const addPRow = () => setPRows(rows => [...rows,{n:'',qty:1,price:0}]);
+  const rmPRow = (i) => setPRows(rows => rows.filter((_,j)=>j!==i));
+  const pickPItem = (i,name) => setPRows(rows => rows.map((r,j)=>j===i?{...r,n:name,price:(prices[name]||r.price||0)}:r));
+  const savePurchase = async () => {
+    if(!pSup.trim()){flash('Enter supplier');return;}
+    const items=pRows.filter(r=>r.n&&parseInt(r.qty)>0).map(r=>({n:r.n,u:muUnit(r.n),qty:parseInt(r.qty),price:parseFloat(r.price)||0}));
+    if(!items.length){flash('Add at least one item');return;}
+    const n=new Date(),z=x=>String(x).padStart(2,'0');
+    const id='PO-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
+    const total=items.reduce((s,it)=>s+it.qty*it.price,0);
     try {
-      const no = await nextNo('LTR', liqSiteCode('Carmen'));
-      const row = { id: uid(), pr_no: no, requested_by: prBy.trim() || null, date: today(), status: 'Pending', items: toolItems.join(', '), site: 'Carmen', created_at: new Date().toISOString() };
-      try { await addPR(row); } catch (e) { if (/column/i.test(e.message || '')) { const { site, ...rest } = row; await addPR(rest); } else throw e; }
-      setToolItems([]); setToolPick(''); loadRefs(); toast('Request created: ' + no);
-    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
+      await supabase.from('purchases').insert([{ id, supplier:pSup.trim(), invoice:pInv.trim()||null, date:pDate, received_by:pBy.trim()||null, items, grand_total:total, created_at:new Date().toISOString() }]);
+      for (const it of items) { const cur=stock[it.n]||0; await supabase.from('warehouse_stock').upsert({item_name:it.n,qty:cur+it.qty,updated_at:new Date().toISOString()},{onConflict:'item_name'}); if(it.price>0) await supabase.from('item_prices').upsert({item_name:it.n,price:it.price,updated_at:new Date().toISOString()},{onConflict:'item_name'}); }
+      flash('Purchase saved \u00b7 stock updated');
+      setPSup(''); setPInv(''); setPBy(''); setPRows([{n:'',qty:1,price:0}]);
+      await loadCore(); loadPurch();
+    } catch (e) { flash('Failed: '+e.message); }
   };
-  const prSlip = (p) => {
-    const open = !!openPr[p.id];
-    const its = p.items ? p.items.split(',').map(s=>s.trim()).filter(Boolean) : [];
-    const bg = p.status==='Approved'?'#1d9e75':p.status==='Rejected'?'#c0392b':p.status==='Bought'?'#2d6cdf':'#b8860b';
-    return html`
-    <div key=${p.id} style="border:1px solid var(--line);border-radius:10px;margin-top:8px;background:var(--panel,#161a22);overflow:hidden">
-      <div onClick=${()=>setOpenPr(o=>({...o,[p.id]:!o[p.id]}))} style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;cursor:pointer">
-        <span style="font-weight:700;font-size:14px">${open?'▾':'▸'} ${p.pr_no}</span>
-        <span style="font-size:11px;font-weight:700;color:#fff;background:${bg};padding:2px 9px;border-radius:10px">${p.status}</span>
-      </div>
-      ${open ? html`<div style="padding:0 12px 10px">
-        <div class="sub" style="margin:0 0 6px">${p.date||'—'} · Requested by ${p.requested_by||'—'}${p.site?' · '+p.site:''}</div>
-        <table style="width:100%;border-collapse:collapse;font-size:13px">
-          ${its.length?its.map((it,i)=>html`<tr><td style="width:22px;padding:3px 0;color:var(--ink-dim)">${i+1}.</td><td style="padding:3px 0">${it}</td></tr>`):html`<tr><td class="sub">No items</td></tr>`}
-        </table>
-        ${p.status==='Pending'?html`<div class="sub" style="margin-top:8px;font-style:italic">Awaiting admin approval</div>`:''}
-      </div>`:''}
-    </div>`;
-  };
-  const saveNewItem = async () => {
-    if (!niName.trim()) { toast('Material name?', true); return; }
-    const nm = niName.trim();
-    try { await addStockItem({ id: uid(), name: nm, unit: niUnit.trim() || 'pcs', default_site: mSite }); setNiName(''); setNiOpen(false); await loadRefs(); if (!prItems.includes(nm)) setPrItems([...prItems, nm]); toast('Material added to request'); } catch (e) { toast('Error: ' + e.message, true); }
+  const loadPurch = async () => { try { const { data } = await supabase.from('purchases').select('*').order('created_at',{ascending:false}).limit(60); setPurch(data||[]); } catch(e){ setPurch([]); } };
+
+  // ---- reports ----
+  const loadReports = async () => {
+    let iss=[];
+    try { const since=new Date(Date.now()-30*864e5).toISOString(); const { data } = await supabase.from('issuances').select('proj_name,items,created_at').gte('created_at',since).limit(1000); iss=data||[]; } catch(e){}
+    const consume={}, byVessel={}; let issuedTotal=0;
+    iss.forEach(r=>{ (r.items||[]).forEach(it=>{ const nm=it.n||it.name, q=it.qty||0, pr=prices[nm]||0; consume[nm]=(consume[nm]||0)+q; issuedTotal+=q; const v=r.proj_name||'\u2014'; byVessel[v]=(byVessel[v]||0)+q*pr; }); });
+    let stockValue=0; MAT_CATALOG.forEach(n=>{ stockValue+=(stock[n]||0)*(prices[n]||0); });
+    setRep({ consume, byVessel, issuedTotal, stockValue });
   };
 
-  // ---- materials (STOCK_MATERIAL) ----
-  const pushStock = async (l) => { try { await liqStockIn(l, fund.custodian); loadAll(fund); toast('Pushed to ' + l.site + ' stock'); } catch (e) { toast('Stock push failed: ' + e.message, true); } };
-  const buyRequest = async () => {
-    const pr = prs.find(p => p.pr_no === mPr);
-    if (!pr) { toast('Select an approved request', true); return; }
-    if (pr.status !== 'Approved') { toast('Request ' + pr.pr_no + ' is not approved', true); return; }
-    if (pr.date && mDate && pr.date > mDate) { toast('OR date must be on/after the request date', true); return; }
-    const buys = buyRows.filter(r => Number(r.qty) > 0 && Number(r.cost) > 0);
-    if (!buys.length) { toast('Enter qty and price for at least one item', true); return; }
-    setBusy(true);
-    try {
-      const dt = mDate || today(), orRef = mOr.trim() || null, ves = mVes || null, rem = mRem.trim() || null;
-      const errs = [];
-      for (const r of buys) {
-        const qb = Number(r.qty), uc = Number(r.cost);
-        const line = { id: uid(), fund_id: fund.id, type: 'STOCK_MATERIAL', or_date: dt, vessel_div: ves, site: mSite,
-          item: r.name, unit: r.unit || 'pc', unit_cost: uc, qty_bought: qb, qty_used: 0, qty_to_stock: qb,
-          pr_ref: pr.pr_no, or_ref: orRef, remarks: rem, posted: false, created_at: new Date().toISOString() };
-        await addLiqLine(line);
-        try { await liqStockIn(line, fund.custodian); } catch (e) { errs.push(r.name + ': ' + e.message); }
-      }
-      try { await updatePR(pr.id, { status: 'Bought' }); } catch (e) {}
-      if (errs.length) toast('Stock update failed → ' + errs.join(' | '), true);
-      else toast(buys.length + ' item(s) bought → ' + mSite + ' stock');
-      setMPr(''); setBuyRows([]); setMOr(''); setMRem(''); setMVes('');
-      loadAll(fund); loadRefs();
-    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
-  };
+  useEffect(() => { if(tab==='buy'&&purch==null) loadPurch(); if(tab==='reports') loadReports(); }, [tab, stock, prices]);
 
-  // ---- tools (TOOL) ----
-  const pushTool = async (l) => {
-    const sid = (sites || []).find(s => s.name === l.site); const pfx = ((l.remarks || '').match(/\[pfx:([A-Z0-9]+)\]/) || [])[1] || (l.item || '').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
-    try { await liqToolIn(l, sid && sid.id, pfx); loadAll(fund); toast('Registered in Tools — ' + l.site); } catch (e) { toast('Tool push failed: ' + e.message, true); }
-  };
-  const addToolLine = async () => {
-    if (!tItem.trim()) { toast('Tool name?', true); return; }
-    const uc = Number(tUC), q = parseInt(tQ, 10);
-    if (!(uc > 0)) { toast('Unit cost must be > 0', true); return; }
-    if (!(q >= 1)) { toast('Qty must be at least 1', true); return; }
-    const pfx = (tPfx || tItem.replace(/[^A-Za-z]/g, '').slice(0, 3)).toUpperCase();
-    if (!pfx) { toast('Code prefix?', true); return; }
-    const line = { id: uid(), fund_id: fund.id, type: 'TOOL', or_date: tDate || today(), vessel_div: tVes || null, site: tSite,
-      item: tItem.trim(), unit: 'pcs', unit_cost: uc, qty: q, or_ref: tOr.trim() || null,
-      remarks: ((tRem.trim() ? tRem.trim() + ' ' : '') + '[pfx:' + pfx + ']'), posted: false, created_at: new Date().toISOString() };
-    setBusy(true);
-    try {
-      await addLiqLine(line);
-      const sid = (sites || []).find(s => s.name === tSite);
-      try { await liqToolIn(line, sid && sid.id, pfx); toast('Tool saved — registered in ' + tSite + ' Tools inventory'); }
-      catch (e) { toast('Saved, but Tools push failed — use "Register" on the line', true); }
-      setTItem(''); setTPfx(''); setTUC(''); setTQ('1'); setTOr(''); setTRem('');
-      loadAll(fund);
-    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
-  };
-  const buyToolRequest = async () => {
-    const pr = prs.find(p => p.pr_no === tPr);
-    if (!pr) { toast('Select an approved request', true); return; }
-    if (pr.status !== 'Approved') { toast('Request ' + pr.pr_no + ' is not approved', true); return; }
-    if (pr.date && tDate && pr.date > tDate) { toast('OR date must be on/after the request date', true); return; }
-    const buys = toolBuyRows.filter(r => (parseInt(r.qty,10)||0) > 0 && Number(r.cost) > 0);
-    if (!buys.length) { toast('Enter qty and price for at least one tool', true); return; }
-    setBusy(true);
-    try {
-      const dt = tDate || today(), orRef = tOr.trim() || null, ves = tVes || null, sid = (sites || []).find(s => s.name === tSite);
-      let failed = 0;
-      for (const r of buys) {
-        const q = parseInt(r.qty,10)||0, uc = Number(r.cost), pfx = (r.prefix || r.name.replace(/[^A-Za-z]/g,'').slice(0,3)).toUpperCase();
-        const line = { id: uid(), fund_id: fund.id, type: 'TOOL', or_date: dt, vessel_div: ves, site: tSite,
-          item: r.name, unit: 'pcs', unit_cost: uc, qty: q, or_ref: orRef,
-          remarks: ((tRem.trim() ? tRem.trim() + ' ' : '') + '[pfx:' + pfx + ']'), pr_ref: pr.pr_no, posted: false, created_at: new Date().toISOString() };
-        await addLiqLine(line);
-        try { await liqToolIn(line, sid && sid.id, pfx); } catch (e) { failed++; }
-      }
-      try { await updatePR(pr.id, { status: 'Bought' }); } catch (e) {}
-      toast(buys.length + ' tool(s) bought → Tools inventory' + (failed ? ' (' + failed + ' need manual Register)' : ''));
-      setTPr(''); setToolBuyRows([]); setTOr(''); setTRem(''); setTVes('');
-      loadAll(fund); loadRefs();
-    } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
-  };
+  const lowItems = MAT_CATALOG.filter(n => (stock[n]||0) <= (MAT_TH[n]||0));
 
-  const advance = advs.reduce((s, a) => s + Number(a.amount || 0), 0);
-  let allow = 0, consProj = 0, consAdm = 0, matUsed = 0, stockVal = 0, toolVal = 0, misc = 0;
-  lines.forEach(l => {
-    if (l.type === 'ALLOWANCE') allow += Number(l.amount || 0);
-    else if (l.type === 'CONSUMABLE') { if (l.charge_to === 'Project') consProj += Number(l.amount || 0); else consAdm += Number(l.amount || 0); }
-    else if (l.type === 'STOCK_MATERIAL') { matUsed += Number(l.qty_used || 0) * Number(l.unit_cost || 0); stockVal += Number(l.qty_to_stock || 0) * Number(l.unit_cost || 0); }
-    else if (l.type === 'TOOL') { toolVal += Number(l.qty || 0) * Number(l.unit_cost || 0); }
-    else if (l.type === 'MISC') { misc += Number(l.amount || 0); }
-  });
-  const consumed = allow + consProj + consAdm + matUsed + misc;
-  const onhand = stockVal + toolVal;
-  const cashRet = advance - consumed - onhand;
-  const cashOut = lines.reduce((s, l) => { if (l.type === 'STOCK_MATERIAL') return s + Number(l.qty_bought || 0) * Number(l.unit_cost || 0); if (l.type === 'TOOL') return s + Number(l.qty || 0) * Number(l.unit_cost || 0); return s + Number(l.amount || 0); }, 0);
-  const balanceLeft = advance - cashOut;
-  const perVessel = {};
-  lines.forEach(l => { let amt = 0; if (l.type === 'ALLOWANCE') amt = Number(l.amount || 0); else if (l.type === 'CONSUMABLE' && l.charge_to === 'Project') amt = Number(l.amount || 0); else if (l.type === 'STOCK_MATERIAL') amt = Number(l.qty_used || 0) * Number(l.unit_cost || 0); else if (l.type === 'MISC') amt = Number(l.amount || 0); if (amt > 0 && l.vessel_div) perVessel[l.vessel_div] = (perVessel[l.vessel_div] || 0) + amt; });
-  const perPerson = {};
-  lines.filter(l => l.type === 'ALLOWANCE').forEach(l => { const k = l.recipient || '—'; if (!perPerson[k]) perPerson[k] = { total: 0, confirmed: 0 }; perPerson[k].total += Number(l.amount || 0); if (l.confirmed) perPerson[k].confirmed += Number(l.amount || 0); });
-
-  if (fund === undefined) return html`<div class="card"><div class="empty">Loading…</div></div>`;
-  if (fund === null) return html`
-    <div class="card">
-      <label>Start a liquidation fund</label>
-      <p class="sub" style="margin:0 0 10px">One custodian fund over a period. Top it up with advances; reconcile by project.</p>
-      <${Field} label="Custodian"><input value=${cust} onInput=${e => setCust(e.target.value)} placeholder="Name" /><//>
-      <${Field} label="Period from"><input type="date" value=${pfrom} onInput=${e => setPfrom(e.target.value)} /><//>
-      <button class="btn" disabled=${busy} onClick=${startFund}>${busy ? 'Starting…' : 'Start fund'}</button>
-    </div>`;
+  const seg = (k,label) => html`<button onClick=${()=>setTab(k)} style="flex:1;padding:9px;border:none;border-radius:9px;font-size:13px;font-weight:700;cursor:pointer;background:${tab===k?'var(--ink-dim)':'transparent'};color:${tab===k?'#fff':'var(--ink-dim)'}">${label}</button>`;
 
   return html`
-    <div class="card" style="background:var(--accent,#0f6e56);color:#fff">
-      <div style="display:flex;justify-content:space-between;align-items:baseline">
-        <div><div style="font-size:12px;opacity:.85;text-transform:uppercase;letter-spacing:.5px">Cash on hand</div>
-        <div style="font-size:24px;font-weight:800">${peso(balanceLeft)}</div></div>
-        <div style="text-align:right;font-size:12px;opacity:.9">Custodian: ${fund.custodian} <button onClick=${renameCustodian} style="background:rgba(255,255,255,.22);border:none;color:#fff;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700;cursor:pointer">✎ change</button><br/>Advance: ${peso(advance)}</div>
+    <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+      <span><b>RSR</b><span class="tag">WAREHOUSE</span></span>
+      <button onClick=${onBack} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">\u2190 Dashboard</button>
+    </div></div></header>
+    <div class="wrap">
+      <div style="display:flex;gap:6px;background:var(--card,#fff);border:1px solid var(--line);border-radius:12px;padding:5px;margin-bottom:12px">
+        ${seg('requests','Requests')}${seg('stock','Stock')}${seg('buy','Buy')}${seg('reports','Reports')}
       </div>
+
+      ${tab==='requests' ? html`
+        <div class="card">
+          <label>Material requests${reqs?` (${reqs.length})`:''}</label>
+          ${reqs==null ? html`<div class="empty">Loading\u2026</div>`
+            : reqs.length ? reqs.map(r=>html`
+              <div class="row" key=${r.id} style="align-items:flex-start">
+                <div>
+                  <div class="name">${r.site||'\u2014'} ${r.urgent?html`<span style="color:#d64045;font-weight:800;font-size:11px">\u00b7 URGENT</span>`:''}</div>
+                  <div class="unit mono" style="color:var(--ink-dim)">${r.id}${r.dr_no?' \u00b7 '+r.dr_no:''}</div>
+                  <div class="unit">${itemsTxt(r)}</div>
+                  <div class="unit">${r.date||''}${r.by_name?' \u00b7 by '+r.by_name:''}</div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
+                  ${badge(r.status)}
+                  ${r.status!=='Dispatched'?html`<button onClick=${()=>dispatch(r)} style="background:#12B89E;color:#000;border:none;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:800;cursor:pointer">Dispatch</button>`:''}
+                  <button onClick=${()=>cancel(r)} style="background:none;border:1px solid var(--line);color:var(--ink-dim);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer">Cancel</button>
+                </div>
+              </div>`)
+            : html`<div class="empty">No open requests.</div>`}
+        </div>` : ''}
+
+      ${tab==='stock' ? html`
+        ${lowItems.length?html`<div class="card" style="border-color:#e8a330;background:#FAEEDA">
+          <label style="color:#7a4a06">\u26a0 Low / reorder (${lowItems.length})</label>
+          <div class="unit" style="color:#7a4a06">${lowItems.map(n=>`${n} (${stock[n]||0})`).join(' \u00b7 ')}</div>
+        </div>`:''}
+        <div class="card">
+          <label>Warehouse stock (your place)</label>
+          ${MAT_CATALOG.map(n=>{ const low=(stock[n]||0)<=(MAT_TH[n]||0); return html`
+            <div class="row" key=${n}>
+              <div><div class="name" style=${low?'color:#d64045':''}>${n}</div><div class="unit">${muUnit(n)} \u00b7 min ${MAT_TH[n]||0}${prices[n]?' \u00b7 '+peso(prices[n]):''}</div></div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <input type="number" min="0" value=${edit[n]??''} onInput=${e=>setEdit({...edit,[n]:e.target.value})} style="width:70px;text-align:center;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:15px"/>
+                <button onClick=${()=>saveStock(n)} style="background:var(--ink-dim);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:700;cursor:pointer">Set</button>
+              </div>
+            </div>`;})}
+        </div>` : ''}
+
+      ${tab==='buy' ? html`
+        <div class="card">
+          <label>New purchase</label>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:8px 0">
+            <input placeholder="Supplier *" value=${pSup} onInput=${e=>setPSup(e.target.value)} style="padding:10px;border:1px solid var(--line);border-radius:8px"/>
+            <input placeholder="Invoice / PO no" value=${pInv} onInput=${e=>setPInv(e.target.value)} style="padding:10px;border:1px solid var(--line);border-radius:8px"/>
+            <input type="date" value=${pDate} onInput=${e=>setPDate(e.target.value)} style="padding:10px;border:1px solid var(--line);border-radius:8px"/>
+            <input placeholder="Received by" value=${pBy} onInput=${e=>setPBy(e.target.value)} style="padding:10px;border:1px solid var(--line);border-radius:8px"/>
+          </div>
+          ${pRows.map((r,i)=>html`
+            <div key=${i} style="display:grid;grid-template-columns:minmax(0,1fr) 56px 78px 28px;gap:6px;align-items:center;margin-bottom:6px">
+              <select value=${r.n} onChange=${e=>pickPItem(i,e.target.value)} style="padding:9px;border:1px solid var(--line);border-radius:8px">
+                <option value="">\u2014 Item \u2014</option>${MAT_CATALOG.map(n=>html`<option value=${n} selected=${r.n===n}>${n}</option>`)}
+              </select>
+              <input type="number" min="1" value=${r.qty} onInput=${e=>setRow(i,'qty',e.target.value)} style="padding:9px;border:1px solid var(--line);border-radius:8px;text-align:center"/>
+              <input type="number" min="0" step="0.01" placeholder="\u20b1" value=${r.price} onInput=${e=>setRow(i,'price',e.target.value)} style="padding:9px;border:1px solid var(--line);border-radius:8px;text-align:center"/>
+              <button onClick=${()=>rmPRow(i)} style="background:none;border:1px solid var(--line);border-radius:8px;padding:8px 0;color:var(--ink-dim);cursor:pointer">\u00d7</button>
+            </div>`)}
+          <button onClick=${addPRow} style="width:100%;padding:10px;border:1px dashed var(--ink-dim);background:none;color:var(--ink-dim);border-radius:8px;font-weight:700;cursor:pointer;margin-top:2px">+ Add item</button>
+          <div class="row" style="margin-top:10px"><div class="name">Grand total</div><div class="name" style="color:#12B89E">${peso(pTotal)}</div></div>
+          <button onClick=${savePurchase} style="width:100%;padding:13px;background:var(--ink-dim);color:#fff;border:none;border-radius:10px;font-weight:800;cursor:pointer;margin-top:8px">Save purchase \u00b7 add to stock</button>
+        </div>
+        <div class="card">
+          <label>Purchase history${purch?` (${purch.length})`:''}</label>
+          ${purch==null?html`<div class="empty">Loading\u2026</div>`
+            : purch.length?purch.map(p=>html`
+              <div class="row" key=${p.id} style="align-items:flex-start">
+                <div><div class="name">${p.supplier||'\u2014'} ${p.invoice?html`<span class="unit">\u00b7 ${p.invoice}</span>`:''}</div>
+                <div class="unit">${(p.items||[]).map(it=>(it.n||it.name)+' \u00d7'+it.qty).join(', ')}</div>
+                <div class="unit">${p.date||''}${p.received_by?' \u00b7 '+p.received_by:''}</div></div>
+                <div class="name" style="color:#12B89E;white-space:nowrap">${peso(p.grand_total)}</div>
+              </div>`)
+            : html`<div class="empty">No purchases yet.</div>`}
+        </div>` : ''}
+
+      ${tab==='reports' ? html`
+        ${rep==null?html`<div class="card"><div class="empty">Loading\u2026</div></div>`:html`
+        <div class="card"><label>Stock on hand value</label><div class="name" style="font-size:24px;color:#12B89E">${peso(rep.stockValue)}</div><div class="unit">Across ${MAT_CATALOG.length} materials at current prices</div></div>
+        <div class="card"><label>Consumption (last 30 days) \u00b7 ${rep.issuedTotal} issued</label>
+          ${Object.keys(rep.consume).length?Object.entries(rep.consume).sort((a,b)=>b[1]-a[1]).map(([n,q])=>html`<div class="row" key=${n}><div class="name">${n}</div><div class="unit">${q} ${muUnit(n)}</div></div>`):html`<div class="empty">No issuances in 30 days.</div>`}
+        </div>
+        <div class="card"><label>Cost per vessel (last 30 days)</label>
+          ${Object.keys(rep.byVessel).length?Object.entries(rep.byVessel).sort((a,b)=>b[1]-a[1]).map(([v,c])=>html`<div class="row" key=${v}><div class="name">${v}</div><div class="name" style="color:#12B89E">${peso(c)}</div></div>`):html`<div class="empty">No data yet.</div>`}
+          <div class="unit" style="margin-top:8px">Based on issued quantities \u00d7 last purchase price.</div>
+        </div>`}` : ''}
+
+      <p class="note" style="text-align:center">You control the warehouse. Dispatch reduces stock; purchases add stock.</p>
     </div>
-    ${tab === null && html`
-      <label style="margin:4px 2px 10px;display:block">Liquidation</label>
-      ${[
-        { id:'fund',  ico:'💵', bg:'#e8f4ee', t:'Fund',        s:'Cash advances & top-ups · ' + peso(advance) },
-        { id:'mat',   ico:'🧱', bg:'#fdeee4', t:'Materials',   s:'Request & buy stock materials' },
-        { id:'tool',  ico:'🛠️', bg:'#e9eef8', t:'Tools',       s:'Request & buy tools' },
-        { id:'allow', ico:'👷', bg:'#fdf3e0', t:'Allowance',   s:'Crew allowance · confirm by passcode' },
-        { id:'cons',  ico:'🧾', bg:'#f0eafa', t:'Consumables', s:'Project & admin consumables' },
-        { id:'misc',  ico:'🏥', bg:'#fde9ec', t:'Misc',        s:'Clinic / medical & other expenses' },
-        { id:'sum',   ico:'📊', bg:'#e6f2f5', t:'Summary',     s:'Reconciliation & totals' },
-      ].map(x => html`
-        <div class="card" key=${x.id} onClick=${() => setTab(x.id)}
-          style="cursor:pointer;display:flex;align-items:center;gap:14px;padding:16px 14px;margin:0 0 12px">
-          <div style=${'width:44px;height:44px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;flex:0 0 44px;background:'+x.bg}>${x.ico}</div>
-          <div style="min-width:0">
-            <div class="name" style="font-size:15px;font-weight:800">${x.t}</div>
-            <div class="sub" style="font-size:12px;color:var(--ink-dim)">${x.s}</div>
-          </div>
-        </div>`)}
-    `}
 
-    ${tab === 'fund' && html`
-      <div class="card">
-        ${stepHead(1, 'Advance details', 'Date, amount & payment mode')}
-        <div class="two"><${Field} label="Date"><input type="date" value=${aDate} onInput=${e=>setADate(e.target.value)} /><//>
-        <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${aAmt} onInput=${e=>setAAmt(e.target.value)} placeholder="10000" /><//></div>
-        <div class="two"><${Field} label="Mode"><select value=${aMode} onChange=${e=>setAMode(e.target.value)}><option>Cash</option><option>GCash</option></select><//>
-        ${aMode==='GCash' ? html`<${Field} label="GCash transaction no."><input value=${aRef} onInput=${e=>setARef(e.target.value)} placeholder="ref no." /><//>` : html`<div></div>`}</div>
-      </div>
-      <div class="card">
-        ${stepHead(2, 'Received by', 'Who received the cash, then save')}
-        <${Field} label="Received by"><input value=${aBy} onInput=${e=>setABy(e.target.value)} /><//>
-        <${Field} label="Remarks"><input value=${aRem} onInput=${e=>setARem(e.target.value)} placeholder="optional" /><//>
-        <button class="btn" disabled=${busy} onClick=${addAdv}>Add advance</button>
-      </div>
-      <div class="card"><label>Advances — total ${peso(advance)}</label>
-        ${advs.length ? advs.map(a => html`<div class="row" key=${a.id}><div><div class="name">${peso(a.amount)}</div><div class="sub">${a.date||'—'}${a.mode==='GCash'?' · GCash'+(a.gcash_ref?' #'+a.gcash_ref:''):' · '+(a.mode||'Cash')}${a.received_by?' · '+a.received_by:''}${a.remarks?' · '+a.remarks:''}</div></div><button class="ret" onClick=${()=>removeAdv(a.id)}>✕</button></div>`) : html`<div class="empty">No advances yet.</div>`}
-      </div>`}
-
-    ${tab === 'mat' && html`
-      <div class="tabs" style="margin-bottom:10px">
-        <button class=${matView==='request'?'on':''} onClick=${() => setMatView('request')}>Request</button>
-        <button class=${matView==='buy'?'on':''} onClick=${() => setMatView('buy')}>Buy stock</button>
-      </div>
-      ${matView === 'request' ? html`
-      <div class="card">
-        ${stepHead(1, 'Request details', 'Who is requesting')}
-        <${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
-      </div>
-      <div class="card">
-        ${stepHead(2, 'Items needed', 'Add the materials to request — no price yet')}
-        <${Field} label="Add materials">
-          <select value=${prPick} onChange=${e=>{const v=e.target.value; if(v && !prItems.includes(v)) setPrItems([...prItems, v]); setPrPick('');}}>
-            <option value="">— add material —</option>
-            ${stockItems.map(s=>html`<option value=${s.name}>${s.name}</option>`)}
-          </select>
-        <//>
-        ${niOpen ? html`<div class="two"><${Field} label="New material name"><input value=${niName} onInput=${e=>setNiName(e.target.value)} /><//>
-          <${Field} label="Unit"><input value=${niUnit} onInput=${e=>setNiUnit(e.target.value)} /><//></div>
-          <div style="display:flex;gap:8px;margin-bottom:6px"><button style=${bSm} onClick=${saveNewItem}>Add to request</button><button style=${bSmAlt} onClick=${()=>setNiOpen(false)}>Cancel</button></div>`
-        : html`<button style=${bSmAlt} onClick=${()=>setNiOpen(true)}>＋ New material (not in list)</button>`}
-        ${prItems.length ? html`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${prItems.map(it=>html`<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${it}<span style="cursor:pointer;font-weight:700;color:var(--ink-dim)" onClick=${()=>setPrItems(prItems.filter(x=>x!==it))}>✕</span></span>`)}</div>` : html`<div class="sub" style="margin:4px 0">Pick materials (or add new ones) to build the request — no price needed yet.</div>`}
-        <button class="btn" disabled=${busy} onClick=${createPR}>Create request</button>
-      </div>
-      <div class="card"><label>Request history</label>
-        ${(()=>{const list=prs.filter(p=>!(p.pr_no||'').startsWith('LTR'));return list.length?list.slice(0,15).map(prSlip):html`<div class="empty">No requests yet.</div>`;})()}
-      </div>` : ''}
-      ${matView === 'buy' ? html`
-      <div class="card">
-        ${stepHead(1, 'Pick approved request', 'Only admin-approved requests appear here')}
-        <${Field} label="Approved request">
-          <select value=${mPr} onChange=${e=>{const no=e.target.value;setMPr(no);const p=prs.find(x=>x.pr_no===no);const names=p&&p.items?p.items.split(',').map(s=>s.trim()).filter(Boolean):[];setBuyRows(names.map(n=>{const s=stockItems.find(x=>x.name===n);return {name:n,unit:(s&&s.unit)||'pc',qty:'',cost:''};}));}}>
-            <option value="">— select approved request —</option>
-            ${prs.filter(p=>p.status==='Approved'&&!(p.pr_no||'').startsWith('LTR')).map(p=>html`<option value=${p.pr_no}>${p.pr_no} · ${p.items ? p.items.slice(0,40) : ''}</option>`)}
-          </select>
-        <//>
-        ${mPr && buyRows.length ? '' : html`<div class="sub" style="margin:8px 0">Select an approved request to encode the purchase.</div>`}
-      </div>
-      ${mPr && buyRows.length ? html`
-      <div class="card">
-        ${stepHead(2, 'Encode qty & price', 'Real quantity bought and unit price per item')}
-        ${buyRows.map((r,idx)=>html`
-          <div key=${r.name} style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:6px">
-            <div style="font-weight:600;font-size:14px;margin-bottom:4px">${r.name} <span class="sub">(${r.unit})</span></div>
-            <div class="two"><${Field} label="Qty bought"><input type="number" min="0" value=${r.qty} onInput=${e=>{const v=e.target.value;setBuyRows(buyRows.map((x,i)=>i===idx?{...x,qty:v}:x));}} /><//>
-            <${Field} label="Unit price ₱"><input type="number" min="0" step="0.01" value=${r.cost} onInput=${e=>{const v=e.target.value;setBuyRows(buyRows.map((x,i)=>i===idx?{...x,cost:v}:x));}} /><//></div>
-            <div class="sub">Line total: ₱${((Number(r.qty)||0)*(Number(r.cost)||0)).toLocaleString('en-PH')}</div>
-          </div>`)}
-      </div>
-      <div class="card">
-        ${stepHead(3, 'Receipt & save', 'Official receipt details, then save to stock')}
-        <div class="two"><${Field} label="OR date"><input type="date" value=${mDate} min=${yday} max=${tdy} onInput=${e=>setMDate(e.target.value)} /><//>
-        <${Field} label="Receipt no. (OR)"><input value=${mOr} onInput=${e=>setMOr(e.target.value)} placeholder="OR ref" /><//></div>
-        <${Field} label="Vessel / division (optional)"><select value=${mVes} onChange=${e=>setMVes(e.target.value)}><option value="">— none —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
-        <${Field} label="Remarks"><input value=${mRem} onInput=${e=>setMRem(e.target.value)} placeholder="optional" /><//>
-        <div class="sub" style="margin:2px 0 6px">Total to ${mSite} stock: ₱${buyRows.reduce((a,r)=>a+(Number(r.qty)||0)*(Number(r.cost)||0),0).toLocaleString('en-PH')}</div>
-        <button class="btn" disabled=${busy} onClick=${buyRequest}>Save purchase → stock</button>
-      </div>` : ''}
-      <div class="card"><label>Material lines</label>
-        ${lines.filter(l=>l.type==='STOCK_MATERIAL').length ? lines.filter(l=>l.type==='STOCK_MATERIAL').map(l => html`
-          <div class="row" key=${l.id} style="align-items:flex-start;flex-direction:column;gap:4px">
-            <div style="display:flex;justify-content:space-between;width:100%">
-              <div><div class="name" style="font-size:14px">${l.item} · ${l.qty_bought} ${l.unit} @ ${peso(l.unit_cost)}</div>
-                <div class="sub">${l.or_date||'—'} · ${l.pr_ref||'no PR'} · ${l.vessel_div||'—'} · ${l.site}${l.or_ref?'':' · '}${l.or_ref?'':html`<b style="color:var(--bad,#b0322a)">⚠ no receipt</b>`}</div></div>
-              <button class="ret" onClick=${()=>removeLine(l)}>✕</button>
-            </div>
-            <div class="sub">${Number(l.qty_used)>0?('Used '+l.qty_used+' = '+peso(Number(l.qty_used)*Number(l.unit_cost))+' · '):''}To stock ${l.qty_to_stock} = ${peso(Number(l.qty_to_stock)*Number(l.unit_cost))}
-              ${Number(l.qty_to_stock)>0 ? (l.posted ? html` · <b style="color:var(--accent2,#1d9e75)">✓ in ${l.site} stock</b>` : html` · <button style=${bSm} onClick=${()=>pushStock(l)}>Push to stock</button>`) : ''}</div>
-          </div>`) : html`<div class="empty">None yet.</div>`}
-      </div>` : ''}`}
-
-    ${tab === 'tool' && html`
-      <div class="tabs" style="margin-bottom:10px">
-        <button class=${toolView==='request'?'on':''} onClick=${() => setToolView('request')}>Request</button>
-        <button class=${toolView==='buy'?'on':''} onClick=${() => setToolView('buy')}>Buy tool</button>
-      </div>
-      ${toolView === 'request' ? html`
-      <div class="card">
-        ${stepHead(1, 'Request details', 'Who is requesting')}
-        <${Field} label="Requested by"><input value=${prBy} onInput=${e=>setPrBy(e.target.value)} /><//>
-      </div>
-      <div class="card">
-        ${stepHead(2, 'Tools needed', 'Type tool names — no price yet')}
-        <${Field} label="Add tools">
-          <input value=${toolPick} onInput=${e=>setToolPick(e.target.value)} onKeyDown=${e=>{if(e.key==='Enter'){e.preventDefault();const v=toolPick.trim();if(v&&!toolItems.includes(v))setToolItems([...toolItems,v]);setToolPick('');}}} placeholder="type a tool name" />
-        <//>
-        <div style="margin:6px 0"><button style=${bSm} onClick=${()=>{const v=toolPick.trim();if(v&&!toolItems.includes(v))setToolItems([...toolItems,v]);setToolPick('');}}>＋ Add tool</button></div>
-        ${toolItems.length?html`<div style="display:flex;flex-wrap:wrap;gap:6px;margin:6px 0">${toolItems.map(it=>html`<span class="pill" style="display:inline-flex;align-items:center;gap:6px">${it}<span style="cursor:pointer;font-weight:700;color:var(--ink-dim)" onClick=${()=>setToolItems(toolItems.filter(x=>x!==it))}>✕</span></span>`)}</div>`:html`<div class="sub" style="margin:4px 0">Add the tools you need — no price yet.</div>`}
-        <button class="btn" disabled=${busy} onClick=${createToolPR}>Create request</button>
-      </div>
-      <div class="card"><label>Request history</label>
-        ${(()=>{const list=prs.filter(p=>(p.pr_no||'').startsWith('LTR'));return list.length?list.slice(0,15).map(prSlip):html`<div class="empty">No requests yet.</div>`;})()}
-      </div>` : ''}
-      ${toolView === 'buy' ? html`
-      <div class="card">
-        ${stepHead(1, 'Pick approved request', 'Only admin-approved tool requests appear here')}
-        <${Field} label="Approved request">
-          <select value=${tPr} onChange=${e=>{const no=e.target.value;setTPr(no);const p=prs.find(x=>x.pr_no===no);const names=p&&p.items?p.items.split(',').map(s=>s.trim()).filter(Boolean):[];setToolBuyRows(names.map(n=>({name:n,prefix:n.replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase(),qty:'1',cost:''})));}}>
-            <option value="">— select approved request —</option>
-            ${prs.filter(p=>p.status==='Approved'&&(p.pr_no||'').startsWith('LTR')).map(p=>html`<option value=${p.pr_no}>${p.pr_no} · ${p.items ? p.items.slice(0,40) : ''}</option>`)}
-          </select>
-        <//>
-        ${tPr && toolBuyRows.length ? '' : html`<div class="sub" style="margin:8px 0">Select an approved request to encode the purchase.</div>`}
-      </div>
-      ${tPr && toolBuyRows.length ? html`
-      <div class="card">
-        ${stepHead(2, 'Encode qty & price', 'Code prefix, quantity and unit price per tool')}
-        ${toolBuyRows.map((r,idx)=>html`
-          <div key=${r.name} style="border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:6px">
-            <div style="font-weight:600;font-size:14px;margin-bottom:4px">${r.name}</div>
-            <div class="two"><${Field} label="Code prefix"><input value=${r.prefix} onInput=${e=>{const v=e.target.value.toUpperCase();setToolBuyRows(toolBuyRows.map((x,i)=>i===idx?{...x,prefix:v}:x));}} /><//>
-            <${Field} label="Qty"><input type="number" min="1" value=${r.qty} onInput=${e=>{const v=e.target.value;setToolBuyRows(toolBuyRows.map((x,i)=>i===idx?{...x,qty:v}:x));}} /><//></div>
-            <${Field} label="Unit price ₱"><input type="number" min="0" step="0.01" value=${r.cost} onInput=${e=>{const v=e.target.value;setToolBuyRows(toolBuyRows.map((x,i)=>i===idx?{...x,cost:v}:x));}} /><//>
-            <div class="sub">Line total: ₱${((parseInt(r.qty,10)||0)*(Number(r.cost)||0)).toLocaleString('en-PH')}</div>
-          </div>`)}
-      </div>
-      <div class="card">
-        ${stepHead(3, 'Receipt & save', 'Official receipt details, then register the tools')}
-        <div class="two"><${Field} label="OR date"><input type="date" value=${tDate} min=${yday} max=${tdy} onInput=${e=>setTDate(e.target.value)} /><//>
-        <${Field} label="Receipt no. (OR)"><input value=${tOr} onInput=${e=>setTOr(e.target.value)} placeholder="OR ref" /><//></div>
-        <div class="two"><${Field} label="Site"><select value=${tSite} onChange=${e=>setTSite(e.target.value)}>${siteNames.map(s=>html`<option>${s}</option>`)}</select><//>
-        <${Field} label="For job (optional)"><select value=${tVes} onChange=${e=>setTVes(e.target.value)}><option value="">—</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//></div>
-        <${Field} label="Remarks"><input value=${tRem} onInput=${e=>setTRem(e.target.value)} placeholder="optional" /><//>
-        <div class="sub" style="margin:2px 0 6px">Total tool value ₱${toolBuyRows.reduce((a,r)=>a+(parseInt(r.qty,10)||0)*(Number(r.cost)||0),0).toLocaleString('en-PH')} → on-hand asset</div>
-        <button class="btn" disabled=${busy} onClick=${buyToolRequest}>Save purchase → Tools</button>
-      </div>` : ''}
-      <div class="card"><label>Tool lines</label>
-        ${lines.filter(l=>l.type==='TOOL').length ? lines.filter(l=>l.type==='TOOL').map(l => html`
-          <div class="row" key=${l.id} style="align-items:flex-start">
-            <div><div class="name" style="font-size:14px">${l.item} ×${l.qty} @ ${peso(l.unit_cost)} = ${peso(Number(l.qty)*Number(l.unit_cost))}</div>
-              <div class="sub">${l.or_date||'—'} · ${l.site}${l.vessel_div?' · '+l.vessel_div:''}${l.or_ref?'':' · '}${l.or_ref?'':html`<b style="color:var(--bad,#b0322a)">⚠ no receipt</b>`}</div>
-              <div class="sub">${l.posted ? html`<b style="color:var(--accent2,#1d9e75)">✓ in Tools inventory (${l.site})</b>` : html`<button style=${bSm} onClick=${()=>pushTool(l)}>Register in Tools</button>`}</div></div>
-            <button class="ret" onClick=${()=>removeLine(l)}>✕</button>
-          </div>`) : html`<div class="empty">None yet.</div>`}
-      </div>` : ''}`}
-
-    ${tab === 'allow' && html`
-      <div class="card">
-        ${stepHead(1, 'Allowance details', 'Date, amount & payment mode')}
-        <div class="two"><${Field} label="Date"><input type="date" value=${alDate} onInput=${e=>setAlDate(e.target.value)} /><//>
-        <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${alAmt} onInput=${e=>setAlAmt(e.target.value)} placeholder="150" /><//></div>
-        <div class="two"><${Field} label="Mode"><select value=${alMode} onChange=${e=>setAlMode(e.target.value)}><option>Cash</option><option>GCash</option></select><//>
-        ${alMode==='GCash' ? html`<${Field} label="GCash transaction no."><input value=${alRef} onInput=${e=>setAlRef(e.target.value)} placeholder="ref no." /><//>` : html`<div></div>`}</div>
-      </div>
-      <div class="card">
-        ${stepHead(2, 'Recipient', 'One row per person — they confirm by passcode')}
-        <${Field} label="Recipient"><select value=${alRec} onChange=${e=>setAlRec(e.target.value)}><option value="">— select person —</option>${employees.map(e=>html`<option value=${e.id}>${e.name}</option>`)}</select><//>
-        <${Field} label="Vessel / division"><select value=${alVes} onChange=${e=>setAlVes(e.target.value)}><option value="">— select —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
-        <${Field} label="Remarks"><input value=${alRem} onInput=${e=>setAlRem(e.target.value)} placeholder="optional" /><//>
-        <button class="btn" disabled=${busy} onClick=${addAllow}>Add allowance row</button>
-      </div>
-      <div class="card"><label>Allowance rows — total ${peso(allow)}</label>
-        ${lines.filter(l=>l.type==='ALLOWANCE').length ? lines.filter(l=>l.type==='ALLOWANCE').map(l => html`
-          <div class="row" key=${l.id} style="align-items:flex-start;flex-direction:column;gap:6px">
-            <div style="display:flex;justify-content:space-between;width:100%">
-              <div><div class="name">${l.recipient} · ${peso(l.amount)}</div><div class="sub">${l.or_date||'—'} · ${l.vessel_div||'—'}${l.mode==='GCash'?' · GCash'+(l.gcash_ref?' #'+l.gcash_ref:''):''}</div></div>
-              <button class="ret" onClick=${()=>removeLine(l)}>✕</button>
-            </div>
-            ${l.confirmed ? html`<div class="sub" style="color:var(--accent2,#1d9e75);font-weight:700">✓ Confirmed${l.confirmed_at?' · '+l.confirmed_at.slice(0,10):''}</div>
-              <div style="display:flex;gap:6px;align-items:center"><span class="sub">Deductible:</span>
-                ${l.deductible==='Pending' ? html`<button style=${bSm} onClick=${()=>setDeduct(l,'Yes')}>Yes</button><button style=${bSmAlt} onClick=${()=>setDeduct(l,'No')}>No</button>` : html`<b class="sub">${l.deductible}</b><button style=${bSmAlt} onClick=${()=>setDeduct(l,'Pending')}>change</button>`}
-              </div>`
-            : html`<button style=${bSm} onClick=${()=>{setPinErr({...pinErr,[l.id]:''});setPinModal(l.id);}}>Enter passcode →</button>`}
-          </div>`) : html`<div class="empty">No allowance rows yet.</div>`}
-      </div>
-      ${pinModal ? (()=>{const l=lines.find(x=>x.id===pinModal);if(!l)return '';return html`
-        <div onClick=${()=>setPinModal(null)} style="position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px">
-          <div onClick=${e=>e.stopPropagation()} style="background:var(--panel,#161a22);border:1px solid var(--line);border-radius:14px;padding:18px;max-width:340px;width:100%">
-            <div style="font-weight:800;font-size:15px;margin-bottom:2px">Confirm allowance</div>
-            <div class="sub" style="margin-bottom:10px">Have ${l.recipient} enter their passcode privately, then pass the phone to the next person.</div>
-            <div style="display:flex;justify-content:space-between;align-items:center;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px"><span>${l.recipient}</span><b style="font-size:16px">${peso(l.amount)}</b></div>
-            <input type="password" inputmode="numeric" autofocus placeholder="passcode" value=${pinVals[l.id]||''} onInput=${e=>setPinVals({...pinVals,[l.id]:e.target.value})} style="width:100%;box-sizing:border-box;margin-bottom:8px" />
-            ${pinErr[l.id] ? html`<div class="sub" style="color:var(--bad,#b0322a);margin-bottom:8px">${pinErr[l.id]}</div>` : ''}
-            <div style="display:flex;gap:8px"><button class="btn" style="flex:1" disabled=${busy} onClick=${()=>confirmAllow(l)}>Confirm</button><button style=${bSmAlt} onClick=${()=>setPinModal(null)}>Cancel</button></div>
-          </div>
-        </div>`;})() : ''}`}
-
-    ${tab === 'cons' && html`
-      <div class="card">
-        ${stepHead(1, 'Expense details', 'Date & amount (tubig, food, fuel)')}
-        <div class="two"><${Field} label="Date"><input type="date" value=${cDate} onInput=${e=>setCDate(e.target.value)} /><//>
-        <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${cAmt} onInput=${e=>setCAmt(e.target.value)} placeholder="0.00" /><//></div>
-      </div>
-      <div class="card">
-        ${stepHead(2, 'Charge & save', 'Where to charge it, then save')}
-        <${Field} label="Charge to"><select value=${cCharge} onChange=${e=>setCCharge(e.target.value)}><option>Project</option><option>Admin</option></select><//>
-        ${cCharge==='Project' && html`<${Field} label="Vessel / division"><select value=${cVes} onChange=${e=>setCVes(e.target.value)}><option value="">— select —</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>`}
-        <${Field} label="Remarks"><input value=${cRem} onInput=${e=>setCRem(e.target.value)} placeholder="optional" /><//>
-        <button class="btn" disabled=${busy} onClick=${addCons}>Add consumable</button>
-      </div>
-      <div class="card"><label>Consumables — Project ${peso(consProj)} · Admin ${peso(consAdm)}</label>
-        ${lines.filter(l=>l.type==='CONSUMABLE').length ? lines.filter(l=>l.type==='CONSUMABLE').map(l => html`<div class="row" key=${l.id}><div><div class="name">${peso(l.amount)} · ${l.charge_to}</div><div class="sub">${l.or_date||'—'}${l.vessel_div?' · '+l.vessel_div:''}${l.remarks?' · '+l.remarks:''}</div></div><button class="ret" onClick=${()=>removeLine(l)}>✕</button></div>`) : html`<div class="empty">No consumables yet.</div>`}
-      </div>`}
-
-    ${tab === 'misc' && html`
-      <div class="card">
-        ${stepHead(1, 'Expense details', 'Date, amount & category')}
-        <div class="two"><${Field} label="Date"><input type="date" value=${mxDate} max=${tdy} onInput=${e=>setMxDate(e.target.value)} /><//>
-        <${Field} label="Amount ₱"><input type="number" min="0" step="0.01" value=${mxAmt} onInput=${e=>setMxAmt(e.target.value)} placeholder="0" /><//></div>
-        <${Field} label="Category"><select value=${mxCat} onChange=${e=>setMxCat(e.target.value)}>${MISC_CATS.map(c=>html`<option>${c}</option>`)}</select><//>
-      </div>
-      <div class="card">
-        ${stepHead(2, 'Charge & reference', 'Person, vessel, receipt & remarks, then save')}
-        <${Field} label="For (person, optional)"><select value=${mxEmp} onChange=${e=>setMxEmp(e.target.value)}><option value="">—</option>${employees.map(e=>html`<option value=${e.id}>${e.name}</option>`)}</select><//>
-        <${Field} label="Vessel / division (optional)"><select value=${mxVes} onChange=${e=>setMxVes(e.target.value)}><option value="">—</option>${vessels.map(v=>html`<option>${v}</option>`)}</select><//>
-        <${Field} label="Receipt no. (OR)"><input value=${mxOr} onInput=${e=>setMxOr(e.target.value)} placeholder="OR ref" /><//>
-        <${Field} label="Remarks"><input value=${mxRem} onInput=${e=>setMxRem(e.target.value)} placeholder="e.g. first-aid at clinic" /><//>
-        <button class="btn" disabled=${busy} onClick=${addMisc}>Add expense</button>
-      </div>
-      <div class="card"><label>Miscellaneous expenses — total ${peso(misc)}</label>
-        ${lines.filter(l=>l.type==='MISC').length ? lines.filter(l=>l.type==='MISC').map(l => html`
-          <div class="row" key=${l.id} style="align-items:flex-start">
-            <div><div class="name" style="font-size:14px">${l.item} · ${peso(l.amount)}</div>
-              <div class="sub">${l.or_date||'—'}${l.recipient?' · '+l.recipient:''}${l.vessel_div?' · '+l.vessel_div:''}${l.or_ref?'':' · '}${l.or_ref?'':html`<b style="color:var(--bad,#b0322a)">⚠ no receipt</b>`}${l.remarks?' · '+l.remarks:''}</div></div>
-            <button class="ret" onClick=${()=>removeLine(l)}>✕</button>
-          </div>`) : html`<div class="empty">No expenses yet.</div>`}
-      </div>`}
-    ${tab === 'sum' && html`
-      <div class="card">
-        <label>Reconciliation</label>
-        <div class="row"><div class="sub">Advance total</div><div class="name">${peso(advance)}</div></div>
-        <div class="row"><div class="sub">Consumed</div><div class="name">${peso(consumed)}</div></div>
-        ${misc>0?html`<div class="row"><div class="sub" style="padding-left:10px">• Miscellaneous (clinic / other)</div><div class="name">${peso(misc)}</div></div>`:''}
-        <div class="row"><div class="sub">On-hand assets — stock ${peso(stockVal)} · tools ${peso(toolVal)}</div><div class="name">${peso(onhand)}</div></div>
-        <div class="row" style="border-top:1px solid var(--line)"><div class="sub"><b>Cash that should be returned</b></div><div class="name">${peso(cashRet)}</div></div>
-        ${cashRet < -0.005 ? html`<div class="note" style="color:var(--bad,#b0322a);font-weight:700;margin-top:8px">⚠ Overspent by ${peso(Math.abs(cashRet))} — fund short / missing top-up.</div>`
-          : html`<div class="note" style="color:var(--accent2,#1d9e75);font-weight:700;margin-top:8px">✓ Balanced — advance = consumed + on-hand + cash returned.</div>`}
-      </div>
-      <div class="card"><label>Project cost per vessel</label>
-        ${Object.keys(perVessel).length ? Object.keys(perVessel).sort((a,b)=>perVessel[b]-perVessel[a]).map(v=>html`<div class="row" key=${v}><div class="sub">${v}</div><div class="name">${peso(perVessel[v])}</div></div>`) : html`<div class="empty">No project costs yet.</div>`}
-        <div class="row" style="border-top:1px solid var(--line)"><div class="sub">Overhead (Admin)</div><div class="name">${peso(consAdm)}</div></div>
-      </div>
-      <div class="card"><label>Allowance per person</label>
-        ${Object.keys(perPerson).length ? Object.keys(perPerson).map(p=>html`<div class="row" key=${p}><div class="sub">${p}</div><div class="name">${peso(perPerson[p].confirmed)} / ${peso(perPerson[p].total)}</div></div>`) : html`<div class="empty">No allowances yet.</div>`}
-      </div>
-      <div class="card"><label>On-hand assets (must exist physically)</label>
-        ${lines.filter(l=>(l.type==='STOCK_MATERIAL'&&Number(l.qty_to_stock)>0)||l.type==='TOOL').length
-          ? lines.filter(l=>(l.type==='STOCK_MATERIAL'&&Number(l.qty_to_stock)>0)||l.type==='TOOL').map(l=>html`
-            <div class="row" key=${l.id}><div class="sub">${l.type==='TOOL'?'🔧':'📦'} ${l.item} · ${l.type==='TOOL'?l.qty:l.qty_to_stock} ${l.unit} · ${l.site}</div>
-            <div class="sub">${l.posted?html`<b style="color:var(--accent2,#1d9e75)">✓ recorded</b>`:html`<b style="color:var(--bad,#b0322a)">⚠ not pushed</b>`}</div></div>`)
-          : html`<div class="empty">No on-hand assets.</div>`}
-      </div>`}
-  `;
+    ${slip && html`<div style="position:fixed;inset:0;background:rgba(15,25,15,.5);z-index:80;display:flex;align-items:center;justify-content:center;padding:16px" onClick=${()=>setSlip(null)}>
+      <div class="card" style="max-width:360px;width:100%;margin:0" onClick=${e=>e.stopPropagation()}>
+        <div style="text-align:center;border-bottom:1.5px dashed var(--line);padding-bottom:12px;margin-bottom:12px">
+          <div style="font-weight:800">RSR \u2014 Dispatch Receipt</div>
+          <div class="mono" style="color:#378ADD;font-size:14px">${slip.drNo}</div>
+          <div class="unit">${slip.date} \u00b7 to ${slip.site}</div>
+        </div>
+        ${slip.items.map(it=>html`<div class="row" key=${it.n}><div class="name">${it.n}</div><div class="unit">${it.qty} ${it.u}</div></div>`)}
+        <button onClick=${()=>setSlip(null)} style="width:100%;padding:12px;background:var(--ink-dim);color:#fff;border:none;border-radius:10px;font-weight:800;cursor:pointer;margin-top:10px">Done</button>
+      </div></div>`}
+    ${msg && html`<div class="toast">${msg}</div>`}`;
 }
 
 function App() {
-  const [authed, setAuthed] = useState(sessionStorage.getItem('rsr_coord') === '1');
-  const [area, setArea] = useState(null);          // null | 'vessels' | 'personnel' | 'expenses'
-  const [liqTab, setLiqTab] = useState(null);       // null (menu) | fund | mat | tool | allow | cons | misc | sum
-  const [pdTab, setPdTab] = useState('personnel');  // personnel | leave | duty
-  const [employees, setEmployees] = useState([]);
-  const [voyages, setVoyages] = useState([]);
-  const [sites, setSites] = useState([]);
+  const [adminTab, setAdminTab] = useState('dash');  // 'dash' | 'people'
+  const [authed, setAuthed] = useState(false);   // always require the passcode on open
+  const [m, setM] = useState({});
+  const [showSet, setShowSet] = useState(false);
+  const [curPin, setCurPin] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [emps, setEmps] = useState([]);
+  const [empSel, setEmpSel] = useState('');
+  const [empPin, setEmpPin] = useState('');
+  const [empSick, setEmpSick] = useState('');
+  const [empVac, setEmpVac] = useState('');
+  const [coordPin, setCoordPin] = useState('');
+  const [sitePin, setSitePin] = useState('');
+  const [rate, setRate] = useState('');          // current/starting daily rate
+  const [incRate, setIncRate] = useState('');     // new rate for an increase
+  const [incDate, setIncDate] = useState('');
+  const [incNote, setIncNote] = useState('');
+  const [salHist, setSalHist] = useState([]);
+  const [bor, setBor] = useState(null);     // borrowed-now list
+  const [rep, setRep] = useState(null);     // repair units
+  const [inv, setInv] = useState(null);     // { units, outs }
+  const [iss, setIss] = useState(null);     // issued materials list
+  const [ves, setVes] = useState(null);     // vessels monitor list
+  const [att, setAtt] = useState(null);     // today's attendance summary
+  const [attRows, setAttRows] = useState(null);  // per-employee rows for the monitor
+  const [attYmd, setAttYmd] = useState(todayYmd());
+  const [hrRows, setHrRows] = useState(null);   // generic rows for HR monitor tabs
+  const [liqReqs, setLiqReqs] = useState(null);   // coordinator purchase requests to approve
   const [toast, setToast] = useState(null);
-  const [fatal, setFatal] = useState(null);
+  const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
 
-  const flash = (msg, err = false) => { setToast({ msg, err }); setTimeout(() => setToast(null), 2600); };
+  const changePin = () => {
+    const admin = localStorage.getItem(PIN_KEY) || '1234';
+    if (curPin !== admin) { flash('Current PIN is wrong'); return; }
+    if (!newPin.trim()) { flash('Enter a new PIN'); return; }
+    localStorage.setItem(PIN_KEY, newPin.trim());
+    setCurPin(''); setNewPin(''); flash('Admin PIN changed');
+  };
 
-  const loadEmployees = useCallback(async () => { try { setEmployees(await getEmployees()); } catch (e) { flash('Load failed: ' + e.message, true); } }, []);
-  const loadVoyages = useCallback(async () => { try { setVoyages(await getVoyages()); } catch (e) { flash('Load failed: ' + e.message, true); } }, []);
+  const saveCoordPin = async () => {
+    if (!coordPin.trim()) { flash('Enter a passcode'); return; }
+    try { await setSetting('coordinator_pin', coordPin.trim()); setCoordPin(''); flash('Assistant passcode set'); }
+    catch (e) { flash('Error: ' + e.message); }
+  };
+  const saveSitePin = async () => {
+    if (!sitePin.trim()) { flash('Enter a passcode'); return; }
+    try { await setSetting('issuance_pin', sitePin.trim()); setSitePin(''); flash('Issuance passcode set'); }
+    catch (e) { flash('Error: ' + e.message); }
+  };
 
-  useEffect(() => { if (!authed) return; (async () => {
-    try { setSites(await getSites()); loadEmployees(); loadVoyages(); }
-    catch (e) { setFatal(e.message); }
-  })(); }, [authed]);
+  const loadEmps = async () => { try { setEmps(await getEmployees()); } catch (_) {} };
+  const pickEmp = async (id) => {
+    setEmpSel(id);
+    const e = emps.find(x => x.id === id) || {};
+    setEmpPin(e.pin || ''); setEmpSick(e.sl_balance ?? ''); setEmpVac(e.vl_balance ?? '');
+    setRate(e.daily_rate ?? ''); setIncRate(''); setIncDate(''); setIncNote('');
+    try { setSalHist(await getSalaryHistory(id)); } catch (_) { setSalHist([]); }
+  };
+  const saveRate = async () => {
+    if (!empSel) { flash('Pick an employee'); return; }
+    try { await updateEmployee(empSel, { daily_rate: rate === '' ? null : Number(rate) }); flash('Daily rate saved'); loadEmps(); }
+    catch (e) { flash('Error: ' + e.message); }
+  };
+  const addIncrease = async () => {
+    if (!empSel) { flash('Pick an employee'); return; }
+    if (incRate === '') { flash('Enter the new rate'); return; }
+    try {
+      await addSalaryChange(empSel, Number(incRate), incDate, incNote);
+      setRate(incRate); setIncRate(''); setIncDate(''); setIncNote('');
+      setSalHist(await getSalaryHistory(empSel)); loadEmps();
+      flash('Salary increase recorded');
+    } catch (e) { flash('Error: ' + e.message); }
+  };
+  const saveEmp = async () => {
+    if (!empSel) { flash('Pick an employee'); return; }
+    try {
+      await updateEmployee(empSel, {
+        pin: empPin.trim() || null,
+        sl_balance: empSick === '' ? 0 : Number(empSick),
+        vl_balance: empVac === '' ? 0 : Number(empVac),
+      });
+      flash('Saved'); loadEmps();
+    } catch (e) { flash('Error: ' + e.message); }
+  };
 
-  if (!authed) return html`
-    <div class="wrap">
-      <${Lock} onUnlock=${() => setAuthed(true)} toast=${flash} />
-      ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
-    </div>`;
+  useEffect(() => {
+    if (!authed || !onAdminPage) return;
+    const iso30 = new Date(Date.now() - 30 * 864e5).toISOString();
+    (async () => {
+      const [toolsOut, inRepair, issued30, vessels, people, pendingReqs, liqPending, poInbox] = await Promise.all([
+        countRows('borrow_issuance', q => q.eq('txn_type', 'borrow').eq('status', 'out')),
+        countRows('item_units', q => q.eq('active', true).eq('status', 'repair')),
+        countRows('issuances', q => q.gte('created_at', iso30)),
+        countRows('voyages', q => q.neq('status', 'not_active')),
+        countRows('employees', q => q),
+        countRows('requests', q => q.eq('status', 'Pending')),
+        countRows('purchase_request', q => q.eq('status', 'Pending')),
+        countRows('requisitions', q => q.eq('status', 'for_purchase')),
+      ]);
+      setM({ toolsOut, inRepair, issued30, vessels, people, pendingReqs, liqPending, poInbox });
+      try {
+        const recs = await getAttendance(todayPH());
+        const c = (f) => recs.filter(f).length;
+        const present = c(r => r.status !== 'absent');
+        setAtt({ working: c(r => r.status === 'working'), onBreak: c(r => r.status === 'break'),
+                 out: c(r => r.status === 'out'), late: c(r => r.is_late),
+                 total: people || 0, absent: Math.max(0, (people || 0) - present) });
+      } catch (_) { setAtt(null); }
+    })();
+  }, [authed]);
 
-  const Header = (title) => html`
+  useEffect(() => {
+    if (!(authed && onAdminPage && adminTab === 'attendance')) return;
+    (async () => { try { setAttRows(await getAttendance(ymdToPH(attYmd))); } catch (e) { flash('Load failed: ' + e.message); } })();
+  }, [adminTab, attYmd, authed]);
+
+  useEffect(() => {
+    const loaders = { leaves: getLeaves, approvals: getApprovals, duty: getStraightDuty, violations: getViolations, sms: getSmsLog };
+    if (!(authed && onAdminPage && loaders[adminTab])) return;
+    setHrRows(null);
+    (async () => { try { setHrRows(await loaders[adminTab]()); } catch (e) { flash('Load failed: ' + e.message); } })();
+  }, [adminTab, authed]);
+
+  useEffect(() => { if (authed && onAdminPage) loadEmps(); }, [authed]);
+  useEffect(() => { if (authed && showSet) loadEmps(); }, [authed, showSet]);
+
+  useEffect(() => {
+    if (!(authed && onAdminPage)) return;
+    if (adminTab === 'borrowed') (async () => {
+      try { setBor(await getBorrowedNow()); setInv(await getInventory()); }
+      catch (e) { flash('Load failed: ' + e.message); }
+    })();
+    if (adminTab === 'repair') (async () => {
+      try { setRep(await getRepairUnits()); }
+      catch (e) { flash('Load failed: ' + e.message); }
+    })();
+    if (adminTab === 'issued') (async () => {
+      try { setIss(await getIssued()); }
+      catch (e) { flash('Load failed: ' + e.message); }
+    })();
+    if (adminTab === 'vessels') (async () => {
+      try { setVes(await getVoyagesMon()); }
+      catch (e) { flash('Load failed: ' + e.message); }
+    })();
+    if (adminTab === 'matreq') (async () => {
+      try { setLiqReqs(await getLiqRequests()); }
+      catch (e) { flash('Load failed: ' + e.message); }
+    })();
+  }, [adminTab, authed]);
+
+  // auto-logout the admin after 2 minutes of no activity
+  useEffect(() => {
+    if (!(authed && onAdminPage)) return;
+    let t;
+    const logout = () => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setShowSet(false); setAdminTab('dash'); };
+    const reset = () => { clearTimeout(t); t = setTimeout(logout, 2 * 60 * 1000); };
+    const evs = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+    evs.forEach(e => window.addEventListener(e, reset, { passive: true }));
+    reset();
+    return () => { clearTimeout(t); evs.forEach(e => window.removeEventListener(e, reset)); };
+  }, [authed]);
+
+  // ---- front chooser (everyone except admin): Coordinator | Issuance ----
+  if (!onAdminPage) return html`
     <header class="app">
-      <div class="wrap"><div class="brand" style="display:flex;align-items:center;justify-content:space-between">
-        <span><b>RSR</b><span class="tag">${title}</span></span>
-        <span style="display:flex;gap:14px;align-items:center">
-          ${area === 'liquidation' && liqTab && html`<button onClick=${() => setLiqTab(null)} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Liquidation menu</button>`}
-          ${area && html`<button onClick=${() => setArea(null)} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Menu</button>`}
-          <a href="../" onClick=${() => sessionStorage.removeItem('rsr_coord')} style="color:var(--ink-dim);text-decoration:none;font-size:13px;font-weight:700">⌂ Home</a>
+      <div class="wrap"><div class="brand"><b>RSR</b><span class="tag">ENGINEERING</span></div></div>
+    </header>
+    <div class="wrap">
+      <div class="sectlabel">Choose your area</div>
+      <div class="grid">
+        <a class="tile" href="./coordinator/">
+          <div class="ico">🗂️</div>
+          <h3>Coordinator</h3>
+          <div class="unit">Personnel &amp; vessel schedules</div>
+        </a>
+        <a class="tile" href="./issuance/">
+          <div class="ico">📦</div>
+          <h3>Issuance</h3>
+          <div class="unit">Tool inventory &amp; material issuance</div>
+        </a>
+      </div>
+      <p class="note" style="text-align:center;margin-top:6px">RSR Engineering Services · Cebu</p>
+    </div>
+    ${toast && html`<div class="toast">${toast}</div>`}`;
+
+  // ---- admin login (its own page, always asks) ----
+  if (!authed) return html`<${Lock} onUnlock=${() => setAuthed(true)} toast=${flash} />
+    ${toast && html`<div class="toast">${toast}</div>`}`;
+
+  const live = [
+    { ico:'🔧', num:m.toolsOut,  unit:'out now',        title:'Tool Borrowing',   onClick:() => setAdminTab('borrowed') },
+    { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', onClick:() => setAdminTab('issued') },
+    { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse',        href:'../warehouse/' },
+    { ico:'🧾', num:m.liqPending, unit:'to approve',       title:'Material Requests', onClick:() => setAdminTab('matreq') },
+    { ico:'🛒', num:m.poInbox,    unit:'to purchase',      title:'Purchasing',        href:'../purchasing/' },
+    { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
+    { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  onClick:() => setAdminTab('vessels') },
+    { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
+    { ico:'⏱️', num:att ? att.working : null, unit:'working now', title:'Time In / Out', onClick:() => setAdminTab('attendance') },
+  ];
+  const soon = [
+    { ico:'📝', title:'Leave Approval' },
+    { ico:'📊', title:'Project Status' },
+    { ico:'💰', title:'Cash Advance / Payroll' },
+  ];
+
+  // ---- admin: tool borrowing monitor (out now + inventory per site) ----
+  if (adminTab === 'borrowed') {
+    const dt = (s) => s ? new Date(s).toLocaleDateString() : '—';
+    // aggregate inventory: site -> item -> { owned, repair, out }
+    const sm = {};
+    if (inv) {
+      (inv.units || []).forEach(u => {
+        const sid = u.site_id || 'none', sname = (u.sites && u.sites.name) || 'Unassigned';
+        const iid = u.item_id, iname = (u.items && u.items.name) || '—';
+        sm[sid] = sm[sid] || { name: sname, items: {} };
+        const it = sm[sid].items[iid] = sm[sid].items[iid] || { name: iname, owned: 0, repair: 0, out: 0 };
+        it.owned++; if (u.status === 'repair') it.repair++;
+      });
+      (inv.outs || []).forEach(o => {
+        const sid = o.site_id || 'none', iid = o.item_id;
+        if (sm[sid] && sm[sid].items[iid]) sm[sid].items[iid].out++;
+      });
+    }
+    const sites = Object.values(sm).sort((a, b) => a.name.localeCompare(b.name));
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">TOOL BORROWING</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="card">
+          <label>Currently borrowed${bor ? ` (${bor.length})` : ''}</label>
+          ${bor == null ? html`<div class="empty">Loading…</div>`
+            : bor.length ? bor.map(b => html`
+              <div class="row" key=${b.id} style="align-items:flex-start">
+                <div>
+                  <div class="name">${b.items ? b.items.name : '—'} ${b.item_units && b.item_units.unit_code ? html`<span class="mono" style="color:var(--ink-dim);font-weight:400">· ${b.item_units.unit_code}</span>` : ''}</div>
+                  <div class="unit">${b.employees ? b.employees.name : '—'}${b.project_vessel ? ' · ' + b.project_vessel : ''}</div>
+                  <div class="unit">${(b.sites && b.sites.name) || '—'} · ${dt(b.borrowed_at)}${b.quantity > 1 ? ' · qty ' + b.quantity : ''}</div>
+                </div>
+                <span class="badge" style="background:var(--hivis);color:#000">OUT</span>
+              </div>`)
+            : html`<div class="empty">Nothing borrowed right now.</div>`}
+        </div>
+
+        <div class="sectlabel">Inventory by site</div>
+        ${inv == null ? html`<div class="card"><div class="empty">Loading…</div></div>`
+          : sites.length ? sites.map(s => html`
+            <div class="card" key=${s.name}>
+              <label>${s.name}</label>
+              ${Object.values(s.items).sort((a, b) => a.name.localeCompare(b.name)).map(it => {
+                const avail = it.owned - it.repair - it.out;
+                return html`<div class="row">
+                  <div><div class="name">${it.name}</div>
+                    <div class="unit">${it.out ? it.out + ' out · ' : ''}${it.repair ? it.repair + ' repair · ' : ''}owned ${it.owned}</div></div>
+                  <div class=${'num' + (avail <= 0 ? ' dim' : '')} style="font-size:20px">${avail}</div>
+                </div>`;
+              })}
+            </div>`)
+          : html`<div class="card"><div class="empty">No tools registered yet.</div></div>`}
+        <p class="note" style="text-align:center">View only. The big number is available now.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  // ---- admin: vessel schedule monitor (read-only) ----
+  if (adminTab === 'vessels') {
+    const stLabel = { drydock:'Drydock', afloat:'Afloat', not_active:'Not active' };
+    const stColor = { drydock:'var(--hivis)', afloat:'#12B89E', not_active:'#888' };
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">VESSELS</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="card">
+          <label>Vessels${ves ? ` (${ves.length})` : ''}</label>
+          ${ves == null ? html`<div class="empty">Loading…</div>`
+            : ves.length ? ves.map(v => html`
+              <div class="row" key=${v.id} style="align-items:flex-start">
+                <div>
+                  <div class="name">${v.vessel_name || '—'} ${v.vessel_code ? html`<span class="mono" style="color:var(--ink-dim);font-weight:400">· ${v.vessel_code}</span>` : ''}</div>
+                  <div class="unit">${(v.sites && v.sites.name) || '—'}${v.start_date ? ' · ' + v.start_date : ''}${v.end_date ? ' → ' + v.end_date : ''}</div>
+                  ${v.notes ? html`<div class="unit">${v.notes}</div>` : ''}
+                </div>
+                <span class="badge" style=${'background:' + (stColor[v.status] || '#888') + ';color:#000'}>${stLabel[v.status] || v.status || '—'}</span>
+              </div>`)
+            : html`<div class="empty">No vessels yet. Your assistant adds them in the Coordinator.</div>`}
+        </div>
+        <p class="note" style="text-align:center">View only.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  // ---- admin: material issuance monitor (read-only) ----
+  if (adminTab === 'matusage') return html`<${MatUsage} toast=${flash} onBack=${() => setAdminTab('issued')} />`;
+  if (adminTab === 'warehouse') return html`<${Warehouse} onBack=${() => setAdminTab('dash')} />`;
+
+  // ---- admin: approve coordinator material / tool requests ----
+  if (adminTab === 'matreq') {
+    const pend = (liqReqs || []).filter(r => r.status === 'Pending');
+    const done = (liqReqs || []).filter(r => r.status !== 'Pending').slice(0, 20);
+    const kindOf = (no) => (no || '').startsWith('LTR') ? 'Tool' : 'Material';
+    const decide = async (r, status) => { try { await decideLiqRequest(r.id, status); flash(r.pr_no + ' ' + status.toLowerCase()); setLiqReqs(await getLiqRequests()); } catch (e) { flash('Error: ' + e.message); } };
+    const slip = (r, act) => html`
+      <div class="card" key=${r.id} style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center"><b>${r.pr_no}</b><span class="unit">${kindOf(r.pr_no)} · ${r.status}</span></div>
+        <div class="unit" style="margin:2px 0 6px">${r.date || '—'}${r.requested_by ? ' · ' + r.requested_by : ''}${r.site ? ' · ' + r.site : ''}</div>
+        ${(r.items || '').split(',').map(s => s.trim()).filter(Boolean).map((it, i) => html`<div class="unit">${i + 1}. ${it}</div>`)}
+        ${act ? html`<div style="display:flex;gap:8px;margin-top:10px">
+          <button class="btn" onClick=${() => decide(r, 'Approved')}>Approve</button>
+          <button class="btn ghost" onClick=${() => decide(r, 'Rejected')}>Reject</button>
+        </div>` : ''}
+      </div>`;
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">MATERIAL REQUESTS</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="sectlabel">Pending approval${liqReqs ? ` (${pend.length})` : ''}</div>
+        ${liqReqs == null ? html`<div class="empty">Loading…</div>`
+          : pend.length ? pend.map(r => slip(r, true)) : html`<div class="empty">No requests waiting for approval.</div>`}
+        ${done.length ? html`<div class="sectlabel">Recently decided</div>${done.map(r => slip(r, false))}` : ''}
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  if (adminTab === 'issued') {
+    const dt = (s) => s ? new Date(s).toLocaleDateString() : '—';
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">MATERIAL ISSUANCE</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="card">
+          <label>Issued materials${iss ? ` (${iss.length})` : ''}</label>
+          ${iss == null ? html`<div class="empty">Loading…</div>`
+            : iss.length ? iss.map(r => html`
+              <div class="row" key=${r.id} style="align-items:flex-start">
+                <div>
+                  <div class="name">${r.emp_name || '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.id}</span></div>
+                  <div class="unit">${r.proj_name || '—'}${r.proj_code ? ' (' + r.proj_code + ')' : ''} · ${r.date || ''}${r.by_name ? ' · by ' + r.by_name : ''}</div>
+                  <div class="unit">${(Array.isArray(r.items) ? r.items : []).map(it => (it.name || it.n) + ' ×' + it.qty).join(', ') || '—'}</div>
+                </div>
+                <span class="badge" style="background:#12B89E;color:#000">ISSUED</span>
+              </div>`)
+            : html`<div class="empty">No materials issued yet.</div>`}
+        </div>
+        <div class="card" style="cursor:pointer" onClick=${() => setAdminTab('matusage')}>
+          <div class="brand" style="display:flex;align-items:center;justify-content:space-between">
+            <span><div class="name">⏳ Usage life (days)</div><div class="unit">Set how long each material should last</div></span>
+            <span style="color:var(--ink-dim);font-weight:700">→</span>
+          </div>
+        </div>
+        <p class="note" style="text-align:center">View only. Site personnel record issuance in the borrower app.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  // ---- admin: tool repair monitor ----
+  if (adminTab === 'repair') {
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">TOOL REPAIR</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="card">
+          <label>In repair${rep ? ` (${rep.length})` : ''}</label>
+          ${rep == null ? html`<div class="empty">Loading…</div>`
+            : rep.length ? rep.map(u => html`
+              <div class="row" key=${u.id} style="align-items:flex-start">
+                <div>
+                  <div class="name">${u.items ? u.items.name : '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${u.unit_code}</span></div>
+                  <div class="unit">Location: ${(u.sites && u.sites.name) || 'Unassigned'}</div>
+                  ${u.defect ? html`<div class="unit">Defect: ${u.defect}</div>` : ''}
+                  ${u.repair_eta ? html`<div class="unit">ETA: ${u.repair_eta}</div>` : ''}
+                </div>
+                <span class="badge">REPAIR</span>
+              </div>`)
+            : html`<div class="empty">No tools in repair.</div>`}
+        </div>
+        <${RepairHistory} />
+        <p class="note" style="text-align:center">View only.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  // ---- admin: HR monitors (read-only) ----
+  const hrTitles = { leaves:'LEAVES', approvals:'APPROVALS', duty:'STRAIGHT DUTY', violations:'VIOLATIONS', sms:'SMS LOG' };
+  if (hrTitles[adminTab]) {
+    const statusPill = (s) => {
+      const k = (s || '').toLowerCase();
+      const c = k === 'approved' ? '#12B89E' : k === 'rejected' || k === 'denied' ? '#D64045' : k === 'pending' ? 'var(--hivis)' : '#888';
+      return html`<span class="badge" style=${'background:' + c + ';color:#000'}>${s || '—'}</span>`;
+    };
+    const apprLabels = {
+      late_lunch_out:'Late Lunch Out', late_pm_out:'Late PM Break Out', late_timein:'Late Time In',
+      late_timeout:'Late Time Out', incomplete:'Incomplete Record', early_break_lunch_out:'Early Lunch Out',
+      early_break_pm_out:'Early PM Break Out', straight_duty_lunch:'Straight Duty — Lunch', straight_duty_pm:'Straight Duty — PM',
+    };
+    const body = (() => {
+      if (hrRows == null) return html`<div class="empty">Loading…</div>`;
+      if (!hrRows.length) return html`<div class="empty">Nothing here yet.</div>`;
+      if (adminTab === 'leaves') return hrRows.map(r => html`
+        <div class="row" key=${r.id} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.employee_name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.type || '—'}</span></div>
+            <div class="unit">${r.start_date || '?'} → ${r.end_date || '?'}${r.days ? ' · ' + r.days + ' day(s)' : ''}</div>
+            ${r.reason ? html`<div class="unit">${r.reason}</div>` : ''}
+            ${r.approved_by ? html`<div class="unit">By ${r.approved_by}${r.approved_via ? ' (' + r.approved_via + ')' : ''}</div>` : ''}
+          </div>
+          ${statusPill(r.status)}
+        </div>`);
+      if (adminTab === 'approvals') return hrRows.map(r => html`
+        <div class="row" key=${r.id} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.employee_name || '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">${r.employee_dept ? '· ' + r.employee_dept : ''}</span></div>
+            <div class="unit">${apprLabels[r.type] || r.type || '—'}</div>
+            ${r.details ? html`<div class="unit">${r.details}</div>` : ''}
+            <div class="unit">${r.punch_time || ''}${r.date ? ' · ' + r.date : ''}</div>
+          </div>
+          ${statusPill(r.status)}
+        </div>`);
+      if (adminTab === 'duty') return hrRows.map(r => html`
+        <div class="row" key=${r.id} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.employee_name}</div>
+            <div class="unit">${r.break_type === 'lunch' ? '🍽️' : '☕'} ${r.break_label || ''}${r.date ? ' · ' + r.date : ''}</div>
+            ${r.reason ? html`<div class="unit">${r.reason}</div>` : ''}
+          </div>
+          ${statusPill(r.status)}
+        </div>`);
+      if (adminTab === 'violations') return hrRows.map(r => {
+        const hist = Array.isArray(r.history) ? r.history.slice(0, 3) : [];
+        return html`<div class="row" key=${r.id || r.employee_name} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.employee_name}</div>
+            ${hist.map(h => html`<div class="unit">#${h.violation}: ${h.date}</div>`)}
+          </div>
+          <span class="badge" style=${'background:' + (r.count >= 3 ? '#D64045' : r.count === 2 ? 'var(--hivis)' : '#888') + ';color:#000'}>🚨 ${r.count}</span>
+        </div>`;
+      });
+      if (adminTab === 'sms') return hrRows.map(r => html`
+        <div class="row" key=${r.id} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.employee_name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.phone || ''}</span></div>
+            <div class="unit">${r.date || ''}${r.day ? ' · Day ' + r.day + ' of 3' : ''}${r.network ? ' · ' + r.network : ''}</div>
+            ${r.message ? html`<div class="unit">${String(r.message).slice(0, 90)}</div>` : ''}
+          </div>
+          <span class="badge">${String(r.status || '').includes('✅') ? 'SENT' : (r.status || '—')}</span>
+        </div>`);
+    })();
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">${hrTitles[adminTab]}</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="card">
+          <label>${hrTitles[adminTab][0] + hrTitles[adminTab].slice(1).toLowerCase()}${hrRows ? ` (${hrRows.length})` : ''}</label>
+          ${body}
+        </div>
+        <p class="note" style="text-align:center">View only.${adminTab === 'approvals' || adminTab === 'leaves' ? ' Approvals are actioned via Telegram.' : ''}</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  // ---- admin: attendance monitor (per-employee, by date) ----
+  if (adminTab === 'attendance') {
+    const pill = { working:'#12B89E', break:'var(--hivis)', out:'#888', incomplete:'#E8A830', absent:'#D64045', late:'#D64045' };
+    const lbl = { working:'Working', break:'Break', out:'Out', incomplete:'Incomplete', absent:'Absent', late:'Late' };
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">ATTENDANCE</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="card">
+          <${Field} label="Date">
+            <input type="date" value=${attYmd} onInput=${e => { setAttRows(null); setAttYmd(e.target.value); }} />
+          <//>
+          <label>${ymdToPH(attYmd) === todayPH() ? 'Today' : 'Records'}${attRows ? ` (${attRows.length})` : ''}</label>
+          ${attRows == null ? html`<div class="empty">Loading…</div>`
+            : attRows.length ? attRows.map(r => html`
+              <div class="row" key=${r.id || r.employee_name} style="align-items:flex-start">
+                <div>
+                  <div class="name">${r.employee_name}${r.is_late ? html` <span class="badge" style="background:#D64045;color:#fff">LATE</span>` : ''}</div>
+                  <div class="unit">In ${r.timein || '—'} · Out ${r.timeout || '—'}${r.worked_ms ? ' · ' + (r.worked_ms / 3600000).toFixed(1) + 'h' : ''}</div>
+                </div>
+                <span class="badge" style=${'background:' + (pill[r.status] || '#888') + ';color:#fff'}>${lbl[r.status] || r.status || '—'}</span>
+              </div>`)
+            : html`<div class="empty">No attendance records for this date.</div>`}
+        </div>
+        <p class="note" style="text-align:center">View only. Punches come from the attendance kiosk.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  // ---- admin: personnel roster (read-only list with details) ----
+  if (adminTab === 'people') {
+    const peso = (n) => n ? '₱' + Number(n).toLocaleString('en-PH') : '—';
+    return html`
+      <header class="app">
+        <div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+          <span><b>RSR</b><span class="tag">PERSONNEL</span></span>
+          <button onClick=${() => setAdminTab('dash')}
+            style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+        </div></div>
+      </header>
+      <div class="wrap">
+        <div class="card">
+          <label>Personnel (${emps.length})</label>
+          ${emps.length ? [...emps].sort((a, b) => (a.name || '').localeCompare(b.name || '')).map(e => html`
+            <div class="row" key=${e.id} style="align-items:flex-start">
+              <div>
+                <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.code || '—'}</span></div>
+                <div class="unit">${e.position || 'No position'}${e.phone ? ' · ' + e.phone : ''}</div>
+                <div class="unit">Rate: ${peso(e.daily_rate)}/day · Sick: ${e.sl_balance ?? 0} · Vacation: ${e.vl_balance ?? 0}</div>
+              </div>
+              <span class="badge" style=${e.pin ? '' : 'background:var(--hivis);color:#000'}>${e.pin ? 'PIN ✓' : 'no PIN'}</span>
+            </div>`) : html`<div class="empty">No personnel yet. Your assistant adds them in the Coordinator.</div>`}
+        </div>
+        <p class="note" style="text-align:center">View only. To set passcode, leave or salary, use the dashboard's <b>settings</b>.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  return html`
+    <header class="app">
+      <div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">ENGINEERING</span></span>
+        <span style="display:flex;gap:12px;align-items:center">
+          <button onClick=${() => setShowSet(s => !s)}
+            style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">settings</button>
+          <button onClick=${() => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setShowSet(false); setAdminTab('dash'); }}
+            style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">lock</button>
         </span>
       </div></div>
-    </header>`;
-
-  // ---- landing: 3 tiles ----
-  if (area === null) return html`
-    ${Header('COORDINATOR')}
+    </header>
     <div class="wrap">
-      ${fatal && html`<div class="card" style="border-color:var(--warn)"><div class="note" style="color:#ffc7c0">Couldn't reach Supabase: ${fatal}.</div></div>`}
-      <label style="margin:4px 2px 12px">Choose an area</label>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-        <div class="card" style="cursor:pointer;margin:0" onClick=${() => setArea('vessels')}>
-          <div style="font-size:24px">🚢</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Vessel Schedule</div>
-          <div class="sub" style="font-size:12px;color:var(--ink-dim)">Dockings, status & dates</div>
+      ${(() => {
+        const needs = emps.filter(e => !e.pin).length;
+        return needs > 0 ? html`
+          <div class="card" style="border-color:var(--hivis);cursor:pointer" onClick=${() => setShowSet(true)}>
+            <div style="font-weight:800;color:var(--hivis)">⚠ ${needs} employee${needs>1?'s':''} need a passcode</div>
+            <p class="note" style="margin:4px 0 0">Newly added by the assistant. Tap to assign their kiosk PIN.</p>
+          </div>` : '';
+      })()}
+
+      ${showSet && html`
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Change admin PIN</div>
+          <${Field} label="Current PIN"><input type="password" inputmode="numeric" value=${curPin} onInput=${e => setCurPin(e.target.value)} /><//>
+          <${Field} label="New PIN"><input type="password" inputmode="numeric" value=${newPin} onInput=${e => setNewPin(e.target.value)} /><//>
+          <button class="btn" onClick=${changePin}>Save new PIN</button>
+          <p class="note" style="margin-top:10px">This is the single admin password (dashboard + coordinator). Stored on this device.</p>
         </div>
-        <div class="card" style="cursor:pointer;margin:0" onClick=${() => { setArea('personnel'); setPdTab('personnel'); }}>
-          <div style="font-size:24px">👷</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Personnel Data</div>
-          <div class="sub" style="font-size:12px;color:var(--ink-dim)">Employees, leave & straight duty</div>
+
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Assistant (coordinator) passcode</div>
+          <p class="note" style="margin:0 0 12px">The passcode your assistant uses to open the coordinator page on her own device.</p>
+          <${Field} label="Set / change assistant passcode">
+            <input type="password" inputmode="numeric" value=${coordPin} onInput=${e => setCoordPin(e.target.value)} placeholder="e.g. 4321" />
+          <//>
+          <button class="btn" onClick=${saveCoordPin}>Save assistant passcode</button>
         </div>
-        <div class="card" style="cursor:pointer;margin:0;grid-column:1/-1" onClick=${() => { setArea('liquidation'); setLiqTab(null); }}>
-          <div style="font-size:24px">💰</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Liquidation</div>
-          <div class="sub" style="font-size:12px;color:var(--ink-dim)">Cash advance · materials · tools · reconcile by project</div>
+
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Issuance (site) passcode</div>
+          <p class="note" style="margin:0 0 12px">The passcode site personnel use to open the borrow/issue app.</p>
+          <${Field} label="Set / change issuance passcode">
+            <input type="password" inputmode="numeric" value=${sitePin} onInput=${e => setSitePin(e.target.value)} placeholder="e.g. 7777" />
+          <//>
+          <button class="btn" onClick=${saveSitePin}>Save issuance passcode</button>
         </div>
+
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Employee passcode &amp; leave</div>
+          <p class="note" style="margin:0 0 12px">Set the worker's sign-in PIN and their leave balances. The assistant can see these but can't change them.</p>
+          <${Field} label="Employee">
+            <select value=${empSel} onChange=${e => pickEmp(e.target.value)}>
+              <option value="">Select employee…</option>
+              ${[...emps].sort((a, b) => (!!a.pin - !!b.pin) || (a.name || '').localeCompare(b.name || ''))
+                .map(e => html`<option value=${e.id}>${e.pin ? '✓' : '⚠'} ${e.name} (${e.code || '—'})</option>`)}
+            </select>
+          <//>
+          ${empSel && (() => {
+            const e = emps.find(x => x.id === empSel) || {};
+            return html`<div class="card" style="background:var(--panel-2);margin:0 0 14px">
+              <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.code || '—'}</span></div>
+              <div class="unit">${e.position || '—'}${e.phone ? ' · ' + e.phone : ''}${e.started_on ? ' · since ' + e.started_on : ''}</div>
+              <div class="unit">Leave — Sick ${e.sl_balance ?? 0} · Vacation ${e.vl_balance ?? 0}</div>
+              <div class="unit">Daily rate — ${e.daily_rate ? '₱' + Number(e.daily_rate).toLocaleString('en-PH') : 'not set'}</div>
+              <div class="unit">Passcode — ${e.pin ? 'set ✓' : 'not set ⚠'}</div>
+            </div>`;
+          })()}
+          ${empSel && html`
+            <${Field} label="Passcode (PIN)">
+              <input inputmode="numeric" value=${empPin} onInput=${e => setEmpPin(e.target.value)} placeholder="e.g. 1234" />
+            <//>
+            <div class="grid" style="margin-bottom:14px">
+              <${Field} label="Sick leave (days)"><input type="number" min="0" step="0.5" value=${empSick} onInput=${e => setEmpSick(e.target.value)} placeholder="0" /><//>
+              <${Field} label="Vacation leave (days)"><input type="number" min="0" step="0.5" value=${empVac} onInput=${e => setEmpVac(e.target.value)} placeholder="0" /><//>
+            </div>
+            <button class="btn" onClick=${saveEmp}>Save</button>`}
+        </div>
+
+        ${empSel && html`
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Salary — ${(emps.find(x=>x.id===empSel)||{}).name || ''}</div>
+          <${Field} label="Daily rate (current / starting) ₱">
+            <input type="number" min="0" value=${rate} onInput=${e => setRate(e.target.value)} placeholder="0" />
+          <//>
+          <button class="btn ghost" onClick=${saveRate}>Save daily rate</button>
+
+          <div style="border-top:1px solid var(--line);margin:16px 0 12px"></div>
+          <div class="sectlabel" style="margin-top:0">Record a salary increase</div>
+          <div class="grid" style="margin-bottom:0">
+            <${Field} label="New daily rate ₱"><input type="number" min="0" value=${incRate} onInput=${e => setIncRate(e.target.value)} placeholder="0" /><//>
+            <${Field} label="Effective date"><input type="date" value=${incDate} onInput=${e => setIncDate(e.target.value)} /><//>
+          </div>
+          <${Field} label="Note (optional)"><input value=${incNote} onInput=${e => setIncNote(e.target.value)} placeholder="e.g. annual increase" /><//>
+          <button class="btn" onClick=${addIncrease}>Add increase</button>
+
+          ${salHist.length > 0 && html`
+            <div style="margin-top:14px">
+              <div class="sectlabel">Salary history</div>
+              ${salHist.map(h => html`
+                <div class="row" key=${h.id}>
+                  <div>
+                    <div class="name">₱${Number(h.daily_rate).toLocaleString('en-PH')}/day</div>
+                    <div class="unit">${h.effective_date || '—'}${h.note ? ' · ' + h.note : ''}</div>
+                  </div>
+                </div>`)}
+            </div>`}
+        </div>`}`}
+
+      ${att && html`
+        <div class="sectlabel">Attendance today</div>
+        <div class="card" style="cursor:pointer" onClick=${() => setAdminTab('attendance')}>
+          <div style="display:flex;gap:14px;overflow-x:auto;text-align:center">
+            ${[['Working', att.working], ['On break', att.onBreak], ['Timed out', att.out], ['Late', att.late], ['Absent', att.absent], ['Total', att.total]]
+              .map(([k, v]) => html`<div style="min-width:54px">
+                <div style="font-size:22px;font-weight:800;color:var(--ink)">${v}</div>
+                <div class="unit">${k}</div>
+              </div>`)}
+          </div>
+        </div>`}
+
+      <div class="sectlabel">Live overview</div>
+      <div class="grid">
+        ${live.map(t => html`<${Tile} ...${t} />`)}
       </div>
-    </div>
-    ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}`;
 
-  // ---- areas ----
-  return html`
-    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISC':'SUMMARY') : '')) : 'PERSONNEL DATA')}
-    <div class="wrap">
-      ${area === 'vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
-      ${area === 'expenses' && html`<${Expenses} voyages=${voyages} toast=${flash} />`}
-      ${area === 'liquidation' && html`<${Liquidation} voyages=${voyages} employees=${employees} sites=${sites} toast=${flash} tab=${liqTab} setTab=${setLiqTab} />`}
-      ${area === 'personnel' && html`
-        <div class="tabs">
-          <button class=${pdTab==='personnel'?'on':''} onClick=${() => setPdTab('personnel')}>Personnel</button>
-          <button class=${pdTab==='leave'?'on':''}     onClick=${() => setPdTab('leave')}>Leave</button>
-          <button class=${pdTab==='duty'?'on':''}      onClick=${() => setPdTab('duty')}>Duty</button>
-        </div>
-        ${pdTab==='personnel' && html`<${Personnel} employees=${employees} onReload=${loadEmployees} toast=${flash} />`}
-        ${pdTab==='leave' && html`<${FileLeave} employees=${employees} toast=${flash} />`}
-        ${pdTab==='duty' && html`<${FileDuty} employees=${employees} toast=${flash} />`}
-      `}
+      <div class="sectlabel">HR monitors</div>
+      <div class="grid">
+        ${[
+          { ico:'🌴', title:'Leaves',        onClick:() => setAdminTab('leaves') },
+          { ico:'⚠️', title:'Approvals',     onClick:() => setAdminTab('approvals') },
+          { ico:'⚡', title:'Straight Duty', onClick:() => setAdminTab('duty') },
+          { ico:'🚨', title:'Violations',    onClick:() => setAdminTab('violations') },
+          { ico:'📱', title:'SMS Log',       onClick:() => setAdminTab('sms') },
+        ].map(t => html`<${Tile} ...${t} />`)}
+      </div>
+
+      <div class="sectlabel">On the roadmap</div>
+      <div class="grid">
+        ${soon.map(t => html`<${Tile} ...${t} />`)}
+      </div>
+
+      <p class="note" style="text-align:center;margin-top:6px">RSR Engineering Services · Cebu</p>
     </div>
-    ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
+    ${toast && html`<div class="toast">${toast}</div>`}
   `;
 }
 
