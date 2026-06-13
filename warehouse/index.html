@@ -204,6 +204,18 @@ async function autoReorderCheck(names){
     }catch(e){ toast('Reorder failed for '+name+': '+(e&&e.message?e.message:e),'err'); }
   }
   if(made>0) toast('Auto-request sent to Purchasing ('+made+' item'+(made>1?'s':'')+')');
+  return made;
+}
+/* manual sweep: reload stock, then check every catalog item at once */
+async function checkAllReorders(btn){
+  if(btn){btn.disabled=true;btn.textContent='Checking…';}
+  try{
+    await loadStock();
+    const names=catalog.map(i=>i.n);
+    const made=await autoReorderCheck(names);
+    if(made===0) toast('Nothing to reorder — all items above their Min, or requests already open');
+  }catch(e){ toast('Check failed: '+(e&&e.message?e.message:e),'err'); }
+  if(btn){btn.disabled=false;btn.textContent='🛒 Check reorders now → Purchasing';}
 }
 async function loadPrices(){prices={};try{const{data}=await sb.from('item_prices').select('item_name,price');(data||[]).forEach(r=>prices[r.item_name]=Number(r.price)||0);}catch(e){}}
 async function refreshBadge(){let n=0;try{const{count}=await sb.from('requests').select('*',{count:'exact',head:true}).in('status',['Pending','Partial']);n=count||0;}catch(e){}const d=document.getElementById('req-dot');if(d)d.style.display=n>0?'block':'none';}
@@ -270,6 +282,7 @@ async function renderStock(c){
     +`<div class="mbox"><div class="mv">${total}</div><div class="ml">Total on hand</div></div>`
     +`<div class="mbox" style="border-color:var(--am)"><div class="mv" style="color:var(--ad)">${low}</div><div class="ml">Low stock</div></div>`
     +`<div class="mbox" style="border-color:var(--rm)"><div class="mv" style="color:var(--r)">${zero}</div><div class="ml">Out of stock</div></div></div>`
+    +`<div style="margin:0 0 12px"><button type="button" onclick="checkAllReorders(this)" style="width:100%;padding:11px;border:none;border-radius:10px;background:var(--p);color:#fff;font-weight:700;font-family:inherit;font-size:14px;cursor:pointer">🛒 Check reorders now → Purchasing</button></div>`
     +'<div class="sc"><table class="tbl"><thead><tr><th>Item</th><th>Unit</th><th style="text-align:right">On hand</th><th>Min</th><th>Reorder qty</th><th>Status</th></tr></thead><tbody>'
     +catalog.map(i=>{const q=stockMap[i.n]||0;const b=q<=0?'<span class="badge bdanger">Out</span>':(i.th>0&&q<=i.th)?'<span class="badge bwarn">Low</span>':'<span class="badge bok">OK</span>';
       const rq=reorderMap[i.n]!=null?reorderMap[i.n]:'';
