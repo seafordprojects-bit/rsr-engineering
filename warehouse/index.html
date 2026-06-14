@@ -361,12 +361,15 @@ async function renderDelivery(c){
         const ord=Number(p.qty)||0, got=Number(p.qty_received)||0, left=Math.max(0,ord-got);
         const kind=(p.type==='store')?'Store':'PO';
         const refTxt=p.ref||'—'; const supplier=p.party||'—'; const orno=p.or_no?(' · OR '+p.or_no):'';
+        const up=Number(p.unit_price)||0; const lineTot=up>0?up*ord:(Number(p.amount)||0);
+        const priceLine=up>0?`<div style="font-size:12px;margin-bottom:8px"><b>Ordered price:</b> ${peso(up)}/${p.unit||'pc'} · total ${peso(lineTot)} <span style="color:var(--tx3)">— verify vs receipt</span></div>`:'';
         return `<div style="border:1px solid var(--bd);border-radius:10px;padding:10px;margin-bottom:8px">
           <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:4px">
             <div style="font-weight:700">${p.item||'—'} <span style="color:var(--tx2);font-weight:400">(${p.unit||'pc'})</span></div>
             <span class="badge ${p.type==='store'?'bok':'bwarn'}">${kind}</span>
           </div>
-          <div style="font-size:12px;color:var(--tx2);margin-bottom:8px">${refTxt} · ${supplier}${orno} · ordered ${ord}${got>0?(' · received '+got):''}</div>
+          <div style="font-size:12px;color:var(--tx2);margin-bottom:6px">${refTxt} · ${supplier}${orno} · ordered ${ord}${got>0?(' · received '+got):''}</div>
+          ${priceLine}
           <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">
             <div><label class="fl">Qty received</label><input class="fi" type="number" min="0" max="${left}" value="${left}" id="rcv-q-${p.id}" style="text-align:center"/></div>
             <div><label class="fl">Received by</label><input class="fi" id="rcv-by-${p.id}" placeholder="Your name"/></div>
@@ -556,18 +559,15 @@ async function renderLog(c){
 /* ── INVENTORY (set on-hand) ── */
 async function renderInventory(c){
   await loadStock();
-  await loadPrices();
   c.innerHTML='<div class="sc"><div class="sc-title">Add a material</div><div class="sc-sub">For old stock not yet on the list. Type the name, unit, and how many are in the warehouse now.</div>'
     +'<div class="fr3"><div class="fg"><label class="fl">Material name</label><input class="fi" id="ni-name" placeholder="e.g. Steel plate 6mm"/></div>'
     +'<div class="fg"><label class="fl">Unit</label><input class="fi" id="ni-unit" placeholder="pcs / m / kg / set" value="pcs"/></div></div>'
     +'<div class="fg"><label class="fl">Quantity on hand</label><input class="fi" type="number" min="0" id="ni-qty" value="0"/></div>'
     +'<div class="btn-row"><button class="btn btn-primary" onclick="saveNewItem()">+ Add to warehouse</button></div></div>'
-    +'<div class="sc"><div class="sc-title">Inventory count &amp; price</div><div class="sc-sub">Set the actual on-hand quantity and the unit price for each item (opening balance or correction). Price feeds delivery records and reports.</div>'
-    +'<div style="display:grid;grid-template-columns:minmax(0,1fr) 78px 86px 56px;gap:8px;margin-bottom:6px"><span class="fl" style="margin:0">Item</span><span class="fl" style="margin:0">Qty</span><span class="fl" style="margin:0">Price \\u20b1</span><span></span></div>'
-    +catalog.map((i,idx)=>`<div class="irow nop" style="grid-template-columns:minmax(0,1fr) 78px 86px 56px;align-items:center">
+    +'<div class="sc"><div class="sc-title">Inventory count</div><div class="sc-sub">Set the actual on-hand quantity for each item (opening balance or correction). Prices are managed in the Purchasing app.</div>'
+    +catalog.map((i,idx)=>`<div class="irow nop" style="grid-template-columns:minmax(0,1fr) 90px 60px;align-items:center">
       <div><div style="font-weight:600">${i.n}</div><div style="font-size:12px;color:var(--tx3)">${i.u}${i.th>0?' · min '+i.th:''}</div></div>
       <input class="fi" type="number" min="0" id="inv-${idx}" value="${stockMap[i.n]||0}" style="text-align:center"/>
-      <input class="fi" type="number" min="0" step="0.01" id="invp-${idx}" value="${prices[i.n]||''}" placeholder="\\u20b1" style="text-align:center"/>
       <button class="btn btn-primary btn-sm" onclick="saveInv(${idx})">Set</button></div>`).join('')
     +'</div>';
 }
@@ -577,16 +577,7 @@ async function saveInv(idx){
   if(isNaN(v)||v<0){toast('Enter a valid qty','err');return;}
   const err=await upsertStock(it.n,v,it.u);
   if(err){toast('Failed: '+err.message,'err');return;}
-  stockMap[it.n]=v;
-  // save unit price if entered
-  const pEl=document.getElementById('invp-'+idx);
-  const pv=pEl?parseFloat(pEl.value):NaN;
-  let msg=it.n+' set to '+v;
-  if(pEl && pEl.value!=='' && !isNaN(pv) && pv>=0){
-    try{ await sb.from('item_prices').upsert({item_name:it.n,price:pv,updated_at:new Date().toISOString()},{onConflict:'item_name'}); prices[it.n]=pv; msg+=' · ₱'+pv; }
-    catch(e){ toast('Qty saved, price failed: '+(e&&e.message?e.message:e),'err'); }
-  }
-  toast(msg);
+  stockMap[it.n]=v;toast(it.n+' set to '+v);
   try{ await autoReorderCheck([it.n]); }catch(e){}
 }
 async function saveNewItem(){
