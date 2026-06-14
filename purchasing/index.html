@@ -31,6 +31,7 @@
     font-size:13px; font-weight:600; padding:8px 14px; border-radius:8px; cursor:pointer; text-decoration:none; display:inline-block}
   main{padding:16px 14px}
   .tabhead{font-size:13px; color:var(--muted); margin:2px 0 12px; font-weight:500}
+  .hint{font-size:12.5px; color:var(--muted); background:var(--bg2,#f4f6f5); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin:0 0 12px; line-height:1.45}
   .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
     padding:14px; margin-bottom:12px; box-shadow:var(--shadow)}
   label{display:block; font-size:12px; color:var(--muted); margin:0 0 5px; font-weight:500}
@@ -122,18 +123,20 @@ const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
 const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
 const sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
 
-let CACHE={ requisitions:[], purchases:[] };
+let CACHE={ requisitions:[], purchases:[], purchase_request:[] };
 const DB = {
   get(t){ return CACHE[t]||[]; },
   async load(){
-    const [r,p]=await Promise.all([
+    const [r,p,lpr]=await Promise.all([
       sb.from('requisitions').select('*').order('created_at',{ascending:true}),
       sb.from('purchases').select('*').order('created_at',{ascending:true}),
+      sb.from('purchase_request').select('*').order('created_at',{ascending:false}).limit(300),
     ]);
     if(r.error) toast('Load requisitions failed: '+r.error.message);
     if(p.error) toast('Load purchases failed: '+p.error.message);
     CACHE.requisitions=r.data||[];
     CACHE.purchases=p.data||[];
+    CACHE.purchase_request=(lpr&&lpr.data)||[];
   },
   async insert(t,row){ if(!row.id) row.id=uid();
     const {error}=await sb.from(t).insert(row);
@@ -284,6 +287,7 @@ async function saveStore(reqId){
 let TAB='inbox';
 const TABS=[
   {id:'inbox',  label:'Requests',  ic:'📨'},
+  {id:'approve',label:'Site Approvals', ic:'✅'},
   {id:'buy',    label:'To buy',    ic:'🧾'},
   {id:'po',     label:'Purchases', ic:'📑'},
   {id:'prices', label:'Prices',    ic:'🏷️'},
@@ -315,6 +319,46 @@ function viewInbox(){
       </div>
     </div>`;
   });
+  return h;
+}
+
+/* ── SITE APPROVALS (Liquidation LPR purchase_request) ── */
+async function decideLpr(id,status){
+  try{
+    const{error}=await sb.from('purchase_request').update({status,approved_by:'Purchasing',approved_at:new Date().toISOString()}).eq('id',id);
+    if(error)throw error;
+    toast(status==='Approved'?'Approved — site can buy':'Rejected');
+    await DB.load(); render();
+  }catch(e){ toast('Failed: '+(e&&e.message?e.message:e)); }
+}
+function lprKind(no){ return (no||'').startsWith('LTR')?'Tool':'Material'; }
+function viewApprovals(){
+  const all=DB.get('purchase_request');
+  const pend=all.filter(r=>r.status==='Pending');
+  const done=all.filter(r=>r.status!=='Pending').slice(0,25);
+  let h=`<div class="hint">Site purchase requests from Liquidation. Approve to let site personnel buy the items (this does not touch warehouse stock — bought items flow straight to that site's stock).</div>`;
+  const slip=(r,act)=>{
+    const items=(r.items||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const badge = r.status==='Approved'?'<span class="pill teal">Approved</span>'
+      : r.status==='Rejected'?'<span class="pill" style="background:#fde8e8;color:#c0392b">Rejected</span>'
+      : r.status==='Bought'?'<span class="pill purple">Bought</span>'
+      : '<span class="pill amber">Pending</span>';
+    return `<div class="card">
+      <div class="item-row">
+        <div><div class="ttl">${r.pr_no||'—'}</div>
+          <div class="sub">${lprKind(r.pr_no)} · ${r.date||'—'}${r.site?(' · '+r.site):''}${r.requested_by?(' · '+r.requested_by):''}</div></div>
+        ${badge}
+      </div>
+      ${items.map((it,i)=>`<div class="meta">${i+1}. ${it}</div>`).join('')}
+      ${act?`<div class="actions btn-pair">
+        <button class="btn small" onclick="decideLpr('${r.id}','Approved')">Approve</button>
+        <button class="btn ghost small" onclick="decideLpr('${r.id}','Rejected')">Reject</button>
+      </div>`:''}
+    </div>`;
+  };
+  h+=`<div class="tabhead" style="margin-top:6px">Pending approval${all.length?` (${pend.length})`:''}</div>`;
+  h+= pend.length ? pend.map(r=>slip(r,true)).join('') : `<div class="empty">No requests waiting for approval.</div>`;
+  if(done.length){ h+=`<div class="tabhead" style="margin-top:14px">Decided</div>`+done.map(r=>slip(r,false)).join(''); }
   return h;
 }
 
@@ -410,12 +454,13 @@ function viewPrices(){
 }
 
 function render(){
-  const map={inbox:viewInbox, buy:viewBuy, po:viewPO, prices:viewPrices};
+  const map={inbox:viewInbox, approve:viewApprovals, buy:viewBuy, po:viewPO, prices:viewPrices};
   const reqs=DB.get('requisitions');
   const nNew=reqs.filter(r=>r.status==='for_purchase').length;
   const nBuy=reqs.filter(r=>r.status==='accepted').length;
+  const nApp=DB.get('purchase_request').filter(r=>r.status==='Pending').length;
   const pills=`<div class="pillbar">`+TABS.map(t=>{
-    let badge=0; if(t.id==='inbox') badge=nNew; if(t.id==='buy') badge=nBuy;
+    let badge=0; if(t.id==='inbox') badge=nNew; if(t.id==='buy') badge=nBuy; if(t.id==='approve') badge=nApp;
     return `<button class="${t.id===TAB?'on':''}" onclick="go('${t.id}')">${t.label}${badge?`<span class="badge">${badge}</span>`:''}</button>`;
   }).join('')+`</div>`;
   document.getElementById('view').innerHTML=pills+map[TAB]();
