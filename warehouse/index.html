@@ -417,7 +417,7 @@ async function saveDelivery(){
   const total=items.reduce((s,it)=>s+it.qty*(it.price||0),0);
   try{
     await sb.from('purchases').insert([{id,supplier:sup,invoice:ref||null,date,received_by:by,items,grand_total:total,created_at:new Date().toISOString()}]);
-    for(const it of items){const cur=stockMap[it.n]||0;await sb.from('warehouse_stock').upsert({item_name:it.n,qty:cur+it.qty,updated_at:new Date().toISOString()},{onConflict:'item_name'});if(it.price>0)await sb.from('item_prices').upsert({item_name:it.n,price:it.price,updated_at:new Date().toISOString()},{onConflict:'item_name'});}
+    for(const it of items){const cur=stockMap[it.n]||0;await sb.from('warehouse_stock').upsert({item_name:it.n,qty:cur+it.qty,updated_at:new Date().toISOString()},{onConflict:'item_name'});}
     toast('Delivery recorded · stock updated');
     swTab('stock');
   }catch(e){toast('Failed: '+e.message,'err');}
@@ -440,7 +440,7 @@ async function receivePurchase(id){
     await loadStock();
     const cur=stockMap[p.item]||0;
     await sb.from('warehouse_stock').upsert({item_name:p.item,qty:cur+got,unit:p.unit||gu(p.item),updated_at:new Date().toISOString()},{onConflict:'item_name'});
-    if(Number(p.unit_price)>0) await sb.from('item_prices').upsert({item_name:p.item,price:Number(p.unit_price),updated_at:new Date().toISOString()},{onConflict:'item_name'});
+    // prices are owned by the Purchasing app; warehouse does not write item_prices
     // update the purchase: accumulate received qty, mark received if complete
     const totalGot=prev+got;
     const newStatus=(totalGot>=ord)?'received':p.status;
