@@ -358,9 +358,15 @@ function viewApprovals(){
   };
   h+=`<div class="tabhead" style="margin-top:6px">Pending approval${all.length?` (${pend.length})`:''}</div>`;
   h+= pend.length ? pend.map(r=>slip(r,true)).join('') : `<div class="empty">No requests waiting for approval.</div>`;
-  if(done.length){ h+=`<div class="tabhead" style="margin-top:14px">Decided</div>`+done.map(r=>slip(r,false)).join(''); }
+  if(done.length){
+    h+=`<button type="button" onclick="toggleDecided()" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:14px;padding:11px 12px;background:var(--bg2,#f4f6f5);border:1px solid var(--line);border-radius:10px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:700;color:var(--ink)">
+      <span>Decided (${done.length})</span><span style="color:var(--muted)">${DECIDED_OPEN?'▲':'▼'}</span></button>`;
+    if(DECIDED_OPEN){ h+=`<div style="margin-top:10px">`+done.map(r=>slip(r,false)).join('')+`</div>`; }
+  }
   return h;
 }
+let DECIDED_OPEN=false;
+function toggleDecided(){ DECIDED_OPEN=!DECIDED_OPEN; render(); }
 
 function viewBuy(){
   const reqs=DB.get('requisitions').filter(r=>r.status==='accepted').slice().reverse();
