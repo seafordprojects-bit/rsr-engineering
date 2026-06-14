@@ -260,7 +260,7 @@ async function swTab(name){
   m.innerHTML='<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px"><button onclick="renderHome()" style="border:1.5px solid var(--bd);background:#fff;border-radius:10px;padding:8px 12px;font-size:13px;font-weight:700;cursor:pointer">← Home</button><div style="font-weight:800;font-size:16px">'+(titles[name]||'')+'</div></div><div id="sec-content"><div class="empty">Loading…</div></div>';
   const c=document.getElementById('sec-content');
   if(name==='stock')await renderStock(c);
-  else if(name==='delivery')renderDelivery(c);
+  else if(name==='delivery')await renderDelivery(c);
   else if(name==='inventory')await renderInventory(c);
   else if(name==='flow')await renderFlow(c);
   refreshBadge();
@@ -345,9 +345,38 @@ function dispatchFromReq(id){const r=(window._reqs||[]).find(x=>x.id===id);if(!r
 
 /* ── RECORD DELIVERY (supplier → warehouse) ── */
 let dcRows=0;
-function renderDelivery(c){
+async function renderDelivery(c){
   dcRows=0;
-  c.innerHTML='<div class="sc"><div class="sc-title">Record incoming delivery</div><div class="sc-sub">Items received from a supplier. Stock updates immediately on save.</div>'
+  // load purchases awaiting warehouse receipt (PO 'ordered' + store 'bought', not yet received)
+  let awaiting=[];
+  try{
+    const{data}=await sb.from('purchases').select('*').in('status',['ordered','bought']).order('date',{ascending:false}).limit(100);
+    awaiting=(data||[]).filter(p=>{const got=Number(p.qty_received)||0; const ord=Number(p.qty)||0; return got<ord;});
+  }catch(e){}
+  let awaitHtml='';
+  if(awaiting.length){
+    awaitHtml='<div class="sc"><div class="sc-title">Awaiting receipt from Purchasing</div>'
+      +'<div class="sc-sub">Items bought by Purchasing. Verify against the physical receipt, enter the qty actually received, then Receive to add it to stock.</div>'
+      +awaiting.map(p=>{
+        const ord=Number(p.qty)||0, got=Number(p.qty_received)||0, left=Math.max(0,ord-got);
+        const kind=(p.type==='store')?'Store':'PO';
+        const refTxt=p.ref||'—'; const supplier=p.party||'—'; const orno=p.or_no?(' · OR '+p.or_no):'';
+        return `<div style="border:1px solid var(--bd);border-radius:10px;padding:10px;margin-bottom:8px">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:4px">
+            <div style="font-weight:700">${p.item||'—'} <span style="color:var(--tx2);font-weight:400">(${p.unit||'pc'})</span></div>
+            <span class="badge ${p.type==='store'?'bok':'bwarn'}">${kind}</span>
+          </div>
+          <div style="font-size:12px;color:var(--tx2);margin-bottom:8px">${refTxt} · ${supplier}${orno} · ordered ${ord}${got>0?(' · received '+got):''}</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">
+            <div><label class="fl">Qty received</label><input class="fi" type="number" min="0" max="${left}" value="${left}" id="rcv-q-${p.id}" style="text-align:center"/></div>
+            <div><label class="fl">Received by</label><input class="fi" id="rcv-by-${p.id}" placeholder="Your name"/></div>
+            <button class="btn btn-primary btn-sm" onclick="receivePurchase('${p.id}')">Receive</button>
+          </div>
+        </div>`;
+      }).join('')
+      +'</div>';
+  }
+  c.innerHTML=awaitHtml+'<div class="sc"><div class="sc-title">Record incoming delivery</div><div class="sc-sub">Manual entry for off-system deliveries. Items received from a supplier. Stock updates immediately on save.</div>'
     +'<div class="fr3"><div class="fg"><label class="fl">Supplier <span>*</span></label><input class="fi" id="del-sup" placeholder="Supplier name"/></div>'
     +'<div class="fg"><label class="fl">Supplier DR / invoice</label><input class="fi" id="del-ref" placeholder="e.g. SDR-2026-041"/></div></div>'
     +'<div class="fr3"><div class="fg"><label class="fl">Date <span>*</span></label><input class="fi" type="date" id="del-date"/></div>'
@@ -389,6 +418,33 @@ async function saveDelivery(){
     toast('Delivery recorded · stock updated');
     swTab('stock');
   }catch(e){toast('Failed: '+e.message,'err');}
+}
+/* receive a Purchasing buy (full or partial) into warehouse stock */
+async function receivePurchase(id){
+  const qEl=document.getElementById('rcv-q-'+id), byEl=document.getElementById('rcv-by-'+id);
+  const recv=parseInt(qEl&&qEl.value,10)||0;
+  const by=(byEl&&byEl.value.trim())||'';
+  if(recv<=0){toast('Enter the qty received','err');return;}
+  if(!by){toast('Enter who received it','err');return;}
+  try{
+    const{data:rows,error}=await sb.from('purchases').select('*').eq('id',id).limit(1);
+    if(error)throw error;
+    const p=rows&&rows[0]; if(!p){toast('Purchase not found','err');return;}
+    const ord=Number(p.qty)||0, prev=Number(p.qty_received)||0, left=Math.max(0,ord-prev);
+    const got=Math.min(recv,left);
+    if(got<=0){toast('Already fully received','err');return;}
+    // add to warehouse stock
+    await loadStock();
+    const cur=stockMap[p.item]||0;
+    await sb.from('warehouse_stock').upsert({item_name:p.item,qty:cur+got,unit:p.unit||gu(p.item),updated_at:new Date().toISOString()},{onConflict:'item_name'});
+    if(Number(p.unit_price)>0) await sb.from('item_prices').upsert({item_name:p.item,price:Number(p.unit_price),updated_at:new Date().toISOString()},{onConflict:'item_name'});
+    // update the purchase: accumulate received qty, mark received if complete
+    const totalGot=prev+got;
+    const newStatus=(totalGot>=ord)?'received':p.status;
+    await sb.from('purchases').update({qty_received:totalGot,received_by:by,received_at:todayYmd(),status:newStatus}).eq('id',id);
+    toast(got+' × '+p.item+' received'+(totalGot<ord?(' (partial, '+(ord-totalGot)+' still due)'):' · complete'));
+    swTab('delivery'); // reload the receive screen
+  }catch(e){toast('Receive failed: '+(e&&e.message?e.message:e),'err');}
 }
 
 /* ── CREATE DISPATCH (warehouse → site) ── */
