@@ -636,12 +636,12 @@ function App() {
         <a class="tile" href="./coordinator/">
           <div class="ico">🗂️</div>
           <h3>Coordinator</h3>
-          <div class="unit">Personnel &amp; vessel schedules</div>
+          <div class="unit">Personnel & vessel schedules</div>
         </a>
         <a class="tile" href="./issuance/">
           <div class="ico">📦</div>
           <h3>Issuance</h3>
-          <div class="unit">Tool inventory &amp; material issuance</div>
+          <div class="unit">Tool inventory & material issuance</div>
         </a>
       </div>
       <p class="note" style="text-align:center;margin-top:6px">RSR Engineering Services · Cebu</p>
@@ -1014,7 +1014,7 @@ function App() {
         </div>
 
         <div class="card">
-          <div class="sectlabel" style="margin-top:0">Employee passcode &amp; leave</div>
+          <div class="sectlabel" style="margin-top:0">Employee passcode & leave</div>
           <p class="note" style="margin:0 0 12px">Set the worker's sign-in PIN and their leave balances. The assistant can see these but can't change them.</p>
           <${Field} label="Employee">
             <select value=${empSel} onChange=${e => pickEmp(e.target.value)}>
