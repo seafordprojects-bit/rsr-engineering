@@ -557,17 +557,16 @@ function App() {
     if (!authed || !onAdminPage) return;
     const iso30 = new Date(Date.now() - 30 * 864e5).toISOString();
     (async () => {
-      const [toolsOut, inRepair, issued30, vessels, people, pendingReqs, liqPending, poInbox] = await Promise.all([
+      const [toolsOut, inRepair, issued30, vessels, people, pendingReqs, poInbox] = await Promise.all([
         countRows('borrow_issuance', q => q.eq('txn_type', 'borrow').eq('status', 'out')),
         countRows('item_units', q => q.eq('active', true).eq('status', 'repair')),
         countRows('issuances', q => q.gte('created_at', iso30)),
         countRows('voyages', q => q.neq('status', 'not_active')),
         countRows('employees', q => q),
         countRows('requests', q => q.eq('status', 'Pending')),
-        countRows('purchase_request', q => q.eq('status', 'Pending')),
         countRows('requisitions', q => q.eq('status', 'for_purchase')),
       ]);
-      setM({ toolsOut, inRepair, issued30, vessels, people, pendingReqs, liqPending, poInbox });
+      setM({ toolsOut, inRepair, issued30, vessels, people, pendingReqs, poInbox });
       try {
         const recs = await getAttendance(todayPH());
         const c = (f) => recs.filter(f).length;
@@ -610,10 +609,6 @@ function App() {
     })();
     if (adminTab === 'vessels') (async () => {
       try { setVes(await getVoyagesMon()); }
-      catch (e) { flash('Load failed: ' + e.message); }
-    })();
-    if (adminTab === 'matreq') (async () => {
-      try { setLiqReqs(await getLiqRequests()); }
       catch (e) { flash('Load failed: ' + e.message); }
     })();
   }, [adminTab, authed]);
@@ -661,7 +656,6 @@ function App() {
     { ico:'🔧', num:m.toolsOut,  unit:'out now',        title:'Tool Borrowing',   onClick:() => setAdminTab('borrowed') },
     { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', onClick:() => setAdminTab('issued') },
     { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse',        href:'../warehouse/' },
-    { ico:'🧾', num:m.liqPending, unit:'to approve',       title:'Material Requests', onClick:() => setAdminTab('matreq') },
     { ico:'🛒', num:m.poInbox,    unit:'to purchase',      title:'Purchasing',        href:'../purchasing/' },
     { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  onClick:() => setAdminTab('vessels') },
@@ -768,35 +762,6 @@ function App() {
   if (adminTab === 'warehouse') return html`<${Warehouse} onBack=${() => setAdminTab('dash')} />`;
 
   // ---- admin: approve coordinator material / tool requests ----
-  if (adminTab === 'matreq') {
-    const pend = (liqReqs || []).filter(r => r.status === 'Pending');
-    const done = (liqReqs || []).filter(r => r.status !== 'Pending').slice(0, 20);
-    const kindOf = (no) => (no || '').startsWith('LTR') ? 'Tool' : 'Material';
-    const decide = async (r, status) => { try { await decideLiqRequest(r.id, status); flash(r.pr_no + ' ' + status.toLowerCase()); setLiqReqs(await getLiqRequests()); } catch (e) { flash('Error: ' + e.message); } };
-    const slip = (r, act) => html`
-      <div class="card" key=${r.id} style="margin-bottom:10px">
-        <div style="display:flex;justify-content:space-between;align-items:center"><b>${r.pr_no}</b><span class="unit">${kindOf(r.pr_no)} · ${r.status}</span></div>
-        <div class="unit" style="margin:2px 0 6px">${r.date || '—'}${r.requested_by ? ' · ' + r.requested_by : ''}${r.site ? ' · ' + r.site : ''}</div>
-        ${(r.items || '').split(',').map(s => s.trim()).filter(Boolean).map((it, i) => html`<div class="unit">${i + 1}. ${it}</div>`)}
-        ${act ? html`<div style="display:flex;gap:8px;margin-top:10px">
-          <button class="btn" onClick=${() => decide(r, 'Approved')}>Approve</button>
-          <button class="btn ghost" onClick=${() => decide(r, 'Rejected')}>Reject</button>
-        </div>` : ''}
-      </div>`;
-    return html`
-      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
-        <span><b>RSR</b><span class="tag">MATERIAL REQUESTS</span></span>
-        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
-      </div></div></header>
-      <div class="wrap">
-        <div class="sectlabel">Pending approval${liqReqs ? ` (${pend.length})` : ''}</div>
-        ${liqReqs == null ? html`<div class="empty">Loading…</div>`
-          : pend.length ? pend.map(r => slip(r, true)) : html`<div class="empty">No requests waiting for approval.</div>`}
-        ${done.length ? html`<div class="sectlabel">Recently decided</div>${done.map(r => slip(r, false))}` : ''}
-      </div>
-      ${toast && html`<div class="toast">${toast}</div>`}`;
-  }
-
   if (adminTab === 'issued') {
     const dt = (s) => s ? new Date(s).toLocaleDateString() : '—';
     return html`
