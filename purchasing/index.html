@@ -123,20 +123,24 @@ const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
 const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
 const sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
 
-let CACHE={ requisitions:[], purchases:[], purchase_request:[] };
+let CACHE={ requisitions:[], purchases:[], purchase_request:[], item_prices:[], warehouse_stock:[] };
 const DB = {
   get(t){ return CACHE[t]||[]; },
   async load(){
-    const [r,p,lpr]=await Promise.all([
+    const [r,p,lpr,ip,ws]=await Promise.all([
       sb.from('requisitions').select('*').order('created_at',{ascending:true}),
       sb.from('purchases').select('*').order('created_at',{ascending:true}),
       sb.from('purchase_request').select('*').order('created_at',{ascending:false}).limit(300),
+      sb.from('item_prices').select('item_name,price').order('item_name',{ascending:true}),
+      sb.from('warehouse_stock').select('item_name,unit').order('item_name',{ascending:true}),
     ]);
     if(r.error) toast('Load requisitions failed: '+r.error.message);
     if(p.error) toast('Load purchases failed: '+p.error.message);
     CACHE.requisitions=r.data||[];
     CACHE.purchases=p.data||[];
     CACHE.purchase_request=(lpr&&lpr.data)||[];
+    CACHE.item_prices=(ip&&ip.data)||[];
+    CACHE.warehouse_stock=(ws&&ws.data)||[];
   },
   async insert(t,row){ if(!row.id) row.id=uid();
     const {error}=await sb.from(t).insert(row);
@@ -424,10 +428,59 @@ function viewPO(){
   return h;
 }
 
+function whPriceList(){
+  const priceMap={};
+  DB.get('item_prices').forEach(r=>{ priceMap[(r.item_name||'').toLowerCase()]={name:r.item_name,price:Number(r.price)||0}; });
+  const seen={}; const out=[];
+  // every warehouse material first (so unpriced ones show with a blank box)
+  DB.get('warehouse_stock').forEach(s=>{
+    const nm=s.item_name; if(!nm) return; const k=nm.toLowerCase(); if(seen[k]) return; seen[k]=1;
+    out.push({name:nm, price:(priceMap[k]?priceMap[k].price:null)});
+  });
+  // any priced item not in warehouse_stock (edge case) still shows
+  DB.get('item_prices').forEach(r=>{ const k=(r.item_name||'').toLowerCase(); if(k&&!seen[k]){ seen[k]=1; out.push({name:r.item_name, price:Number(r.price)||0}); } });
+  return out.sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+}
+async function saveWhPrice(idx){
+  const list=whPriceList();
+  const row=list[idx]; if(!row){ return; }
+  const name=row.name;
+  const el=document.getElementById('whp-'+idx);
+  const v=el?parseFloat(el.value):NaN;
+  if(el && el.value===''){ toast('Enter a price'); return; }
+  if(isNaN(v)||v<0){ toast('Enter a valid price'); return; }
+  try{
+    const{error}=await sb.from('item_prices').upsert({item_name:name,price:v,updated_at:new Date().toISOString()},{onConflict:'item_name'});
+    if(error)throw error;
+    toast(name+' → '+money(v));
+    await DB.load(); render();
+  }catch(e){ toast('Save failed: '+(e&&e.message?e.message:e)); }
+}
 function viewPrices(){
+  const wh=whPriceList();
+  const priced=wh.filter(r=>r.price!=null&&r.price>0).length;
+  let h=`<div class="hint">Current warehouse price per material (used to charge projects at the latest price). Items with no price yet show a blank box — fill it in and tap Save. Editing here updates the warehouse too.</div>`;
+  h+=`<div class="card"><div class="item-row"><div class="ttl">Warehouse current prices</div><span class="pill gray">${priced}/${wh.length} priced</span></div>`;
+  if(wh.length){
+    wh.forEach((r,idx)=>{
+      const has=(r.price!=null&&r.price>0);
+      h+=`<div class="srcrow" style="align-items:center">
+        <div class="src"><div style="font-weight:600">${r.name}</div>${has?'':'<div class="srcsub" style="color:var(--amber-ink,#ba7517)">no price yet</div>'}</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <span style="color:var(--muted)">₱</span>
+          <input type="number" min="0" step="0.01" id="whp-${idx}" value="${has?r.price:''}" placeholder="0.00" style="width:84px;padding:7px 8px;border:1px solid ${has?'var(--line)':'var(--amber,#ba7517)'};border-radius:8px;text-align:right;font-family:inherit;font-size:13px"/>
+          <button class="btn small" onclick="saveWhPrice(${idx})">Save</button>
+        </div>
+      </div>`;
+    });
+  } else {
+    h+=`<div class="empty">No warehouse materials found. Add stock in the warehouse app first.</div>`;
+  }
+  h+=`</div>`;
+
   const buys=DB.get('purchases').filter(p=>p.item && (p.type==='online'||p.type==='store'));
-  let h=`<div class="tabhead">Price reference for canvassing — every material you've bought, grouped by item, online and store together. Each source shows its unit price; the cheapest is flagged. Tap a website to reorder.</div>`;
-  if(!buys.length){ return h+`<div class="empty"><div class="big">No price history yet</div>Online POs and store buys land here grouped by material.</div>`; }
+  h+=`<div class="tabhead" style="margin-top:6px">Canvass history — every material you've bought, online and store together. Each source shows its unit price; the cheapest is flagged.</div>`;
+  if(!buys.length){ return h+`<div class="empty">No purchase price history yet. Online POs and store buys land here grouped by material.</div>`; }
   const groups={};
   buys.forEach(p=>{ const k=(p.item||'').trim().toLowerCase(); (groups[k]=groups[k]||[]).push(p); });
   Object.keys(groups).sort().forEach(k=>{
