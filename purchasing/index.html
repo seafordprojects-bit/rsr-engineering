@@ -341,7 +341,7 @@ function viewBuy(){
 }
 
 function viewPO(){
-  const ps=DB.get('purchases').slice().reverse();
+  const ps=DB.get('purchases').filter(p=>p.type==='online'||p.type==='store').slice().reverse();
   let h=`<div class="tabhead">Everything purchasing has bought. Online POs wait for the warehouse to receive; store buys are already in hand.</div>`;
   if(!ps.length){ return h+`<div class="empty"><div class="big">No purchases yet</div>Buy an accepted request from the To buy tab.</div>`; }
   ps.forEach(p=>{
@@ -355,6 +355,12 @@ function viewPO(){
       detail=`Store <b>${p.party}</b> · OR ${p.or_no} · ${p.payment}`;
       extra=`<div class="meta">${p.unit_price?money(p.unit_price)+'/'+p.unit+' · ':''}total ${money(p.amount)}${p.bought_by?' · by '+p.bought_by:''}</div>`;
     }
+    const ord=Number(p.qty)||0, got=Number(p.qty_received)||0;
+    const recvLine = p.status==='received'
+      ? `Status: ${statusPill('received')} <span style="color:var(--muted)">received by ${p.received_by||'warehouse'}${p.received_at?' on '+p.received_at:''}</span>`
+      : got>0
+        ? `Status: ${statusPill(p.type==='online'?'ordered':'bought')} <span style="color:var(--muted)">partial — ${got} of ${ord} received</span>`
+        : `Status: ${statusPill(p.type==='online'?'ordered':'bought')} <span style="color:var(--muted)">${p.type==='online'?'awaiting delivery (warehouse receives)':'goods in hand (warehouse stocks in)'}</span>`;
     h+=`<div class="card">
       <div class="item-row">
         <div><div class="ttl">${p.item} · ${p.qty} ${p.unit}</div>
@@ -362,15 +368,14 @@ function viewPO(){
         ${typePill}
       </div>
       <div class="meta">${detail}</div>${extra}
-      <div class="meta">Status: ${statusPill(p.type==='online'?'ordered':'bought')}
-        <span style="color:var(--muted)">${p.type==='online'?'awaiting delivery (warehouse receives)':'goods in hand (warehouse stocks in)'}</span></div>
+      <div class="meta">${recvLine}</div>
     </div>`;
   });
   return h;
 }
 
 function viewPrices(){
-  const buys=DB.get('purchases').filter(p=>p.item);
+  const buys=DB.get('purchases').filter(p=>p.item && (p.type==='online'||p.type==='store'));
   let h=`<div class="tabhead">Price reference for canvassing — every material you've bought, grouped by item, online and store together. Each source shows its unit price; the cheapest is flagged. Tap a website to reorder.</div>`;
   if(!buys.length){ return h+`<div class="empty"><div class="big">No price history yet</div>Online POs and store buys land here grouped by material.</div>`; }
   const groups={};
