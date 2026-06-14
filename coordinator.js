@@ -923,7 +923,7 @@ function Liquidation({ voyages, employees, sites, toast, tab, setTab }) {
         { id:'tool',  ico:'🛠️', bg:'#e9eef8', t:'Tools',       s:'Request & buy tools' },
         { id:'allow', ico:'👷', bg:'#fdf3e0', t:'Allowance',   s:'Crew allowance · confirm by passcode' },
         { id:'cons',  ico:'🧾', bg:'#f0eafa', t:'Consumables', s:'Project & admin consumables' },
-        { id:'misc',  ico:'🏥', bg:'#fde9ec', t:'Misc',        s:'Clinic / medical & other expenses' },
+        { id:'misc',  ico:'🏥', bg:'#fde9ec', t:'Miscellaneous', s:'Clinic / medical & other expenses' },
         { id:'sum',   ico:'📊', bg:'#e6f2f5', t:'Summary',     s:'Reconciliation & totals' },
       ].map(x => html`
         <div class="card" key=${x.id} onClick=${() => setTab(x.id)}
@@ -1264,7 +1264,7 @@ function App() {
 
   // ---- areas ----
   return html`
-    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISC':'SUMMARY') : '')) : 'PERSONNEL DATA')}
+    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISCELLANEOUS':'SUMMARY') : '')) : 'PERSONNEL DATA')}
     <div class="wrap">
       ${area === 'vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
       ${area === 'expenses' && html`<${Expenses} voyages=${voyages} toast=${flash} />`}
