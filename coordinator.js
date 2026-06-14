@@ -230,6 +230,7 @@ function Personnel({ employees, onReload, toast }) {
 
   return html`
     <div class="card">
+      ${stepHead(1, 'Identity', 'Name, employee type & code')}
       <${Field} label="Full name">
         <input value=${name} onInput=${e => setName(e.target.value)} placeholder="e.g. Juan Dela Cruz" />
       <//>
@@ -243,6 +244,9 @@ function Personnel({ employees, onReload, toast }) {
       <${Field} label="Employee code (auto)">
         <input value=${shownCode} disabled placeholder="auto-generated" />
       <//>
+    </div>
+    <div class="card">
+      ${stepHead(2, 'Work details', 'Position, contact & start date, then save')}
       <${Field} label="Position">
         <input value=${position} onInput=${e => setPosition(e.target.value)} placeholder="e.g. Fitter" />
       <//>
@@ -326,6 +330,7 @@ function Vessels({ voyages, sites, onReload, toast }) {
 
   return html`
     <div class="card">
+      ${stepHead(1, 'Vessel details', 'Name, code, location & status')}
       <div class="two">
         <${Field} label="Vessel name">
           <input value=${vessel} onInput=${e => setVessel(e.target.value)} placeholder="e.g. MV SF Trinity" />
@@ -347,8 +352,11 @@ function Vessels({ voyages, sites, onReload, toast }) {
           </select>
         <//>
       </div>
+    </div>
 
-      <label style="margin-top:6px">Drydock dates ${isDry ? '' : html`<span style="font-weight:400;color:var(--ink-dim)">(if applicable)</span>`}</label>
+    <div class="card">
+      ${stepHead(2, 'Repair dates', 'Fill the dates that apply to this vessel')}
+      <label style="margin-top:2px">Drydock dates ${isDry ? '' : html`<span style="font-weight:400;color:var(--ink-dim)">(if applicable)</span>`}</label>
       <div class="two">
         <${Field} label="Docking date"><input type="date" value=${docking} onInput=${e => setDocking(e.target.value)} /><//>
         <${Field} label="Undocking date"><input type="date" value=${undocking} onInput=${e => setUndocking(e.target.value)} /><//>
@@ -366,7 +374,10 @@ function Vessels({ voyages, sites, onReload, toast }) {
         <${Field} label="Emergency repair start"><input type="date" value=${emergStart} onInput=${e => setEmergStart(e.target.value)} /><//>
         <${Field} label="Emergency repair end"><input type="date" value=${emergEnd} onInput=${e => setEmergEnd(e.target.value)} /><//>
       </div>
+    </div>
 
+    <div class="card">
+      ${stepHead(3, 'Notes & save', 'Anything else, then add to schedule')}
       <${Field} label="Notes">
         <textarea rows="2" value=${notes} onInput=${e => setNotes(e.target.value)}></textarea>
       <//>
@@ -452,7 +463,7 @@ function FileLeave({ employees, toast }) {
 
   return html`
     <div class="card">
-      <label>File leave on behalf of an employee</label>
+      ${stepHead(1, 'Who & what', 'Employee and leave type')}
       <${Field} label="Employee">
         <select value=${emp} onChange=${e => setEmp(e.target.value)}>
           <option value="">Select employee…</option>
@@ -465,7 +476,10 @@ function FileLeave({ employees, toast }) {
           <option>Leave Without Pay</option><option>Emergency Leave</option>
         </select>
       <//>
-      ${hint && html`<p class="note" style="margin:-6px 0 12px;color:var(--ink-dim)">${hint}</p>`}
+      ${hint && html`<p class="note" style="margin:-6px 0 2px;color:var(--ink-dim)">${hint}</p>`}
+    </div>
+    <div class="card">
+      ${stepHead(2, 'Dates & reason', 'When, why, then submit')}
       <div class="two">
         <${Field} label="Start date"><input type="date" value=${start} onInput=${e => setStart(e.target.value)} /><//>
         <${Field} label="End date"><input type="date" value=${end} onInput=${e => setEnd(e.target.value)} /><//>
@@ -515,8 +529,8 @@ function FileDuty({ employees, toast }) {
 
   return html`
     <div class="card">
-      <label>File straight duty (emergency work during break)</label>
-      <p class="note" style="margin:0 0 12px;color:var(--ink-dim)">Admin approves via Telegram.</p>
+      ${stepHead(1, 'Employee & date', 'Who is on straight duty and when')}
+      <p class="note" style="margin:0 0 12px;color:var(--ink-dim)">Emergency work during break · Admin approves via Telegram.</p>
       <${Field} label="Employee">
         <select value=${emp} onChange=${e => setEmp(e.target.value)}>
           <option value="">Select employee…</option>
@@ -524,6 +538,9 @@ function FileDuty({ employees, toast }) {
         </select>
       <//>
       <${Field} label="Date"><input type="date" value=${date} onInput=${e => setDate(e.target.value)} /><//>
+    </div>
+    <div class="card">
+      ${stepHead(2, 'Reason & break', 'Why, then pick which break to file')}
       <${Field} label="Reason"><textarea rows="2" value=${reason} onInput=${e => setReason(e.target.value)} placeholder="e.g. Emergency repair works"></textarea><//>
       <div class="two">
         <button class="btn" disabled=${saving} onClick=${() => submit('lunch')}>🍽️ Lunch straight duty</button>
