@@ -127,6 +127,21 @@ async function getRecentLeaves() {
   if (error) throw error;
   return data || [];
 }
+// ---- kiosk attendance (read-only view) ----
+async function getAttendance(dateStr) {
+  const { data, error } = await supabase.from('attendance_records')
+    .select('*').eq('date', dateStr).order('employee_name', { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+function msToH(ms) { if (!ms || ms < 0) return '0.00'; return (ms / 3600000).toFixed(2); }
+function attStatus(r) {
+  if (r.is_incomplete) return { t: 'Incomplete', c: '#c0392b' };
+  if (r.status === 'out') return { t: 'Timed out', c: '#2d6cdf' };
+  if (r.status === 'working') return { t: 'Working', c: '#1d9e75' };
+  return { t: r.status || '—', c: '#b8860b' };
+}
+
 async function fileDuty(row) {
   const { error } = await supabase.from('straight_duty').insert(row);
   if (error) throw error;
@@ -556,6 +571,55 @@ function FileDuty({ employees, toast }) {
             ${r.reason ? html`<div class="sub" style="color:var(--ink-dim)">"${r.reason}"</div>` : ''}</div>
           <span class="pill" style=${'background:' + (r.status === 'Approved' ? '#12B89E' : r.status === 'Rejected' ? '#D64045' : 'var(--hivis)') + ';color:#000'}>${r.status}</span>
         </div>`) : html`<div class="empty">No straight duties filed yet.</div>`}
+    </div>`;
+}
+
+// Kiosk attendance — single-day view of all staff time in/out
+function Attendance({ toast }) {
+  const [date, setDate] = useState(todayPH());
+  const [rows, setRows] = useState(null);
+  const [open, setOpen] = useState({});
+  const load = (d) => { setRows(null); getAttendance(d).then(setRows).catch(e => { toast && toast('Load failed: ' + e.message, true); setRows([]); }); };
+  useEffect(() => { load(date); }, [date]);
+  const toInput = (mdy) => { const p = (mdy || '').split('/'); return p.length === 3 ? `${p[2]}-${p[0]}-${p[1]}` : ''; };
+  const fromInput = (ymd) => { const p = (ymd || '').split('-'); return p.length === 3 ? `${p[1]}/${p[2]}/${p[0]}` : ''; };
+  const present = (rows || []).filter(r => r.timein).length;
+  const late = (rows || []).filter(r => r.is_late).length;
+  return html`
+    <div class="card">
+      ${stepHead(1, 'Pick a day', 'See everyone\u2019s time in / time out for that date')}
+      <${Field} label="Date">
+        <input type="date" value=${toInput(date)} onInput=${e => setDate(fromInput(e.target.value))} />
+      <//>
+      ${rows && html`<div class="sub" style="color:var(--ink-dim)">${rows.length} record${rows.length === 1 ? '' : 's'} · ${present} present · ${late} late</div>`}
+    </div>
+    <div class="card">
+      <label>Attendance — ${date}</label>
+      ${rows == null ? html`<div class="empty">Loading…</div>`
+        : rows.length === 0 ? html`<div class="empty">No punches recorded for this day.</div>`
+        : rows.map(r => {
+            const st = attStatus(r);
+            const isOpen = !!open[r.id];
+            return html`
+              <div class="row" key=${r.id} style="flex-direction:column;align-items:stretch;gap:0">
+                <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onClick=${() => setOpen({ ...open, [r.id]: !isOpen })}>
+                  <div>
+                    <div class="name">${isOpen ? '▾' : '▸'} ${r.employee_name || r.employee_code}</div>
+                    <div class="sub">In ${r.timein || '—'} · Out ${r.timeout || '—'} · ${msToH(r.worked_ms)} h${r.site ? ' · ' + r.site : ''}</div>
+                  </div>
+                  <span class="pill" style=${'background:' + st.c + ';color:#fff'}>${st.t}${r.is_late ? ' · Late' : ''}</span>
+                </div>
+                ${isOpen && html`<div style="padding:8px 0 2px;font-size:13px;color:var(--ink-dim);line-height:1.7">
+                  <div>Time In: <b style="color:var(--ink)">${r.timein || '—'}</b>${r.is_late ? ' (late)' : ''}</div>
+                  <div>Lunch: ${r.lunch_out || '—'} → ${r.lunch_in || '—'}</div>
+                  <div>PM break: ${r.pm_out || '—'} → ${r.pm_in || '—'}</div>
+                  <div>Time Out: <b style="color:var(--ink)">${r.timeout || '—'}</b></div>
+                  <div>Worked: <b style="color:var(--ink)">${msToH(r.worked_ms)} h</b>${Number(r.ot_ms) > 0 ? ' · OT ' + msToH(r.ot_ms) + ' h' : ''}</div>
+                  ${(r.has_ot_allowance || r.has_away_allowance) ? html`<div>Allowance: ${r.has_ot_allowance ? 'OT \u20b150 ' : ''}${r.has_away_allowance ? 'Away' : ''}</div>` : ''}
+                  ${(r.straight_duty_lunch || r.straight_duty_pm) ? html`<div>Straight duty: ${r.straight_duty_lunch ? 'Lunch ' : ''}${r.straight_duty_pm ? 'PM' : ''}</div>` : ''}
+                </div>`}
+              </div>`;
+          })}
     </div>`;
 }
 
@@ -1275,16 +1339,21 @@ function App() {
           <div style="font-size:24px">💰</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Liquidation</div>
           <div class="sub" style="font-size:12px;color:var(--ink-dim)">Cash advance · materials · tools · reconcile by project</div>
         </div>
+        <div class="card" style="cursor:pointer;margin:0;grid-column:1/-1" onClick=${() => setArea('attendance')}>
+          <div style="font-size:24px">🕒</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Attendance</div>
+          <div class="sub" style="font-size:12px;color:var(--ink-dim)">Kiosk time in / time out by day</div>
+        </div>
       </div>
     </div>
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}`;
 
   // ---- areas ----
   return html`
-    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISCELLANEOUS':'SUMMARY') : '')) : 'PERSONNEL DATA')}
+    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'attendance' ? 'ATTENDANCE' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISCELLANEOUS':'SUMMARY') : '')) : 'PERSONNEL DATA')}
     <div class="wrap">
       ${area === 'vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
       ${area === 'expenses' && html`<${Expenses} voyages=${voyages} toast=${flash} />`}
+      ${area === 'attendance' && html`<${Attendance} toast=${flash} />`}
       ${area === 'liquidation' && html`<${Liquidation} voyages=${voyages} employees=${employees} sites=${sites} toast=${flash} tab=${liqTab} setTab=${setLiqTab} />`}
       ${area === 'personnel' && html`
         <div class="tabs">
