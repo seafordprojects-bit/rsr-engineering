@@ -670,6 +670,7 @@ function App() {
     { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', onClick:() => setAdminTab('issued') },
     { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse',        href:'../warehouse/' },
     { ico:'🛒', num:m.poInbox,    unit:'to purchase',      title:'Purchasing',        href:'../purchasing/' },
+    { ico:'💵', num:null,         unit:'weekly',           title:'Payroll',           href:'../payroll/' },
     { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  onClick:() => setAdminTab('vessels') },
     { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
