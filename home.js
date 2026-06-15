@@ -125,6 +125,10 @@ async function getStraightDuty() {
   if (error) throw error;
   return data || [];
 }
+async function decideStraightDuty(id, status) {
+  const { error } = await supabase.from('straight_duty').update({ status, decided_by: 'Admin', decided_on: new Date().toISOString() }).eq('id', id);
+  if (error) throw error;
+}
 async function getViolations() {
   const { data, error } = await supabase.from('violations').select('*').order('count', { ascending: false }).limit(200);
   if (error) throw error;
@@ -860,15 +864,22 @@ function App() {
           </div>
           ${statusPill(r.status)}
         </div>`);
-      if (adminTab === 'duty') return hrRows.map(r => html`
+      if (adminTab === 'duty') return hrRows.map(r => {
+        const decide = async (st) => { try { await decideStraightDuty(r.id, st); flash(r.employee_name + ' ' + st.toLowerCase()); setHrRows(await getStraightDuty()); } catch (e) { flash('Error: ' + e.message); } };
+        return html`
         <div class="row" key=${r.id} style="align-items:flex-start">
           <div>
             <div class="name">${r.employee_name}</div>
             <div class="unit">${r.break_type === 'lunch' ? '🍽️' : '☕'} ${r.break_label || ''}${r.date ? ' · ' + r.date : ''}</div>
             ${r.reason ? html`<div class="unit">${r.reason}</div>` : ''}
+            ${r.status === 'Pending' ? html`<div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn" style="padding:6px 14px;font-size:13px" onClick=${() => decide('Approved')}>✅ Approve</button>
+              <button class="btn ghost" style="padding:6px 14px;font-size:13px" onClick=${() => decide('Rejected')}>❌ Reject</button>
+            </div>` : ''}
           </div>
           ${statusPill(r.status)}
-        </div>`);
+        </div>`;
+      });
       if (adminTab === 'violations') return hrRows.map(r => {
         const hist = Array.isArray(r.history) ? r.history.slice(0, 3) : [];
         return html`<div class="row" key=${r.id || r.employee_name} style="align-items:flex-start">
