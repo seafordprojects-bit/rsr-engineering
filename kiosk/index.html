@@ -4232,16 +4232,47 @@ async function loadLeavesFromSupabase() {
   } catch(e) { console.warn('Load leaves from Supabase:', e); }
 }
 
+// ── APPROVED STRAIGHT DUTIES (filed in Coordinator, approved in Admin) ──
+// Reads approved rows from straight_duty and applies the break skip to that
+// employee's record for that date, so the break is not deducted.
+async function loadApprovedStraightDuties() {
+  try {
+    const { data } = await sbClient.from('straight_duty')
+      .select('*').eq('status', 'Approved').order('created_at', { ascending: false }).limit(300);
+    if (!data || !data.length) return;
+    let changed = false;
+    data.forEach(sd => {
+      const code = sd.employee_code, date = sd.date;
+      if (!code || !date) return;
+      const key = code + '_' + date;
+      // ensure a record exists for that employee+date
+      if (!records[key]) {
+        const emp = employees.find(e => e.code === code);
+        records[key] = { punches: {}, isLate: false, lateMs: 0,
+          employeeName: emp ? emp.name : (sd.employee_name || code) };
+      }
+      const rec = records[key];
+      if (sd.break_type === 'lunch' && !rec.straightDutyLunch) { rec.straightDutyLunch = true; changed = true; }
+      if (sd.break_type === 'pm' && !rec.straightDutyPm) { rec.straightDutyPm = true; changed = true; }
+    });
+    if (changed) { saveData(); if (typeof renderRoster === 'function') renderRoster(); if (typeof updateStats === 'function') updateStats(); }
+  } catch(e) { console.warn('Load approved straight duties:', e); }
+}
+
 // ── INIT SUPABASE SYNC ──
 async function initSupabaseSync() {
   await loadEmployeesFromSupabase();
   await loadLeavesFromSupabase();
+  await loadApprovedStraightDuties();
   console.log('✅ Supabase sync initialized');
   syncFlush(); // push anything queued from a previous offline session
 }
 
 // Start Supabase sync after page loads
 setTimeout(initSupabaseSync, 2000);
+// Re-check approved straight duties periodically (so an approval made during
+// the day is applied without restarting the kiosk).
+setInterval(function(){ if (navigator.onLine) loadApprovedStraightDuties(); }, 5*60*1000);
 
 // ============================================================
 //  OFFLINE QUEUE + AUTO-SYNC
