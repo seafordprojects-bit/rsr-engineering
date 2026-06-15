@@ -528,14 +528,14 @@ function FileDuty({ employees, toast }) {
     if (!picked) { toast('Select an employee', true); return; }
     if (!date) { toast('Select a date', true); return; }
     if (!reason.trim()) { toast('Enter a reason', true); return; }
+    const dmy = (() => { const p = (date || '').split('-'); return p.length === 3 ? (p[1] + '/' + p[2] + '/' + p[0]) : date; })();
     const breakLabel = breakType === 'lunch' ? 'Lunch (12:00–1:00 PM)' : 'PM Break (5:00–6:00 PM)';
     setSaving(true);
     try {
       await fileDuty({ employee_code: emp, employee_name: picked.name, employee_dept: picked.dept || '—',
-        break_type: breakType, break_label: breakLabel, date, reason: reason.trim(), status: 'Pending', filed_on: todayPH() });
+        break_type: breakType, break_label: breakLabel, date: dmy, reason: reason.trim(), status: 'Pending', filed_on: todayPH() });
       const emoji = breakType === 'lunch' ? '🍽️' : '☕';
-      notifyTg(`${emoji} <b>Straight Duty Request</b>\n👤 ${picked.name}\n💼 ${picked.dept || '—'}\n📅 ${date}\n⏰ ${breakLabel}\n📝 "${reason.trim()}"`,
-        [{ text: '✅ Approve', callback_data: 'approve_sd_' + breakType }, { text: '❌ Reject', callback_data: 'reject_sd_' + breakType }]);
+      notifyTg(`${emoji} <b>Straight Duty Request</b>\n👤 ${picked.name}\n💼 ${picked.dept || '—'}\n📅 ${dmy}\n⏰ ${breakLabel}\n📝 "${reason.trim()}"\n\n➡️ Approve in the Admin app (Straight Duty).`);
       toast('Straight duty request sent');
       setEmp(''); setReason(''); reload();
     } catch (e) { toast('Error: ' + e.message, true); }
