@@ -410,7 +410,9 @@ async function runPayroll(){
 
     computed=[];
     employees.forEach(emp=>{
-      const rs=(byEmp[emp.code]||[]).filter(r=>r.timein); // only days actually worked
+      let rs=(byEmp[emp.code]||[]).filter(r=>r.timein); // only days actually worked
+      // de-duplicate by date — if the same day appears twice, keep one (avoids double pay)
+      const seen={}; rs=rs.filter(r=>{ const k=toISO(r.date); if(seen[k]) return false; seen[k]=1; return true; });
       if(!rs.length) return; // skip employees with no attendance this week
       const shiftMs=emp.shift*3600000;
       const hourly=emp.shift>0 ? emp.dailyRate/emp.shift : 0;
@@ -531,7 +533,7 @@ function slipHTML(r){
         <div class="slip-period">Payslip · ${fmtDate(curFrom)} – ${fmtDate(curTo)}</div>
       </div>
       <div class="slip-emp"><span><b>${r.name}</b></span><span>${r.code}</span></div>
-      <div class="slip-emp"><span>${r.dept||'—'} · ${peso(r.dailyRate)}/day · ${r.shift}h shift</span><span>${r.daysPresent} day(s)</span></div>
+      <div class="slip-emp"><span>${r.dept||'—'} · ${r.shift}h shift</span><span>${r.daysPresent} day(s)</span></div>
       <table class="slip-tbl">
         <tr><td>Hours worked (${r.totalHrs.toFixed(2)}h over ${r.daysPresent} day${r.daysPresent===1?'':'s'})</td><td>${peso(r.basic)}</td></tr>
         <tr><td>Less: late / undertime</td><td>${r.lateUT>0?'('+peso(r.lateUT)+')':peso(0)}</td></tr>
@@ -542,9 +544,9 @@ function slipHTML(r){
         <tr><td>Less: other deduction</td><td>${(Number(r.otherDeduct)||0)>0?'('+peso(r.otherDeduct)+')':peso(0)}</td></tr>
       </table>
       <div class="slip-net"><span>TOTAL (NET PAY)</span><span>${peso(net)}</span></div>
-      <div style="font-size:11px;color:#666;margin-top:8px;display:flex;justify-content:space-between">
-        <span>Cash advance balance</span>
-        <span>${peso(Math.max(0, (Number(r.valeBalance)||0) - (Number(r.valeDeduct)||0)))} remaining</span>
+      <div style="font-size:11px;color:#666;margin-top:8px;display:flex;justify-content:space-between;border:1px dashed #ccc;border-radius:8px;padding:6px 10px">
+        <span>Cash advance balance (reminder only)</span>
+        <span><b>${peso(Math.max(0, (Number(r.valeBalance)||0) - (Number(r.valeDeduct)||0)))}</b> remaining</span>
       </div>
       <div style="display:flex;justify-content:space-between;margin-top:26px;font-size:11px;color:#888">
         <div style="border-top:1px solid #999;padding-top:4px;width:45%;text-align:center">Received by</div>
