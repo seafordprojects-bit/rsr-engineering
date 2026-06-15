@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>RSR Engineering Payroll</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#1a1a1a;background:#f5f5f0;min-height:100vh}
+.wrap{max-width:480px;margin:0 auto;padding:14px}
+.header{text-align:center;margin-bottom:14px}
+.app-title{font-size:16px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em}
+.app-sub{font-size:11px;color:#888;margin-top:1px}
+.tabs{display:flex;gap:2px;margin-bottom:14px;background:#e8e8e3;border-radius:10px;padding:3px}
+.tab{flex:1;padding:8px 3px;font-size:12px;cursor:pointer;border:none;background:none;color:#666;border-radius:7px;font-weight:500;transition:all .2s}
+.tab.active{background:#fff;color:#1a1a1a;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.section{display:none}.section.active{display:block}
+.card{background:#fff;border:1px solid #e8e8e3;border-radius:16px;padding:1rem;margin-bottom:12px}
+.card h4{font-size:13px;font-weight:600;margin-bottom:12px}
+.field-label{font-size:12px;color:#888;display:block;margin-bottom:4px;margin-top:10px}
+.field-label:first-of-type{margin-top:0}
+.field-input{width:100%;font-size:13px;padding:9px 12px;border:1px solid #e8e8e3;border-radius:10px;background:#f9f9f7;color:#1a1a1a}
+select.field-input{appearance:none}
+.btn-primary{width:100%;padding:12px;font-size:13px;font-weight:600;border-radius:12px;cursor:pointer;border:none;background:#378ADD;color:#fff;margin-top:12px}
+.btn-green{background:#1D9E75}
+.btn-red{background:#E24B4A}
+.btn-sm{font-size:12px;padding:7px 14px;border-radius:10px;cursor:pointer;border:1px solid #e8e8e3;background:#fff;color:#1a1a1a}
+.toolbar{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap;align-items:flex-end}
+.toolbar .fld{flex:1;min-width:120px}
+.quick-row{display:flex;gap:6px;margin-bottom:10px}
+.quick-btn{flex:1;padding:8px;font-size:11px;font-weight:600;border-radius:9px;cursor:pointer;border:1px solid #e8e8e3;background:#fff;color:#666}
+.quick-btn.active{background:#E6F1FB;border-color:#378ADD;color:#0C447C}
+.stats-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:14px}
+.stat{background:#fff;border-radius:13px;padding:11px;border:1px solid #e8e8e3;text-align:center}
+.stat-label{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px}
+.stat-val{font-size:18px;font-weight:700}
+.stat-val.net{color:#1D9E75}.stat-val.ot{color:#534AB7}.stat-val.vale{color:#D85A30}
+.pr-card{background:#fff;border:1px solid #e8e8e3;border-radius:14px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 6px rgba(0,0,0,0.04)}
+.pr-head{display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px}
+.pr-name{font-size:15px;font-weight:700;color:#1B2A4A}
+.pr-meta{font-size:11px;color:#888;margin-top:1px}
+.pr-net{text-align:right}
+.pr-net-lbl{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.04em}
+.pr-net-val{font-size:20px;font-weight:800;color:#1D9E75}
+.pr-lines{display:grid;grid-template-columns:1fr auto;gap:3px 10px;font-size:12px;margin-bottom:8px}
+.pr-lines .k{color:#666}
+.pr-lines .v{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+.pr-lines .v.minus{color:#A32D2D}
+.pr-lines .v.plus{color:#0F6E56}
+.pr-inputs{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:4px}
+.pr-inputs label{font-size:10px;color:#888;display:block;margin-bottom:3px;text-transform:uppercase;letter-spacing:.03em}
+.pr-inputs input{width:100%;font-size:13px;padding:7px 9px;border:1px solid #e8e8e3;border-radius:9px;background:#f9f9f7;text-align:right;font-weight:600}
+.vale-hint{font-size:10px;color:#D85A30;margin-top:2px;font-weight:600}
+.pill{display:inline-block;font-size:10px;padding:2px 8px;border-radius:999px;font-weight:600}
+.pill-a{background:#E1F5EE;color:#085041}.pill-b{background:#E6F1FB;color:#0C447C}
+.pill-susp{background:#FCEBEB;color:#791F1F}
+.empty-state{text-align:center;color:#aaa;padding:2rem;font-size:13px}
+.adv-row{display:flex;justify-content:space-between;align-items:center;padding:11px 0;border-bottom:1px solid #f0f0eb}
+.adv-row:last-child{border-bottom:none}
+.adv-name{font-size:13px;font-weight:600}
+.adv-sub{font-size:11px;color:#888;margin-top:1px}
+.adv-bal{font-size:15px;font-weight:700;color:#D85A30;text-align:right}
+.led-row{display:flex;justify-content:space-between;font-size:11px;padding:5px 0;border-bottom:1px solid #f7f7f4}
+.led-out{color:#A32D2D}.led-pay{color:#0F6E56}
+.lock{background:#fff;border:1px solid #e8e8e3;border-radius:16px;padding:2rem;text-align:center;max-width:320px;margin:3rem auto 0}
+.lock h3{font-size:16px;font-weight:600;margin-bottom:6px}
+.lock p{font-size:13px;color:#888;margin-bottom:14px}
+.lock input{width:100%;font-size:18px;padding:11px 14px;border:1px solid #e8e8e3;border-radius:10px;background:#f9f9f7;text-align:center;letter-spacing:6px;margin-bottom:10px}
+.msg{border-radius:11px;padding:10px 14px;margin:8px 0;font-size:12px;display:none}
+.msg.show{display:block}
+.msg.ok{background:#E1F5EE;color:#085041;border:1px solid #5DCAA5}
+.msg.err{background:#FCEBEB;color:#791F1F;border:1px solid #F09595}
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;align-items:flex-end;justify-content:center}
+.modal-bg.show{display:flex}
+.modal{background:#fff;border-radius:20px 20px 0 0;padding:1.4rem;width:100%;max-width:480px;max-height:90vh;overflow-y:auto}
+.modal h3{font-size:15px;font-weight:600;margin-bottom:12px}
+.slip{font-family:-apple-system,sans-serif;color:#1a1a1a}
+.slip-h{text-align:center;border-bottom:2px solid #1B2A4A;padding-bottom:8px;margin-bottom:10px}
+.slip-co{font-size:14px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
+.slip-period{font-size:11px;color:#666;margin-top:2px}
+.slip-emp{display:flex;justify-content:space-between;margin-bottom:8px;font-size:12px}
+.slip-tbl{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:8px}
+.slip-tbl td{padding:5px 0;border-bottom:1px solid #f0f0eb}
+.slip-tbl td:last-child{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+.slip-net{display:flex;justify-content:space-between;background:#1B2A4A;color:#fff;padding:10px 12px;border-radius:10px;font-weight:700;margin-top:6px}
+/* compact tiled payslips for batch printing */
+.slip-grid{font-size:0}
+.mini{display:inline-block;width:49%;vertical-align:top;box-sizing:border-box;border:1px solid #333;border-radius:6px;padding:7px 9px;margin:0 0.5% 1% 0;font-size:9px;line-height:1.36;color:#111;break-inside:avoid;page-break-inside:avoid}
+.mini-co{font-size:8px;font-weight:700;text-align:center;letter-spacing:.05em;text-transform:uppercase;margin-bottom:1px}
+.mini-top{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid #333;padding-bottom:3px;margin-bottom:3px}
+.mini-name{font-weight:800;font-size:10px;text-transform:uppercase}
+.mini-code{font-size:8px;color:#555}
+.mini-sub{font-size:8px;color:#555;margin-bottom:4px}
+.mini-l{display:flex;justify-content:space-between}
+.mini-l .v{font-variant-numeric:tabular-nums}
+.mini-net{display:flex;justify-content:space-between;font-weight:800;font-size:10px;border-top:1px solid #333;margin-top:4px;padding-top:3px}
+.mini-sign{font-size:7px;color:#555;margin-top:9px;border-top:1px solid #999;padding-top:2px;width:72%}
+@page{size:A4 portrait;margin:8mm}
+@media print{
+  body *{visibility:hidden}
+  #print-area,#print-area *{visibility:visible}
+  #print-area{position:absolute;left:0;top:0;width:100%;padding:0}
+  .modal,.modal-bg{position:static;background:none;max-width:none;max-height:none;overflow:visible;border-radius:0;padding:0;display:block}
+  .mini{height:52mm;margin:0 1mm 3mm 0}
+}
+.spin{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:#378ADD;border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
+@keyframes sp{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<!-- LOCK -->
+<div id="lock-screen" class="lock">
+  <h3>💰 RSR Payroll</h3>
+  <p>Enter payroll passcode</p>
+  <input type="password" id="lock-pin" inputmode="numeric" maxlength="8" placeholder="••••" onkeydown="if(event.key==='Enter')unlock()" />
+  <button class="btn-primary" style="margin-top:0" onclick="unlock()">Unlock</button>
+  <div id="lock-err" style="font-size:12px;color:#A32D2D;margin-top:8px;min-height:14px"></div>
+</div>
+
+<!-- APP -->
+<div class="wrap" id="app" style="display:none">
+  <div class="header">
+    <div class="app-title" id="co-title">RSR ENGINEERING</div>
+    <div class="app-sub">Weekly Payroll</div>
+  </div>
+
+  <div class="tabs">
+    <button class="tab active" id="t-run" onclick="tab('run',this)">Run Payroll</button>
+    <button class="tab" id="t-adv" onclick="tab('adv',this)">Cash Advances</button>
+    <button class="tab" id="t-set" onclick="tab('set',this)">Settings</button>
+  </div>
+
+  <!-- RUN PAYROLL -->
+  <div id="sec-run" class="section active">
+    <div class="card">
+      <h4>Pay week</h4>
+      <div class="quick-row">
+        <button class="quick-btn active" id="q-this" onclick="setWeek(0)">This week</button>
+        <button class="quick-btn" id="q-last" onclick="setWeek(-1)">Last week</button>
+        <button class="quick-btn" id="q-custom" onclick="markCustom()">Custom</button>
+      </div>
+      <div class="toolbar">
+        <div class="fld"><label class="field-label">From</label><input type="date" id="from" class="field-input" onchange="markCustom()"></div>
+        <div class="fld"><label class="field-label">To</label><input type="date" id="to" class="field-input" onchange="markCustom()"></div>
+      </div>
+      <button class="btn-primary" onclick="runPayroll()" id="run-btn">Load &amp; compute</button>
+    </div>
+
+    <div id="run-msg" class="msg"></div>
+
+    <div id="run-results" style="display:none">
+      <div class="stats-grid">
+        <div class="stat"><div class="stat-label">Headcount</div><div class="stat-val" id="s-head">0</div></div>
+        <div class="stat"><div class="stat-label">OT pay</div><div class="stat-val ot" id="s-ot">₱0</div></div>
+        <div class="stat"><div class="stat-label">Vales deducted</div><div class="stat-val vale" id="s-vale">₱0</div></div>
+        <div class="stat"><div class="stat-label">Total net payout</div><div class="stat-val net" id="s-net">₱0</div></div>
+      </div>
+      <div id="pr-list"></div>
+      <button class="btn-primary" onclick="printAllSlips()">🖨️ Print all payslips</button>
+      <button class="btn-primary btn-green" onclick="postDeductions()" id="post-btn">Post vale deductions</button>
+      <div id="post-msg" class="msg"></div>
+    </div>
+  </div>
+
+  <!-- CASH ADVANCES -->
+  <div id="sec-adv" class="section">
+    <div class="card">
+      <h4>Record a cash advance (vale)</h4>
+      <label class="field-label">Employee</label>
+      <select id="adv-emp" class="field-input"></select>
+      <label class="field-label">Amount (₱)</label>
+      <input type="number" id="adv-amt" class="field-input" inputmode="decimal" placeholder="0.00">
+      <label class="field-label">Date</label>
+      <input type="date" id="adv-date" class="field-input">
+      <label class="field-label">Reason (optional)</label>
+      <input type="text" id="adv-reason" class="field-input" placeholder="e.g. emergency, advance vs salary">
+      <button class="btn-primary" onclick="addAdvance()" id="adv-btn">Add advance</button>
+      <div id="adv-msg" class="msg"></div>
+    </div>
+    <div class="card">
+      <h4>Outstanding vale balances</h4>
+      <div id="adv-list"><div class="empty-state">Loading…</div></div>
+    </div>
+  </div>
+
+  <!-- SETTINGS -->
+  <div id="sec-set" class="section">
+    <div class="card">
+      <h4>Settings</h4>
+      <label class="field-label">Company name</label>
+      <input type="text" id="set-co" class="field-input">
+      <label class="field-label">Overtime multiplier</label>
+      <input type="number" id="set-ot" class="field-input" step="0.05" inputmode="decimal">
+      <label class="field-label">Default weekly vale deduction (₱)</label>
+      <input type="number" id="set-vale" class="field-input" inputmode="decimal" placeholder="500">
+      <label class="field-label">Change payroll passcode (leave blank to keep)</label>
+      <input type="password" id="set-pin" class="field-input" inputmode="numeric" placeholder="new passcode">
+      <button class="btn-primary" onclick="saveSettings()">Save settings</button>
+      <div id="set-msg" class="msg"></div>
+    </div>
+    <div class="card">
+      <h4>How pay is computed</h4>
+      <div style="font-size:12px;color:#666;line-height:1.6">
+        Hourly rate = daily rate ÷ shift hours.<br>
+        <b>Basic</b> = daily rate × days present.<br>
+        <b>Less late / undertime</b> = shortfall hours × hourly rate (grace period already respected by the kiosk).<br>
+        <b>Plus OT</b> = OT hours × hourly × <span id="ot-disp">1.25</span>.<br>
+        <b>Plus allowance</b> = manual entry per employee.<br>
+        <b>Less vale</b> = amount you choose to deduct this week.<br>
+        Reads <code>employees</code> &amp; <code>attendance_records</code> from your kiosk's Supabase — no kiosk changes.
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- PASSCODE CONFIRM MODAL -->
+<div class="modal-bg" id="confirm-bg">
+  <div class="modal">
+    <h3 id="confirm-title">Confirm</h3>
+    <p style="font-size:12px;color:#888;margin-bottom:12px" id="confirm-sub"></p>
+    <input type="password" id="confirm-pin" class="field-input" inputmode="numeric" placeholder="Enter passcode" style="text-align:center;letter-spacing:4px">
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn-sm" style="flex:1" onclick="closeConfirm()">Cancel</button>
+      <button class="btn-primary btn-green" style="flex:1;margin-top:0" onclick="doConfirm()">Confirm</button>
+    </div>
+    <div id="confirm-err" style="font-size:12px;color:#A32D2D;margin-top:8px;min-height:14px"></div>
+  </div>
+</div>
+
+<!-- PAYSLIP MODAL -->
+<div class="modal-bg" id="slip-bg">
+  <div class="modal">
+    <div id="print-area"></div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn-sm" style="flex:1" onclick="document.getElementById('slip-bg').classList.remove('show')">Close</button>
+      <button class="btn-primary" style="flex:1;margin-top:0" onclick="window.print()">Print / Save PDF</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── SUPABASE (same project as the kiosk) ──
+const SUPABASE_URL = 'https://wpmcbjrisuyjvobvzaus.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ── SETTINGS (Supabase 'settings' table, with localStorage cache) ──
+const LS='rsr_payroll_settings';
+let cfg = JSON.parse(localStorage.getItem(LS) || '{}');
+cfg.pin = cfg.pin || '1234';
+cfg.company = cfg.company || 'RSR Engineering';
+cfg.otMult = cfg.otMult || 1.25;
+cfg.weeklyVale = (cfg.weeklyVale===undefined) ? 500 : cfg.weeklyVale;
+cfg.allowance = (cfg.allowance===undefined) ? 50 : cfg.allowance;
+// Pull the shared settings from Supabase (key 'payroll_cfg'); fall back to local.
+async function loadCfg(){
+  try{
+    const {data}=await sb.from('settings').select('value').eq('key','payroll_cfg').maybeSingle();
+    if(data && data.value){
+      const v=typeof data.value==='string'?JSON.parse(data.value):data.value;
+      cfg={...cfg,...v};
+      localStorage.setItem(LS, JSON.stringify(cfg));
+    }
+  }catch(e){ console.warn('loadCfg:',e.message); }
+}
+async function saveCfg(){
+  localStorage.setItem(LS, JSON.stringify(cfg));
+  try{
+    await sb.from('settings').upsert({key:'payroll_cfg', value:JSON.stringify(cfg)},{onConflict:'key'});
+  }catch(e){ console.warn('saveCfg supabase:',e.message); }
+}
+
+let employees=[];          // from Supabase
+let advances=[];           // cash_advances ledger
+let computed=[];           // current payroll run rows
+let curFrom=null, curTo=null;
+let confirmCb=null;
+
+// ── HELPERS ──
+const peso = n => '₱'+(Math.round((n||0)*100)/100).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
+const pesoShort = n => '₱'+Math.round(n||0).toLocaleString('en-PH');
+function msg(id,type,text){const e=document.getElementById(id);e.className='msg show '+type;e.textContent=text;}
+function clearMsg(id){const e=document.getElementById(id);e.className='msg';}
+function isoOf(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}
+// Normalise any stored date string ('2026-06-13' or '06/13/2026' or '6/13/2026') to ISO yyyy-mm-dd
+function toISO(s){
+  if(!s) return '';
+  s=String(s).trim();
+  if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+  const m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m) return m[3]+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0');
+  const d=new Date(s); return isNaN(d)?s:isoOf(d);
+}
+function fmtDate(iso){const d=new Date(iso+'T00:00:00');return d.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});}
+
+// ── LOCK ──
+function unlock(){
+  const v=document.getElementById('lock-pin').value;
+  if(v===cfg.pin){
+    document.getElementById('lock-screen').style.display='none';
+    document.getElementById('app').style.display='block';
+    init();
+  } else {
+    document.getElementById('lock-err').textContent='Wrong passcode.';
+  }
+}
+
+function tab(name,btn){
+  document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
+  document.getElementById('sec-'+name).classList.add('active');
+  btn.classList.add('active');
+  if(name==='adv') renderAdvances();
+}
+
+// ── INIT ──
+async function init(){
+  document.getElementById('co-title').textContent=(cfg.company||'RSR Engineering').toUpperCase();
+  document.getElementById('set-co').value=cfg.company;
+  document.getElementById('set-ot').value=cfg.otMult;
+  document.getElementById('set-vale').value=cfg.weeklyVale;
+  document.getElementById('ot-disp').textContent=cfg.otMult;
+  document.getElementById('adv-date').value=isoOf(new Date());
+  setWeek(0);
+  await loadEmployees();
+  await loadAdvances();
+}
+
+async function loadEmployees(){
+  try{
+    const {data,error}=await sb.from('employees').select('*').order('name');
+    if(error) throw error;
+    employees=(data||[]).map(e=>({
+      code:e.code, name:e.name, dept:e.dept, position:e.position,
+      homeSite:e.home_site||'A', shift:Number(e.shift)||8,
+      dailyRate:Number(e.daily_rate)||0, suspended:!!e.is_suspended
+    }));
+    // populate advance dropdown
+    const sel=document.getElementById('adv-emp');
+    sel.innerHTML=employees.map(e=>`<option value="${e.code}">${e.name} (${e.code})</option>`).join('');
+  }catch(err){ msg('run-msg','err','Could not load employees: '+err.message); }
+}
+
+async function loadAdvances(){
+  try{
+    const {data,error}=await sb.from('cash_advances').select('*').order('created_at',{ascending:false});
+    if(error) throw error;
+    advances=data||[];
+  }catch(err){
+    advances=[];
+    console.warn('cash_advances load:',err.message);
+  }
+}
+
+// outstanding balance for an employee = advances - payments
+function outstanding(code){
+  return advances.filter(a=>a.employee_code===code)
+    .reduce((s,a)=> s + (a.type==='payment' ? -Number(a.amount) : Number(a.amount)), 0);
+}
+
+// ── WEEK SELECTION (Mon–Sun) ──
+function setWeek(offset){
+  const now=new Date();
+  const dow=(now.getDay()+6)%7; // 0=Mon
+  const mon=new Date(now); mon.setDate(now.getDate()-dow+offset*7); mon.setHours(0,0,0,0);
+  const sun=new Date(mon); sun.setDate(mon.getDate()+6);
+  document.getElementById('from').value=isoOf(mon);
+  document.getElementById('to').value=isoOf(sun);
+  document.querySelectorAll('.quick-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById(offset===0?'q-this':'q-last').classList.add('active');
+}
+function markCustom(){
+  document.querySelectorAll('.quick-btn').forEach(b=>b.classList.remove('active'));
+  document.getElementById('q-custom').classList.add('active');
+}
+
+// ── RUN PAYROLL ──
+async function runPayroll(){
+  clearMsg('post-msg');
+  const from=document.getElementById('from').value, to=document.getElementById('to').value;
+  if(!from||!to){ msg('run-msg','err','Pick a from and to date.'); return; }
+  if(from>to){ msg('run-msg','err','From date is after To date.'); return; }
+  curFrom=from; curTo=to;
+  const btn=document.getElementById('run-btn');
+  btn.innerHTML='<span class="spin"></span> Loading…'; btn.disabled=true;
+  try{
+    if(!employees.length) await loadEmployees();
+    await loadAdvances();
+    // Fetch attendance. Try a date-range query; if the column is text we still
+    // catch everything by also filtering client-side on normalised ISO dates.
+    let recs=[];
+    try{
+      const {data}=await sb.from('attendance_records').select('*').gte('date',from).lte('date',to);
+      recs=data||[];
+    }catch(e){ recs=[]; }
+    if(!recs.length){
+      // fallback: pull recent and filter client-side (handles MM/DD/YYYY text columns)
+      const {data}=await sb.from('attendance_records').select('*').order('created_at',{ascending:false}).limit(5000);
+      recs=(data||[]).filter(r=>{const i=toISO(r.date);return i>=from && i<=to;});
+    } else {
+      recs=recs.filter(r=>{const i=toISO(r.date);return i>=from && i<=to;});
+    }
+
+    // group by employee_code
+    const byEmp={};
+    recs.forEach(r=>{ (byEmp[r.employee_code]=byEmp[r.employee_code]||[]).push(r); });
+
+    computed=[];
+    employees.forEach(emp=>{
+      const rs=(byEmp[emp.code]||[]).filter(r=>r.timein); // only days actually worked
+      if(!rs.length) return; // skip employees with no attendance this week
+      const shiftMs=emp.shift*3600000;
+      const hourly=emp.shift>0 ? emp.dailyRate/emp.shift : 0;
+      let daysPresent=0, regularMs=0, otMs=0, shortfallMs=0, otAllowDays=0, awayAllowDays=0;
+      rs.forEach(r=>{
+        daysPresent++;
+        const worked=Number(r.worked_ms)||0;
+        const ot=Number(r.ot_ms)||0;
+        const reg=Math.max(0, worked-ot);            // regular portion
+        regularMs+=Math.min(reg,shiftMs);
+        otMs+=ot;
+        shortfallMs+=Math.max(0, shiftMs-Math.min(reg,shiftMs)); // late/undertime gap
+        if(r.has_ot_allowance) otAllowDays++;
+        if(r.has_away_allowance) awayAllowDays++;
+      });
+      const allowAmt=Number(cfg.allowance)||50;
+      const basic = emp.dailyRate*daysPresent;
+      const lateUT = (shortfallMs/3600000)*hourly;
+      const otPay = (otMs/3600000)*hourly*cfg.otMult;
+      const bal = outstanding(emp.code);
+      const defaultVale = bal>0 ? Math.min(cfg.weeklyVale, bal) : 0;
+      computed.push({
+        code:emp.code, name:emp.name, dept:emp.dept, homeSite:emp.homeSite,
+        suspended:emp.suspended, dailyRate:emp.dailyRate, shift:emp.shift, hourly,
+        daysPresent, otHrs:otMs/3600000, basic, lateUT, otPay,
+        valeBalance:bal, otAllowance:otAllowDays*allowAmt, stayInAllowance:awayAllowDays*allowAmt,
+        valeDeduct:defaultVale, otherDeduct:0
+      });
+    });
+
+    if(!computed.length){ msg('run-msg','err','No attendance found for that week.'); document.getElementById('run-results').style.display='none'; }
+    else { clearMsg('run-msg'); renderRun(); document.getElementById('run-results').style.display='block'; }
+  }catch(err){
+    msg('run-msg','err','Error: '+err.message);
+  }finally{
+    btn.innerHTML='Load &amp; compute'; btn.disabled=false;
+  }
+}
+
+function netOf(r){ return r.basic - r.lateUT + r.otPay + (Number(r.otAllowance)||0) + (Number(r.stayInAllowance)||0) - (Number(r.valeDeduct)||0) - (Number(r.otherDeduct)||0); }
+
+function renderRun(){
+  document.getElementById('s-head').textContent=computed.length;
+  document.getElementById('pr-list').innerHTML=computed.map((r,i)=>`
+    <div class="pr-card">
+      <div class="pr-head">
+        <div>
+          <div class="pr-name">${r.name} ${r.suspended?'<span class="pill pill-susp">suspended</span>':''}</div>
+          <div class="pr-meta">${r.code} · ${r.dept||'—'} · ${peso(r.dailyRate)}/day · ${r.daysPresent} day(s)</div>
+        </div>
+        <div class="pr-net">
+          <div class="pr-net-lbl">Net pay</div>
+          <div class="pr-net-val" id="net-${i}">${peso(netOf(r))}</div>
+        </div>
+      </div>
+      <div class="pr-lines">
+        <div class="k">Basic (${r.daysPresent} × ${pesoShort(r.dailyRate)})</div><div class="v">${peso(r.basic)}</div>
+        <div class="k">Less late / undertime</div><div class="v minus">${r.lateUT>0?'−'+peso(r.lateUT):peso(0)}</div>
+        <div class="k">OT pay (${r.otHrs.toFixed(2)}h × ${cfg.otMult})</div><div class="v plus">${r.otPay>0?'+'+peso(r.otPay):peso(0)}</div>
+      </div>
+      <div class="pr-inputs">
+        <div>
+          <label>OT allowance (+)</label>
+          <input type="number" inputmode="decimal" value="${r.otAllowance}" oninput="upd(${i},'otAllowance',this.value)">
+        </div>
+        <div>
+          <label>Stay-in allowance (+)</label>
+          <input type="number" inputmode="decimal" value="${r.stayInAllowance}" oninput="upd(${i},'stayInAllowance',this.value)">
+        </div>
+        <div>
+          <label>Cash advance (−)</label>
+          <input type="number" inputmode="decimal" value="${r.valeDeduct}" oninput="upd(${i},'valeDeduct',this.value)">
+          ${r.valeBalance>0?`<div class="vale-hint">Outstanding: ${peso(r.valeBalance)}</div>`:''}
+        </div>
+        <div>
+          <label>Other deduction (−)</label>
+          <input type="number" inputmode="decimal" value="${r.otherDeduct}" oninput="upd(${i},'otherDeduct',this.value)">
+        </div>
+      </div>
+    </div>`).join('');
+  // payslip buttons row per card
+  computed.forEach((r,i)=>{
+    const card=document.getElementById('net-'+i).closest('.pr-card');
+    const b=document.createElement('button');
+    b.className='btn-sm'; b.style.cssText='width:100%;margin-top:10px';
+    b.textContent='View payslip'; b.onclick=()=>showSlip(i);
+    card.appendChild(b);
+  });
+  recalcTotals();
+}
+
+function upd(i,field,val){
+  computed[i][field]=parseFloat(val)||0;
+  // clamp vale deduction to outstanding balance
+  if(field==='valeDeduct' && computed[i][field]>computed[i].valeBalance && computed[i].valeBalance>0){
+    computed[i][field]=computed[i].valeBalance;
+  }
+  document.getElementById('net-'+i).textContent=peso(netOf(computed[i]));
+  recalcTotals();
+}
+
+function recalcTotals(){
+  let net=0,ot=0,vale=0;
+  computed.forEach(r=>{ net+=netOf(r); ot+=r.otPay; vale+=(Number(r.valeDeduct)||0); });
+  document.getElementById('s-net').textContent=pesoShort(net);
+  document.getElementById('s-ot').textContent=pesoShort(ot);
+  document.getElementById('s-vale').textContent=pesoShort(vale);
+}
+
+// ── PAYSLIP ──
+function slipHTML(r){
+  const net=netOf(r);
+  return `
+    <div class="slip">
+      <div class="slip-h">
+        <div class="slip-co">${cfg.company}</div>
+        <div class="slip-period">Payslip · ${fmtDate(curFrom)} – ${fmtDate(curTo)}</div>
+      </div>
+      <div class="slip-emp"><span><b>${r.name}</b></span><span>${r.code}</span></div>
+      <div class="slip-emp"><span>${r.dept||'—'} · ${peso(r.dailyRate)}/day · ${r.shift}h shift</span><span>${r.daysPresent} day(s)</span></div>
+      <table class="slip-tbl">
+        <tr><td>Basic pay (${r.daysPresent} × ${peso(r.dailyRate)})</td><td>${peso(r.basic)}</td></tr>
+        <tr><td>Less: late / undertime</td><td>${r.lateUT>0?'('+peso(r.lateUT)+')':peso(0)}</td></tr>
+        <tr><td>Add: overtime (${r.otHrs.toFixed(2)}h × ${cfg.otMult})</td><td>${peso(r.otPay)}</td></tr>
+        <tr><td>Add: OT allowance</td><td>${peso(Number(r.otAllowance)||0)}</td></tr>
+        <tr><td>Add: stay-in allowance</td><td>${peso(Number(r.stayInAllowance)||0)}</td></tr>
+        <tr><td>Less: cash advance</td><td>${(Number(r.valeDeduct)||0)>0?'('+peso(r.valeDeduct)+')':peso(0)}</td></tr>
+        <tr><td>Less: other deduction</td><td>${(Number(r.otherDeduct)||0)>0?'('+peso(r.otherDeduct)+')':peso(0)}</td></tr>
+      </table>
+      <div class="slip-net"><span>NET PAY</span><span>${peso(net)}</span></div>
+      ${r.valeBalance>0?`<div style="font-size:11px;color:#888;margin-top:8px">Remaining vale balance after this slip: ${peso(r.valeBalance-(Number(r.valeDeduct)||0))}</div>`:''}
+      <div style="display:flex;justify-content:space-between;margin-top:26px;font-size:11px;color:#888">
+        <div style="border-top:1px solid #999;padding-top:4px;width:45%;text-align:center">Received by</div>
+        <div style="border-top:1px solid #999;padding-top:4px;width:45%;text-align:center">Prepared by</div>
+      </div>
+    </div>`;
+}
+function showSlip(i){
+  document.getElementById('print-area').innerHTML=slipHTML(computed[i]);
+  document.getElementById('slip-bg').classList.add('show');
+}
+function slipMini(r){
+  const net=netOf(r);
+  const L=(k,v,paren)=>`<div class="mini-l"><span>${k}</span><span class="v">${paren&&v>0?'('+peso(v)+')':peso(v)}</span></div>`;
+  return `<div class="mini">
+    <div class="mini-co">${cfg.company}</div>
+    <div class="mini-top"><span class="mini-name">${r.name}</span><span class="mini-code">${r.code}</span></div>
+    <div class="mini-sub">${fmtDate(curFrom)} – ${fmtDate(curTo)} · ${peso(r.dailyRate)}/day · ${r.daysPresent}d</div>
+    ${L('Basic',r.basic)}
+    ${L('Late/UT',r.lateUT,true)}
+    ${L('OT pay',r.otPay)}
+    ${L('OT allow.',Number(r.otAllowance)||0)}
+    ${L('Stay-in',Number(r.stayInAllowance)||0)}
+    ${L('Cash adv.',Number(r.valeDeduct)||0,true)}
+    ${L('Other ded.',Number(r.otherDeduct)||0,true)}
+    <div class="mini-net"><span>NET PAY</span><span>${peso(net)}</span></div>
+    <div class="mini-sign">Received by</div>
+  </div>`;
+}
+function printAllSlips(){
+  if(!computed.length) return;
+  document.getElementById('print-area').innerHTML=
+    '<div class="slip-grid">'+computed.map(slipMini).join('')+'</div>';
+  document.getElementById('slip-bg').classList.add('show');
+}
+
+// ── POST VALE DEDUCTIONS ──
+function postDeductions(){
+  const toPost=computed.filter(r=>(Number(r.valeDeduct)||0)>0);
+  if(!toPost.length){ msg('post-msg','err','No vale deductions entered.'); return; }
+  const total=toPost.reduce((s,r)=>s+Number(r.valeDeduct),0);
+  openConfirm('Post vale deductions',
+    `This will record ${toPost.length} vale payment(s) totalling ${peso(total)} against employees' advances. This reduces their outstanding balances.`,
+    async()=>{
+      const btn=document.getElementById('post-btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span> Posting…';
+      try{
+        const rows=toPost.map(r=>({
+          employee_code:r.code, employee_name:r.name, type:'payment',
+          amount:Number(r.valeDeduct), reason:'Payroll deduction',
+          date:curTo, week_start:curFrom, week_end:curTo
+        }));
+        const {error}=await sb.from('cash_advances').insert(rows);
+        if(error) throw error;
+        await loadAdvances();
+        // refresh balances shown in run + reset deductions
+        computed.forEach(r=>{ r.valeBalance=outstanding(r.code); });
+        msg('post-msg','ok','Posted '+rows.length+' deduction(s). Balances updated.');
+      }catch(err){ msg('post-msg','err','Failed: '+err.message); }
+      finally{ btn.disabled=false; btn.innerHTML='Post vale deductions'; }
+    });
+}
+
+// ── CASH ADVANCES TAB ──
+async function addAdvance(){
+  const code=document.getElementById('adv-emp').value;
+  const amt=parseFloat(document.getElementById('adv-amt').value);
+  const date=document.getElementById('adv-date').value;
+  const reason=document.getElementById('adv-reason').value.trim();
+  if(!code){ msg('adv-msg','err','Pick an employee.'); return; }
+  if(!amt||amt<=0){ msg('adv-msg','err','Enter a valid amount.'); return; }
+  const emp=employees.find(e=>e.code===code);
+  const btn=document.getElementById('adv-btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span> Saving…';
+  try{
+    const {error}=await sb.from('cash_advances').insert({
+      employee_code:code, employee_name:emp?emp.name:code, type:'advance',
+      amount:amt, reason:reason||null, date:date||isoOf(new Date())
+    });
+    if(error) throw error;
+    await loadAdvances();
+    document.getElementById('adv-amt').value=''; document.getElementById('adv-reason').value='';
+    msg('adv-msg','ok','Advance recorded.');
+    renderAdvances();
+  }catch(err){ msg('adv-msg','err','Failed: '+err.message); }
+  finally{ btn.disabled=false; btn.innerHTML='Add advance'; }
+}
+
+function renderAdvances(){
+  const list=document.getElementById('adv-list');
+  const codes=[...new Set(advances.map(a=>a.employee_code))];
+  const rows=codes.map(code=>{
+    const bal=outstanding(code);
+    const emp=employees.find(e=>e.code===code);
+    return {code,name:emp?emp.name:code,bal};
+  }).filter(r=>Math.abs(r.bal)>0.005).sort((a,b)=>b.bal-a.bal);
+  if(!rows.length){ list.innerHTML='<div class="empty-state">No outstanding advances.</div>'; return; }
+  list.innerHTML=rows.map(r=>`
+    <div class="adv-row" onclick="toggleLedger('${r.code}')">
+      <div><div class="adv-name">${r.name}</div><div class="adv-sub">${r.code} · tap for history</div></div>
+      <div class="adv-bal">${peso(r.bal)}</div>
+    </div>
+    <div id="led-${r.code}" style="display:none;padding:4px 0 10px"></div>`).join('');
+}
+
+function toggleLedger(code){
+  const el=document.getElementById('led-'+code);
+  if(el.style.display==='block'){ el.style.display='none'; return; }
+  const items=advances.filter(a=>a.employee_code===code)
+    .sort((a,b)=> new Date(a.created_at)-new Date(b.created_at));
+  el.innerHTML=items.map(a=>{
+    const isPay=a.type==='payment';
+    return `<div class="led-row"><span>${fmtDate(toISO(a.date))} · ${isPay?'Payroll deduction':(a.reason||'Advance')}</span>
+      <span class="${isPay?'led-pay':'led-out'}">${isPay?'−':'+'}${peso(a.amount)}</span></div>`;
+  }).join('');
+  el.style.display='block';
+}
+
+// ── CONFIRM MODAL ──
+function openConfirm(title,sub,cb){
+  document.getElementById('confirm-title').textContent=title;
+  document.getElementById('confirm-sub').textContent=sub;
+  document.getElementById('confirm-pin').value='';
+  document.getElementById('confirm-err').textContent='';
+  confirmCb=cb;
+  document.getElementById('confirm-bg').classList.add('show');
+}
+function closeConfirm(){ document.getElementById('confirm-bg').classList.remove('show'); confirmCb=null; }
+function doConfirm(){
+  if(document.getElementById('confirm-pin').value!==cfg.pin){
+    document.getElementById('confirm-err').textContent='Wrong passcode.'; return;
+  }
+  const cb=confirmCb; closeConfirm(); if(cb) cb();
+}
+
+// ── SETTINGS ──
+function saveSettings(){
+  cfg.company=document.getElementById('set-co').value.trim()||'RSR Engineering';
+  cfg.otMult=parseFloat(document.getElementById('set-ot').value)||1.25;
+  const wv=parseFloat(document.getElementById('set-vale').value);
+  cfg.weeklyVale=isNaN(wv)?500:wv;
+  const np=document.getElementById('set-pin').value.trim();
+  if(np) cfg.pin=np;
+  saveCfg();
+  document.getElementById('co-title').textContent=cfg.company.toUpperCase();
+  document.getElementById('ot-disp').textContent=cfg.otMult;
+  document.getElementById('set-pin').value='';
+  msg('set-msg','ok','Settings saved.');
+}
+
+window.addEventListener('load',async ()=>{ document.getElementById('lock-pin').focus(); await loadCfg(); });
+</script>
+</body>
+</html>
