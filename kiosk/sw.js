@@ -1,6 +1,6 @@
 /* RSR Kiosk service worker — offline cache + auto-update.
    Bump CACHE_VERSION on every kiosk update so tablets fetch fresh files. */
-const CACHE_VERSION = 'rsr-kiosk-v4';
+const CACHE_VERSION = 'rsr-kiosk-v5';
 const APP_SHELL = [
   './',
   './index.html',
