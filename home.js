@@ -106,6 +106,22 @@ async function getLeaves() {
   if (error) throw error;
   return data || [];
 }
+// Approve/reject a leave from Admin. On approval, deduct VL/SL balance (mirrors kiosk).
+async function decideLeave(row, status) {
+  await supabase.from('leave_requests')
+    .update({ status, approved_by: 'Admin', approved_via: 'Admin app' }).eq('id', row.id);
+  if (status === 'Approved' && row.employee_code && row.days) {
+    const t = row.type;
+    const col = t === 'Vacation Leave' ? 'vl_balance' : t === 'Sick Leave' ? 'sl_balance' : null;
+    if (col) {
+      const { data: emp } = await supabase.from('employees').select('id,' + col).eq('code', row.employee_code).maybeSingle();
+      if (emp) {
+        const newBal = Math.max(0, (Number(emp[col]) || 0) - Number(row.days));
+        await supabase.from('employees').update({ [col]: newBal }).eq('id', emp.id);
+      }
+    }
+  }
+}
 async function getApprovals() {
   const { data, error } = await supabase.from('pending_approvals').select('*').order('created_at', { ascending: false }).limit(100);
   if (error) throw error;
@@ -854,16 +870,23 @@ function App() {
     const body = (() => {
       if (hrRows == null) return html`<div class="empty">Loading…</div>`;
       if (!hrRows.length) return html`<div class="empty">Nothing here yet.</div>`;
-      if (adminTab === 'leaves') return hrRows.map(r => html`
+      if (adminTab === 'leaves') return hrRows.map(r => {
+        const decide = async (st) => { try { await decideLeave(r, st); flash(r.employee_name + ' ' + st.toLowerCase()); setHrRows(await getLeaves()); } catch (e) { flash('Error: ' + e.message); } };
+        return html`
         <div class="row" key=${r.id} style="align-items:flex-start">
           <div>
             <div class="name">${r.employee_name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.type || '—'}</span></div>
             <div class="unit">${r.start_date || '?'} → ${r.end_date || '?'}${r.days ? ' · ' + r.days + ' day(s)' : ''}</div>
             ${r.reason ? html`<div class="unit">${r.reason}</div>` : ''}
-            ${r.approved_by ? html`<div class="unit">By ${r.approved_by}${r.approved_via ? ' (' + r.approved_via + ')' : ''}</div>` : ''}
+            ${r.status !== 'Pending' && r.approved_by ? html`<div class="unit" style="color:var(--ink-dim)">${r.status} by ${r.approved_by}${r.approved_via ? ' (' + r.approved_via + ')' : ''}</div>` : ''}
+            ${r.status === 'Pending' ? html`<div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn" style="padding:6px 14px;font-size:13px" onClick=${() => decide('Approved')}>✅ Approve</button>
+              <button class="btn ghost" style="padding:6px 14px;font-size:13px" onClick=${() => decide('Rejected')}>❌ Reject</button>
+            </div>` : ''}
           </div>
           ${statusPill(r.status)}
-        </div>`);
+        </div>`;
+      });
       if (adminTab === 'approvals') return hrRows.map(r => html`
         <div class="row" key=${r.id} style="align-items:flex-start">
           <div>
@@ -938,7 +961,7 @@ function App() {
           <label>${hrTitles[adminTab][0] + hrTitles[adminTab].slice(1).toLowerCase()}${hrRows ? ` (${hrRows.length})` : ''}</label>
           ${body}
         </div>
-        ${adminTab === 'duty' || adminTab === 'latebreaks' ? '' : html`<p class="note" style="text-align:center">View only.${adminTab === 'approvals' || adminTab === 'leaves' ? ' Approvals are actioned via Telegram.' : ''}</p>`}
+        ${adminTab === 'duty' || adminTab === 'latebreaks' || adminTab === 'leaves' ? '' : html`<p class="note" style="text-align:center">View only.${adminTab === 'approvals' ? ' Approvals are actioned via Telegram.' : ''}</p>`}
       </div>
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
