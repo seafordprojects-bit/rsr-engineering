@@ -129,6 +129,15 @@ async function decideStraightDuty(id, status) {
   const { error } = await supabase.from('straight_duty').update({ status, decided_by: 'Admin', decided_on: new Date().toISOString() }).eq('id', id);
   if (error) throw error;
 }
+async function getLateBreaks() {
+  const { data, error } = await supabase.from('late_break_requests').select('*').order('created_at', { ascending: false }).limit(60);
+  if (error) throw error;
+  return data || [];
+}
+async function decideLateBreakAdmin(id, status) {
+  const { error } = await supabase.from('late_break_requests').update({ status, decided_by: 'Admin', decided_on: new Date().toISOString() }).eq('id', id);
+  if (error) throw error;
+}
 async function getViolations() {
   const { data, error } = await supabase.from('violations').select('*').order('count', { ascending: false }).limit(200);
   if (error) throw error;
@@ -588,7 +597,7 @@ function App() {
   }, [adminTab, attYmd, authed]);
 
   useEffect(() => {
-    const loaders = { leaves: getLeaves, approvals: getApprovals, duty: getStraightDuty, violations: getViolations, sms: getSmsLog };
+    const loaders = { leaves: getLeaves, approvals: getApprovals, duty: getStraightDuty, latebreaks: getLateBreaks, violations: getViolations, sms: getSmsLog };
     if (!(authed && onAdminPage && loaders[adminTab])) return;
     setHrRows(null);
     (async () => { try { setHrRows(await loaders[adminTab]()); } catch (e) { flash('Load failed: ' + e.message); } })();
@@ -829,7 +838,7 @@ function App() {
   }
 
   // ---- admin: HR monitors (read-only) ----
-  const hrTitles = { leaves:'LEAVES', approvals:'APPROVALS', duty:'STRAIGHT DUTY', violations:'VIOLATIONS', sms:'SMS LOG' };
+  const hrTitles = { leaves:'LEAVES', approvals:'APPROVALS', duty:'STRAIGHT DUTY', latebreaks:'LATE BREAKS', violations:'VIOLATIONS', sms:'SMS LOG' };
   if (hrTitles[adminTab]) {
     const statusPill = (s) => {
       const k = (s || '').toLowerCase();
@@ -872,6 +881,24 @@ function App() {
             <div class="name">${r.employee_name}</div>
             <div class="unit">${r.break_type === 'lunch' ? '🍽️' : '☕'} ${r.break_label || ''}${r.date ? ' · ' + r.date : ''}</div>
             ${r.reason ? html`<div class="unit">${r.reason}</div>` : ''}
+            ${r.status !== 'Pending' && r.decided_by ? html`<div class="unit" style="color:var(--ink-dim)">${r.status} by ${r.decided_by}</div>` : ''}
+            ${r.status === 'Pending' ? html`<div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn" style="padding:6px 14px;font-size:13px" onClick=${() => decide('Approved')}>✅ Approve</button>
+              <button class="btn ghost" style="padding:6px 14px;font-size:13px" onClick=${() => decide('Rejected')}>❌ Reject</button>
+            </div>` : ''}
+          </div>
+          ${statusPill(r.status)}
+        </div>`;
+      });
+      if (adminTab === 'latebreaks') return hrRows.map(r => {
+        const decide = async (st) => { try { await decideLateBreakAdmin(r.id, st); flash(r.employee_name + ' ' + st.toLowerCase()); setHrRows(await getLateBreaks()); } catch (e) { flash('Error: ' + e.message); } };
+        const lbl = r.break_type === 'pm_out' ? 'PM Break (late)' : 'Lunch (late)';
+        return html`
+        <div class="row" key=${r.id} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.employee_name || r.employee_code}</div>
+            <div class="unit">⏰ ${lbl}${r.date ? ' · ' + r.date : ''}${r.punch_time ? ' · ' + r.punch_time : ''}</div>
+            ${r.status !== 'Pending' && r.decided_by ? html`<div class="unit" style="color:var(--ink-dim)">${r.status} by ${r.decided_by}</div>` : ''}
             ${r.status === 'Pending' ? html`<div style="display:flex;gap:8px;margin-top:8px">
               <button class="btn" style="padding:6px 14px;font-size:13px" onClick=${() => decide('Approved')}>✅ Approve</button>
               <button class="btn ghost" style="padding:6px 14px;font-size:13px" onClick=${() => decide('Rejected')}>❌ Reject</button>
@@ -910,7 +937,7 @@ function App() {
           <label>${hrTitles[adminTab][0] + hrTitles[adminTab].slice(1).toLowerCase()}${hrRows ? ` (${hrRows.length})` : ''}</label>
           ${body}
         </div>
-        <p class="note" style="text-align:center">View only.${adminTab === 'approvals' || adminTab === 'leaves' ? ' Approvals are actioned via Telegram.' : ''}</p>
+        ${adminTab === 'duty' || adminTab === 'latebreaks' ? '' : html`<p class="note" style="text-align:center">View only.${adminTab === 'approvals' || adminTab === 'leaves' ? ' Approvals are actioned via Telegram.' : ''}</p>`}
       </div>
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
@@ -1108,6 +1135,7 @@ function App() {
           { ico:'🌴', title:'Leaves',        onClick:() => setAdminTab('leaves') },
           { ico:'⚠️', title:'Approvals',     onClick:() => setAdminTab('approvals') },
           { ico:'⚡', title:'Straight Duty', onClick:() => setAdminTab('duty') },
+          { ico:'⏰', title:'Late Breaks', onClick:() => setAdminTab('latebreaks') },
           { ico:'🚨', title:'Violations',    onClick:() => setAdminTab('violations') },
           { ico:'📱', title:'SMS Log',       onClick:() => setAdminTab('sms') },
         ].map(t => html`<${Tile} ...${t} />`)}
