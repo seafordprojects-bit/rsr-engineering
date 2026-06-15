@@ -2100,6 +2100,7 @@ async function punch(type){
       // Send approval request to admin via Telegram
       const reqId=Date.now();
       lateLunchRequests[emp.code]={pending:true,approved:false,reqId,empCode:emp.code,empName:emp.name};
+      writeLateBreakRequest(emp.code, emp.name, todayKey(), 'lunch_out', nowShort());
       showMsg('warn','Approval requested','Late Lunch Out sent to admin for approval. Please wait...',0);
       sendLateLunchApproval(emp,reqId);
       return;
@@ -2139,6 +2140,7 @@ async function punch(type){
       }
       const reqId=Date.now();
       latePmOutRequests[emp.code]={pending:true,approved:false,reqId,empCode:emp.code,empName:emp.name};
+      writeLateBreakRequest(emp.code, emp.name, todayKey(), 'pm_out', nowShort());
       showMsg('warn','Approval requested','Late PM Break Out sent to admin for approval. Please wait...',0);
       sendLatePmOutApproval(emp,reqId);
       return;
@@ -4232,6 +4234,35 @@ async function loadLeavesFromSupabase() {
   } catch(e) { console.warn('Load leaves from Supabase:', e); }
 }
 
+// ── LATE BREAK REQUESTS (shared with Coordinator/Admin for approval) ──
+// When an employee punches a break after the cutoff, write a request row so
+// the assistant or admin can approve it from their own device. Approved ones
+// are read back and lift the pending flag in the kiosk.
+async function writeLateBreakRequest(empCode, empName, date, breakType, punchTime) {
+  try {
+    await sbClient.from('late_break_requests')
+      .upsert({ employee_code: empCode, employee_name: empName, date: date,
+        break_type: breakType, punch_time: punchTime || null, status: 'Pending' },
+        { onConflict: 'employee_code,date,break_type' });
+  } catch(e) { console.warn('Write late break request:', e); }
+}
+async function loadApprovedLateBreaks() {
+  try {
+    const { data } = await sbClient.from('late_break_requests')
+      .select('*').neq('status', 'Pending').order('created_at', { ascending: false }).limit(300);
+    if (!data || !data.length) return;
+    data.forEach(lb => {
+      const store = lb.break_type === 'pm_out' ? latePmOutRequests : lateLunchRequests;
+      if (lb.status === 'Approved') {
+        store[lb.employee_code] = { pending: false, approved: true, empCode: lb.employee_code, empName: lb.employee_name };
+      } else if (lb.status === 'Rejected') {
+        // rejected: clear any pending so the kiosk re-asks (penalty stands)
+        if (store[lb.employee_code] && !store[lb.employee_code].approved) delete store[lb.employee_code];
+      }
+    });
+  } catch(e) { console.warn('Load approved late breaks:', e); }
+}
+
 // ── APPROVED STRAIGHT DUTIES (filed in Coordinator, approved in Admin) ──
 // Reads approved rows from straight_duty and applies the break skip to that
 // employee's record for that date, so the break is not deducted.
@@ -4264,15 +4295,16 @@ async function initSupabaseSync() {
   await loadEmployeesFromSupabase();
   await loadLeavesFromSupabase();
   await loadApprovedStraightDuties();
+  await loadApprovedLateBreaks();
   console.log('✅ Supabase sync initialized');
   syncFlush(); // push anything queued from a previous offline session
 }
 
 // Start Supabase sync after page loads
 setTimeout(initSupabaseSync, 2000);
-// Re-check approved straight duties periodically (so an approval made during
-// the day is applied without restarting the kiosk).
-setInterval(function(){ if (navigator.onLine) loadApprovedStraightDuties(); }, 5*60*1000);
+// Re-check approved straight duties + late breaks periodically (so an approval
+// made during the day is applied without restarting the kiosk).
+setInterval(function(){ if (navigator.onLine) { loadApprovedStraightDuties(); loadApprovedLateBreaks(); } }, 60000);
 
 // ============================================================
 //  OFFLINE QUEUE + AUTO-SYNC
