@@ -134,6 +134,29 @@ async function getAttendance(dateStr) {
   if (error) throw error;
   return data || [];
 }
+// --- approvals (assistant can approve; notifies admin via Telegram) ---
+async function getPendingLateBreaks() {
+  const { data, error } = await supabase.from('late_break_requests')
+    .select('*').eq('status', 'Pending').order('created_at', { ascending: false }).limit(100);
+  if (error) throw error;
+  return data || [];
+}
+async function getPendingDuties() {
+  const { data, error } = await supabase.from('straight_duty')
+    .select('*').eq('status', 'Pending').order('created_at', { ascending: false }).limit(100);
+  if (error) throw error;
+  return data || [];
+}
+async function decideLateBreak(id, status) {
+  const { error } = await supabase.from('late_break_requests')
+    .update({ status, decided_by: 'Coordinator', decided_on: new Date().toISOString() }).eq('id', id);
+  if (error) throw error;
+}
+async function decideDutyCoord(id, status) {
+  const { error } = await supabase.from('straight_duty')
+    .update({ status, decided_by: 'Coordinator', decided_on: new Date().toISOString() }).eq('id', id);
+  if (error) throw error;
+}
 function msToH(ms) { if (!ms || ms < 0) return '0.00'; return (ms / 3600000).toFixed(2); }
 function attStatus(r) {
   if (r.is_incomplete) return { t: 'Incomplete', c: '#c0392b' };
@@ -621,6 +644,60 @@ function Attendance({ toast }) {
               </div>`;
           })}
     </div>`;
+}
+
+// Assistant approvals: late breaks + straight duty. Approving notifies admin.
+function Approvals({ toast }) {
+  const [lb, setLb] = useState(null);
+  const [sd, setSd] = useState(null);
+  const reload = () => {
+    getPendingLateBreaks().then(setLb).catch(() => setLb([]));
+    getPendingDuties().then(setSd).catch(() => setSd([]));
+  };
+  useEffect(() => { reload(); }, []);
+  const brkLabel = (t) => t === 'pm_out' ? 'PM Break (late)' : 'Lunch (late)';
+  const doLate = async (r, status) => {
+    try {
+      await decideLateBreak(r.id, status);
+      if (status === 'Approved') notifyTg(`✅ <b>Late Break Approved</b>\\n👤 ${r.employee_name || r.employee_code}\\n📅 ${r.date}\\n⏰ ${brkLabel(r.break_type)}${r.punch_time ? ' @ ' + r.punch_time : ''}\\n👩‍💼 Approved by: Coordinator`);
+      toast((r.employee_name || r.employee_code) + ' ' + status.toLowerCase());
+      reload();
+    } catch (e) { toast('Error: ' + e.message, true); }
+  };
+  const doDuty = async (r, status) => {
+    try {
+      await decideDutyCoord(r.id, status);
+      if (status === 'Approved') notifyTg(`✅ <b>Straight Duty Approved</b>\\n👤 ${r.employee_name || r.employee_code}\\n📅 ${r.date}\\n⏰ ${r.break_label || r.break_type}\\n👩‍💼 Approved by: Coordinator`);
+      toast((r.employee_name || r.employee_code) + ' ' + status.toLowerCase());
+      reload();
+    } catch (e) { toast('Error: ' + e.message, true); }
+  };
+  const card = (r, kind, decide, label) => html`
+    <div class="row" key=${r.id} style="align-items:flex-start">
+      <div>
+        <div class="name">${r.employee_name || r.employee_code}</div>
+        <div class="sub">${label}${r.date ? ' · ' + r.date : ''}${r.punch_time ? ' · ' + r.punch_time : ''}</div>
+        ${r.reason ? html`<div class="sub" style="color:var(--ink-dim)">"${r.reason}"</div>` : ''}
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <button class="btn" style="padding:6px 14px;font-size:13px" onClick=${() => decide(r, 'Approved')}>✅ Approve</button>
+          <button class="btn ghost" style="padding:6px 14px;font-size:13px" onClick=${() => decide(r, 'Rejected')}>❌ Reject</button>
+        </div>
+      </div>
+    </div>`;
+  return html`
+    <div class="card">
+      ${stepHead(1, 'Late breaks', 'Breaks punched after the cutoff, waiting for approval')}
+      ${lb == null ? html`<div class="empty">Loading…</div>`
+        : lb.length === 0 ? html`<div class="empty">No late breaks waiting.</div>`
+        : lb.map(r => card(r, 'late', doLate, brkLabel(r.break_type)))}
+    </div>
+    <div class="card">
+      ${stepHead(2, 'Straight duty', 'Requests waiting for approval')}
+      ${sd == null ? html`<div class="empty">Loading…</div>`
+        : sd.length === 0 ? html`<div class="empty">No straight duty waiting.</div>`
+        : sd.map(r => card(r, 'duty', doDuty, (r.break_type === 'lunch' ? '🍽️ ' : '☕ ') + (r.break_label || r.break_type)))}
+    </div>
+    <p class="note" style="color:var(--ink-dim);font-size:12px;margin-top:4px">Approving here notifies the admin on Telegram. The admin can also approve from the Admin app.</p>`;
 }
 
 function Expenses({ voyages, toast }) {
@@ -1343,17 +1420,22 @@ function App() {
           <div style="font-size:24px">🕒</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Attendance</div>
           <div class="sub" style="font-size:12px;color:var(--ink-dim)">Kiosk time in / time out by day</div>
         </div>
+        <div class="card" style="cursor:pointer;margin:0;grid-column:1/-1" onClick=${() => setArea('approvals')}>
+          <div style="font-size:24px">✅</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Approvals</div>
+          <div class="sub" style="font-size:12px;color:var(--ink-dim)">Late breaks & straight duty</div>
+        </div>
       </div>
     </div>
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}`;
 
   // ---- areas ----
   return html`
-    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'attendance' ? 'ATTENDANCE' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISCELLANEOUS':'SUMMARY') : '')) : 'PERSONNEL DATA')}
+    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'attendance' ? 'ATTENDANCE' : area === 'approvals' ? 'APPROVALS' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISCELLANEOUS':'SUMMARY') : '')) : 'PERSONNEL DATA')}
     <div class="wrap">
       ${area === 'vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
       ${area === 'expenses' && html`<${Expenses} voyages=${voyages} toast=${flash} />`}
       ${area === 'attendance' && html`<${Attendance} toast=${flash} />`}
+      ${area === 'approvals' && html`<${Approvals} toast=${flash} />`}
       ${area === 'liquidation' && html`<${Liquidation} voyages=${voyages} employees=${employees} sites=${sites} toast=${flash} tab=${liqTab} setTab=${setLiqTab} />`}
       ${area === 'personnel' && html`
         <div class="tabs">
