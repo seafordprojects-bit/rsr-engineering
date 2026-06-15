@@ -414,7 +414,7 @@ async function runPayroll(){
       if(!rs.length) return; // skip employees with no attendance this week
       const shiftMs=emp.shift*3600000;
       const hourly=emp.shift>0 ? emp.dailyRate/emp.shift : 0;
-      let daysPresent=0, regularMs=0, otMs=0, shortfallMs=0, otAllowDays=0, awayAllowDays=0;
+      let daysPresent=0, regularMs=0, otMs=0, shortfallMs=0, otAllowDays=0, awayAllowDays=0, totalWorkedMs=0;
       rs.forEach(r=>{
         daysPresent++;
         const worked=Number(r.worked_ms)||0;
@@ -422,6 +422,7 @@ async function runPayroll(){
         const reg=Math.max(0, worked-ot);            // regular portion
         regularMs+=Math.min(reg,shiftMs);
         otMs+=ot;
+        totalWorkedMs+=worked;
         shortfallMs+=Math.max(0, shiftMs-Math.min(reg,shiftMs)); // late/undertime gap
         if(r.has_ot_allowance) otAllowDays++;
         if(r.has_away_allowance) awayAllowDays++;
@@ -435,7 +436,7 @@ async function runPayroll(){
       computed.push({
         code:emp.code, name:emp.name, dept:emp.dept, homeSite:emp.homeSite,
         suspended:emp.suspended, dailyRate:emp.dailyRate, shift:emp.shift, hourly,
-        daysPresent, otHrs:otMs/3600000, basic, lateUT, otPay,
+        daysPresent, otHrs:otMs/3600000, totalHrs:totalWorkedMs/3600000, basic, lateUT, otPay,
         valeBalance:bal, otAllowance:otAllowDays*allowAmt, stayInAllowance:awayAllowDays*allowAmt,
         valeDeduct:defaultVale, otherDeduct:0
       });
@@ -467,7 +468,7 @@ function renderRun(){
         </div>
       </div>
       <div class="pr-lines">
-        <div class="k">Basic (${r.daysPresent} × ${pesoShort(r.dailyRate)})</div><div class="v">${peso(r.basic)}</div>
+        <div class="k">Hours worked (${r.totalHrs.toFixed(2)}h)</div><div class="v">${peso(r.basic)}</div>
         <div class="k">Less late / undertime</div><div class="v minus">${r.lateUT>0?'−'+peso(r.lateUT):peso(0)}</div>
         <div class="k">OT pay (${r.otHrs.toFixed(2)}h × ${cfg.otMult})</div><div class="v plus">${r.otPay>0?'+'+peso(r.otPay):peso(0)}</div>
       </div>
@@ -532,7 +533,7 @@ function slipHTML(r){
       <div class="slip-emp"><span><b>${r.name}</b></span><span>${r.code}</span></div>
       <div class="slip-emp"><span>${r.dept||'—'} · ${peso(r.dailyRate)}/day · ${r.shift}h shift</span><span>${r.daysPresent} day(s)</span></div>
       <table class="slip-tbl">
-        <tr><td>Basic pay (${r.daysPresent} × ${peso(r.dailyRate)})</td><td>${peso(r.basic)}</td></tr>
+        <tr><td>Hours worked (${r.totalHrs.toFixed(2)}h over ${r.daysPresent} day${r.daysPresent===1?'':'s'})</td><td>${peso(r.basic)}</td></tr>
         <tr><td>Less: late / undertime</td><td>${r.lateUT>0?'('+peso(r.lateUT)+')':peso(0)}</td></tr>
         <tr><td>Add: overtime (${r.otHrs.toFixed(2)}h × ${cfg.otMult})</td><td>${peso(r.otPay)}</td></tr>
         <tr><td>Add: OT allowance</td><td>${peso(Number(r.otAllowance)||0)}</td></tr>
@@ -540,8 +541,11 @@ function slipHTML(r){
         <tr><td>Less: cash advance</td><td>${(Number(r.valeDeduct)||0)>0?'('+peso(r.valeDeduct)+')':peso(0)}</td></tr>
         <tr><td>Less: other deduction</td><td>${(Number(r.otherDeduct)||0)>0?'('+peso(r.otherDeduct)+')':peso(0)}</td></tr>
       </table>
-      <div class="slip-net"><span>NET PAY</span><span>${peso(net)}</span></div>
-      ${r.valeBalance>0?`<div style="font-size:11px;color:#888;margin-top:8px">Remaining vale balance after this slip: ${peso(r.valeBalance-(Number(r.valeDeduct)||0))}</div>`:''}
+      <div class="slip-net"><span>TOTAL (NET PAY)</span><span>${peso(net)}</span></div>
+      <div style="font-size:11px;color:#666;margin-top:8px;display:flex;justify-content:space-between">
+        <span>Cash advance balance</span>
+        <span>${peso(Math.max(0, (Number(r.valeBalance)||0) - (Number(r.valeDeduct)||0)))} remaining</span>
+      </div>
       <div style="display:flex;justify-content:space-between;margin-top:26px;font-size:11px;color:#888">
         <div style="border-top:1px solid #999;padding-top:4px;width:45%;text-align:center">Received by</div>
         <div style="border-top:1px solid #999;padding-top:4px;width:45%;text-align:center">Prepared by</div>
@@ -558,15 +562,16 @@ function slipMini(r){
   return `<div class="mini">
     <div class="mini-co">${cfg.company}</div>
     <div class="mini-top"><span class="mini-name">${r.name}</span><span class="mini-code">${r.code}</span></div>
-    <div class="mini-sub">${fmtDate(curFrom)} – ${fmtDate(curTo)} · ${peso(r.dailyRate)}/day · ${r.daysPresent}d</div>
-    ${L('Basic',r.basic)}
+    <div class="mini-sub">${fmtDate(curFrom)} – ${fmtDate(curTo)} · ${r.totalHrs.toFixed(1)}h · ${r.daysPresent}d</div>
+    ${L('Hours pay',r.basic)}
     ${L('Late/UT',r.lateUT,true)}
     ${L('OT pay',r.otPay)}
     ${L('OT allow.',Number(r.otAllowance)||0)}
     ${L('Stay-in',Number(r.stayInAllowance)||0)}
     ${L('Cash adv.',Number(r.valeDeduct)||0,true)}
     ${L('Other ded.',Number(r.otherDeduct)||0,true)}
-    <div class="mini-net"><span>NET PAY</span><span>${peso(net)}</span></div>
+    <div class="mini-net"><span>TOTAL</span><span>${peso(net)}</span></div>
+    <div class="mini-l" style="font-size:8px;color:#666"><span>Adv. balance</span><span class="v">${peso(Math.max(0,(Number(r.valeBalance)||0)-(Number(r.valeDeduct)||0)))}</span></div>
     <div class="mini-sign">Received by</div>
   </div>`;
 }
