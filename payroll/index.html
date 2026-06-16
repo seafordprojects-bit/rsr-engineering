@@ -158,6 +158,7 @@ select.field-input{appearance:none}
         <div class="stat"><div class="stat-label">Vales deducted</div><div class="stat-val vale" id="s-vale">₱0</div></div>
         <div class="stat"><div class="stat-label">Total net payout</div><div class="stat-val net" id="s-net">₱0</div></div>
       </div>
+      <div id="allow-panel"></div>
       <div id="pr-list"></div>
       <button class="btn-primary" onclick="printAllSlips()">🖨️ Print all payslips</button>
       <button class="btn-primary btn-green" onclick="postDeductions()" id="post-btn">Post vale deductions</button>
@@ -362,18 +363,22 @@ let deductAllowances=[];
 async function loadDeductAllowances(){
   try{
     const {data,error}=await sb.from('liq_line').select('*')
-      .eq('type','ALLOWANCE').eq('confirmed',true).eq('deductible','Yes');
+      .eq('type','ALLOWANCE').eq('confirmed',true);
     if(error) throw error;
-    // keep only the ones not yet settled in a prior payroll run
+    // all confirmed allowances not yet settled in a prior payroll run
     deductAllowances=(data||[]).filter(l=>!l.payroll_settled);
+    // payroller's Yes/No decision for this run; default NO (not deducted)
+    allowDecide={};
+    deductAllowances.forEach(l=>{ allowDecide[l.id]=false; });
   }catch(err){
     deductAllowances=[];
     console.warn('liq allowances load:',err.message);
   }
 }
-// allowances for one employee (by id), with total + date list
+let allowDecide={}; // { liq_line_id: true/false }  payroller's deduct decision this run
+// allowances the payroller marked YES for one employee (by id)
 function allowancesFor(empId){
-  const rows=deductAllowances.filter(l=>l.emp_id===empId);
+  const rows=deductAllowances.filter(l=>l.emp_id===empId && allowDecide[l.id]);
   const total=rows.reduce((s,l)=>s+Number(l.amount||0),0);
   const dates=rows.map(l=>fmtDate(toISO(l.or_date||l.created_at))).filter(Boolean);
   return { total, dates, ids:rows.map(l=>l.id) };
@@ -532,6 +537,44 @@ function renderRun(){
     b.textContent='View payslip'; b.onclick=()=>showSlip(i);
     card.appendChild(b);
   });
+  recalcTotals();
+  renderAllowPanel();
+}
+
+// Panel: each confirmed, unsettled allowance with a Yes/No deduct toggle (default No).
+function renderAllowPanel(){
+  const el=document.getElementById('allow-panel');
+  if(!el) return;
+  if(!deductAllowances.length){ el.innerHTML=''; return; }
+  const rows=deductAllowances.map(l=>{
+    const emp=employees.find(e=>e.id===l.emp_id);
+    const yes=!!allowDecide[l.id];
+    return `<div class="led-row" style="align-items:center">
+      <div><div style="font-weight:600">${emp?emp.name:(l.recipient||'—')} · ${peso(l.amount)}</div>
+        <div style="font-size:11px;color:#888">${fmtDate(toISO(l.or_date||l.created_at))}${l.vessel_div?' · '+l.vessel_div:''}</div></div>
+      <div style="display:flex;gap:6px">
+        <button class="btn-sm" style="${yes?'background:#0F6E56;color:#fff':''}" onclick="setAllow('${l.id}',true)">Deduct</button>
+        <button class="btn-sm" style="${!yes?'background:#444;color:#fff':''}" onclick="setAllow('${l.id}',false)">No</button>
+      </div></div>`;
+  }).join('');
+  el.innerHTML=`<div class="pr-card"><div style="font-weight:700;margin-bottom:2px">Allowances to decide</div>
+    <div style="font-size:11px;color:#888;margin-bottom:8px">Mark which liquidation allowances to deduct this run. Default is No. Only "Deduct" ones reduce pay.</div>
+    ${rows}</div>`;
+}
+function setAllow(id, val){
+  allowDecide[id]=val;
+  const l=deductAllowances.find(x=>x.id===id);
+  if(l){
+    const idx=computed.findIndex(c=>{const e=employees.find(x=>x.code===c.code);return e&&e.id===l.emp_id;});
+    if(idx>=0){
+      const emp=employees.find(e=>e.code===computed[idx].code);
+      const al=allowancesFor(emp.id);
+      computed[idx].allowDeduct=al.total; computed[idx].allowDates=al.dates; computed[idx].allowIds=al.ids;
+      const nv=document.getElementById('net-'+idx);
+      if(nv) nv.textContent=peso(netOf(computed[idx]));
+    }
+  }
+  renderAllowPanel();
   recalcTotals();
 }
 
