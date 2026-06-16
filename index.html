@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>RSR Admin</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+<script type="importmap">
+{
+  "imports": {
+    "preact": "https://esm.sh/preact@10.22.0",
+    "preact/hooks": "https://esm.sh/preact@10.22.0/hooks",
+    "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact",
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2.45.0"
+  }
+}
+</script>
+
+<style>
+  :root{
+    --bg:#11161c; --panel:#1a222b; --panel-2:#212c37; --line:#2c3946;
+    --ink:#e9eef3; --ink-dim:#8da0b2; --hivis:#ffb000; --hivis-ink:#1a1200;
+    --ok:#34d17a; --warn:#ff6b5e; --radius:16px;
+  }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{
+    background:radial-gradient(900px 500px at 80% -10%, rgba(255,176,0,.08), transparent 60%), var(--bg);
+    color:var(--ink); font-family:"Barlow",system-ui,sans-serif; -webkit-font-smoothing:antialiased; padding-bottom:40px;
+  }
+  code,.mono{font-family:"JetBrains Mono",monospace}
+  .wrap{max-width:620px;margin:0 auto;padding:0 16px;width:100%}
+  header.app{position:sticky;top:0;z-index:10;background:rgba(17,22,28,.85);backdrop-filter:blur(10px);border-bottom:1px solid var(--line);padding:14px 16px;margin-bottom:18px}
+  .brand{display:flex;align-items:center;gap:10px}
+  .brand b{font-weight:800;letter-spacing:.5px}
+  .tag{font-size:11px;color:var(--hivis-ink);background:var(--hivis);padding:2px 8px;border-radius:999px;font-weight:800;letter-spacing:.5px}
+  label{display:block;font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--ink-dim);margin:0 0 6px}
+  input,select,textarea,button{font-family:inherit;font-size:16px}
+  input,select,textarea{width:100%;background:var(--panel-2);color:var(--ink);border:1px solid var(--line);border-radius:10px;padding:13px 12px}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--hivis);border-color:transparent}
+  .field{margin-bottom:14px}
+  .two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+  .btn{width:100%;padding:15px;border:none;border-radius:12px;cursor:pointer;background:var(--hivis);color:var(--hivis-ink);font-weight:800;letter-spacing:.4px;text-transform:uppercase}
+  .btn.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  .lock{max-width:340px;margin:70px auto 0;text-align:center}
+  .note{font-size:12px;color:var(--ink-dim);line-height:1.5}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--warn);color:#2a0a06;font-weight:800;padding:12px 18px;border-radius:999px;box-shadow:0 8px 30px rgba(0,0,0,.4);z-index:50}
+
+  .sectlabel{font-size:12px;font-weight:800;letter-spacing:.6px;color:var(--ink-dim);text-transform:uppercase;margin:6px 2px 10px}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px}
+  a.tile,.tile{display:block;text-decoration:none;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:16px;transition:border-color .15s,transform .05s}
+  a.tile:active{transform:scale(.99)} a.tile:hover{border-color:var(--hivis)}
+  .tile .ico{font-size:24px}
+  .tile .num{font-size:30px;font-weight:800;line-height:1.1;margin-top:8px}
+  .tile .num.dim{color:var(--ink-dim)}
+  .tile h3{margin:2px 0 0;font-size:14px;font-weight:700}
+  .tile .unit{font-size:12px;color:var(--ink-dim)}
+  .tile.soon{opacity:.55}
+  .badge{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.5px;background:var(--panel-2);color:var(--ink-dim);padding:2px 7px;border-radius:999px;margin-top:2px;white-space:nowrap}
+
+  .row{display:flex;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--line)}
+  .row:last-child{border-bottom:none}
+  .name{font-weight:700;font-size:15px}
+  .unit{font-size:12px;color:var(--ink-dim);margin-top:2px}
+  .empty{color:var(--ink-dim);font-size:13px;padding:10px 0;text-align:center}
+</style>
+</head>
+<body>
+  <div id="app"></div>
+  <script type="module" src="./home.js"></script>
+</body>
+</html>
