@@ -690,6 +690,7 @@ function App() {
     { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  onClick:() => setAdminTab('vessels') },
     { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
+    { ico:'💰', num:null,        unit:'set rates',       title:'Salary',           onClick:() => setAdminTab('salary') },
     { ico:'⏱️', num:att ? att.working : null, unit:'working now', title:'Time In / Out', onClick:() => setAdminTab('attendance') },
   ];
   const soon = [
@@ -997,6 +998,63 @@ function App() {
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
 
+  // ---- admin: salary (dedicated, simple) ----
+  if (adminTab === 'salary') {
+    const sel = emps.find(x => x.id === empSel);
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">SALARY</span></span>
+        <button onClick=${() => { setEmpSel(''); setAdminTab('dash'); }} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        ${!empSel ? html`
+        <div class="card">
+          <label>Personnel (${emps.length}) — tap to set rate</label>
+          ${emps.length ? [...emps].sort((a,b)=>(a.name||'').localeCompare(b.name||'')).map(e => html`
+            <div class="row" key=${e.id} style="cursor:pointer" onClick=${() => pickEmp(e.id)}>
+              <div>
+                <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.code || '—'}</span></div>
+                <div class="unit">${e.position || 'No position'}</div>
+              </div>
+              <span class="badge" style=${e.daily_rate ? 'background:#12B89E;color:#000' : 'background:var(--hivis);color:#000'}>${e.daily_rate ? '₱' + Number(e.daily_rate).toLocaleString('en-PH') + '/day' : 'no rate'}</span>
+            </div>`) : html`<div class="empty">No personnel yet.</div>`}
+        </div>` : html`
+        <div class="card">
+          <button onClick=${() => setEmpSel('')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer;padding:0;margin-bottom:10px">← All personnel</button>
+          <div class="name" style="font-size:17px">${sel ? sel.name : ''} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${sel ? (sel.code||'—') : ''}</span></div>
+          <div class="unit" style="margin-bottom:14px">Current rate: <b style="color:var(--ink)">${sel && sel.daily_rate ? '₱' + Number(sel.daily_rate).toLocaleString('en-PH') + '/day' : 'not set'}</b></div>
+
+          <${Field} label="Set daily rate ₱">
+            <input type="number" min="0" value=${rate} onInput=${e => setRate(e.target.value)} placeholder="0" />
+          <//>
+          <button class="btn" onClick=${saveRate}>Save daily rate</button>
+
+          <div style="border-top:1px solid var(--line);margin:18px 0 12px"></div>
+          <div class="sectlabel" style="margin-top:0">Record a salary increase</div>
+          <p class="note" style="margin:0 0 10px">Use this when the rate goes up, so it's dated and kept in history.</p>
+          <div class="grid" style="margin-bottom:0">
+            <${Field} label="New daily rate ₱"><input type="number" min="0" value=${incRate} onInput=${e => setIncRate(e.target.value)} placeholder="0" /><//>
+            <${Field} label="Effective date"><input type="date" value=${incDate} onInput=${e => setIncDate(e.target.value)} /><//>
+          </div>
+          <${Field} label="Note (optional)"><input value=${incNote} onInput=${e => setIncNote(e.target.value)} placeholder="e.g. annual increase" /><//>
+          <button class="btn" onClick=${addIncrease}>Add increase</button>
+
+          ${salHist.length > 0 ? html`
+            <div style="margin-top:18px">
+              <div class="sectlabel">Salary history</div>
+              ${salHist.map(h => html`
+                <div class="row" key=${h.id}>
+                  <div>
+                    <div class="name">₱${Number(h.daily_rate).toLocaleString('en-PH')}/day</div>
+                    <div class="unit">${h.effective_date ? 'Effective ' + h.effective_date : 'No date'}${h.note ? ' · ' + h.note : ''}</div>
+                  </div>
+                </div>`)}
+            </div>` : html`<div class="note" style="margin-top:14px">No increases recorded yet.</div>`}
+        </div>`}
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
   // ---- admin: personnel roster (read-only list with details) ----
   if (adminTab === 'people') {
     const peso = (n) => n ? '₱' + Number(n).toLocaleString('en-PH') : '—';
@@ -1017,6 +1075,7 @@ function App() {
                 <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.code || '—'}</span></div>
                 <div class="unit">${e.position || 'No position'}${e.phone ? ' · ' + e.phone : ''}</div>
                 <div class="unit">Rate: ${peso(e.daily_rate)}/day · Sick: ${e.sl_balance ?? 0} · Vacation: ${e.vl_balance ?? 0}</div>
+                <div class="unit">Passcode: <span class="mono" style="font-weight:700;letter-spacing:1px">${e.pin || '— not set —'}</span></div>
               </div>
               <span class="badge" style=${e.pin ? '' : 'background:var(--hivis);color:#000'}>${e.pin ? 'PIN ✓' : 'no PIN'}</span>
             </div>`) : html`<div class="empty">No personnel yet. Your assistant adds them in the Coordinator.</div>`}
