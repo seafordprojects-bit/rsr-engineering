@@ -655,6 +655,25 @@ function App() {
     })();
   }, [adminTab, authed]);
 
+  // floating back button (bottom-right) on every admin sub-screen
+  useEffect(() => {
+    let fab = document.getElementById('admin-back-fab');
+    const cleanup = () => { const f = document.getElementById('admin-back-fab'); if (f) f.remove(); };
+    if (!(authed && onAdminPage) || adminTab === 'dash') { cleanup(); return; }
+    const hrTabs = ['leaves','approvals','duty','latebreaks','violations','sms','people','salary'];
+    const toolTabs = ['borrowed','repair'];
+    const target = hrTabs.includes(adminTab) ? 'hrmenu' : (toolTabs.includes(adminTab) ? 'toolsmenu' : 'dash');
+    if (!fab) {
+      fab = document.createElement('button');
+      fab.id = 'admin-back-fab';
+      fab.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:9999;background:var(--hivis,#E8A830);color:#000;border:none;border-radius:24px;padding:13px 20px;font-size:14px;font-weight:800;box-shadow:0 4px 16px rgba(0,0,0,.4);cursor:pointer';
+      document.body.appendChild(fab);
+    }
+    fab.textContent = (target === 'dash') ? '← Dashboard' : '← Back';
+    fab.onclick = () => setAdminTab(target);
+    return cleanup;
+  }, [adminTab, authed, onAdminPage]);
+
   // auto-logout the admin after 2 minutes of no activity
   useEffect(() => {
     if (!(authed && onAdminPage)) return;
@@ -695,12 +714,11 @@ function App() {
     ${toast && html`<div class="toast">${toast}</div>`}`;
 
   const live = [
-    { ico:'🔧', num:m.toolsOut,  unit:'out now',        title:'Tool Borrowing',   onClick:() => setAdminTab('borrowed') },
+    { ico:'🔧', num:(m.toolsOut||0)+(m.inRepair||0), unit:'out + repair', title:'Tools', onClick:() => setAdminTab('toolsmenu') },
     { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', onClick:() => setAdminTab('issued') },
     { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse',        href:'../warehouse/' },
     { ico:'🛒', num:m.poInbox,    unit:'to purchase',      title:'Purchasing',        href:'../purchasing/' },
     { ico:'💵', num:null,         unit:'weekly',           title:'Payroll',           href:'../payroll/' },
-    { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  onClick:() => setAdminTab('vessels') },
     { ico:'⏱️', num:att ? att.working : null, unit:'working now', title:'Time In / Out', onClick:() => setAdminTab('attendance') },
   ];
@@ -732,7 +750,7 @@ function App() {
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">TOOL BORROWING</span></span>
-        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+        <button onClick=${() => setAdminTab('toolsmenu')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Tools</button>
       </div></div></header>
       <div class="wrap">
         <div class="card">
@@ -854,7 +872,7 @@ function App() {
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">TOOL REPAIR</span></span>
-        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+        <button onClick=${() => setAdminTab('toolsmenu')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Tools</button>
       </div></div></header>
       <div class="wrap">
         <div class="card">
@@ -1017,6 +1035,24 @@ function App() {
             : html`<div class="empty">No attendance records for this date.</div>`}
         </div>
         <p class="note" style="text-align:center">View only. Punches come from the attendance kiosk.</p>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
+  // ---- admin: Tools sub-menu ----
+  if (adminTab === 'toolsmenu') {
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">TOOLS</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="grid">
+          ${[
+            { ico:'🔧', title:'Tool Borrowing', unit:'out now', onClick:() => setAdminTab('borrowed') },
+            { ico:'🛠️', title:'Tool Repair',   unit:'in repair', onClick:() => setAdminTab('repair') },
+          ].map(t => html`<${Tile} ...${t} />`)}
+        </div>
       </div>
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
