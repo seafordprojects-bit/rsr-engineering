@@ -1,14 +1,17 @@
 /* ============================================================
-   config.js  —  shared helpers for the Job Monitoring screens
-   IMPORT PATTERN: borrows the Supabase client from ./supabase.js
-   (same as home.js / coordinator.js). No key lives here.
-   Each screen does:  import { sb, CHECKPOINTS, ... } from './config.js';
+   config.js  —  shared by every Job Monitoring screen
+   DIRECT pattern: creates its own Supabase client (like kiosk/payroll).
+   No dependency on ../supabase.js, so no path can 404.
+   Each screen does:  import { sb, CHECKPOINTS, ... } from "./config.js";
+   (Each screen's <script type="importmap"> resolves @supabase/supabase-js.)
    ============================================================ */
 
-import { supabase } from "./supabase.js";
+import { createClient } from "@supabase/supabase-js";
 
-/* re-export the shared client under the name the screens use */
-export const sb = supabase;
+const SUPABASE_URL      = "https://wpmcbjrisuyjvobvzaus.supabase.co";
+const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0";
+
+export const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 /* The 6 roll-call checkpoints — 2 hours each, last two are OT */
 export const CHECKPOINTS = [
