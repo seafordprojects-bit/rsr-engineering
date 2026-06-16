@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Assign</title>
+<style>
+  :root{
+    --ink:#1c2230; --muted:#6b7280; --line:#e3e6ec; --paper:#ffffff; --bg:#f4f5f7;
+    --steel:#2f5d8a; --steel-d:#234a70; --ok:#1f7a4d; --okbg:#e8f5ee;
+    --warn:#b4540a; --lock:#7a5b1f; --lockbg:#fbf6e7;
+    --radius:14px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding:0 0 48px;-webkit-text-size-adjust:100%}
+  .wrap{max-width:560px;margin:0 auto;padding:14px}
+  header.top{display:flex;align-items:baseline;justify-content:space-between;padding:10px 2px 12px}
+  header.top h1{font-size:19px;margin:0}
+  header.top .sub{color:var(--muted);font-size:12.5px}
+  a.back{color:var(--steel);text-decoration:none;font-size:13px}
+
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:15px;margin-bottom:14px}
+  label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:5px}
+  select{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:#fcfcfd;font-family:inherit;color:var(--ink)}
+  select:focus{outline:2px solid var(--steel);border-color:var(--steel)}
+
+  .jno{font-family:var(--mono);font-size:13px;color:var(--steel-d);font-weight:700}
+  .jttl{font-weight:600;font-size:15px;margin-top:1px}
+  .jmeta{font-size:12.5px;color:var(--muted);margin-top:2px}
+
+  .lockban{background:var(--lockbg);border:1px solid #ecdcae;color:var(--lock);
+       font-size:12.5px;border-radius:10px;padding:10px 12px;margin:12px 0 4px}
+
+  .roster{margin-top:13px;display:flex;flex-direction:column;gap:7px}
+  .prow{display:flex;align-items:center;justify-content:space-between;gap:8px;
+        border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:#fcfcfd}
+  .pname{font-size:14px}
+  .x{border:1px solid #f0cab0;background:#fbeae1;color:var(--warn);font-weight:700;
+     width:30px;height:30px;border-radius:8px;font-size:15px;line-height:1}
+  .empty{color:var(--muted);font-size:13px;padding:8px 2px}
+
+  .add{margin-top:13px;display:flex;gap:8px;align-items:center}
+  .add select{flex:1}
+  .addbtn{border:0;background:var(--steel);color:#fff;font-weight:700;font-size:14px;padding:11px 16px;border-radius:10px}
+  .addbtn:disabled{opacity:.5}
+
+  .count{font-size:12px;color:var(--ok);font-weight:700;margin-top:11px}
+  .msg{margin-top:11px;font-size:13px;padding:9px 11px;border-radius:9px;background:#fbeae1;color:var(--warn);border:1px solid #f0cab0}
+  .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
+  .empty-jobs{color:var(--muted);font-size:13.5px;text-align:center;padding:20px 0;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2",
+    "preact": "https://esm.sh/preact@10.19.3",
+    "preact/hooks": "https://esm.sh/preact@10.19.3/hooks",
+    "htm": "https://esm.sh/htm@3.1.1"
+  }
+}
+</script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>Assign</h1>
+        <div class="sub">Who works each job order</div>
+      </div>
+      <a class="back" href="index.html">&larr; Menu</a>
+    </header>
+    <div id="app"><div class="loading">Loading&hellip;</div></div>
+  </div>
+
+  <script type="module">
+    import { h, render } from "preact";
+    import { useState, useEffect } from "preact/hooks";
+    import htm from "htm";
+    import { sb, loadEmployees } from "./config.js";
+    const html = htm.bind(h);
+
+    function App(){
+      const [jobs,setJobs]=useState(null);
+      const [emps,setEmps]=useState([]);
+      const [assign,setAssign]=useState({});      // job_id -> [emp code]
+      const [started,setStarted]=useState(new Set()); // job_ids with a checkpoint = roster locked
+      const [sel,setSel]=useState("");
+      const [pick,setPick]=useState("");
+      const [busy,setBusy]=useState(false);
+      const [msg,setMsg]=useState("");
+
+      useEffect(()=>{ loadEmployees().then(setEmps); },[]);
+      useEffect(()=>{ reload(); },[]);
+
+      async function reload(){
+        setMsg("");
+        const jq=sb.from("jobs").select("id,job_no,vessel,location,start_date,target_date,status").neq("status","done").order("job_no");
+        const aq=sb.from("job_assignment").select("job_id,employee_code");
+        const cq=sb.from("job_checkpoint").select("job_id");
+        const [jr,ar,cr]=await Promise.all([jq,aq,cq]);
+        const errs=[jr.error,ar.error,cr.error].filter(Boolean);
+        if(errs.length){ console.error(errs); setMsg(errs.map(e=>e.message).join(" \u00b7 ")); }
+        const js=jr.data||[];
+        setJobs(js);
+        if(js.length && !sel) setSel(js[0].id);
+        const am={}; (ar.data||[]).forEach(a=>{ (am[a.job_id]=am[a.job_id]||[]).push(a.employee_code); });
+        setAssign(am);
+        setStarted(new Set((cr.data||[]).map(r=>r.job_id)));
+      }
+
+      const nameOf=(code)=>{ const e=emps.find(x=>x.id===code); return e? e.name : code; };
+
+      async function addOne(){
+        if(!sel||!pick) return;
+        setBusy(true);
+        const {error}=await sb.from("job_assignment").insert({job_id:sel, employee_code:pick});
+        setBusy(false);
+        if(error){ setMsg(error.message); return; }
+        setPick("");
+        reload();
+      }
+      async function removeOne(code){
+        setBusy(true);
+        const {error}=await sb.from("job_assignment").delete().eq("job_id",sel).eq("employee_code",code);
+        setBusy(false);
+        if(error){ setMsg(error.message); return; }
+        reload();
+      }
+
+      if(jobs===null) return html`<div class="loading">Loading&hellip;</div>`;
+      if(jobs.length===0) return html`<div class="empty-jobs">No open job orders. Create one in Job Order first.</div>`;
+
+      const job=jobs.find(j=>j.id===sel)||jobs[0];
+      const roster=assign[job.id]||[];
+      const locked=started.has(job.id);
+      const candidates=emps.filter(e=> !roster.includes(e.id));
+
+      return html`
+        <div class="card">
+          <label>Job order</label>
+          <select value=${sel} onChange=${e=>{ setSel(e.target.value); setPick(""); setMsg(""); }}>
+            ${jobs.map(j=> html`<option value=${j.id}>${j.job_no} \u2014 ${j.vessel} \u00b7 ${j.location}</option>`)}
+          </select>
+
+          <div style="margin-top:13px">
+            <div class="jno">${job.job_no}</div>
+            <div class="jttl">${job.vessel} \u00b7 ${job.location}</div>
+            <div class="jmeta">${job.start_date||"\u2014"} \u2192 ${job.target_date||"\u2014"} \u00b7 ${job.status}</div>
+          </div>
+
+          ${locked && html`<div class="lockban">Roll-call has started on this job order, so the roster is locked. To move someone now, use Roll-call (the change is recorded as a move, keeping plan-vs-actual honest).</div>`}
+
+          <div class="roster">
+            ${roster.length===0
+              ? html`<div class="empty">No one assigned yet.</div>`
+              : roster.map(code=> html`
+                  <div class="prow">
+                    <div class="pname">${nameOf(code)}</div>
+                    ${!locked && html`<button class="x" disabled=${busy} onClick=${()=>removeOne(code)} title="Remove">\u00d7</button>`}
+                  </div>`)}
+          </div>
+
+          ${!locked && html`
+            <div class="add">
+              <select value=${pick} onChange=${e=>setPick(e.target.value)}>
+                <option value="">Add a person\u2026</option>
+                ${candidates.map(e=> html`<option value=${e.id}>${e.name}</option>`)}
+              </select>
+              <button class="addbtn" disabled=${busy||!pick} onClick=${addOne}>Add</button>
+            </div>`}
+
+          <div class="count">${roster.length} assigned</div>
+          ${msg && html`<div class="msg">${msg}</div>`}
+        </div>
+      `;
+    }
+
+    render(html`<${App} />`, document.getElementById("app"));
+  </script>
+</body>
+</html>
