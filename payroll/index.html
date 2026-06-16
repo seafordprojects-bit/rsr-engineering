@@ -574,10 +574,10 @@ function slipMini(r){
     ${L('OT ('+r.otHrs.toFixed(1)+'h × '+cfg.otMult+')',r.otPay)}
     ${L('OT allow.',Number(r.otAllowance)||0)}
     ${L('Stay-in',Number(r.stayInAllowance)||0)}
-    ${L('Cash adv.',Number(r.valeDeduct)||0,true)}
-    ${L('Other ded.',Number(r.otherDeduct)||0,true)}
+    ${L('Less cash advance',Number(r.valeDeduct)||0,true)}
+    ${L('Less other deduction',Number(r.otherDeduct)||0,true)}
     <div class="mini-net"><span>TOTAL</span><span>${peso(net)}</span></div>
-    <div class="mini-l" style="font-size:8px;color:#666"><span>Adv. balance</span><span class="v">${peso(Math.max(0,(Number(r.valeBalance)||0)-(Number(r.valeDeduct)||0)))}</span></div>
+    <div class="mini-l" style="font-size:8px;color:#666"><span>Remaining cash advance</span><span class="v">${peso(Math.max(0,(Number(r.valeBalance)||0)-(Number(r.valeDeduct)||0)))}</span></div>
     <div class="mini-sign">Received by</div>
   </div>`;
 }
