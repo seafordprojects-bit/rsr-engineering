@@ -713,15 +713,6 @@ function App() {
   if (!authed) return html`<${Lock} onUnlock=${() => setAuthed(true)} toast=${flash} />
     ${toast && html`<div class="toast">${toast}</div>`}`;
 
-  const live = [
-    { ico:'🔧', num:(m.toolsOut||0)+(m.inRepair||0), unit:'out + repair', title:'Tools', onClick:() => setAdminTab('toolsmenu') },
-    { ico:'📦', num:m.issued30,  unit:'issued (30 days)', title:'Material Issuance', onClick:() => setAdminTab('issued') },
-    { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse',        href:'../warehouse/' },
-    { ico:'🛒', num:m.poInbox,    unit:'to purchase',      title:'Purchasing',        href:'../purchasing/' },
-    { ico:'💵', num:null,         unit:'weekly',           title:'Payroll',           href:'../payroll/' },
-    { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  onClick:() => setAdminTab('vessels') },
-    { ico:'⏱️', num:att ? att.working : null, unit:'working now', title:'Time In / Out', onClick:() => setAdminTab('attendance') },
-  ];
   const soon = [
     { ico:'📝', title:'Leave Approval' },
     { ico:'📊', title:'Project Status' },
@@ -1290,9 +1281,23 @@ function App() {
           </div>
         </div>`}
 
-      <div class="sectlabel">Live overview</div>
+      <div class="sectlabel">Operations</div>
       <div class="grid">
-        ${live.map(t => html`<${Tile} ...${t} />`)}
+        ${[
+          { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse', href:'../warehouse/' },
+          { ico:'🛒', num:m.poInbox, unit:'to purchase', title:'Purchasing', href:'../purchasing/' },
+          { ico:'💵', num:null, unit:'weekly', title:'Payroll', href:'../payroll/' },
+        ].map(t => html`<${Tile} ...${t} />`)}
+      </div>
+
+      <div class="sectlabel">Field & tools</div>
+      <div class="grid">
+        ${[
+          { ico:'🔧', num:(m.toolsOut||0)+(m.inRepair||0), unit:'out + repair', title:'Tools', onClick:() => setAdminTab('toolsmenu') },
+          { ico:'📦', num:m.issued30, unit:'issued (30 days)', title:'Material Issuance', onClick:() => setAdminTab('issued') },
+          { ico:'🚢', num:m.vessels, unit:'active', title:'Vessel Schedule', onClick:() => setAdminTab('vessels') },
+          { ico:'⏱️', num:att ? att.working : null, unit:'working now', title:'Time In / Out', onClick:() => setAdminTab('attendance') },
+        ].map(t => html`<${Tile} ...${t} />`)}
       </div>
 
       <div class="sectlabel">HR monitors</div>
