@@ -575,7 +575,7 @@ function slipHTML(r){
         <tr><td>Less: other deduction</td><td>${(Number(r.otherDeduct)||0)>0?'('+peso(r.otherDeduct)+')':peso(0)}</td></tr>
       </table>
       <div class="slip-net"><span>TOTAL (NET PAY)</span><span>${peso(net)}</span></div>
-      <div style="font-size:13px;color:#000;margin-top:10px;display:flex;justify-content:space-between;align-items:center;border:2px solid #000;border-radius:8px;padding:9px 12px;font-weight:700">
+      <div style="font-size:12px;color:#333;margin-top:10px;display:flex;justify-content:space-between;align-items:center">
         <span>Remaining cash advance</span>
         <span>${peso(Math.max(0, (Number(r.valeBalance)||0) - (Number(r.valeDeduct)||0)))}</span>
       </div>
@@ -605,7 +605,7 @@ function slipMini(r){
     ${(Number(r.allowDeduct)||0)>0?L('Less allowance'+(r.allowDates&&r.allowDates.length?' ('+r.allowDates.join(', ')+')':''),Number(r.allowDeduct)||0,true):''}
     ${L('Less other deduction',Number(r.otherDeduct)||0,true)}
     <div class="mini-net"><span>TOTAL</span><span>${peso(net)}</span></div>
-    <div class="mini-l" style="font-size:10px;color:#000;font-weight:700;margin-top:3px"><span>Remaining cash advance</span><span class="v">${peso(Math.max(0,(Number(r.valeBalance)||0)-(Number(r.valeDeduct)||0)))}</span></div>
+    <div class="mini-l" style="margin-top:3px"><span>Remaining cash advance</span><span class="v">${peso(Math.max(0,(Number(r.valeBalance)||0)-(Number(r.valeDeduct)||0)))}</span></div>
     <div class="mini-sign">Received by</div>
   </div>`;
 }
@@ -688,12 +688,12 @@ function renderAdvances(){
     const bal=outstanding(code);
     const emp=employees.find(e=>e.code===code);
     return {code,name:emp?emp.name:code,bal};
-  }).filter(r=>Math.abs(r.bal)>0.005).sort((a,b)=>b.bal-a.bal);
-  if(!rows.length){ list.innerHTML='<div class="empty-state">No outstanding advances.</div>'; return; }
+  }).sort((a,b)=>b.bal-a.bal);
+  if(!rows.length){ list.innerHTML='<div class="empty-state">No cash advances recorded.</div>'; return; }
   list.innerHTML=rows.map(r=>`
     <div class="adv-row" onclick="toggleLedger('${r.code}')">
       <div><div class="adv-name">${r.name}</div><div class="adv-sub">${r.code} · tap for history</div></div>
-      <div class="adv-bal">${peso(r.bal)}</div>
+      <div class="adv-bal">${Math.abs(r.bal)<0.005?'<span style="color:#0F6E56;font-size:12px">Paid off</span>':peso(r.bal)}</div>
     </div>
     <div id="led-${r.code}" style="display:none;padding:4px 0 10px"></div>`).join('');
 }
@@ -703,11 +703,24 @@ function toggleLedger(code){
   if(el.style.display==='block'){ el.style.display='none'; return; }
   const items=advances.filter(a=>a.employee_code===code)
     .sort((a,b)=> new Date(a.created_at)-new Date(b.created_at));
-  el.innerHTML=items.map(a=>{
+  const totalAdv=items.filter(a=>a.type!=='payment').reduce((s,a)=>s+Number(a.amount||0),0);
+  const totalPaid=items.filter(a=>a.type==='payment').reduce((s,a)=>s+Number(a.amount||0),0);
+  const bal=totalAdv-totalPaid;
+  const history=items.map(a=>{
     const isPay=a.type==='payment';
-    return `<div class="led-row"><span>${fmtDate(toISO(a.date))} · ${isPay?'Payroll deduction':(a.reason||'Advance')}</span>
+    const label=isPay?'Deducted (payroll)':(a.reason&&a.reason!=='Advance'?a.reason:'Advance given');
+    return `<div class="led-row"><span>${fmtDate(toISO(a.date))} · ${label}</span>
       <span class="${isPay?'led-pay':'led-out'}">${isPay?'−':'+'}${peso(a.amount)}</span></div>`;
   }).join('');
+  el.innerHTML=`
+    <div style="font-size:11px;color:#666;display:flex;justify-content:space-between;padding:4px 0">
+      <span>Total advanced</span><span>${peso(totalAdv)}</span></div>
+    <div style="font-size:11px;color:#666;display:flex;justify-content:space-between;padding:4px 0">
+      <span>Total deducted</span><span>−${peso(totalPaid)}</span></div>
+    <div style="font-size:12px;font-weight:700;display:flex;justify-content:space-between;padding:5px 0;border-top:1px solid #eee;border-bottom:1px solid #eee;margin-bottom:4px">
+      <span>Remaining balance</span><span>${peso(bal)}</span></div>
+    <div style="font-size:10px;color:#999;margin:6px 0 2px">HISTORY</div>
+    ${history||'<div class="led-row"><span>No entries.</span><span></span></div>'}`;
   el.style.display='block';
 }
 
