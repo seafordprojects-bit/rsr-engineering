@@ -802,6 +802,7 @@ function Liquidation({ voyages, employees, sites, toast, tab, setTab }) {
   const [aDate, setADate] = useState(today()); const [aAmt, setAAmt] = useState(''); const [aBy, setABy] = useState('Raffy'); const [aRem, setARem] = useState(''); const [aMode, setAMode] = useState('Cash'); const [aRef, setARef] = useState('');
   const [alDate, setAlDate] = useState(today()); const [alRec, setAlRec] = useState(''); const [alAmt, setAlAmt] = useState(''); const [alVes, setAlVes] = useState(''); const [alRem, setAlRem] = useState(''); const [alMode, setAlMode] = useState('Cash'); const [alRef, setAlRef] = useState('');
   const [pinVals, setPinVals] = useState({}); const [pinErr, setPinErr] = useState({}); const [pinModal, setPinModal] = useState(null);
+  const [addPinModal, setAddPinModal] = useState(false); const [addPinVal, setAddPinVal] = useState(''); const [addPinErr, setAddPinErr] = useState('');
   const [cDate, setCDate] = useState(today()); const [cAmt, setCAmt] = useState(''); const [cCharge, setCCharge] = useState('Project'); const [cVes, setCVes] = useState(''); const [cRem, setCRem] = useState('');
   const [mxDate, setMxDate] = useState(today()); const [mxCat, setMxCat] = useState('Clinic / Medical'); const [mxAmt, setMxAmt] = useState(''); const [mxEmp, setMxEmp] = useState(''); const [mxVes, setMxVes] = useState(''); const [mxOr, setMxOr] = useState(''); const [mxRem, setMxRem] = useState('');
   const [prs, setPrs] = useState([]); const [stockItems, setStockItems] = useState([]);
@@ -855,16 +856,28 @@ function Liquidation({ voyages, employees, sites, toast, tab, setTab }) {
     if (alAmt === '' || isNaN(Number(alAmt))) { toast('Enter an amount', true); return; }
     if (!alVes) { toast('Vessel / division is required', true); return; }
     if (alMode === 'GCash' && !alRef.trim()) { toast('Enter the GCash transaction no.', true); return; }
+    // open the passcode popup FIRST — the row is only added after the recipient confirms.
+    setAddPinVal(''); setAddPinErr(''); setAddPinModal(true);
+  };
+  // called from the popup: verify recipient passcode, then insert the row already-confirmed.
+  const confirmAndAddAllow = async () => {
+    const pin = (addPinVal || '').trim();
+    if (!pin) { setAddPinErr('Enter passcode'); return; }
     const emp = employees.find(e => e.id === alRec);
+    if (!emp) { setAddPinErr('Recipient not found'); return; }
     setBusy(true);
-    const row = { id: uid(), fund_id: fund.id, type: 'ALLOWANCE', or_date: alDate || today(), vessel_div: alVes, recipient: emp ? emp.name : alRec, emp_id: emp ? emp.id : null, amount: Number(alAmt),
-      mode: alMode, gcash_ref: alMode === 'GCash' ? alRef.trim() : null, confirmed: false, deductible: 'Pending', remarks: alRem.trim() || null, created_at: new Date().toISOString() };
     try {
-      let hint = false;
+      const ok = await verifyPin(emp.id, pin);
+      if (!ok) { setAddPinErr('Wrong passcode for ' + emp.name); setBusy(false); return; }
+      const row = { id: uid(), fund_id: fund.id, type: 'ALLOWANCE', or_date: alDate || today(), vessel_div: alVes,
+        recipient: emp.name, emp_id: emp.id, amount: Number(alAmt),
+        mode: alMode, gcash_ref: alMode === 'GCash' ? alRef.trim() : null,
+        confirmed: true, confirmed_at: new Date().toISOString(),
+        deductible: 'Pending', remarks: alRem.trim() || null, created_at: new Date().toISOString() };
       try { await addLiqLine(row); }
-      catch (e) { if (/column|mode|gcash/i.test(e.message || '')) { const { mode, gcash_ref, ...rest } = row; await addLiqLine(rest); hint = true; } else throw e; }
-      setAlAmt(''); setAlRem(''); setAlRef(''); loadAll(fund);
-      toast(hint ? 'Added — run updated liquidation.sql to store the GCash details' : 'Allowance added — awaiting passcode');
+      catch (e) { if (/column|mode|gcash/i.test(e.message || '')) { const { mode, gcash_ref, ...rest } = row; await addLiqLine(rest); } else throw e; }
+      setAlAmt(''); setAlRem(''); setAlRef(''); setAddPinModal(false); setAddPinVal('');
+      loadAll(fund); toast('Allowance added & confirmed');
     } catch (e) { toast('Error: ' + e.message, true); } finally { setBusy(false); }
   };
   const confirmAllow = async (l) => {
@@ -1271,24 +1284,22 @@ function Liquidation({ voyages, employees, sites, toast, tab, setTab }) {
               <div><div class="name">${l.recipient} · ${peso(l.amount)}</div><div class="sub">${l.or_date||'—'} · ${l.vessel_div||'—'}${l.mode==='GCash'?' · GCash'+(l.gcash_ref?' #'+l.gcash_ref:''):''}</div></div>
               <button class="ret" onClick=${()=>removeLine(l)}>✕</button>
             </div>
-            ${l.confirmed ? html`<div class="sub" style="color:var(--accent2,#1d9e75);font-weight:700">✓ Confirmed${l.confirmed_at?' · '+l.confirmed_at.slice(0,10):''}</div>
-              <div style="display:flex;gap:6px;align-items:center"><span class="sub">Deductible:</span>
-                ${l.deductible==='Pending' ? html`<button style=${bSm} onClick=${()=>setDeduct(l,'Yes')}>Yes</button><button style=${bSmAlt} onClick=${()=>setDeduct(l,'No')}>No</button>` : html`<b class="sub">${l.deductible}</b><button style=${bSmAlt} onClick=${()=>setDeduct(l,'Pending')}>change</button>`}
-              </div>`
-            : html`<button style=${bSm} onClick=${()=>{setPinErr({...pinErr,[l.id]:''});setPinModal(l.id);}}>Enter passcode →</button>`}
+            ${l.confirmed ? html`<div class="sub" style="color:var(--accent2,#1d9e75);font-weight:700">✓ Confirmed${l.confirmed_at?' · '+l.confirmed_at.slice(0,10):''}</div>`
+            : html`<div class="sub" style="color:#c9a227">Awaiting passcode</div>`}
           </div>`) : html`<div class="empty">No allowance rows yet.</div>`}
       </div>
-      ${pinModal ? (()=>{const l=lines.find(x=>x.id===pinModal);if(!l)return '';return html`
-        <div onClick=${()=>setPinModal(null)} style="position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px">
+      ${addPinModal ? html`
+        <div onClick=${()=>{setAddPinModal(false);setAddPinVal('');}} style="position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:50;padding:16px">
           <div onClick=${e=>e.stopPropagation()} style="background:var(--panel,#161a22);border:1px solid var(--line);border-radius:14px;padding:18px;max-width:340px;width:100%">
             <div style="font-weight:800;font-size:15px;margin-bottom:2px">Confirm allowance</div>
-            <div class="sub" style="margin-bottom:10px">Have ${l.recipient} enter their passcode privately, then pass the phone to the next person.</div>
-            <div style="display:flex;justify-content:space-between;align-items:center;border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px"><span>${l.recipient}</span><b style="font-size:16px">${peso(l.amount)}</b></div>
-            <input type="password" inputmode="numeric" autofocus placeholder="passcode" value=${pinVals[l.id]||''} onInput=${e=>setPinVals({...pinVals,[l.id]:e.target.value})} style="width:100%;box-sizing:border-box;margin-bottom:8px" />
-            ${pinErr[l.id] ? html`<div class="sub" style="color:var(--bad,#b0322a);margin-bottom:8px">${pinErr[l.id]}</div>` : ''}
-            <div style="display:flex;gap:8px"><button class="btn" style="flex:1" disabled=${busy} onClick=${()=>confirmAllow(l)}>Confirm</button><button style=${bSmAlt} onClick=${()=>setPinModal(null)}>Cancel</button></div>
+            <div class="sub" style="margin-bottom:4px">${(employees.find(e=>e.id===alRec)||{}).name||''} · ${peso(Number(alAmt)||0)}</div>
+            <div class="sub" style="margin-bottom:10px">Have the recipient enter their passcode to confirm receipt. The row is added once the passcode is correct.</div>
+            <input type="password" inputmode="numeric" value=${addPinVal} onInput=${e=>setAddPinVal(e.target.value)} placeholder="Recipient passcode" style="width:100%;padding:11px;border-radius:9px;border:1px solid var(--line);background:#0e1218;color:#fff;font-size:18px;letter-spacing:4px;text-align:center;margin-bottom:8px" />
+            ${addPinErr?html`<div class="sub" style="color:#e25555;margin-bottom:8px">${addPinErr}</div>`:''}
+            <div style="display:flex;gap:8px"><button class="btn" style="flex:1" disabled=${busy} onClick=${confirmAndAddAllow}>Confirm & add</button><button style=${bSmAlt} onClick=${()=>{setAddPinModal(false);setAddPinVal('');}}>Cancel</button></div>
           </div>
-        </div>`;})() : ''}`}
+        </div>` : ''}
+      ${''}`}
 
     ${tab === 'cons' && html`
       <div class="card">
