@@ -255,6 +255,7 @@ cfg.company = cfg.company || 'RSR Engineering';
 cfg.otMult = cfg.otMult || 1.25;
 cfg.weeklyVale = (cfg.weeklyVale===undefined) ? 500 : cfg.weeklyVale;
 cfg.allowance = (cfg.allowance===undefined) ? 50 : cfg.allowance;
+cfg.otAllowMinHrs = (cfg.otAllowMinHrs===undefined) ? 3 : cfg.otAllowMinHrs;
 // Pull the shared settings from Supabase (key 'payroll_cfg'); fall back to local.
 async function loadCfg(){
   try{
@@ -426,7 +427,10 @@ async function runPayroll(){
         otMs+=ot;
         totalWorkedMs+=worked;
         shortfallMs+=Math.max(0, shiftMs-Math.min(reg,shiftMs)); // late/undertime gap
-        if(r.has_ot_allowance) otAllowDays++;
+        // OT allowance only when the day actually has >= the minimum OT hours
+        // (default 3h). Safety net in case a flag is set incorrectly.
+        const otMinHrs = Number(cfg.otAllowMinHrs)||3;
+        if(r.has_ot_allowance && (ot/3600000) >= otMinHrs) otAllowDays++;
         if(r.has_away_allowance) awayAllowDays++;
       });
       const allowAmt=Number(cfg.allowance)||50;
@@ -565,9 +569,9 @@ function slipMini(r){
     <div class="mini-co">${cfg.company}</div>
     <div class="mini-top"><span class="mini-name">${r.name}</span><span class="mini-code">${r.code}</span></div>
     <div class="mini-sub">${fmtDate(curFrom)} – ${fmtDate(curTo)} · ${r.totalHrs.toFixed(1)}h · ${r.daysPresent}d</div>
-    ${L('Hours pay',r.basic)}
+    ${L('Hours worked ('+r.totalHrs.toFixed(1)+'h / '+r.daysPresent+'d)',r.basic)}
     ${L('Late/UT',r.lateUT,true)}
-    ${L('OT pay',r.otPay)}
+    ${L('OT ('+r.otHrs.toFixed(1)+'h × '+cfg.otMult+')',r.otPay)}
     ${L('OT allow.',Number(r.otAllowance)||0)}
     ${L('Stay-in',Number(r.stayInAllowance)||0)}
     ${L('Cash adv.',Number(r.valeDeduct)||0,true)}
