@@ -328,6 +328,7 @@ async function init(){
   setWeek(0);
   await loadEmployees();
   await loadAdvances();
+  await loadDeductAllowances();
 }
 
 async function loadEmployees(){
@@ -335,7 +336,7 @@ async function loadEmployees(){
     const {data,error}=await sb.from('employees').select('*').order('name');
     if(error) throw error;
     employees=(data||[]).map(e=>({
-      code:e.code, name:e.name, dept:e.dept, position:e.position,
+      id:e.id, code:e.code, name:e.name, dept:e.dept, position:e.position,
       homeSite:e.home_site||'A', shift:Number(e.shift)||8,
       dailyRate:Number(e.daily_rate)||0, suspended:!!e.is_suspended
     }));
@@ -354,6 +355,28 @@ async function loadAdvances(){
     advances=[];
     console.warn('cash_advances load:',err.message);
   }
+}
+
+// Deductible allowances from Liquidation: confirmed, deductible=Yes, not settled.
+let deductAllowances=[];
+async function loadDeductAllowances(){
+  try{
+    const {data,error}=await sb.from('liq_line').select('*')
+      .eq('type','ALLOWANCE').eq('confirmed',true).eq('deductible','Yes');
+    if(error) throw error;
+    // keep only the ones not yet settled in a prior payroll run
+    deductAllowances=(data||[]).filter(l=>!l.payroll_settled);
+  }catch(err){
+    deductAllowances=[];
+    console.warn('liq allowances load:',err.message);
+  }
+}
+// allowances for one employee (by id), with total + date list
+function allowancesFor(empId){
+  const rows=deductAllowances.filter(l=>l.emp_id===empId);
+  const total=rows.reduce((s,l)=>s+Number(l.amount||0),0);
+  const dates=rows.map(l=>fmtDate(toISO(l.or_date||l.created_at))).filter(Boolean);
+  return { total, dates, ids:rows.map(l=>l.id) };
 }
 
 // outstanding balance for an employee = advances - payments
@@ -439,12 +462,14 @@ async function runPayroll(){
       const otPay = (otMs/3600000)*hourly*cfg.otMult;
       const bal = outstanding(emp.code);
       const defaultVale = bal>0 ? Math.min(cfg.weeklyVale, bal) : 0;
+      const al = allowancesFor(emp.id);
       computed.push({
         code:emp.code, name:emp.name, dept:emp.dept, homeSite:emp.homeSite,
         suspended:emp.suspended, dailyRate:emp.dailyRate, shift:emp.shift, hourly,
         daysPresent, otHrs:otMs/3600000, totalHrs:totalWorkedMs/3600000, basic, lateUT, otPay,
         valeBalance:bal, otAllowance:otAllowDays*allowAmt, stayInAllowance:awayAllowDays*allowAmt,
-        valeDeduct:defaultVale, otherDeduct:0
+        valeDeduct:defaultVale, otherDeduct:0,
+        allowDeduct:al.total, allowDates:al.dates, allowIds:al.ids
       });
     });
 
@@ -457,7 +482,7 @@ async function runPayroll(){
   }
 }
 
-function netOf(r){ return r.basic - r.lateUT + r.otPay + (Number(r.otAllowance)||0) + (Number(r.stayInAllowance)||0) - (Number(r.valeDeduct)||0) - (Number(r.otherDeduct)||0); }
+function netOf(r){ return r.basic - r.lateUT + r.otPay + (Number(r.otAllowance)||0) + (Number(r.stayInAllowance)||0) - (Number(r.valeDeduct)||0) - (Number(r.otherDeduct)||0) - (Number(r.allowDeduct)||0); }
 
 function renderRun(){
   document.getElementById('s-head').textContent=computed.length;
@@ -477,6 +502,7 @@ function renderRun(){
         <div class="k">Hours worked (${r.totalHrs.toFixed(2)}h)</div><div class="v">${peso(r.basic)}</div>
         <div class="k">Less late / undertime</div><div class="v minus">${r.lateUT>0?'−'+peso(r.lateUT):peso(0)}</div>
         <div class="k">OT pay (${r.otHrs.toFixed(2)}h × ${cfg.otMult})</div><div class="v plus">${r.otPay>0?'+'+peso(r.otPay):peso(0)}</div>
+        ${(Number(r.allowDeduct)||0)>0?`<div class="k">Less allowance${r.allowDates&&r.allowDates.length?' ('+r.allowDates.join(', ')+')':''}</div><div class="v minus">−${peso(r.allowDeduct)}</div>`:''}
       </div>
       <div class="pr-inputs">
         <div>
@@ -545,12 +571,13 @@ function slipHTML(r){
         <tr><td>Add: OT allowance</td><td>${peso(Number(r.otAllowance)||0)}</td></tr>
         <tr><td>Add: stay-in allowance</td><td>${peso(Number(r.stayInAllowance)||0)}</td></tr>
         <tr><td>Less: cash advance</td><td>${(Number(r.valeDeduct)||0)>0?'('+peso(r.valeDeduct)+')':peso(0)}</td></tr>
+        ${(Number(r.allowDeduct)||0)>0?`<tr><td>Less: allowance${r.allowDates&&r.allowDates.length?' ('+r.allowDates.join(', ')+')':''}</td><td>(${peso(r.allowDeduct)})</td></tr>`:''}
         <tr><td>Less: other deduction</td><td>${(Number(r.otherDeduct)||0)>0?'('+peso(r.otherDeduct)+')':peso(0)}</td></tr>
       </table>
       <div class="slip-net"><span>TOTAL (NET PAY)</span><span>${peso(net)}</span></div>
-      <div style="font-size:11px;color:#666;margin-top:8px;display:flex;justify-content:space-between;border:1px dashed #ccc;border-radius:8px;padding:6px 10px">
-        <span>Cash advance balance (reminder only)</span>
-        <span><b>${peso(Math.max(0, (Number(r.valeBalance)||0) - (Number(r.valeDeduct)||0)))}</b> remaining</span>
+      <div style="font-size:13px;color:#000;margin-top:10px;display:flex;justify-content:space-between;align-items:center;border:2px solid #000;border-radius:8px;padding:9px 12px;font-weight:700">
+        <span>Remaining cash advance</span>
+        <span>${peso(Math.max(0, (Number(r.valeBalance)||0) - (Number(r.valeDeduct)||0)))}</span>
       </div>
       <div style="display:flex;justify-content:space-between;margin-top:26px;font-size:11px;color:#888">
         <div style="border-top:1px solid #999;padding-top:4px;width:45%;text-align:center">Received by</div>
@@ -568,16 +595,17 @@ function slipMini(r){
   return `<div class="mini">
     <div class="mini-co">${cfg.company}</div>
     <div class="mini-top"><span class="mini-name">${r.name}</span><span class="mini-code">${r.code}</span></div>
-    <div class="mini-sub">${fmtDate(curFrom)} – ${fmtDate(curTo)} · ${r.totalHrs.toFixed(1)}h · ${r.daysPresent}d</div>
+    <div class="mini-sub">${r.totalHrs.toFixed(1)}h · ${r.daysPresent} day${r.daysPresent===1?'':'s'}</div>
     ${L('Hours worked ('+r.totalHrs.toFixed(1)+'h / '+r.daysPresent+'d)',r.basic)}
     ${L('Late/UT',r.lateUT,true)}
     ${L('OT ('+r.otHrs.toFixed(1)+'h × '+cfg.otMult+')',r.otPay)}
     ${L('OT allow.',Number(r.otAllowance)||0)}
     ${L('Stay-in',Number(r.stayInAllowance)||0)}
     ${L('Less cash advance',Number(r.valeDeduct)||0,true)}
+    ${(Number(r.allowDeduct)||0)>0?L('Less allowance'+(r.allowDates&&r.allowDates.length?' ('+r.allowDates.join(', ')+')':''),Number(r.allowDeduct)||0,true):''}
     ${L('Less other deduction',Number(r.otherDeduct)||0,true)}
     <div class="mini-net"><span>TOTAL</span><span>${peso(net)}</span></div>
-    <div class="mini-l" style="font-size:8px;color:#666"><span>Remaining cash advance</span><span class="v">${peso(Math.max(0,(Number(r.valeBalance)||0)-(Number(r.valeDeduct)||0)))}</span></div>
+    <div class="mini-l" style="font-size:10px;color:#000;font-weight:700;margin-top:3px"><span>Remaining cash advance</span><span class="v">${peso(Math.max(0,(Number(r.valeBalance)||0)-(Number(r.valeDeduct)||0)))}</span></div>
     <div class="mini-sign">Received by</div>
   </div>`;
 }
@@ -590,25 +618,40 @@ function printAllSlips(){
 
 // ── POST VALE DEDUCTIONS ──
 function postDeductions(){
-  const toPost=computed.filter(r=>(Number(r.valeDeduct)||0)>0);
-  if(!toPost.length){ msg('post-msg','err','No vale deductions entered.'); return; }
-  const total=toPost.reduce((s,r)=>s+Number(r.valeDeduct),0);
-  openConfirm('Post vale deductions',
-    `This will record ${toPost.length} vale payment(s) totalling ${peso(total)} against employees' advances. This reduces their outstanding balances.`,
+  const valeRows=computed.filter(r=>(Number(r.valeDeduct)||0)>0);
+  const allowRows=computed.filter(r=>(Number(r.allowDeduct)||0)>0 && r.allowIds && r.allowIds.length);
+  if(!valeRows.length && !allowRows.length){ msg('post-msg','err','No deductions to post.'); return; }
+  const valeTotal=valeRows.reduce((s,r)=>s+Number(r.valeDeduct),0);
+  const allowTotal=allowRows.reduce((s,r)=>s+Number(r.allowDeduct),0);
+  const allowCount=allowRows.reduce((s,r)=>s+r.allowIds.length,0);
+  openConfirm('Post deductions',
+    `This will:\n• record ${valeRows.length} cash-advance payment(s) totalling ${peso(valeTotal)}\n• settle ${allowCount} liquidation allowance(s) totalling ${peso(allowTotal)}\nThese reduce balances and mark allowances as deducted (so they won't be deducted again).`,
     async()=>{
       const btn=document.getElementById('post-btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span> Posting…';
       try{
-        const rows=toPost.map(r=>({
-          employee_code:r.code, employee_name:r.name, type:'payment',
-          amount:Number(r.valeDeduct), reason:'Payroll deduction',
-          date:curTo, week_start:curFrom, week_end:curTo
-        }));
-        const {error}=await sb.from('cash_advances').insert(rows);
-        if(error) throw error;
+        // 1) record vale payments
+        if(valeRows.length){
+          const rows=valeRows.map(r=>({
+            employee_code:r.code, employee_name:r.name, type:'payment',
+            amount:Number(r.valeDeduct), reason:'Payroll deduction',
+            date:curTo, week_start:curFrom, week_end:curTo
+          }));
+          const {error}=await sb.from('cash_advances').insert(rows);
+          if(error) throw error;
+        }
+        // 2) mark liquidation allowances as settled (prevents double-deduction)
+        const allIds=[];
+        allowRows.forEach(r=>r.allowIds.forEach(id=>allIds.push(id)));
+        if(allIds.length){
+          const {error}=await sb.from('liq_line')
+            .update({ payroll_settled:true, payroll_settled_at:new Date().toISOString() })
+            .in('id', allIds);
+          if(error) throw error;
+        }
         await loadAdvances();
-        // refresh balances shown in run + reset deductions
+        await loadDeductAllowances();
         computed.forEach(r=>{ r.valeBalance=outstanding(r.code); });
-        msg('post-msg','ok','Posted '+rows.length+' deduction(s). Balances updated.');
+        msg('post-msg','ok','Posted. '+valeRows.length+' vale payment(s), '+allowCount+' allowance(s) settled.');
       }catch(err){ msg('post-msg','err','Failed: '+err.message); }
       finally{ btn.disabled=false; btn.innerHTML='Post vale deductions'; }
     });
