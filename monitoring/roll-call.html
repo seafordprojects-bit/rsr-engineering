@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Roll-call</title>
+<style>
+  :root{
+    --ink:#1c2230; --muted:#6b7280; --line:#e3e6ec; --paper:#ffffff;
+    --bg:#f4f5f7; --steel:#2f5d8a; --steel-d:#234a70; --ok:#1f7a4d; --okbg:#e8f5ee;
+    --warn:#b4540a; --warnbg:#fbf3e8; --hold:#7a5b1f; --holdbg:#fbf6e7;
+    --radius:14px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding:0 0 48px;-webkit-text-size-adjust:100%}
+  .wrap{max-width:600px;margin:0 auto;padding:14px}
+  header.top{display:flex;align-items:baseline;justify-content:space-between;padding:10px 2px 12px}
+  header.top h1{font-size:19px;margin:0}
+  header.top .sub{color:var(--muted);font-size:12.5px}
+  a.back{color:var(--steel);text-decoration:none;font-size:13px}
+
+  .bar{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:13px;margin-bottom:14px}
+  .bar label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:5px}
+  .bar input[type=date]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:#fcfcfd;font-family:inherit}
+  .cps{display:flex;flex-wrap:wrap;gap:7px;margin-top:11px}
+  .cp{flex:1 0 28%;text-align:center;padding:9px 4px;border:1px solid var(--line);border-radius:10px;
+      background:#fcfcfd;font-size:13px;font-weight:600;color:var(--ink);position:relative}
+  .cp.on{background:var(--steel);color:#fff;border-color:var(--steel)}
+  .cp .ot{display:block;font-size:9px;letter-spacing:.5px;opacity:.8;margin-top:1px}
+
+  .job{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+  .job.paused{background:var(--holdbg);border-color:#ecdcae}
+  .jhead{display:flex;justify-content:space-between;align-items:flex-start;gap:8px}
+  .jno{font-family:var(--mono);font-size:13px;color:var(--steel-d);font-weight:700}
+  .jttl{font-weight:600;margin-top:1px;font-size:14px}
+  .jmeta{font-size:12px;color:var(--muted);margin-top:2px}
+  .count{font-size:12px;color:var(--ok);font-weight:700;white-space:nowrap}
+
+  .people{margin-top:11px;display:flex;flex-direction:column;gap:7px}
+  .prow{display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .pname{font-size:14px}
+  .pname .moved{font-size:10px;font-weight:700;color:var(--warn);background:var(--warnbg);
+      border:1px solid #f0d9bf;border-radius:10px;padding:1px 6px;margin-left:6px;letter-spacing:.3px}
+  .tog{border:1px solid var(--line);background:#fcfcfd;color:var(--muted);font-size:12.5px;font-weight:700;
+       padding:7px 12px;border-radius:9px;min-width:104px;text-align:center}
+  .tog.present{background:var(--okbg);color:var(--ok);border-color:#bfe3cf}
+  .tog.locked{opacity:.55;font-style:italic;font-weight:600}
+
+  .add{margin-top:10px;display:flex;gap:8px;align-items:center}
+  .add select{flex:1;padding:9px 10px;border:1px dashed #c3d3e4;border-radius:9px;background:#f7fafd;font-size:13.5px;font-family:inherit;color:var(--ink)}
+
+  .pausebtn{margin-top:11px;border:1px solid #e7ddc2;background:#fbf6e7;color:var(--hold);
+       font-size:12.5px;font-weight:700;padding:8px 12px;border-radius:9px;width:100%}
+  .resumebtn{margin-top:11px;border:1px solid #bfe3cf;background:var(--okbg);color:var(--ok);
+       font-size:13px;font-weight:700;padding:9px 12px;border-radius:9px;width:100%}
+  .reasons{margin-top:9px;display:flex;flex-wrap:wrap;gap:6px}
+  .reasons .r{border:1px solid #e7ddc2;background:#fff;color:var(--hold);font-size:12px;font-weight:600;padding:6px 10px;border-radius:18px}
+  .holdnote{font-size:12.5px;color:var(--hold);margin-top:8px}
+
+  .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:20px 0;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
+  .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
+  .msg{margin:0 0 12px;font-size:13px;padding:9px 11px;border-radius:9px;background:var(--warnbg);color:var(--warn);border:1px solid #f0d9bf}
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2",
+    "preact": "https://esm.sh/preact@10.19.3",
+    "preact/hooks": "https://esm.sh/preact@10.19.3/hooks",
+    "htm": "https://esm.sh/htm@3.1.1"
+  }
+}
+</script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>Roll-call</h1>
+        <div class="sub">Tap who is present each checkpoint</div>
+      </div>
+      <a class="back" href="index.html">&larr; Menu</a>
+    </header>
+    <div id="app"><div class="loading">Loading&hellip;</div></div>
+  </div>
+
+  <script type="module">
+    import { h, render } from "preact";
+    import { useState, useEffect } from "preact/hooks";
+    import htm from "htm";
+    import { sb, CHECKPOINTS, HOURS_PER_CHECKPOINT, loadEmployees, todayLocal, ymd, addDays } from "./config.js";
+    const html = htm.bind(h);
+
+    const cpMinutes = (code) => { const [h,m]=code.split(":").map(Number); return h*60+m; };
+    function nearestCheckpoint(){
+      const now=new Date(); const nm=now.getHours()*60+now.getMinutes();
+      let pick=CHECKPOINTS[0].code;
+      for(const c of CHECKPOINTS){ if(cpMinutes(c.code)<=nm) pick=c.code; }
+      return pick;
+    }
+    function daysBetween(a,b){ return Math.round((new Date(b+"T00:00:00")-new Date(a+"T00:00:00"))/86400000); }
+
+    function App(){
+      const [date,setDate]=useState(todayLocal());
+      const [cp,setCp]=useState(nearestCheckpoint());
+      const [emps,setEmps]=useState([]);          // [{id,name}]
+      const [jobs,setJobs]=useState(null);         // active jobs for date
+      const [roster,setRoster]=useState({});       // job_id -> [emp code]
+      const [rows,setRows]=useState([]);           // checkpoint rows for date+cp: {id,job_id,employee_code}
+      const [pauses,setPauses]=useState([]);       // active pauses on date: {id,job_id,paused_on,reason}
+      const [addPick,setAddPick]=useState({});     // job_id -> selected code
+      const [pausing,setPausing]=useState(null);   // job_id currently choosing a reason
+      const [msg,setMsg]=useState("");
+      const [busy,setBusy]=useState(false);
+
+      useEffect(()=>{ loadEmployees().then(setEmps); },[]);
+      useEffect(()=>{ reload(); },[date,cp]);
+
+      async function reload(){
+        setMsg("");
+        const dnow=date;
+        const jq = sb.from("jobs")
+          .select("id,job_no,vessel,location,start_date,target_date,status,est_manhours")
+          .neq("status","done").order("job_no");
+        const aq = sb.from("job_assignment").select("job_id,employee_code");
+        const cq = sb.from("job_checkpoint").select("id,job_id,employee_code")
+          .eq("work_date",dnow).eq("checkpoint",cp);
+        const pq = sb.from("job_pause").select("id,job_id,paused_on,resumed_on,reason")
+          .lte("paused_on",dnow);
+        const [jr,ar,cr,pr]=await Promise.all([jq,aq,cq,pq]);
+        if(jr.error){ console.error(jr.error); setMsg("Could not load jobs."); }
+        // active = started on/before date (null start = always)
+        const active=(jr.data||[]).filter(j=> !j.start_date || j.start_date<=dnow);
+        setJobs(active);
+        const rm={}; (ar.data||[]).forEach(a=>{ (rm[a.job_id]=rm[a.job_id]||[]).push(a.employee_code); });
+        setRoster(rm);
+        setRows(cr.data||[]);
+        // pause is active on date if not yet resumed (resumed_on null or after date)
+        setPauses((pr.data||[]).filter(p=> !p.resumed_on || p.resumed_on>dnow));
+      }
+
+      const nameOf = (code)=>{ const e=emps.find(x=>x.id===code); return e? e.name : code; };
+      const empByCp = {}; rows.forEach(r=>{ empByCp[r.employee_code]=r; });           // emp -> row (this block)
+      const presentRow = (job,code)=> rows.find(r=>r.job_id===job && r.employee_code===code);
+      const pauseOf = (job)=> pauses.find(p=>p.job_id===job);
+
+      async function toggle(job,code){
+        if(busy) return;
+        const here=presentRow(job,code);
+        const elsewhere=empByCp[code];
+        if(here){ // remove
+          setBusy(true);
+          const {error}=await sb.from("job_checkpoint").delete().eq("id",here.id);
+          setBusy(false);
+          if(error){ setMsg(error.message); return; }
+          reload(); return;
+        }
+        if(elsewhere){ // tagged on a different job this block
+          const otherJob=(jobs||[]).find(j=>j.id===elsewhere.job_id);
+          setMsg(`${nameOf(code)} is already on ${otherJob? otherJob.job_no : "another job"} at this checkpoint. Untag there first to move.`);
+          return;
+        }
+        // add present
+        setBusy(true);
+        const otFlag = (CHECKPOINTS.find(c=>c.code===cp)||{}).ot || false;
+        const {error}=await sb.from("job_checkpoint").insert({
+          job_id:job, employee_code:code, work_date:date, checkpoint:cp,
+          hours:HOURS_PER_CHECKPOINT, is_ot:otFlag,
+        });
+        setBusy(false);
+        if(error){ setMsg(error.message); return; }
+        reload();
+      }
+
+      async function addMovedIn(job){
+        const code=addPick[job];
+        if(!code) return;
+        setAddPick({...addPick,[job]:""});
+        await toggle(job,code);
+      }
+
+      async function doPause(job,reason){
+        setPausing(null);
+        setBusy(true);
+        const {error}=await sb.from("job_pause").insert({ job_id:job, paused_on:date, reason });
+        setBusy(false);
+        if(error){ setMsg(error.message); return; }
+        reload();
+      }
+      async function doResume(job){
+        const p=pauseOf(job); if(!p) return;
+        setBusy(true);
+        const {error:e1}=await sb.from("job_pause").update({resumed_on:date}).eq("id",p.id);
+        if(e1){ setBusy(false); setMsg(e1.message); return; }
+        // auto-extend target_date by the paused days
+        const j=(jobs||[]).find(x=>x.id===job);
+        const gap=daysBetween(p.paused_on,date);
+        if(j && j.target_date && gap>0){
+          const nt=ymd(addDays(j.target_date,gap));
+          await sb.from("jobs").update({target_date:nt}).eq("id",job);
+        }
+        setBusy(false);
+        reload();
+      }
+
+      if(jobs===null) return html`<div class="loading">Loading&hellip;</div>`;
+      const cpLabel=(CHECKPOINTS.find(c=>c.code===cp)||{}).label||cp;
+
+      return html`
+        <div class="bar">
+          <label>Date</label>
+          <input type="date" value=${date} onInput=${e=>setDate(e.target.value)} />
+          <div class="cps">
+            ${CHECKPOINTS.map(c=> html`
+              <div class="cp ${c.code===cp?"on":""}" onClick=${()=>setCp(c.code)}>
+                ${c.label}${c.ot && html`<span class="ot">OT</span>`}
+              </div>`)}
+          </div>
+        </div>
+
+        ${msg && html`<div class="msg">${msg}</div>`}
+
+        ${jobs.length===0
+          ? html`<div class="empty">No active job orders on ${date}. Create one in Job Order, or check the start date.</div>`
+          : jobs.map(j=>{
+              const paused=pauseOf(j.id);
+              const rosterCodes=roster[j.id]||[];
+              const movedIn=rows.filter(r=>r.job_id===j.id && !rosterCodes.includes(r.employee_code)).map(r=>r.employee_code);
+              const shown=[...rosterCodes, ...movedIn];
+              const presentCount=rows.filter(r=>r.job_id===j.id).length;
+              const candidates=emps.filter(e=> !shown.includes(e.id) && !empByCp[e.id]); // free this block
+              return html`
+                <div class="job ${paused?"paused":""}">
+                  <div class="jhead">
+                    <div>
+                      <div class="jno">${j.job_no}</div>
+                      <div class="jttl">${j.vessel} \u00b7 ${j.location}</div>
+                      <div class="jmeta">est ${j.est_manhours} hrs \u00b7 ${j.start_date||"\u2014"} \u2192 ${j.target_date||"\u2014"}</div>
+                    </div>
+                    ${!paused && html`<div class="count">${presentCount} present \u00b7 +${presentCount*HOURS_PER_CHECKPOINT}h</div>`}
+                  </div>
+
+                  ${paused
+                    ? html`
+                        <div class="holdnote">On hold since ${paused.paused_on}${paused.reason?` \u2014 ${paused.reason}`:""}. Roll-call locked.</div>
+                        <button class="resumebtn" disabled=${busy} onClick=${()=>doResume(j.id)}>Resume work</button>`
+                    : html`
+                        <div class="people">
+                          ${shown.length===0
+                            ? html`<div class="jmeta">No one assigned. Add someone below.</div>`
+                            : shown.map(code=>{
+                                const here=!!presentRow(j.id,code);
+                                const elsewhere=!here && empByCp[code];
+                                const isMoved=movedIn.includes(code);
+                                return html`
+                                  <div class="prow">
+                                    <div class="pname">${nameOf(code)}${isMoved && html`<span class="moved">moved in</span>`}</div>
+                                    ${elsewhere
+                                      ? html`<div class="tog locked">on ${(jobs.find(x=>x.id===elsewhere.job_id)||{}).job_no||"other"}</div>`
+                                      : html`<button class="tog ${here?"present":""}" disabled=${busy} onClick=${()=>toggle(j.id,code)}>
+                                          ${here?"Present \u00b7 +2h":"Tap if present"}
+                                        </button>`}
+                                  </div>`;
+                              })}
+                        </div>
+                        <div class="add">
+                          <select value=${addPick[j.id]||""} onChange=${e=>{ setAddPick({...addPick,[j.id]:e.target.value}); }}>
+                            <option value="">+ Add someone (moved in)\u2026</option>
+                            ${candidates.map(e=> html`<option value=${e.id}>${e.name}</option>`)}
+                          </select>
+                          <button class="tog" disabled=${busy||!addPick[j.id]} onClick=${()=>addMovedIn(j.id)}>Add</button>
+                        </div>
+                        ${pausing===j.id
+                          ? html`<div class="reasons">
+                              ${["Absent","Pulled to priority","No material","Weather","Other"].map(r=>
+                                html`<button class="r" onClick=${()=>doPause(j.id,r)}>${r}</button>`)}
+                            </div>`
+                          : html`<button class="pausebtn" onClick=${()=>setPausing(j.id)}>Pause this job order</button>`}
+                      `}
+                </div>`;
+            })}
+      `;
+    }
+
+    render(html`<${App} />`, document.getElementById("app"));
+  </script>
+</body>
+</html>
