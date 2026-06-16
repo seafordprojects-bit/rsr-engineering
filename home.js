@@ -519,6 +519,7 @@ function App() {
   const [rep, setRep] = useState(null);     // repair units
   const [inv, setInv] = useState(null);     // { units, outs }
   const [iss, setIss] = useState(null);     // issued materials list
+  const [attPresent, setAttPresent] = useState({}); // {name|date: true} for issuance-date attendance
   const [ves, setVes] = useState(null);     // vessels monitor list
   const [att, setAtt] = useState(null);     // today's attendance summary
   const [attRows, setAttRows] = useState(null);  // per-employee rows for the monitor
@@ -633,7 +634,19 @@ function App() {
       catch (e) { flash('Load failed: ' + e.message); }
     })();
     if (adminTab === 'issued') (async () => {
-      try { setIss(await getIssued()); }
+      try {
+        const rows = await getIssued();
+        setIss(rows);
+        // cross-check: pull attendance for the issuance dates to flag issued-but-absent
+        const dates = [...new Set(rows.map(r => r.date).filter(Boolean))];
+        if (dates.length) {
+          const { data } = await supabase.from('attendance_records')
+            .select('employee_name, date, status').in('date', dates).limit(5000);
+          const present = {};
+          (data || []).forEach(a => { present[(a.employee_name || '').trim().toLowerCase() + '|' + a.date] = true; });
+          setAttPresent(present);
+        } else setAttPresent({});
+      }
       catch (e) { flash('Load failed: ' + e.message); }
     })();
     if (adminTab === 'vessels') (async () => {
@@ -689,8 +702,6 @@ function App() {
     { ico:'💵', num:null,         unit:'weekly',           title:'Payroll',           href:'../payroll/' },
     { ico:'🛠️', num:m.inRepair,  unit:'in repair',       title:'Tool Repair',      onClick:() => setAdminTab('repair') },
     { ico:'🚢', num:m.vessels,   unit:'active',          title:'Vessel Schedule',  onClick:() => setAdminTab('vessels') },
-    { ico:'👷', num:m.people,    unit:'on file',         title:'Personnel',        onClick:() => setAdminTab('people') },
-    { ico:'💰', num:null,        unit:'set rates',       title:'Salary',           onClick:() => setAdminTab('salary') },
     { ico:'⏱️', num:att ? att.working : null, unit:'working now', title:'Time In / Out', onClick:() => setAdminTab('attendance') },
   ];
   const soon = [
@@ -795,24 +806,36 @@ function App() {
   // ---- admin: approve coordinator material / tool requests ----
   if (adminTab === 'issued') {
     const dt = (s) => s ? new Date(s).toLocaleDateString() : '—';
+    const wasPresent = (r) => attPresent[(r.emp_name || '').trim().toLowerCase() + '|' + r.date];
+    const absentList = (iss || []).filter(r => r.emp_name && r.date && !wasPresent(r));
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">MATERIAL ISSUANCE</span></span>
         <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
       </div></div></header>
       <div class="wrap">
+        ${iss && absentList.length ? html`
+        <div class="card" style="border-color:var(--hivis)">
+          <div style="font-weight:800;color:var(--hivis)">⚠ ${absentList.length} issued to someone ABSENT that day</div>
+          <p class="note" style="margin:4px 0 0">Material was issued to a person with no attendance record on the issuance date — check if the material is actually being used.</p>
+        </div>` : ''}
         <div class="card">
           <label>Issued materials${iss ? ` (${iss.length})` : ''}</label>
           ${iss == null ? html`<div class="empty">Loading…</div>`
-            : iss.length ? iss.map(r => html`
+            : iss.length ? iss.map(r => {
+              const absent = r.emp_name && r.date && !wasPresent(r);
+              return html`
               <div class="row" key=${r.id} style="align-items:flex-start">
                 <div>
-                  <div class="name">${r.emp_name || '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${r.id}</span></div>
+                  <div class="name">${r.emp_name || '—'}</div>
                   <div class="unit">${r.proj_name || '—'}${r.proj_code ? ' (' + r.proj_code + ')' : ''} · ${r.date || ''}${r.by_name ? ' · by ' + r.by_name : ''}</div>
                   <div class="unit">${(Array.isArray(r.items) ? r.items : []).map(it => (it.name || it.n) + ' ×' + it.qty).join(', ') || '—'}</div>
                 </div>
-                <span class="badge" style="background:#12B89E;color:#000">ISSUED</span>
-              </div>`)
+                ${absent
+                  ? html`<span class="badge" style="background:#D64045;color:#fff">ABSENT THAT DAY</span>`
+                  : html`<span class="badge" style="background:#12B89E;color:#000">PRESENT</span>`}
+              </div>`;
+            })
             : html`<div class="empty">No materials issued yet.</div>`}
         </div>
         <div class="card" style="cursor:pointer" onClick=${() => setAdminTab('matusage')}>
@@ -821,7 +844,7 @@ function App() {
             <span style="color:var(--ink-dim);font-weight:700">→</span>
           </div>
         </div>
-        <p class="note" style="text-align:center">View only. Site personnel record issuance in the borrower app.</p>
+        <p class="note" style="text-align:center">"Absent that day" = material issued to a person with no attendance record on the issuance date.</p>
       </div>
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
@@ -955,7 +978,7 @@ function App() {
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">${hrTitles[adminTab]}</span></span>
-        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+        <button onClick=${() => setAdminTab('hrmenu')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← HR Monitors</button>
       </div></div></header>
       <div class="wrap">
         <div class="card">
@@ -998,13 +1021,37 @@ function App() {
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
 
+  // ---- admin: HR Monitors sub-menu ----
+  if (adminTab === 'hrmenu') {
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">HR MONITORS</span></span>
+        <button onClick=${() => setAdminTab('hrmenu')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← HR Monitors</button>
+      </div></div></header>
+      <div class="wrap">
+        <div class="grid">
+          ${[
+            { ico:'🌴', title:'Leaves',        onClick:() => setAdminTab('leaves') },
+            { ico:'⚠️', title:'Approvals',     onClick:() => setAdminTab('approvals') },
+            { ico:'⚡', title:'Straight Duty', onClick:() => setAdminTab('duty') },
+            { ico:'⏰', title:'Late Breaks',   onClick:() => setAdminTab('latebreaks') },
+            { ico:'👷', title:'Personnel',     onClick:() => setAdminTab('people') },
+            { ico:'💰', title:'Salary',        onClick:() => setAdminTab('salary') },
+            { ico:'🚨', title:'Violations',    onClick:() => setAdminTab('violations') },
+            { ico:'📱', title:'SMS Log',       onClick:() => setAdminTab('sms') },
+          ].map(t => html`<${Tile} ...${t} />`)}
+        </div>
+      </div>
+      ${toast && html`<div class="toast">${toast}</div>`}`;
+  }
+
   // ---- admin: salary (dedicated, simple) ----
   if (adminTab === 'salary') {
     const sel = emps.find(x => x.id === empSel);
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">SALARY</span></span>
-        <button onClick=${() => { setEmpSel(''); setAdminTab('dash'); }} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+        <button onClick=${() => { setEmpSel(''); setAdminTab('hrmenu'); }} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← HR Monitors</button>
       </div></div></header>
       <div class="wrap">
         ${!empSel ? html`
@@ -1215,12 +1262,7 @@ function App() {
       <div class="sectlabel">HR monitors</div>
       <div class="grid">
         ${[
-          { ico:'🌴', title:'Leaves',        onClick:() => setAdminTab('leaves') },
-          { ico:'⚠️', title:'Approvals',     onClick:() => setAdminTab('approvals') },
-          { ico:'⚡', title:'Straight Duty', onClick:() => setAdminTab('duty') },
-          { ico:'⏰', title:'Late Breaks', onClick:() => setAdminTab('latebreaks') },
-          { ico:'🚨', title:'Violations',    onClick:() => setAdminTab('violations') },
-          { ico:'📱', title:'SMS Log',       onClick:() => setAdminTab('sms') },
+          { ico:'🧑‍💼', title:'HR Monitors', unit:'leaves, salary, etc.', onClick:() => setAdminTab('hrmenu') },
         ].map(t => html`<${Tile} ...${t} />`)}
       </div>
 
