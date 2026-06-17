@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Monitor</title>
+<style>
+  :root{
+    --ink:#1c2230; --muted:#6b7280; --line:#e3e6ec; --paper:#ffffff; --bg:#f4f5f7;
+    --steel:#2f5d8a; --steel-d:#234a70; --ok:#1f7a4d; --okbg:#e8f5ee;
+    --over:#b4231f; --overbg:#fbe8e7; --track:#eef1f5;
+    --radius:14px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding:0 0 48px;-webkit-text-size-adjust:100%}
+  .wrap{max-width:600px;margin:0 auto;padding:14px}
+  header.top{display:flex;align-items:baseline;justify-content:space-between;padding:10px 2px 12px}
+  header.top h1{font-size:19px;margin:0}
+  header.top .sub{color:var(--muted);font-size:12.5px}
+  a.back{color:var(--steel);text-decoration:none;font-size:13px}
+
+  .summary{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);
+       padding:12px 15px;margin-bottom:14px;font-size:13px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 16px}
+  .summary b{color:var(--ink);font-family:var(--mono)}
+
+  .job{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:12px}
+  .jhead{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;cursor:pointer}
+  .jno{font-family:var(--mono);font-size:13px;color:var(--steel-d);font-weight:700}
+  .jttl{font-weight:600;font-size:14px;margin-top:1px}
+  .jmeta{font-size:12px;color:var(--muted);margin-top:2px}
+  .chev{color:var(--muted);font-size:13px;flex-shrink:0;margin-top:2px}
+
+  .hrs{display:flex;align-items:baseline;gap:6px;margin-top:11px}
+  .hrs .big{font-family:var(--mono);font-size:22px;font-weight:700}
+  .hrs .of{font-size:13px;color:var(--muted)}
+  .bar{height:9px;border-radius:6px;background:var(--track);margin-top:7px;overflow:hidden}
+  .bar > i{display:block;height:100%;background:var(--steel);border-radius:6px}
+  .bar.over > i{background:var(--over)}
+
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:11px}
+  .chip{font-size:12px;border:1px solid var(--line);background:#fcfcfd;border-radius:18px;padding:4px 11px;color:var(--ink)}
+  .chip b{font-family:var(--mono)}
+  .pace{font-size:11px;font-weight:700;border-radius:18px;padding:4px 11px;text-transform:uppercase;letter-spacing:.4px}
+  .pace.ok{background:var(--okbg);color:var(--ok)}
+  .pace.over{background:var(--overbg);color:var(--over)}
+  .pill{display:inline-block;font-size:10.5px;font-weight:700;padding:2px 8px;border-radius:18px;text-transform:uppercase;letter-spacing:.4px;background:#eef2f7;color:#3a5573;margin-left:6px}
+  .pill.done{background:var(--okbg);color:var(--ok)}
+
+  .drill{margin-top:13px;border-top:1px dashed var(--line);padding-top:11px}
+  .day{margin-bottom:10px}
+  .dayhd{display:flex;justify-content:space-between;font-size:12.5px;font-weight:700;color:var(--steel-d)}
+  .dayhd .dt{font-family:var(--mono)}
+  .erow{display:flex;justify-content:space-between;font-size:12.5px;color:var(--muted);padding:2px 0 2px 10px}
+  .erow b{color:var(--ink);font-family:var(--mono)}
+  .nodata{font-size:12.5px;color:var(--muted)}
+
+  .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:20px 0;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
+  .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
+  .msg{margin:0 0 12px;font-size:13px;padding:9px 11px;border-radius:9px;background:var(--overbg);color:var(--over);border:1px solid #f0bdba}
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2",
+    "preact": "https://esm.sh/preact@10.19.3",
+    "preact/hooks": "https://esm.sh/preact@10.19.3/hooks",
+    "htm": "https://esm.sh/htm@3.1.1"
+  }
+}
+</script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>Monitor</h1>
+        <div class="sub">Estimate vs actual &middot; kg per man-hour</div>
+      </div>
+      <a class="back" href="index.html">&larr; Menu</a>
+    </header>
+    <div id="app"><div class="loading">Loading&hellip;</div></div>
+  </div>
+
+  <script type="module">
+    import { h, render } from "preact";
+    import { useState, useEffect } from "preact/hooks";
+    import htm from "htm";
+    import { sb, loadEmployees, fmtNum } from "./config.js";
+    const html = htm.bind(h);
+
+    function App(){
+      const [rows,setRows]=useState(null);   // job_monitor
+      const [daily,setDaily]=useState({});    // job_id -> {date -> [{emp,hours}]}
+      const [emps,setEmps]=useState([]);
+      const [open,setOpen]=useState({});       // job_id -> bool
+      const [msg,setMsg]=useState("");
+
+      useEffect(()=>{ loadEmployees().then(setEmps); load(); },[]);
+
+      async function load(){
+        setMsg("");
+        const mq=sb.from("job_monitor").select("*").order("job_no");
+        const dq=sb.from("job_daily").select("job_id,work_date,employee_code,hours");
+        const [mr,dr]=await Promise.all([mq,dq]);
+        const errs=[mr.error,dr.error].filter(Boolean);
+        if(errs.length){ console.error(errs); setMsg(errs.map(e=>e.message).join(" \u00b7 ")); }
+        setRows(mr.data||[]);
+        const d={};
+        (dr.data||[]).forEach(r=>{
+          (d[r.job_id]=d[r.job_id]||{});
+          (d[r.job_id][r.work_date]=d[r.job_id][r.work_date]||[]).push({emp:r.employee_code,hours:Number(r.hours)});
+        });
+        setDaily(d);
+      }
+
+      const nameOf=(code)=>{ const e=emps.find(x=>x.id===code); return e? e.name : code; };
+
+      if(rows===null) return html`<div class="loading">Loading&hellip;</div>`;
+      if(rows.length===0) return html`<div class="empty">No job orders yet.</div>`;
+
+      const totEst=rows.reduce((s,r)=>s+Number(r.est_manhours||0),0);
+      const totAct=rows.reduce((s,r)=>s+Number(r.actual_manhours||0),0);
+
+      return html`
+        ${msg && html`<div class="msg">${msg}</div>`}
+        <div class="summary">
+          <span><b>${rows.length}</b> job orders</span>
+          <span>est <b>${fmtNum(totEst)}</b> hrs</span>
+          <span>actual <b>${fmtNum(totAct)}</b> hrs</span>
+        </div>
+
+        ${rows.map(r=>{
+          const est=Number(r.est_manhours||0), act=Number(r.actual_manhours||0);
+          const pct=est>0? (act/est*100) : 0;
+          const over=r.pace==="over";
+          const dmap=daily[r.id]||{};
+          const dates=Object.keys(dmap).sort();
+          const isOpen=!!open[r.id];
+          return html`
+            <div class="job">
+              <div class="jhead" onClick=${()=>setOpen({...open,[r.id]:!isOpen})}>
+                <div>
+                  <div class="jno">${r.job_no}${r.status==="done" && html`<span class="pill done">done</span>`}</div>
+                  <div class="jttl">${r.vessel} \u00b7 ${r.location}</div>
+                  <div class="jmeta">${r.start_date||"\u2014"} \u2192 ${r.target_date||"\u2014"}</div>
+                </div>
+                <div class="chev">${isOpen?"\u25be":"\u25b8"}</div>
+              </div>
+
+              <div class="hrs">
+                <span class="big">${fmtNum(act)}</span>
+                <span class="of">/ ${fmtNum(est)} hrs (${fmtNum(pct,0)}%)</span>
+              </div>
+              <div class="bar ${over?"over":""}"><i style=${`width:${Math.min(pct,100)}%`}></i></div>
+
+              <div class="chips">
+                <span class="chip"><b>${fmtNum(r.kilos)}</b> kg</span>
+                <span class="chip">${r.kg_per_manhour!=null? html`<b>${fmtNum(r.kg_per_manhour)}</b> kg/man-hr` : "no actual yet"}</span>
+                <span class="chip">${over? html`over by <b>${fmtNum(act-est)}</b>h` : html`<b>${fmtNum(r.manhours_left)}</b>h left`}</span>
+                <span class="pace ${over?"over":"ok"}">${over?"over":"on / under"}</span>
+              </div>
+
+              ${isOpen && html`
+                <div class="drill">
+                  ${dates.length===0
+                    ? html`<div class="nodata">No roll-call logged yet.</div>`
+                    : dates.map(dt=>{
+                        const list=dmap[dt];
+                        const dayTot=list.reduce((s,x)=>s+x.hours,0);
+                        return html`
+                          <div class="day">
+                            <div class="dayhd"><span class="dt">${dt}</span><span>${fmtNum(dayTot)} h</span></div>
+                            ${list.map(x=> html`<div class="erow"><span>${nameOf(x.emp)}</span><b>${fmtNum(x.hours)}h</b></div>`)}
+                          </div>`;
+                      })}
+                </div>`}
+            </div>`;
+        })}
+      `;
+    }
+
+    render(html`<${App} />`, document.getElementById("app"));
+  </script>
+</body>
+</html>
