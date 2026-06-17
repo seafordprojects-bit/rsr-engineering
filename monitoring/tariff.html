@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Work Tariff</title>
+<style>
+  :root{
+    --ink:#1c2230; --muted:#6b7280; --line:#e3e6ec; --paper:#ffffff; --bg:#f4f5f7;
+    --steel:#2f5d8a; --steel-d:#234a70; --ok:#1f7a4d; --okbg:#e8f5ee;
+    --warn:#b4540a; --over:#b4231f; --overbg:#fbe8e7;
+    --radius:14px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding:0 0 48px;-webkit-text-size-adjust:100%}
+  .wrap{max-width:560px;margin:0 auto;padding:14px}
+  header.top{display:flex;align-items:baseline;justify-content:space-between;padding:10px 2px 12px}
+  header.top h1{font-size:19px;margin:0}
+  header.top .sub{color:var(--muted);font-size:12.5px}
+  a.back{color:var(--steel);text-decoration:none;font-size:13px}
+
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:15px;margin-bottom:14px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 12px;font-weight:700}
+  label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin:9px 0 4px}
+  input,select{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:#fcfcfd;font-family:inherit;color:var(--ink)}
+  input:focus,select:focus{outline:2px solid var(--steel);border-color:var(--steel)}
+  .row{display:flex;gap:10px}.row>div{flex:1}
+  button.primary{width:100%;margin-top:13px;padding:13px;border:0;border-radius:11px;background:var(--steel);color:#fff;font-size:15px;font-weight:700}
+  button.primary:active{background:var(--steel-d)}
+  button.primary:disabled{opacity:.5}
+  button.ghost{margin-top:8px;width:100%;padding:11px;border:1px solid var(--line);background:#fcfcfd;color:var(--muted);border-radius:11px;font-weight:600;font-size:13.5px}
+  .msg{margin-top:10px;font-size:13px;padding:9px 11px;border-radius:9px;display:none}
+  .msg.ok{display:block;background:var(--okbg);color:var(--ok);border:1px solid #bfe3cf}
+  .msg.err{display:block;background:var(--overbg);color:var(--over);border:1px solid #f0bdba}
+
+  .catlabel{font-size:11px;font-weight:800;letter-spacing:.6px;color:var(--muted);text-transform:uppercase;margin:16px 4px 8px}
+  .item{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--paper);
+        border:1px solid var(--line);border-radius:12px;padding:11px 13px;margin-bottom:9px}
+  .item.off{opacity:.5}
+  .iname{font-weight:600;font-size:14px}
+  .irate{font-size:12.5px;color:var(--muted);margin-top:2px}
+  .irate b{font-family:var(--mono);color:var(--ink)}
+  .acts{display:flex;gap:6px;flex-shrink:0}
+  .acts button{border:1px solid var(--line);background:#fcfcfd;border-radius:8px;font-size:12px;font-weight:700;padding:7px 9px;color:var(--ink)}
+  .acts .del{border-color:#f0cab0;background:#fbeae1;color:var(--warn)}
+  .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:18px 0}
+  .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2",
+    "preact": "https://esm.sh/preact@10.19.3",
+    "preact/hooks": "https://esm.sh/preact@10.19.3/hooks",
+    "htm": "https://esm.sh/htm@3.1.1"
+  }
+}
+</script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>Work Tariff</h1>
+        <div class="sub">Standard works &middot; time per unit</div>
+      </div>
+      <a class="back" href="index.html">&larr; Menu</a>
+    </header>
+    <div id="app"><div class="loading">Loading&hellip;</div></div>
+  </div>
+
+  <script type="module">
+    import { h, render } from "preact";
+    import { useState, useEffect } from "preact/hooks";
+    import htm from "htm";
+    import { sb, fmtNum } from "./config.js";
+    const html = htm.bind(h);
+
+    const UNITS=[["each","each"],["metre","metre"],["m2","m\u00b2"],["kg","kg"],["set","set"],["lot","lot"]];
+    const unitLabel=(u)=>{ const f=UNITS.find(x=>x[0]===u); return f? f[1]:u; };
+
+    function App(){
+      const [items,setItems]=useState(null);
+      const [editId,setEditId]=useState(null);
+      const [name,setName]=useState("");
+      const [unit,setUnit]=useState("each");
+      const [mh,setMh]=useState("");
+      const [cat,setCat]=useState("");
+      const [busy,setBusy]=useState(false);
+      const [msg,setMsg]=useState(null);
+
+      useEffect(()=>{ load(); },[]);
+      async function load(){
+        const {data,error}=await sb.from("work_tariff").select("*").order("category").order("name");
+        if(error){ console.error(error); setMsg({type:"err",text:error.message}); setItems([]); return; }
+        setItems(data||[]);
+      }
+
+      function clearForm(){ setEditId(null); setName(""); setUnit("each"); setMh(""); setCat(""); }
+      function editItem(it){ setEditId(it.id); setName(it.name); setUnit(it.unit); setMh(String(it.manhours_per_unit)); setCat(it.category||""); window.scrollTo(0,0); }
+
+      async function save(){
+        setMsg(null);
+        const rate=Number(mh);
+        if(!name.trim()) return setMsg({type:"err",text:"Enter a work name."});
+        if(isNaN(rate)||rate<0) return setMsg({type:"err",text:"Enter valid man-hours per unit."});
+        setBusy(true);
+        const payload={ name:name.trim(), unit, manhours_per_unit:rate, category:cat.trim()||null };
+        let error;
+        if(editId){ ({error}=await sb.from("work_tariff").update(payload).eq("id",editId)); }
+        else { ({error}=await sb.from("work_tariff").insert(payload)); }
+        setBusy(false);
+        if(error){ setMsg({type:"err",text:error.message}); return; }
+        setMsg({type:"ok",text:editId?"Updated.":"Added."});
+        clearForm(); load();
+      }
+      async function toggle(it){
+        setBusy(true);
+        const {error}=await sb.from("work_tariff").update({active:!it.active}).eq("id",it.id);
+        setBusy(false);
+        if(error){ setMsg({type:"err",text:error.message}); return; }
+        load();
+      }
+      async function del(it){
+        setBusy(true);
+        const {error}=await sb.from("work_tariff").delete().eq("id",it.id);
+        setBusy(false);
+        if(error){ setMsg({type:"err",text:"Can't delete (a job order may use it). Set it inactive instead."}); return; }
+        setMsg({type:"ok",text:"Deleted."}); load();
+      }
+
+      if(items===null) return html`<div class="loading">Loading&hellip;</div>`;
+
+      // group by category
+      const groups={}; items.forEach(it=>{ const k=it.category||"Uncategorised"; (groups[k]=groups[k]||[]).push(it); });
+      const cats=Object.keys(groups).sort();
+
+      return html`
+        <div class="card">
+          <h2>${editId?"Edit work item":"Add work item"}</h2>
+          <label>Work name</label>
+          <input value=${name} onInput=${e=>setName(e.target.value)} placeholder="e.g. Install anode" />
+          <div class="row">
+            <div>
+              <label>Unit</label>
+              <select value=${unit} onChange=${e=>setUnit(e.target.value)}>
+                ${UNITS.map(([v,l])=> html`<option value=${v}>${l}</option>`)}
+              </select>
+            </div>
+            <div>
+              <label>Man-hours per ${unitLabel(unit)}</label>
+              <input type="number" inputmode="decimal" value=${mh} onInput=${e=>setMh(e.target.value)} placeholder="0" />
+            </div>
+          </div>
+          <label>Category (optional)</label>
+          <input value=${cat} onInput=${e=>setCat(e.target.value)} placeholder="e.g. Steel, Anodes, Piping" />
+          <button class="primary" disabled=${busy} onClick=${save}>${busy?"Saving\u2026":(editId?"Update":"Add to tariff")}</button>
+          ${editId && html`<button class="ghost" onClick=${clearForm}>Cancel edit</button>`}
+          ${msg && html`<div class="msg ${msg.type}">${msg.text}</div>`}
+        </div>
+
+        ${items.length===0
+          ? html`<div class="empty">No work items yet. Add your first above.</div>`
+          : cats.map(c=> html`
+              <div class="catlabel">${c}</div>
+              ${groups[c].map(it=> html`
+                <div class="item ${it.active?"":"off"}">
+                  <div>
+                    <div class="iname">${it.name}</div>
+                    <div class="irate"><b>${fmtNum(it.manhours_per_unit,3)}</b> man-hr / ${unitLabel(it.unit)}${it.active?"":" \u00b7 inactive"}</div>
+                  </div>
+                  <div class="acts">
+                    <button onClick=${()=>editItem(it)}>Edit</button>
+                    <button onClick=${()=>toggle(it)}>${it.active?"Hide":"Show"}</button>
+                    <button class="del" onClick=${()=>del(it)}>Del</button>
+                  </div>
+                </div>`)}
+            `)}
+      `;
+    }
+
+    render(html`<${App} />`, document.getElementById("app"));
+  </script>
+</body>
+</html>
