@@ -76,7 +76,23 @@ async function verifyPin(empId, pin) { const { data, error } = await supabase.rp
 async function getPRs() { const { data, error } = await supabase.from('purchase_request').select('*').order('created_at', { ascending: false }).limit(300); if (error) throw error; return data || []; }
 async function addPR(row) { const { error } = await supabase.from('purchase_request').insert(row); if (error) throw error; }
 async function updatePR(id, fields) { const { error } = await supabase.from('purchase_request').update(fields).eq('id', id); if (error) throw error; }
-async function getStockItems() { const { data, error } = await supabase.from('stock_item').select('*').order('name'); if (error) throw error; return data || []; }
+async function getStockItems() {
+  // Source the material list from the shared `materials` master (code-based).
+  // Fall back to the old stock_item table if materials is empty/unavailable.
+  try {
+    const { data, error } = await supabase.from('materials').select('*');
+    if (error) throw error;
+    const rows = (data || []).filter(m => m.active !== false);
+    if (rows.length) {
+      return rows
+        .map(m => ({ name: m.name, unit: m.unit || 'pcs', code: m.code || '' }))
+        .sort((a, b) => (a.code || 'zzz').localeCompare(b.code || 'zzz') || a.name.localeCompare(b.name));
+    }
+  } catch (e) { /* fall through to stock_item */ }
+  const { data, error } = await supabase.from('stock_item').select('*').order('name');
+  if (error) throw error;
+  return (data || []).map(s => ({ ...s, code: s.code || '' }));
+}
 async function addStockItem(row) { const { error } = await supabase.from('stock_item').insert(row); if (error) throw error; }
 async function nextNo(prefix, site) {
   try { const { data, error } = await supabase.rpc('next_no', { p_prefix: prefix, p_site: site }); if (!error && data) return data; } catch (_) {}
@@ -1140,7 +1156,7 @@ function Liquidation({ voyages, employees, sites, toast, tab, setTab }) {
         <${Field} label="Add materials">
           <select value=${prPick} onChange=${e=>{const v=e.target.value; if(v && !prItems.includes(v)) setPrItems([...prItems, v]); setPrPick('');}}>
             <option value="">— add material —</option>
-            ${stockItems.map(s=>html`<option value=${s.name}>${s.name}</option>`)}
+            ${stockItems.map(s=>html`<option value=${s.name}>${s.code?s.code+' · ':''}${s.name}</option>`)}
           </select>
         <//>
         ${niOpen ? html`<div class="two"><${Field} label="New material name"><input value=${niName} onInput=${e=>setNiName(e.target.value)} /><//>
