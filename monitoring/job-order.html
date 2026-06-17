@@ -22,18 +22,18 @@
   .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);
         padding:16px;margin-bottom:14px;box-shadow:0 1px 2px rgba(20,30,50,.04)}
   .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 12px;font-weight:700}
+  .sub2{font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--steel-d);font-weight:800;margin:16px 0 2px}
   label{display:block;font-size:12.5px;color:var(--muted);margin:10px 0 4px;font-weight:600}
   input,select,textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;
         font-size:15px;background:#fcfcfd;color:var(--ink);font-family:inherit}
   input:focus,select:focus,textarea:focus{outline:2px solid var(--steel);border-color:var(--steel)}
-  textarea{min-height:64px;resize:vertical}
-  .row{display:flex;gap:10px}
-  .row>div{flex:1}
-  .calc{display:flex;justify-content:space-between;align-items:center;background:#f1f5fa;
-        border:1px dashed #c3d3e4;border-radius:10px;padding:10px 12px;margin-top:12px;font-size:13.5px}
-  .calc b{font-family:var(--mono);font-size:15px}
-  button.primary{width:100%;margin-top:14px;padding:13px;border:0;border-radius:11px;background:var(--steel);
-        color:#fff;font-size:15px;font-weight:700;letter-spacing:.2px}
+  textarea{min-height:60px;resize:vertical}
+  .row{display:flex;gap:10px}.row>div{flex:1}
+  .calc{background:#f1f5fa;border:1px dashed #c3d3e4;border-radius:10px;padding:11px 13px;margin-top:14px;font-size:13px}
+  .calc .line{display:flex;justify-content:space-between;margin:2px 0}
+  .calc b{font-family:var(--mono)}
+  .calc .big{font-size:16px;color:var(--steel-d);font-weight:700}
+  button.primary{width:100%;margin-top:14px;padding:13px;border:0;border-radius:11px;background:var(--steel);color:#fff;font-size:15px;font-weight:700;letter-spacing:.2px}
   button.primary:active{background:var(--steel-d)}
   button.primary:disabled{opacity:.5}
   .msg{margin-top:10px;font-size:13px;padding:9px 11px;border-radius:9px;display:none}
@@ -46,9 +46,7 @@
   .job .meta{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12.5px;color:var(--muted)}
   .job .meta b{color:var(--ink);font-weight:600}
   .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 8px;border-radius:20px;text-transform:uppercase;letter-spacing:.4px}
-  .pill.open{background:#eef2f7;color:#3a5573}
-  .pill.ongoing{background:#e8f0fb;color:#235}
-  .pill.done{background:#e8f5ee;color:var(--ok)}
+  .pill.open{background:#eef2f7;color:#3a5573}.pill.ongoing{background:#e8f0fb;color:#235}.pill.done{background:#e8f5ee;color:var(--ok)}
   .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:18px 0}
   .loading{color:var(--muted);font-size:13px;text-align:center;padding:10px}
 </style>
@@ -66,10 +64,7 @@
 <body>
   <div class="wrap">
     <header class="top">
-      <div>
-        <h1>Job Order</h1>
-        <div class="sub">Inspect &rarr; create</div>
-      </div>
+      <div><h1>Job Order</h1><div class="sub">Estimate from the tariff</div></div>
       <a class="back" href="index.html">&larr; Menu</a>
     </header>
     <div id="app"><div class="loading">Loading&hellip;</div></div>
@@ -79,78 +74,104 @@
     import { h, render } from "preact";
     import { useState, useEffect } from "preact/hooks";
     import htm from "htm";
-    import { sb, SITES, loadLocations, todayLocal, ymd, addDays, fmtNum } from "./config.js";
+    import { sb, SITES, todayLocal, ymd, addDays, fmtNum } from "./config.js";
     const html = htm.bind(h);
 
-    function App() {
-      const [locations, setLocations] = useState(null);
-      const [jobs, setJobs] = useState(null);
-      const [preparedBy, setPreparedBy] = useState(localStorage.getItem("rsr_prepared_by") || "");
+    const UNITS={each:"each",metre:"metre",m2:"m\u00b2",kg:"kg",set:"set",lot:"lot"};
+    const unitLabel=(u)=>UNITS[u]||u;
+    const GROUPS=[
+      ["position","Working position"],["access","Access / staging"],["size","Piece size"],
+      ["location","Location on vessel"],["complexity","Complexity / curvature"],["stage","Stage height / crane"],
+    ];
 
-      const [vessel, setVessel]     = useState("");
-      const [site, setSite]         = useState(SITES[0]);
-      const [location, setLocation] = useState("");
-      const [desc, setDesc]         = useState("");
-      const [kilos, setKilos]       = useState("");
-      const [start, setStart]       = useState(todayLocal());
-      const [days, setDays]         = useState("5");
-      const [busy, setBusy]   = useState(false);
-      const [msg, setMsg]     = useState(null);
+    function App(){
+      const [items,setItems]=useState(null);
+      const [factors,setFactors]=useState([]);       // active factor options (flat)
+      const [jobs,setJobs]=useState(null);
+      const [preparedBy,setPreparedBy]=useState(localStorage.getItem("rsr_prepared_by")||"");
 
-      useEffect(() => { refresh(); }, []);
-      async function refresh() {
-        const [locs, js] = await Promise.all([loadLocations(), fetchJobs()]);
-        setLocations(locs);
-        if (locs.length && !location) setLocation(locs[0].location);
+      const [vessel,setVessel]=useState("");
+      const [site,setSite]=useState(SITES[0]);
+      const [itemId,setItemId]=useState("");
+      const [qty,setQty]=useState("");
+      const [location,setLocation]=useState("");
+      const [desc,setDesc]=useState("");
+      const [days,setDays]=useState("5");
+      const [start,setStart]=useState(todayLocal());
+      const [fsel,setFsel]=useState({});             // grp -> option id
+
+      const [busy,setBusy]=useState(false);
+      const [msg,setMsg]=useState(null);
+
+      useEffect(()=>{ refresh(); },[]);
+      async function refresh(){
+        const iq=sb.from("work_tariff").select("id,name,unit,manhours_per_unit,use_factors,category").eq("active",true).order("category").order("name");
+        const fq=sb.from("correction_factor").select("id,grp,label,factor").eq("active",true).order("grp").order("sort").order("label");
+        const [ir,fr,js]=await Promise.all([iq,fq,fetchJobs()]);
+        const its=ir.data||[]; setItems(its);
+        if(its.length && !itemId) setItemId(its[0].id);
+        const fs=fr.data||[]; setFactors(fs);
+        // default one selection per group (first option)
+        const def={}; GROUPS.forEach(([g])=>{ const first=fs.find(x=>x.grp===g); if(first) def[g]=first.id; });
+        setFsel(def);
         setJobs(js);
       }
-      async function fetchJobs() {
-        const { data, error } = await sb.from("jobs")
-          .select("job_no,vessel,site,location,description,kilos,est_manhours,status,start_date,target_date")
-          .order("created_at", { ascending:false }).limit(20);
-        if (error) { console.error(error); return []; }
-        return data || [];
+      async function fetchJobs(){
+        const {data,error}=await sb.from("jobs")
+          .select("job_no,vessel,location,quantity,unit,kilos,est_manhours,status,start_date,target_date")
+          .order("created_at",{ascending:false}).limit(20);
+        if(error){ console.error(error); return []; }
+        return data||[];
       }
 
-      const rate = (() => {
-        const l = (locations||[]).find(x => x.location === location);
-        return l ? Number(l.manhours_per_kg) : 0;
-      })();
-      const kg = Number(kilos) || 0;
-      const est = +(kg * rate).toFixed(2);
-      const nDays = Math.max(1, Number(days) || 1);
-      const target = ymd(addDays(start, nDays - 1));
+      const item=(items||[]).find(x=>x.id===itemId)||null;
+      const rate=item? Number(item.manhours_per_unit):0;
+      const unit=item? item.unit:"";
+      const useF=!!(item && item.use_factors);
+      const q=Number(qty)||0;
+      const base=+(q*rate).toFixed(2);
+      const optById=(id)=>factors.find(x=>x.id===id);
+      let combined=1;
+      if(useF) GROUPS.forEach(([g])=>{ const o=optById(fsel[g]); if(o) combined*=Number(o.factor); });
+      combined=+combined.toFixed(3);
+      const est=+(base*combined).toFixed(2);
+      const nDays=Math.max(1,Number(days)||1);
+      const target=ymd(addDays(start,nDays-1));
+      const factorsByGroup=(g)=>factors.filter(x=>x.grp===g);
 
-      function savePreparedBy(v){ setPreparedBy(v); localStorage.setItem("rsr_prepared_by", v); }
+      function savePrep(v){ setPreparedBy(v); localStorage.setItem("rsr_prepared_by",v); }
 
-      async function save() {
+      async function save(){
         setMsg(null);
-        if (!vessel.trim())  return setMsg({type:"err",text:"Enter the vessel."});
-        if (!location)       return setMsg({type:"err",text:"Pick a location."});
-        if (kg <= 0)         return setMsg({type:"err",text:"Enter estimated plates (kg)."});
-        if (rate <= 0)       return setMsg({type:"err",text:`No rate set for "${location}". Seed work_standards first.`});
+        if(!vessel.trim()) return setMsg({type:"err",text:"Enter the vessel."});
+        if(!item) return setMsg({type:"err",text:"Pick a work item."});
+        if(q<=0) return setMsg({type:"err",text:"Enter a quantity."});
         setBusy(true);
-        try {
-          const { data: jobNo, error: e1 } = await sb.rpc("next_job_no", { p_site: site });
-          if (e1) throw e1;
-          const { error: e2 } = await sb.from("jobs").insert({
-            job_no: jobNo, vessel: vessel.trim(), site, location,
-            description: desc.trim() || null, kilos: kg,
-            rate_used: rate, est_manhours: est, status: "open",
-            start_date: start, target_date: target,
-            created_by: preparedBy.trim() || null,
+        try{
+          const {data:jobNo,error:e1}=await sb.rpc("next_job_no",{p_site:site});
+          if(e1) throw e1;
+          const fbreak={};
+          if(useF) GROUPS.forEach(([g,lbl])=>{ const o=optById(fsel[g]); if(o) fbreak[g]={label:o.label,factor:Number(o.factor)}; });
+          const {error:e2}=await sb.from("jobs").insert({
+            job_no:jobNo, vessel:vessel.trim(), site,
+            location:location.trim()||null, description:desc.trim()||null,
+            tariff_id:item.id, quantity:q, unit,
+            kilos: unit==="kg"? q : null,
+            rate_used:rate, correction_factor:combined,
+            factors: useF? fbreak : null,
+            est_manhours:est, status:"open",
+            start_date:start, target_date:target,
+            created_by:preparedBy.trim()||null,
           });
-          if (e2) throw e2;
+          if(e2) throw e2;
           setMsg({type:"ok",text:`Created ${jobNo} \u00b7 est ${fmtNum(est)} man-hrs`});
-          setVessel(""); setDesc(""); setKilos("");
+          setVessel(""); setQty(""); setLocation(""); setDesc("");
           setJobs(await fetchJobs());
-        } catch (err) {
-          console.error(err);
-          setMsg({type:"err",text:"Could not save: " + (err.message || err)});
-        } finally { setBusy(false); }
+        }catch(err){ console.error(err); setMsg({type:"err",text:"Could not save: "+(err.message||err)}); }
+        finally{ setBusy(false); }
       }
 
-      if (locations === null) return html`<div class="loading">Loading&hellip;</div>`;
+      if(items===null) return html`<div class="loading">Loading&hellip;</div>`;
 
       return html`
         <div class="card">
@@ -158,70 +179,78 @@
           <label>Vessel</label>
           <input value=${vessel} onInput=${e=>setVessel(e.target.value)} placeholder="e.g. MV Santa Maria" />
           <div class="row">
-            <div>
-              <label>Site</label>
-              <select value=${site} onChange=${e=>setSite(e.target.value)}>
-                ${SITES.map(s => html`<option value=${s}>${s}</option>`)}
-              </select>
+            <div><label>Site</label>
+              <select value=${site} onChange=${e=>setSite(e.target.value)}>${SITES.map(s=>html`<option value=${s}>${s}</option>`)}</select>
             </div>
-            <div>
-              <label>Location of works</label>
-              <select value=${location} onChange=${e=>setLocation(e.target.value)}>
-                ${(locations||[]).map(l => html`<option value=${l.location}>${l.location}</option>`)}
+            <div><label>Work item</label>
+              <select value=${itemId} onChange=${e=>setItemId(e.target.value)}>
+                ${items.map(it=>html`<option value=${it.id}>${it.name}</option>`)}
               </select>
             </div>
           </div>
-          ${locations.length === 0 && html`<div class="hint">No locations yet. Seed <b>work_standards</b> with locations + kg\u2192man-hr rates first.</div>`}
-          <label>Scope / description</label>
-          <textarea value=${desc} onInput=${e=>setDesc(e.target.value)} placeholder="What's being renewed / done"></textarea>
+          ${items.length===0 && html`<div class="hint">No work items yet. Add them in Work Tariff first.</div>`}
+
           <div class="row">
-            <div>
-              <label>Estimated plates (kg)</label>
-              <input type="number" inputmode="decimal" value=${kilos} onInput=${e=>setKilos(e.target.value)} placeholder="0" />
+            <div><label>Quantity${unit?` (${unitLabel(unit)})`:""}</label>
+              <input type="number" inputmode="decimal" value=${qty} onInput=${e=>setQty(e.target.value)} placeholder="0" />
             </div>
-            <div>
-              <label>Estimated days</label>
+            <div><label>Estimated days</label>
               <input type="number" inputmode="numeric" value=${days} onInput=${e=>setDays(e.target.value)} />
             </div>
           </div>
+
+          <label>Location / area (optional)</label>
+          <input value=${location} onInput=${e=>setLocation(e.target.value)} placeholder="e.g. bottom shell Fr.40-50" />
+          <label>Scope / description (optional)</label>
+          <textarea value=${desc} onInput=${e=>setDesc(e.target.value)} placeholder="What's being done"></textarea>
           <label>Start date</label>
           <input type="date" value=${start} onInput=${e=>setStart(e.target.value)} />
+
+          ${useF && html`
+            <div class="sub2">Correction factors</div>
+            ${GROUPS.map(([g,lbl])=>{
+              const opts=factorsByGroup(g);
+              if(opts.length===0) return null;
+              return html`
+                <label>${lbl}</label>
+                <select value=${fsel[g]||""} onChange=${e=>setFsel({...fsel,[g]:e.target.value})}>
+                  ${opts.map(o=>html`<option value=${o.id}>${o.label} (\u00d7${fmtNum(o.factor,2)})</option>`)}
+                </select>`;
+            })}
+          `}
+
           <div class="calc">
-            <span>Rate: <b>${fmtNum(rate,4)}</b> man-hr/kg \u00b7 Target: <b>${target}</b></span>
-            <span>Est: <b>${fmtNum(est)}</b> hrs</span>
+            <div class="line"><span>Base: ${fmtNum(q)} \u00d7 ${fmtNum(rate,4)}</span><b>${fmtNum(base)} h</b></div>
+            ${useF && html`<div class="line"><span>Combined factor</span><b>\u00d7 ${fmtNum(combined,3)}</b></div>`}
+            <div class="line big"><span>Estimate</span><b>${fmtNum(est)} h</b></div>
+            <div class="line" style="color:var(--muted)"><span>Target date</span><b>${target}</b></div>
           </div>
+
           <label>Prepared by</label>
-          <input value=${preparedBy} onInput=${e=>savePreparedBy(e.target.value)} placeholder="your name" />
-          <button class="primary" disabled=${busy} onClick=${save}>
-            ${busy ? "Saving\u2026" : "Create job order"}
-          </button>
+          <input value=${preparedBy} onInput=${e=>savePrep(e.target.value)} placeholder="your name" />
+          <button class="primary" disabled=${busy} onClick=${save}>${busy?"Saving\u2026":"Create job order"}</button>
           ${msg && html`<div class="msg ${msg.type}">${msg.text}</div>`}
         </div>
 
         <div class="card">
           <h2>Recent job orders</h2>
-          ${jobs === null
-            ? html`<div class="loading">Loading&hellip;</div>`
-            : jobs.length === 0
-              ? html`<div class="empty">No job orders yet. Create your first one above.</div>`
-              : jobs.map(j => html`
-                  <div class="job">
-                    <div style="display:flex;justify-content:space-between;align-items:center">
-                      <span class="no">${j.job_no}</span>
-                      <span class="pill ${j.status}">${j.status}</span>
-                    </div>
-                    <div class="ttl">${j.vessel} \u00b7 ${j.location}</div>
-                    <div class="meta">
-                      <span><b>${fmtNum(j.kilos)}</b> kg</span>
-                      <span>est <b>${fmtNum(j.est_manhours)}</b> hrs</span>
-                      <span>${j.start_date || "\u2014"} \u2192 ${j.target_date || "\u2014"}</span>
-                    </div>
-                  </div>`)
-          }
+          ${jobs===null? html`<div class="loading">Loading&hellip;</div>`
+            : jobs.length===0? html`<div class="empty">No job orders yet.</div>`
+            : jobs.map(j=>html`
+                <div class="job">
+                  <div style="display:flex;justify-content:space-between;align-items:center">
+                    <span class="no">${j.job_no}</span><span class="pill ${j.status}">${j.status}</span>
+                  </div>
+                  <div class="ttl">${j.vessel}${j.location?` \u00b7 ${j.location}`:""}</div>
+                  <div class="meta">
+                    <span><b>${fmtNum(j.quantity!=null?j.quantity:j.kilos)}</b> ${unitLabel(j.unit||"kg")}</span>
+                    <span>est <b>${fmtNum(j.est_manhours)}</b> hrs</span>
+                    <span>${j.start_date||"\u2014"} \u2192 ${j.target_date||"\u2014"}</span>
+                  </div>
+                </div>`)}
         </div>
       `;
     }
-
     render(html`<${App} />`, document.getElementById("app"));
   </script>
 </body>
