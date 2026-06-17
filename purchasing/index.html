@@ -438,8 +438,8 @@ function whPriceList(){
   const seen={}; const out=[];
   // 1) every material in the master first (so ALL brands show, even at zero stock)
   DB.get('materials').forEach(m=>{
-    const nm=m.name; if(!nm) return; const k=nm.toLowerCase(); if(seen[k]) return; seen[k]=1;
-    out.push({name:nm, code:m.code||'', unit:m.unit||unitMap[k]||'', price:(priceMap[k]?priceMap[k].price:null)});
+    const b=(m.brand||'').trim(); const nm=b?(m.name+' — '+b):m.name; if(!nm) return; const k=nm.toLowerCase(); if(seen[k]) return; seen[k]=1;
+    out.push({name:nm, code:m.code||'', brand:b, unit:m.unit||unitMap[k]||'', price:(priceMap[k]?priceMap[k].price:null)});
   });
   // 2) any warehouse_stock item not in the master (orphan) still shows
   DB.get('warehouse_stock').forEach(s=>{
@@ -449,6 +449,53 @@ function whPriceList(){
   // 3) any priced item not seen yet
   DB.get('item_prices').forEach(r=>{ const k=(r.item_name||'').toLowerCase(); if(k&&!seen[k]){ seen[k]=1; out.push({name:r.item_name, code:'', unit:'', price:Number(r.price)||0}); } });
   return out.sort((a,b)=>(a.code||'zzz').localeCompare(b.code||'zzz') || (a.name||'').localeCompare(b.name||''));
+}
+/* ---- register a NEW brand/material into the materials master (on the fly) ---- */
+function matPrefixes(){
+  const set={};
+  DB.get('materials').forEach(m=>{ const pf=((m.code||'').match(/^([A-Za-z]+)-/)||[])[1]; if(pf) set[pf.toUpperCase()]=1; });
+  return Object.keys(set).sort();
+}
+function nextCodeFor(prefix){
+  let max=0;
+  DB.get('materials').forEach(m=>{ const mm=(m.code||'').match(new RegExp('^'+prefix+'-(\\d+)$','i')); if(mm){ const n=parseInt(mm[1],10); if(n>max)max=n; } });
+  return prefix.toUpperCase()+'-'+String(max+1).padStart(3,'0');
+}
+function norm(s){ return (s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+function similarMaterial(name){
+  const n=norm(name);
+  return DB.get('materials').find(m=>{ const a=norm(m.name); return a===n || (a.length>4 && (a.includes(n)||n.includes(a))); });
+}
+function toggleNewMat(show){
+  const box=document.getElementById('newmat-box'); if(box) box.style.display=show?'block':'none';
+  if(show){ const sel=document.getElementById('nm-prefix'); if(sel) updateNextCode(); }
+}
+function updateNextCode(){
+  const pf=document.getElementById('nm-prefix').value;
+  const lbl=document.getElementById('nm-code');
+  if(lbl) lbl.textContent = pf ? nextCodeFor(pf) : '—';
+}
+async function saveNewMat(){
+  const pf=document.getElementById('nm-prefix').value;
+  const name=(document.getElementById('nm-name').value||'').trim();
+  const brand=(document.getElementById('nm-brand').value||'').trim();
+  const unit=document.getElementById('nm-unit').value;
+  if(!pf){ toast('Pick a code prefix'); return; }
+  if(!name){ toast('Enter the material name'); return; }
+  const fullLabel=brand?(name+' — '+brand):name;
+  const dup=similarMaterial(fullLabel);
+  if(dup){
+    const dlab=(dup.brand?dup.name+' — '+dup.brand:dup.name);
+    if(!confirm('A similar material already exists:\n\n  '+dup.code+' · '+dlab+'\n\nAdd "'+fullLabel+'" as a NEW separate material anyway?')) return;
+  }
+  const code=nextCodeFor(pf);
+  try{
+    const{error}=await sb.from('materials').insert({code,name,brand,unit,threshold:0,active:true});
+    if(error)throw error;
+    toast(code+' · '+fullLabel+' registered');
+    document.getElementById('nm-name').value=''; document.getElementById('nm-brand').value='';
+    await DB.load(); render();
+  }catch(e){ toast('Add failed: '+(e&&e.message?e.message:e)); }
 }
 async function saveWhPrice(idx){
   const list=whPriceList();
@@ -470,6 +517,27 @@ function viewPrices(){
   const priced=wh.filter(r=>r.price!=null&&r.price>0).length;
   let h=`<div class="hint">Current warehouse price per material (used to charge projects at the latest price). Items with no price yet show a blank box — fill it in and tap Save. Editing here updates the warehouse too.</div>`;
   h+=`<div class="card"><div class="item-row"><div class="ttl">Warehouse current prices</div><span class="pill gray">${priced}/${wh.length} priced</span></div>`;
+  h+=`<button class="btn small" style="margin:4px 0 8px" onclick="toggleNewMat(true)">+ Register new brand / material</button>
+    <div id="newmat-box" style="display:none;border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px;background:var(--card2,#faf9f5)">
+      <div style="font-weight:600;margin-bottom:6px">New brand / material</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+        <select id="nm-prefix" onchange="updateNextCode()" style="padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit">
+          <option value="">— prefix —</option>
+          ${matPrefixes().map(p=>`<option value="${p}">${p}-</option>`).join('')}
+        </select>
+        <span style="color:var(--muted);font-size:12px">code: <b id="nm-code">—</b></span>
+      </div>
+      <input id="nm-name" placeholder="Item name, e.g. Welding gloves" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;margin-bottom:6px"/>
+      <input id="nm-brand" placeholder="Brand (optional), e.g. Tianjin Orange" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;margin-bottom:6px"/>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="nm-unit" style="padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit">
+          ${['pcs','pair','unit','box','bottle','tool','set','roll','meter'].map(u=>`<option value="${u}">${u}</option>`).join('')}
+        </select>
+        <button class="btn small" onclick="saveNewMat()">Register</button>
+        <button class="btn small ghost" onclick="toggleNewMat(false)">Cancel</button>
+      </div>
+      <div style="color:var(--muted);font-size:11px;margin-top:6px">Registers into the materials master — it will then appear in the warehouse, issuance, and coordinator too.</div>
+    </div>`;
   if(wh.length){
     wh.forEach((r,idx)=>{
       const has=(r.price!=null&&r.price>0);
