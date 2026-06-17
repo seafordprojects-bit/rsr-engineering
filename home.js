@@ -1307,6 +1307,14 @@ function App() {
         ].map(t => html`<${Tile} ...${t} />`)}
       </div>
 
+      <div class="sectlabel">Job monitoring</div>
+      <div class="grid">
+        ${[
+          { ico:'📊', title:'Monitor', unit:'est vs actual, kg/man-hr', href:'../monitoring/monitor.html' },
+          { ico:'⚖️', title:'Reconcile', unit:'kiosk hrs & plan vs actual', href:'../monitoring/reconcile.html' },
+        ].map(t => html`<${Tile} ...${t} />`)}
+      </div>
+
       <div class="sectlabel">On the roadmap</div>
       <div class="grid">
         ${soon.map(t => html`<${Tile} ...${t} />`)}
