@@ -83,7 +83,23 @@ async function getVoyagesMon() {
   return data || [];
 }
 // attendance dates are stored in PH format (MM/DD/YYYY) by the kiosk
-const MAT_CATALOG = ['Electrode handle','Welding gloves','Cutting tip','Dark glass','Clear glass','Trouble light','Electrical tape','Chalk stone','Dry chalk','Flint stone','Striker','Y-connector','Cutting disk','Oxygen regulator','LPG regulator','Steel square'];
+// Materials catalog — loaded from the `materials` table (self-managed, code-based).
+// Falls back to a minimal hardcoded list only if the table can't be read.
+let MAT_CATALOG = ['Electrode handle','Welding gloves','Clear glass'];
+let MAT_TH = {};
+let MAT_UNIT = {};
+let MAT_CODE = {};   // name -> code
+async function loadMaterials() {
+  try {
+    const { data, error } = await supabase.from('materials').select('*').eq('active', true);
+    if (error) throw error;
+    if (data && data.length) {
+      MAT_CATALOG = data.map(m => m.name);
+      MAT_TH = {}; MAT_UNIT = {}; MAT_CODE = {};
+      data.forEach(m => { MAT_TH[m.name] = Number(m.threshold) || 0; MAT_UNIT[m.name] = m.unit || 'pcs'; MAT_CODE[m.name] = m.code; });
+    }
+  } catch (e) { /* keep fallback */ }
+}
 async function getMatUsage() {
   const { data, error } = await supabase.from('material_usage').select('item_name,usage_days');
   if (error) throw error;
@@ -224,11 +240,15 @@ function MatUsage({ toast, onBack }) {
   const [newName, setNewName] = useState('');
   const [saving, setSaving] = useState(false);
   useEffect(() => {
-    getMatUsage().then(rows => {
-      const mm = {}, ex = [];
-      rows.forEach(r => { mm[r.item_name] = String(r.usage_days ?? ''); if (!MAT_CATALOG.includes(r.item_name)) ex.push(r.item_name); });
-      setMap(mm); setExtra(ex);
-    }).catch(() => {});
+    (async () => {
+      await loadMaterials();
+      try {
+        const rows = await getMatUsage();
+        const mm = {}, ex = [];
+        rows.forEach(r => { mm[r.item_name] = String(r.usage_days ?? ''); if (!MAT_CATALOG.includes(r.item_name)) ex.push(r.item_name); });
+        setMap(mm); setExtra(ex);
+      } catch (_) {}
+    })();
   }, []);
   const names = [...MAT_CATALOG, ...extra];
   const setDays = (n, v) => setMap(p => ({ ...p, [n]: v.replace(/[^0-9]/g, '') }));
@@ -299,13 +319,13 @@ function RepairHistory() {
     </div>`;
 }
 
-const MAT_TH = {'Electrode handle':3,'Welding gloves':3,'Cutting tip':5,'Dark glass':3,'Clear glass':3,'Trouble light':2,'Electrical tape':5,'Chalk stone':5,'Dry chalk':5,'Flint stone':5,'Striker':3,'Y-connector':2,'Cutting disk':5,'Oxygen regulator':1,'LPG regulator':1,'Steel square':1};
-function muUnit(n){return ({'Welding gloves':'pair','Oxygen regulator':'unit','LPG regulator':'unit'})[n]||'pcs';}
+function muUnit(n){return MAT_UNIT[n]||'pcs';}
 const peso = (v) => '\u20b1' + (Number(v)||0).toLocaleString('en-PH',{maximumFractionDigits:2});
 
 function Warehouse({ onBack }) {
   const [tab, setTab] = useState('requests');
   const [reqs, setReqs] = useState(null);
+  const [matReady, setMatReady] = useState(false);
   const [stock, setStock] = useState({});
   const [prices, setPrices] = useState({});
   const [edit, setEdit] = useState({});
@@ -322,6 +342,8 @@ function Warehouse({ onBack }) {
   const flash = (m) => { setMsg(m); setTimeout(() => setMsg(null), 2400); };
 
   const loadCore = async () => {
+    await loadMaterials();
+    setMatReady(true);
     try { const { data:rq } = await supabase.from('requests').select('*').in('status',['Pending','Approved','Dispatched']).order('created_at',{ascending:false}).limit(100); setReqs(rq||[]); } catch(e){ setReqs([]); }
     try { const { data:ws } = await supabase.from('warehouse_stock').select('item_name,qty'); const m={}; (ws||[]).forEach(r=>m[r.item_name]=Number(r.qty)||0); setStock(m); const ed={}; MAT_CATALOG.forEach(n=>ed[n]=String(m[n]??0)); setEdit(ed); } catch(e){}
     try { const { data:pr } = await supabase.from('item_prices').select('item_name,price'); const m={}; (pr||[]).forEach(r=>m[r.item_name]=Number(r.price)||0); setPrices(m); } catch(e){}
@@ -1304,15 +1326,6 @@ function App() {
       <div class="grid">
         ${[
           { ico:'🧑‍💼', title:'HR Monitors', unit:'leaves, salary, etc.', onClick:() => setAdminTab('hrmenu') },
-        ].map(t => html`<${Tile} ...${t} />`)}
-      </div>
-
-      <div class="sectlabel">Job monitoring</div>
-      <div class="grid">
-        ${[
-          { ico:'📊', title:'Monitor', unit:'est vs actual, kg/man-hr', href:'../monitoring/monitor.html' },
-          { ico:'⚖️', title:'Reconcile', unit:'kiosk hrs & plan vs actual', href:'../monitoring/reconcile.html' },
-          { ico:'🧾', title:'Work Tariff', unit:'standard time per work', href:'../monitoring/tariff.html' },
         ].map(t => html`<${Tile} ...${t} />`)}
       </div>
 
