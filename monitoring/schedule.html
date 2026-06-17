@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Schedule</title>
+<style>
+  :root{
+    --ink:#1c2230; --muted:#6b7280; --line:#e3e6ec; --paper:#ffffff; --bg:#f4f5f7;
+    --steel:#2f5d8a; --steel-d:#234a70; --over:#b4231f; --overbg:#fbe8e7;
+    --radius:14px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding:0 0 48px;-webkit-text-size-adjust:100%}
+  .wrap{max-width:760px;margin:0 auto;padding:14px}
+  header.top{display:flex;align-items:baseline;justify-content:space-between;padding:10px 2px 12px}
+  header.top h1{font-size:19px;margin:0}
+  header.top .sub{color:var(--muted);font-size:12.5px}
+  a.back{color:var(--steel);text-decoration:none;font-size:13px}
+
+  .nav{display:flex;align-items:center;justify-content:space-between;gap:10px;
+       background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:10px 12px;margin-bottom:13px}
+  .nav button{border:1px solid var(--line);background:#fcfcfd;color:var(--ink);font-weight:700;font-size:15px;
+       width:40px;height:40px;border-radius:10px}
+  .nav .lbl{font-weight:700;font-size:14px}
+  .nav .lbl small{display:block;color:var(--muted);font-weight:600;font-size:11.5px}
+
+  .flagbar{background:var(--overbg);border:1px solid #f0bdba;color:var(--over);font-size:12.5px;font-weight:600;
+       border-radius:11px;padding:9px 12px;margin-bottom:13px}
+
+  .scroll{overflow-x:auto;-webkit-overflow-scrolling:touch;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
+  .grid{display:grid;grid-template-columns:104px repeat(7, minmax(60px,1fr));min-width:560px}
+  .gh{font-size:11px;font-weight:700;color:var(--muted);text-align:center;padding:9px 2px;border-bottom:1px solid var(--line)}
+  .gh small{display:block;font-family:var(--mono);font-weight:500;color:var(--ink)}
+  .gh.name{text-align:left;padding-left:12px;position:sticky;left:0;background:var(--paper);z-index:2}
+  .cellname{font-size:13px;font-weight:600;padding:9px 12px;border-bottom:1px solid #eef1f5;
+       position:sticky;left:0;background:var(--paper);z-index:1;display:flex;align-items:center}
+  .cell{border-bottom:1px solid #eef1f5;border-left:1px solid #f1f3f6;padding:5px 3px;min-height:38px;display:flex;align-items:center;justify-content:center}
+  .chip{font-size:10.5px;font-weight:700;color:#fff;border-radius:6px;padding:3px 5px;width:100%;text-align:center;
+        white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .chip.conf{background:var(--over);}
+  .legend{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}
+  .lg{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)}
+  .lg i{width:14px;height:14px;border-radius:4px;display:inline-block}
+
+  .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:20px 0;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
+  .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
+  .msg{margin:0 0 12px;font-size:13px;padding:9px 11px;border-radius:9px;background:var(--overbg);color:var(--over);border:1px solid #f0bdba}
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2",
+    "preact": "https://esm.sh/preact@10.19.3",
+    "preact/hooks": "https://esm.sh/preact@10.19.3/hooks",
+    "htm": "https://esm.sh/htm@3.1.1"
+  }
+}
+</script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>Schedule</h1>
+        <div class="sub">Week look-ahead &middot; personnel projection</div>
+      </div>
+      <a class="back" href="index.html">&larr; Menu</a>
+    </header>
+    <div id="app"><div class="loading">Loading&hellip;</div></div>
+  </div>
+
+  <script type="module">
+    import { h, render } from "preact";
+    import { useState, useEffect } from "preact/hooks";
+    import htm from "htm";
+    import { sb, loadEmployees, mondayOf, ymd, addDays } from "./config.js";
+    const html = htm.bind(h);
+
+    const PALETTE=["#2f5d8a","#5a7d3c","#8a5a2f","#5b4f8a","#2f7d7a","#8a2f6b","#3a6ea5","#7a6a2f"];
+    const DOW=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+    const shortNo=(jn)=>{ const p=(jn||"").split("-"); return p.length>=3 ? `${p[1]}-${parseInt(p[2],10)}` : jn; };
+
+    function App(){
+      const [emps,setEmps]=useState([]);
+      const [jobs,setJobs]=useState(null);
+      const [assign,setAssign]=useState({});    // job_id -> [emp]
+      const [mon,setMon]=useState(mondayOf(new Date()));
+      const [msg,setMsg]=useState("");
+
+      useEffect(()=>{ loadEmployees().then(setEmps); load(); },[]);
+      async function load(){
+        setMsg("");
+        const jq=sb.from("jobs").select("id,job_no,start_date,target_date,status").order("job_no");
+        const aq=sb.from("job_assignment").select("job_id,employee_code");
+        const [jr,ar]=await Promise.all([jq,aq]);
+        const errs=[jr.error,ar.error].filter(Boolean);
+        if(errs.length){ console.error(errs); setMsg(errs.map(e=>e.message).join(" \u00b7 ")); }
+        setJobs(jr.data||[]);
+        const am={}; (ar.data||[]).forEach(a=>{ (am[a.job_id]=am[a.job_id]||[]).push(a.employee_code); });
+        setAssign(am);
+      }
+
+      const nameOf=(code)=>{ const e=emps.find(x=>x.id===code); return e? e.name : code; };
+
+      if(jobs===null) return html`<div class="loading">Loading&hellip;</div>`;
+
+      // color index by position in full job list (stable across weeks)
+      const colorOf={}; jobs.forEach((j,i)=>{ colorOf[j.id]=PALETTE[i%PALETTE.length]; });
+
+      const weekDays=[...Array(7)].map((_,i)=> ymd(addDays(mon,i)));
+      const monStr=ymd(mon), sunStr=weekDays[6];
+
+      // jobs overlapping this week (need both dates)
+      const inWeek=jobs.filter(j=> j.start_date && j.target_date && j.start_date<=sunStr && j.target_date>=monStr);
+
+      // personnel with any assignment to a job in this week
+      const persons=[];
+      emps.forEach(e=>{
+        const myJobs=inWeek.filter(j=> (assign[j.id]||[]).includes(e.id));
+        if(myJobs.length) persons.push({code:e.id, name:e.name, jobs:myJobs});
+      });
+      persons.sort((a,b)=> a.name.localeCompare(b.name));
+
+      // build per-person per-day; detect conflicts
+      let conflictPeople=0;
+      const rowsData=persons.map(p=>{
+        let hasConflict=false;
+        const days=weekDays.map(d=>{
+          const active=p.jobs.filter(j=> j.start_date<=d && j.target_date>=d);
+          if(active.length>1) hasConflict=true;
+          return active;
+        });
+        if(hasConflict) conflictPeople++;
+        return {...p, days, hasConflict};
+      });
+
+      const monthLabel = new Date(monStr+"T00:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"})
+                        + " \u2013 " + new Date(sunStr+"T00:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric"});
+
+      return html`
+        ${msg && html`<div class="msg">${msg}</div>`}
+        <div class="nav">
+          <button onClick=${()=>setMon(addDays(mon,-7))}>\u2039</button>
+          <div class="lbl" style="text-align:center">Week of ${monStr}<small>${monthLabel}</small></div>
+          <button onClick=${()=>setMon(addDays(mon,7))}>\u203a</button>
+        </div>
+
+        ${conflictPeople>0 && html`<div class="flagbar">\u26a0 ${conflictPeople} ${conflictPeople===1?"person is":"people are"} double-booked this week (two job orders on the same day).</div>`}
+
+        ${rowsData.length===0
+          ? html`<div class="empty">No one scheduled this week. Assign personnel to job orders whose dates fall in this week.</div>`
+          : html`
+            <div class="scroll">
+              <div class="grid">
+                <div class="gh name">Personnel</div>
+                ${weekDays.map((d,i)=> html`<div class="gh">${DOW[i]}<small>${d.slice(8)}</small></div>`)}
+                ${rowsData.map(p=> html`
+                  <div class="cellname">${p.name}</div>
+                  ${p.days.map(active=> html`
+                    <div class="cell">
+                      ${active.length===0 ? "" :
+                        active.length>1
+                          ? html`<span class="chip conf" title="double-booked">2+</span>`
+                          : html`<span class="chip" style=${`background:${colorOf[active[0].id]}`} title=${active[0].job_no}>${shortNo(active[0].job_no)}</span>`}
+                    </div>`)}
+                `)}
+              </div>
+            </div>
+            <div class="legend">
+              ${inWeek.map(j=> html`<span class="lg"><i style=${`background:${colorOf[j.id]}`}></i>${shortNo(j.job_no)}</span>`)}
+              ${conflictPeople>0 && html`<span class="lg"><i style="background:var(--over)"></i>double-booked</span>`}
+            </div>`}
+      `;
+    }
+
+    render(html`<${App} />`, document.getElementById("app"));
+  </script>
+</body>
+</html>
