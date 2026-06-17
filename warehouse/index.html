@@ -161,9 +161,10 @@ async function loadStock(){
   let mats=[];
   try{ const{data}=await sb.from('materials').select('*'); mats=(data||[]).filter(m=>m.active!==false); }catch(e){}
   if(mats.length){
-    catalog=mats.map(m=>({n:m.name,u:m.unit||'pcs',th:Number(m.threshold)||0,code:m.code}));
+    const mlab=m=>{const b=(m.brand||'').trim();return b?(m.name+' — '+b):m.name;};
+    catalog=mats.map(m=>({n:mlab(m),u:m.unit||'pcs',th:Number(m.threshold)||0,code:m.code,brand:m.brand||''}));
     // include any stock rows not in the master (orphans), so nothing is hidden
-    const known=mats.map(m=>m.name);
+    const known=mats.map(mlab);
     const extra=rows.map(r=>r.item_name).filter(n=>n&&!known.includes(n)).sort((a,b)=>a.localeCompare(b));
     catalog=catalog.concat(extra.map(n=>({n,u:unitMap[n]||'pcs',th:0,code:''})));
   } else {
