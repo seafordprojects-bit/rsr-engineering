@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Reconcile</title>
+<style>
+  :root{
+    --ink:#1c2230; --muted:#6b7280; --line:#e3e6ec; --paper:#ffffff; --bg:#f4f5f7;
+    --steel:#2f5d8a; --steel-d:#234a70; --ok:#1f7a4d; --okbg:#e8f5ee;
+    --warn:#b4540a; --warnbg:#fbf3e8; --over:#b4231f; --overbg:#fbe8e7;
+    --radius:14px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding:0 0 48px;-webkit-text-size-adjust:100%}
+  .wrap{max-width:600px;margin:0 auto;padding:14px}
+  header.top{display:flex;align-items:baseline;justify-content:space-between;padding:10px 2px 12px}
+  header.top h1{font-size:19px;margin:0}
+  header.top .sub{color:var(--muted);font-size:12.5px}
+  a.back{color:var(--steel);text-decoration:none;font-size:13px}
+
+  .tabs{display:flex;gap:8px;margin-bottom:14px}
+  .tab{flex:1;text-align:center;padding:10px;border:1px solid var(--line);border-radius:11px;background:var(--paper);font-weight:700;font-size:14px;color:var(--ink)}
+  .tab.on{background:var(--steel);color:#fff;border-color:var(--steel)}
+
+  .bar{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;margin-bottom:13px}
+  .bar label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:5px}
+  .bar input[type=date]{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:#fcfcfd;font-family:inherit}
+
+  .summary{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:13px;color:var(--muted);
+       background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:11px 14px;margin-bottom:13px}
+  .summary b{color:var(--ink);font-family:var(--mono)}
+
+  .row{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:11px 13px;margin-bottom:9px}
+  .rn{font-weight:600;font-size:14px}
+  .rfig{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12.5px;color:var(--muted);margin-top:4px}
+  .rfig b{color:var(--ink);font-family:var(--mono)}
+  .flag{font-size:11px;font-weight:700;border-radius:18px;padding:2px 9px;letter-spacing:.3px;margin-left:auto}
+  .flag.warn{background:var(--warnbg);color:var(--warn);border:1px solid #f0d9bf}
+  .flag.over{background:var(--overbg);color:var(--over);border:1px solid #f0bdba}
+  .flag.ok{background:var(--okbg);color:var(--ok);border:1px solid #bfe3cf}
+  .rtop{display:flex;align-items:center;gap:8px}
+
+  .move{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:11px 13px;margin-bottom:9px}
+  .move .nm{font-weight:600;font-size:14px}
+  .move .arr{font-size:13px;margin-top:4px;color:var(--muted)}
+  .move .arr b{font-family:var(--mono);color:var(--ink)}
+  .tagp{color:var(--warn);font-weight:700}
+  .taga{color:var(--steel-d);font-weight:700}
+
+  .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:20px 0;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
+  .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
+  .msg{margin:0 0 12px;font-size:13px;padding:9px 11px;border-radius:9px;background:var(--overbg);color:var(--over);border:1px solid #f0bdba}
+  .note{font-size:12px;color:var(--muted);margin:4px 2px 0;line-height:1.4}
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2",
+    "preact": "https://esm.sh/preact@10.19.3",
+    "preact/hooks": "https://esm.sh/preact@10.19.3/hooks",
+    "htm": "https://esm.sh/htm@3.1.1"
+  }
+}
+</script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>Reconcile</h1>
+        <div class="sub">Cross-check the two clocks</div>
+      </div>
+      <a class="back" href="index.html">&larr; Menu</a>
+    </header>
+    <div id="app"><div class="loading">Loading&hellip;</div></div>
+  </div>
+
+  <script type="module">
+    import { h, render } from "preact";
+    import { useState, useEffect } from "preact/hooks";
+    import htm from "htm";
+    import { sb, loadEmployees, todayLocal, fmtNum } from "./config.js";
+    const html = htm.bind(h);
+
+    function App(){
+      const [tab,setTab]=useState("hours");
+      const [emps,setEmps]=useState([]);
+      const [jobs,setJobs]=useState([]);     // id -> job_no map source
+      const [date,setDate]=useState(todayLocal());
+      const [hours,setHours]=useState(null);  // labor_reconcile rows for date
+      const [place,setPlace]=useState(null);   // placement_reconcile rows
+      const [msg,setMsg]=useState("");
+
+      useEffect(()=>{ loadEmployees().then(setEmps); loadJobs(); },[]);
+      useEffect(()=>{ if(tab==="hours") loadHours(); },[tab,date]);
+      useEffect(()=>{ if(tab==="placement") loadPlace(); },[tab]);
+
+      async function loadJobs(){
+        const {data}=await sb.from("jobs").select("id,job_no");
+        setJobs(data||[]);
+      }
+      async function loadHours(){
+        setMsg("");
+        const {data,error}=await sb.from("labor_reconcile").select("*").eq("work_date",date);
+        if(error){ console.error(error); setMsg(error.message); setHours([]); return; }
+        setHours(data||[]);
+      }
+      async function loadPlace(){
+        setMsg("");
+        const {data,error}=await sb.from("placement_reconcile").select("*");
+        if(error){ console.error(error); setMsg(error.message); setPlace([]); return; }
+        setPlace(data||[]);
+      }
+
+      const nameOf=(code)=>{ const e=emps.find(x=>x.id===code); return e? e.name : code; };
+      const jobNo=(id)=>{ const j=jobs.find(x=>x.id===id); return j? j.job_no : "job"; };
+
+      function HoursView(){
+        if(hours===null) return html`<div class="loading">Loading&hellip;</div>`;
+        const tk=hours.reduce((s,r)=>s+Number(r.kiosk_hours||0),0);
+        const tj=hours.reduce((s,r)=>s+Number(r.job_hours||0),0);
+        const tu=hours.reduce((s,r)=>s+Number(r.unallocated_hours||0),0);
+        return html`
+          <div class="bar">
+            <label>Date</label>
+            <input type="date" value=${date} onInput=${e=>setDate(e.target.value)} />
+          </div>
+          <div class="summary">
+            <span>kiosk <b>${fmtNum(tk)}</b>h</span>
+            <span>on jobs <b>${fmtNum(tj)}</b>h</span>
+            <span>unallocated <b>${fmtNum(tu)}</b>h</span>
+          </div>
+          ${hours.length===0
+            ? html`<div class="empty">No kiosk or job hours on ${date}.</div>`
+            : hours.map(r=>{
+                const u=Number(r.unallocated_hours||0);
+                const cls = u>0 ? "warn" : (u<0 ? "over" : "ok");
+                const lab = u>0 ? `${fmtNum(u)}h untagged` : (u<0 ? `${fmtNum(-u)}h over` : "matched");
+                return html`
+                  <div class="row">
+                    <div class="rtop">
+                      <span class="rn">${nameOf(r.employee_code)}</span>
+                      <span class="flag ${cls}">${lab}</span>
+                    </div>
+                    <div class="rfig">
+                      <span>kiosk <b>${fmtNum(r.kiosk_hours)}</b>h</span>
+                      <span>jobs <b>${fmtNum(r.job_hours)}</b>h</span>
+                    </div>
+                  </div>`;
+              })}
+          <div class="note">Unallocated = clocked at the kiosk but not tagged to any job order that day (idle, untracked task, or a missed roll-call). Negative = more tagged than clocked.</div>
+        `;
+      }
+
+      function PlacementView(){
+        if(place===null) return html`<div class="loading">Loading&hellip;</div>`;
+        // group by employee
+        const byEmp={};
+        place.forEach(r=>{
+          const e=(byEmp[r.employee_code]=byEmp[r.employee_code]||{planned:[],moved:[],matched:0});
+          if(r.status==="planned-absent") e.planned.push(r.job_id);
+          else if(r.status==="moved-in") e.moved.push(r.job_id);
+          else e.matched++;
+        });
+        const codes=Object.keys(byEmp);
+        const mism=codes.filter(c=> byEmp[c].planned.length || byEmp[c].moved.length);
+        const matchedCount=place.filter(r=>r.status==="matched").length;
+        return html`
+          <div class="summary">
+            <span><b>${matchedCount}</b> matched</span>
+            <span><b>${mism.length}</b> with a move/gap</span>
+          </div>
+          ${mism.length===0
+            ? html`<div class="empty">No placement differences. Everyone worked where they were projected.</div>`
+            : mism.map(c=>{
+                const e=byEmp[c];
+                const proj=e.planned.map(jobNo).join(", ");
+                const act =e.moved.map(jobNo).join(", ");
+                return html`
+                  <div class="move">
+                    <div class="nm">${nameOf(c)}</div>
+                    <div class="arr">
+                      ${proj? html`projected <span class="tagp">${proj}</span>` : html`<span class="tagp">not projected</span>`}
+                      ${" \u2192 "}
+                      ${act? html`actual <span class="taga">${act}</span>` : html`<span class="taga">no roll-call</span>`}
+                    </div>
+                  </div>`;
+              })}
+          <div class="note">Projected = on a job's roster but never tapped present there. Actual = tapped present on a job they weren't rostered for. A pair = a move.</div>
+        `;
+      }
+
+      return html`
+        <div class="tabs">
+          <div class="tab ${tab==="hours"?"on":""}" onClick=${()=>setTab("hours")}>Hours</div>
+          <div class="tab ${tab==="placement"?"on":""}" onClick=${()=>setTab("placement")}>Placement</div>
+        </div>
+        ${msg && html`<div class="msg">${msg}</div>`}
+        ${tab==="hours" ? HoursView() : PlacementView()}
+      `;
+    }
+
+    render(html`<${App} />`, document.getElementById("app"));
+  </script>
+</body>
+</html>
