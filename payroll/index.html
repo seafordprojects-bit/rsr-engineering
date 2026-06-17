@@ -496,7 +496,7 @@ function renderRun(){
       <div class="pr-head">
         <div>
           <div class="pr-name">${r.name} ${r.suspended?'<span class="pill pill-susp">suspended</span>':''}</div>
-          <div class="pr-meta">${r.code} · ${r.dept||'—'} · ${peso(r.dailyRate)}/day · ${r.daysPresent} day(s)</div>
+          <div class="pr-meta">${r.code} · ${r.dept||'—'} · ${r.daysPresent} day(s)</div>
         </div>
         <div class="pr-net">
           <div class="pr-net-lbl">Net pay</div>
@@ -504,7 +504,8 @@ function renderRun(){
         </div>
       </div>
       <div class="pr-lines">
-        <div class="k">Hours worked (${r.totalHrs.toFixed(2)}h)</div><div class="v">${peso(r.basic)}</div>
+        <div class="k">Daily pay (${r.daysPresent} day${r.daysPresent===1?'':'s'})</div><div class="v">${peso(r.basic)}</div>
+        <div class="k" style="font-size:11px;color:#888">Total hours: ${r.totalHrs.toFixed(2)}h</div><div class="v"></div>
         <div class="k">Less late / undertime</div><div class="v minus">${r.lateUT>0?'−'+peso(r.lateUT):peso(0)}</div>
         <div class="k">OT pay (${r.otHrs.toFixed(2)}h × ${cfg.otMult})</div><div class="v plus">${r.otPay>0?'+'+peso(r.otPay):peso(0)}</div>
         ${(Number(r.allowDeduct)||0)>0?`<div class="k">Less allowance${r.allowDates&&r.allowDates.length?' ('+r.allowDates.join(', ')+')':''}</div><div class="v minus">−${peso(r.allowDeduct)}</div>`:''}
@@ -599,55 +600,54 @@ function recalcTotals(){
 // ── PAYSLIP ──
 function slipHTML(r){
   const net=netOf(r);
+  const basicHrs=Math.max(0, r.totalHrs - r.otHrs);
   return `
-    <div class="slip">
-      <div class="slip-h">
-        <div class="slip-co">${cfg.company}</div>
-        <div class="slip-period">Payslip · ${fmtDate(curFrom)} – ${fmtDate(curTo)}</div>
-      </div>
-      <div class="slip-emp"><span><b>${r.name}</b></span><span>${r.code}</span></div>
-      <div class="slip-emp"><span>${r.dept||'—'} · ${r.shift}h shift</span><span>${r.daysPresent} day(s)</span></div>
-      <table class="slip-tbl">
-        <tr><td>Hours worked (${r.totalHrs.toFixed(2)}h over ${r.daysPresent} day${r.daysPresent===1?'':'s'})</td><td>${peso(r.basic)}</td></tr>
-        <tr><td>Less: late / undertime</td><td>${r.lateUT>0?'('+peso(r.lateUT)+')':peso(0)}</td></tr>
-        <tr><td>Add: overtime (${r.otHrs.toFixed(2)}h × ${cfg.otMult})</td><td>${peso(r.otPay)}</td></tr>
-        <tr><td>Add: OT allowance</td><td>${peso(Number(r.otAllowance)||0)}</td></tr>
-        <tr><td>Add: stay-in allowance</td><td>${peso(Number(r.stayInAllowance)||0)}</td></tr>
-        <tr><td>Less: cash advance</td><td>${(Number(r.valeDeduct)||0)>0?'('+peso(r.valeDeduct)+')':peso(0)}</td></tr>
-        ${(Number(r.allowDeduct)||0)>0?`<tr><td>Less: allowance${r.allowDates&&r.allowDates.length?' ('+r.allowDates.join(', ')+')':''}</td><td>(${peso(r.allowDeduct)})</td></tr>`:''}
-        <tr><td>Less: other deduction</td><td>${(Number(r.otherDeduct)||0)>0?'('+peso(r.otherDeduct)+')':peso(0)}</td></tr>
-      </table>
-      <div class="slip-net"><span>TOTAL (NET PAY)</span><span>${peso(net)}</span></div>
-      <div style="font-size:12px;color:#333;margin-top:10px;display:flex;justify-content:space-between;align-items:center">
-        <span>Remaining cash advance</span>
-        <span>${peso(Math.max(0, (Number(r.valeBalance)||0) - (Number(r.valeDeduct)||0)))}</span>
-      </div>
-      <div style="display:flex;justify-content:space-between;margin-top:26px;font-size:11px;color:#888">
-        <div style="border-top:1px solid #999;padding-top:4px;width:45%;text-align:center">Received by</div>
-        <div style="border-top:1px solid #999;padding-top:4px;width:45%;text-align:center">Prepared by</div>
+    <div class="slip" style="font-family:'Courier New',monospace;border:1px dashed #999;padding:22px 24px;max-width:360px;margin:0 auto">
+      <div style="text-align:center;font-weight:800;font-size:15px;letter-spacing:.05em">${cfg.company}</div>
+      <div style="text-align:center;font-size:11px;color:#555;margin:2px 0 12px">PAYSLIP · ${fmtDate(curFrom)} – ${fmtDate(curTo)}</div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;border-top:1px dashed #999;border-bottom:1px dashed #999;padding:7px 0;margin-bottom:8px"><span>${r.name}</span><span>${r.code}</span></div>
+      ${slipRow('Daily pay ('+r.daysPresent+' day'+(r.daysPresent===1?'':'s')+')', peso(r.basic))}
+      ${r.otPay>0?slipRow('Add OT ('+r.otHrs.toFixed(2)+'h × '+cfg.otMult+')', peso(r.otPay)):''}
+      ${(Number(r.holPay)||0)>0?slipRow('Add holiday pay', peso(r.holPay)):''}
+      <div style="font-size:10px;color:#888;padding:3px 0">Total hours worked: ${basicHrs.toFixed(0)}h basic + ${r.otHrs.toFixed(0)}h overtime</div>
+      ${slipRow('Less late / undertime', r.lateUT>0?'('+peso(r.lateUT)+')':peso(0))}
+      ${slipRow('Add OT allowance', peso(Number(r.otAllowance)||0))}
+      ${(Number(r.stayInAllowance)||0)>0?slipRow('Add stay-in allowance', peso(r.stayInAllowance)):''}
+      ${slipRow('Less cash advance', (Number(r.valeDeduct)||0)>0?'('+peso(r.valeDeduct)+')':peso(0))}
+      ${(Number(r.allowDeduct)||0)>0?slipRow('Less allowance'+(r.allowDates&&r.allowDates.length?' ('+r.allowDates.join(', ')+')':''), '('+peso(r.allowDeduct)+')'):''}
+      ${(Number(r.otherDeduct)||0)>0?slipRow('Less other deduction', '('+peso(r.otherDeduct)+')'):''}
+      <div style="display:flex;justify-content:space-between;font-size:14px;font-weight:800;border-top:2px solid #000;padding-top:7px;margin-top:7px"><span>NET PAY</span><span>${peso(net)}</span></div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:#555;margin-top:8px"><span>Remaining cash advance</span><span>${peso(Math.max(0, (Number(r.valeBalance)||0) - (Number(r.valeDeduct)||0)))}</span></div>
+      <div style="display:flex;justify-content:space-between;margin-top:24px;font-size:10px;color:#888">
+        <div style="border-top:1px solid #999;padding-top:3px;width:45%;text-align:center">Received by</div>
+        <div style="border-top:1px solid #999;padding-top:3px;width:45%;text-align:center">Prepared by</div>
       </div>
     </div>`;
 }
+function slipRow(k,v){ return `<div style="display:flex;justify-content:space-between;font-size:12px;padding:4px 0"><span>${k}</span><span style="font-variant-numeric:tabular-nums">${v}</span></div>`; }
 function showSlip(i){
   document.getElementById('print-area').innerHTML=slipHTML(computed[i]);
   document.getElementById('slip-bg').classList.add('show');
 }
 function slipMini(r){
   const net=netOf(r);
+  const basicHrs=Math.max(0, r.totalHrs - r.otHrs);
   const L=(k,v,paren)=>`<div class="mini-l"><span>${k}</span><span class="v">${paren&&v>0?'('+peso(v)+')':peso(v)}</span></div>`;
   return `<div class="mini">
     <div class="mini-co">${cfg.company}</div>
     <div class="mini-top"><span class="mini-name">${r.name}</span><span class="mini-code">${r.code}</span></div>
-    <div class="mini-sub">${r.totalHrs.toFixed(1)}h · ${r.daysPresent} day${r.daysPresent===1?'':'s'}</div>
-    ${L('Hours worked ('+r.totalHrs.toFixed(1)+'h / '+r.daysPresent+'d)',r.basic)}
+    <div class="mini-sub">${r.daysPresent} day${r.daysPresent===1?'':'s'}</div>
+    ${L('Daily pay ('+r.daysPresent+'d)',r.basic)}
+    ${r.otPay>0?L('OT ('+r.otHrs.toFixed(1)+'h × '+cfg.otMult+')',r.otPay):''}
+    ${(Number(r.holPay)||0)>0?L('Holiday pay',r.holPay):''}
+    <div class="mini-l" style="font-size:8px;color:#888"><span>${basicHrs.toFixed(0)}h basic + ${r.otHrs.toFixed(0)}h OT</span><span></span></div>
     ${L('Late/UT',r.lateUT,true)}
-    ${L('OT ('+r.otHrs.toFixed(1)+'h × '+cfg.otMult+')',r.otPay)}
     ${L('OT allow.',Number(r.otAllowance)||0)}
-    ${L('Stay-in',Number(r.stayInAllowance)||0)}
+    ${(Number(r.stayInAllowance)||0)>0?L('Stay-in',Number(r.stayInAllowance)||0):''}
     ${L('Less cash advance',Number(r.valeDeduct)||0,true)}
     ${(Number(r.allowDeduct)||0)>0?L('Less allowance'+(r.allowDates&&r.allowDates.length?' ('+r.allowDates.join(', ')+')':''),Number(r.allowDeduct)||0,true):''}
-    ${L('Less other deduction',Number(r.otherDeduct)||0,true)}
-    <div class="mini-net"><span>TOTAL</span><span>${peso(net)}</span></div>
+    ${(Number(r.otherDeduct)||0)>0?L('Less other deduction',Number(r.otherDeduct)||0,true):''}
+    <div class="mini-net"><span>NET PAY</span><span>${peso(net)}</span></div>
     <div class="mini-l" style="margin-top:3px"><span>Remaining cash advance</span><span class="v">${peso(Math.max(0,(Number(r.valeBalance)||0)-(Number(r.valeDeduct)||0)))}</span></div>
     <div class="mini-sign">Received by</div>
   </div>`;
