@@ -226,6 +226,7 @@ function openPO(reqId){
   modal(`
     <h2>Create purchase order</h2>
     <p class="msub">${r.ref} · ${r.item} · ${r.qty} ${r.unit}</p>
+    ${brandPickerHTML(r.item)}
     <div class="field"><label>Supplier / store name</label><input id="po_sup" placeholder="e.g. WeldPro on Lazada"></div>
     <div class="field"><label>Website / link</label><input id="po_url" type="url" inputmode="url" placeholder="https://..."></div>
     <div class="row2">
@@ -240,12 +241,32 @@ function openPO(reqId){
       <button class="btn" onclick="savePO('${reqId}')">Send PO</button>
     </div>`);
 }
+// Build a brand picker for the requested base item. Lists master materials whose
+// base name matches; lets you pick a specific brand variant (or buy as-is).
+function brandVariantsFor(itemName){
+  const base=(itemName||'').split(' — ')[0].trim().toLowerCase();
+  return DB.get('materials').filter(m=>{
+    const mn=(m.name||'').trim().toLowerCase();
+    return mn===base && (m.brand||'').trim();
+  });
+}
+function brandPickerHTML(itemName){
+  const vars=brandVariantsFor(itemName);
+  if(!vars.length) return ''; // no brand variants registered for this item
+  const opts=vars.map(m=>`<option value="${(m.name+' — '+m.brand).replace(/"/g,'&quot;')}">${m.brand} (${m.code})</option>`).join('');
+  return `<div class="field"><label>Brand</label>
+    <select id="po_brand">
+      <option value="">— buy as "${(itemName||'').replace(/"/g,'&quot;')}" (no specific brand) —</option>
+      ${opts}
+    </select></div>`;
+}
 async function savePO(reqId){
   const r=DB.get('requisitions').find(x=>x.id===reqId);
   const sup=val('po_sup'); if(!sup){ toast('Enter a supplier / store'); return; }
   const unit=parseFloat(val('po_unit'))||0;
+  const chosenItem=(val('po_brand')||'').trim()||r.item;
   const ref=await seq('PO');
-  await DB.insert('purchases',{ref, requisition_id:reqId, item:r.item, unit:r.unit, qty:r.qty, job:r.job,
+  await DB.insert('purchases',{ref, requisition_id:reqId, item:chosenItem, unit:r.unit, qty:r.qty, job:r.job,
     type:'online', party:sup, website:val('po_url'), unit_price:unit, amount:unit*r.qty,
     terms:val('po_terms'), expected:val('po_eta'), status:'ordered', date:today()});
   await DB.update('requisitions',reqId,{status:'ordered'});
@@ -257,6 +278,7 @@ function openStore(reqId){
   modal(`
     <h2>Record store purchase</h2>
     <p class="msub">${r.ref} · ${r.item} · ${r.qty} ${r.unit} — already bought over the counter</p>
+    ${brandPickerHTML(r.item).replace(/id="po_brand"/,'id="st_brand"')}
     <div class="field"><label>Store / vendor</label><input id="st_store" placeholder="e.g. ACE Hardware Mandaue"></div>
     <div class="row2">
       <div class="field"><label>Unit price (₱)</label><input id="st_unit" type="number" inputmode="decimal" placeholder="0.00"></div>
@@ -280,7 +302,8 @@ async function saveStore(reqId){
   const unit=parseFloat(val('st_unit'))||0;
   const amt=parseFloat(val('st_amt'))|| (unit*r.qty) ||0;
   const ref=await seq('SP');
-  await DB.insert('purchases',{ref, requisition_id:reqId, item:r.item, unit:r.unit, qty:r.qty, job:r.job,
+  const chosenItem=(val('st_brand')||'').trim()||r.item;
+  await DB.insert('purchases',{ref, requisition_id:reqId, item:chosenItem, unit:r.unit, qty:r.qty, job:r.job,
     type:'store', party:store, or_no:orno, unit_price:unit, amount:amt,
     payment:val('st_pay'), bought_by:val('st_by'), status:'bought', date:today()});
   await DB.update('requisitions',reqId,{status:'bought'});
