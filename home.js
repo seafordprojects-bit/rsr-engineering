@@ -448,7 +448,7 @@ function Warehouse({ onBack }) {
           <label>Warehouse stock (your place)</label>
           ${MAT_CATALOG.map(n=>{ const low=(stock[n]||0)<=(MAT_TH[n]||0); return html`
             <div class="row" key=${n}>
-              <div><div class="name" style=${low?'color:#d64045':''}>${n}</div><div class="unit">${muUnit(n)} \u00b7 min ${MAT_TH[n]||0}${prices[n]?' \u00b7 '+peso(prices[n]):''}</div></div>
+              <div><div class="name" style=${low?'color:#d64045':''}>${MAT_CODE[n]?html`<span class="mono" style="color:var(--ink-dim);font-weight:600;font-size:12px">${MAT_CODE[n]}</span> `:''}${n}</div><div class="unit">${muUnit(n)} \u00b7 min ${MAT_TH[n]||0}${prices[n]?' \u00b7 '+peso(prices[n]):''}</div></div>
               <div style="display:flex;gap:6px;align-items:center">
                 <input type="number" min="0" value=${edit[n]??''} onInput=${e=>setEdit({...edit,[n]:e.target.value})} style="width:70px;text-align:center;padding:8px;border:1px solid var(--line);border-radius:8px;font-size:15px"/>
                 <button onClick=${()=>saveStock(n)} style="background:var(--ink-dim);color:#fff;border:none;border-radius:8px;padding:8px 12px;font-size:13px;font-weight:700;cursor:pointer">Set</button>
@@ -468,7 +468,7 @@ function Warehouse({ onBack }) {
           ${pRows.map((r,i)=>html`
             <div key=${i} style="display:grid;grid-template-columns:minmax(0,1fr) 56px 78px 28px;gap:6px;align-items:center;margin-bottom:6px">
               <select value=${r.n} onChange=${e=>pickPItem(i,e.target.value)} style="padding:9px;border:1px solid var(--line);border-radius:8px">
-                <option value="">\u2014 Item \u2014</option>${MAT_CATALOG.map(n=>html`<option value=${n} selected=${r.n===n}>${n}</option>`)}
+                <option value="">\u2014 Item \u2014</option>${MAT_CATALOG.map(n=>html`<option value=${n} selected=${r.n===n}>${MAT_CODE[n]?MAT_CODE[n]+' \u00b7 ':''}${n}</option>`)}
               </select>
               <input type="number" min="1" value=${r.qty} onInput=${e=>setRow(i,'qty',e.target.value)} style="padding:9px;border:1px solid var(--line);border-radius:8px;text-align:center"/>
               <input type="number" min="0" step="0.01" placeholder="\u20b1" value=${r.price} onInput=${e=>setRow(i,'price',e.target.value)} style="padding:9px;border:1px solid var(--line);border-radius:8px;text-align:center"/>
