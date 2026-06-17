@@ -428,7 +428,7 @@ async function saveDelivery(){
   const total=items.reduce((s,it)=>s+it.qty*(it.price||0),0);
   try{
     await sb.from('purchases').insert([{id,supplier:sup,invoice:ref||null,date,received_by:by,items,grand_total:total,created_at:new Date().toISOString()}]);
-    for(const it of items){const cur=stockMap[it.n]||0;await sb.from('warehouse_stock').upsert({item_name:it.n,qty:cur+it.qty,updated_at:new Date().toISOString()},{onConflict:'item_name'});}
+    for(const it of items){const cur=stockMap[it.n]||0;const m=(catalog||[]).find(x=>x.n===it.n);const row={item_name:it.n,qty:cur+it.qty,unit:gu(it.n),updated_at:new Date().toISOString()};if(m&&m.code)row.code=m.code;await sb.from('warehouse_stock').upsert(row,{onConflict:'item_name'});}
     toast('Delivery recorded · stock updated');
     swTab('stock');
   }catch(e){toast('Failed: '+e.message,'err');}
@@ -447,10 +447,14 @@ async function receivePurchase(id){
     const ord=Number(p.qty)||0, prev=Number(p.qty_received)||0, left=Math.max(0,ord-prev);
     const got=Math.min(recv,left);
     if(got<=0){toast('Already fully received','err');return;}
-    // add to warehouse stock
+    // add to warehouse stock (carry the material code from the master if known)
     await loadStock();
     const cur=stockMap[p.item]||0;
-    await sb.from('warehouse_stock').upsert({item_name:p.item,qty:cur+got,unit:p.unit||gu(p.item),updated_at:new Date().toISOString()},{onConflict:'item_name'});
+    let matCode=p.code||'';
+    if(!matCode){ const m=(catalog||[]).find(x=>x.n===p.item); matCode=(m&&m.code)||''; }
+    const stockRow={item_name:p.item,qty:cur+got,unit:p.unit||gu(p.item),updated_at:new Date().toISOString()};
+    if(matCode) stockRow.code=matCode;
+    await sb.from('warehouse_stock').upsert(stockRow,{onConflict:'item_name'});
     // prices are owned by the Purchasing app; warehouse does not write item_prices
     // update the purchase: accumulate received qty, mark received if complete
     const totalGot=prev+got;
