@@ -1312,6 +1312,7 @@ function App() {
         ${[
           { ico:'📊', title:'Monitor', unit:'est vs actual, kg/man-hr', href:'../monitoring/monitor.html' },
           { ico:'⚖️', title:'Reconcile', unit:'kiosk hrs & plan vs actual', href:'../monitoring/reconcile.html' },
+          { ico:'🧾', title:'Work Tariff', unit:'standard time per work', href:'../monitoring/tariff.html' },
         ].map(t => html`<${Tile} ...${t} />`)}
       </div>
 
