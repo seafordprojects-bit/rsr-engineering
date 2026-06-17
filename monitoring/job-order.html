@@ -83,22 +83,24 @@
       ["position","Working position"],["access","Access / staging"],["size","Piece size"],
       ["location","Location on vessel"],["complexity","Complexity / curvature"],["stage","Stage height / crane"],
     ];
+    const catOf=(it)=>it.category||"Other";
 
     function App(){
       const [items,setItems]=useState(null);
-      const [factors,setFactors]=useState([]);       // active factor options (flat)
+      const [factors,setFactors]=useState([]);
       const [jobs,setJobs]=useState(null);
       const [preparedBy,setPreparedBy]=useState(localStorage.getItem("rsr_prepared_by")||"");
 
       const [vessel,setVessel]=useState("");
       const [site,setSite]=useState(SITES[0]);
+      const [selCat,setSelCat]=useState("");
       const [itemId,setItemId]=useState("");
       const [qty,setQty]=useState("");
       const [location,setLocation]=useState("");
       const [desc,setDesc]=useState("");
       const [days,setDays]=useState("5");
       const [start,setStart]=useState(todayLocal());
-      const [fsel,setFsel]=useState({});             // grp -> option id
+      const [fsel,setFsel]=useState({});
 
       const [busy,setBusy]=useState(false);
       const [msg,setMsg]=useState(null);
@@ -109,10 +111,11 @@
         const fq=sb.from("correction_factor").select("id,grp,label,factor").eq("active",true).order("grp").order("sort").order("label");
         const [ir,fr,js]=await Promise.all([iq,fq,fetchJobs()]);
         const its=ir.data||[]; setItems(its);
-        if(its.length && !itemId) setItemId(its[0].id);
+        const cs=[...new Set(its.map(catOf))];
+        const c0=cs[0]||""; setSelCat(c0);
+        const first=its.find(i=>catOf(i)===c0); setItemId(first?first.id:"");
         const fs=fr.data||[]; setFactors(fs);
-        // default one selection per group (first option)
-        const def={}; GROUPS.forEach(([g])=>{ const first=fs.find(x=>x.grp===g); if(first) def[g]=first.id; });
+        const def={}; GROUPS.forEach(([g])=>{ const f=fs.find(x=>x.grp===g); if(f) def[g]=f.id; });
         setFsel(def);
         setJobs(js);
       }
@@ -123,6 +126,10 @@
         if(error){ console.error(error); return []; }
         return data||[];
       }
+
+      const cats=[...new Set((items||[]).map(catOf))];
+      const itemsInCat=(items||[]).filter(i=>catOf(i)===selCat);
+      function onCat(c){ setSelCat(c); const first=(items||[]).find(i=>catOf(i)===c); setItemId(first?first.id:""); }
 
       const item=(items||[]).find(x=>x.id===itemId)||null;
       const rate=item? Number(item.manhours_per_unit):0;
@@ -138,6 +145,7 @@
       const nDays=Math.max(1,Number(days)||1);
       const target=ymd(addDays(start,nDays-1));
       const factorsByGroup=(g)=>factors.filter(x=>x.grp===g);
+      const qtyLabel = unit==="kg" ? "Estimated plates (kg)" : `Quantity${unit?` (${unitLabel(unit)})`:""}`;
 
       function savePrep(v){ setPreparedBy(v); localStorage.setItem("rsr_prepared_by",v); }
 
@@ -151,7 +159,7 @@
           const {data:jobNo,error:e1}=await sb.rpc("next_job_no",{p_site:site});
           if(e1) throw e1;
           const fbreak={};
-          if(useF) GROUPS.forEach(([g,lbl])=>{ const o=optById(fsel[g]); if(o) fbreak[g]={label:o.label,factor:Number(o.factor)}; });
+          if(useF) GROUPS.forEach(([g])=>{ const o=optById(fsel[g]); if(o) fbreak[g]={label:o.label,factor:Number(o.factor)}; });
           const {error:e2}=await sb.from("jobs").insert({
             job_no:jobNo, vessel:vessel.trim(), site,
             location:location.trim()||null, description:desc.trim()||null,
@@ -178,20 +186,27 @@
           <h2>New job order</h2>
           <label>Vessel</label>
           <input value=${vessel} onInput=${e=>setVessel(e.target.value)} placeholder="e.g. MV Santa Maria" />
-          <div class="row">
-            <div><label>Site</label>
-              <select value=${site} onChange=${e=>setSite(e.target.value)}>${SITES.map(s=>html`<option value=${s}>${s}</option>`)}</select>
-            </div>
-            <div><label>Work item</label>
-              <select value=${itemId} onChange=${e=>setItemId(e.target.value)}>
-                ${items.map(it=>html`<option value=${it.id}>${it.name}</option>`)}
-              </select>
-            </div>
-          </div>
-          ${items.length===0 && html`<div class="hint">No work items yet. Add them in Work Tariff first.</div>`}
+          <label>Site</label>
+          <select value=${site} onChange=${e=>setSite(e.target.value)}>${SITES.map(s=>html`<option value=${s}>${s}</option>`)}</select>
+
+          ${items.length===0
+            ? html`<div class="hint">No work items yet. Add them in Work Tariff first.</div>`
+            : html`
+              <div class="row">
+                <div><label>Category</label>
+                  <select value=${selCat} onChange=${e=>onCat(e.target.value)}>
+                    ${cats.map(c=>html`<option value=${c}>${c}</option>`)}
+                  </select>
+                </div>
+                <div><label>Work item${selCat==="Steel renewal"?" (thickness)":""}</label>
+                  <select value=${itemId} onChange=${e=>setItemId(e.target.value)}>
+                    ${itemsInCat.map(it=>html`<option value=${it.id}>${it.name}</option>`)}
+                  </select>
+                </div>
+              </div>`}
 
           <div class="row">
-            <div><label>Quantity${unit?` (${unitLabel(unit)})`:""}</label>
+            <div><label>${qtyLabel}</label>
               <input type="number" inputmode="decimal" value=${qty} onInput=${e=>setQty(e.target.value)} placeholder="0" />
             </div>
             <div><label>Estimated days</label>
