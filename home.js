@@ -91,14 +91,40 @@ let MAT_UNIT = {};
 let MAT_CODE = {};   // name -> code
 async function loadMaterials() {
   try {
-    const { data, error } = await supabase.from('materials').select('*').eq('active', true);
+    const { data, error } = await supabase.from('materials').select('*');
     if (error) throw error;
-    if (data && data.length) {
-      MAT_CATALOG = data.map(m => m.name);
+    const rows = (data || []).filter(m => m.active !== false);  // treat null/true as active
+    if (rows.length) {
+      MAT_CATALOG = rows.map(m => m.name);
       MAT_TH = {}; MAT_UNIT = {}; MAT_CODE = {};
-      data.forEach(m => { MAT_TH[m.name] = Number(m.threshold) || 0; MAT_UNIT[m.name] = m.unit || 'pcs'; MAT_CODE[m.name] = m.code; });
+      rows.forEach(m => { MAT_TH[m.name] = Number(m.threshold) || 0; MAT_UNIT[m.name] = m.unit || 'pcs'; MAT_CODE[m.name] = m.code; });
     }
   } catch (e) { /* keep fallback */ }
+}
+// Materials master CRUD (the `materials` table)
+async function getMaterials() {
+  const { data, error } = await supabase.from('materials').select('*').order('code');
+  if (error) throw error;
+  return data || [];
+}
+async function addMaterialRow(row) {
+  const { error } = await supabase.from('materials').insert(row);
+  if (error) throw error;
+}
+async function updateMaterialRow(code, fields) {
+  const { error } = await supabase.from('materials').update(fields).eq('code', code);
+  if (error) throw error;
+}
+// changing the CODE itself: re-link the simple name-keyed tables is NOT needed
+// (they key by name); but the code is the PK so we update it directly.
+async function changeMaterialCode(oldCode, newCode) {
+  const { error } = await supabase.from('materials').update({ code: newCode }).eq('code', oldCode);
+  if (error) throw error;
+}
+async function deleteMaterialRow(code) {
+  // soft-delete: keep the row but mark inactive so history still resolves
+  const { error } = await supabase.from('materials').update({ active: false }).eq('code', code);
+  if (error) throw error;
 }
 async function getMatUsage() {
   const { data, error } = await supabase.from('material_usage').select('item_name,usage_days');
@@ -232,6 +258,101 @@ function Tile({ ico, num, unit, title, href, onClick }) {
   return href
     ? html`<a class="tile" href=${href}>${inner}</a>`
     : html`<div class="tile soon">${ico ? html`<div class="ico">${ico}</div>` : ''}<h3 style="margin-top:8px">${title}</h3><span class="badge">COMING SOON</span></div>`;
+}
+
+function MaterialsAdmin({ toast, onBack }) {
+  const [rows, setRows] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [editCode, setEditCode] = useState(null);   // code of row being edited
+  const [form, setForm] = useState({ code:'', name:'', unit:'pcs', threshold:'' });
+  const [adding, setAdding] = useState(false);
+  const UNITS = ['pcs','pair','unit','box','bottle','tool','set','roll','meter'];
+  const load = async () => { try { setRows(await getMaterials()); } catch(e){ setRows([]); toast('Load failed: '+e.message); } };
+  useEffect(() => { load(); }, []);
+  const startAdd = () => { setForm({ code:'', name:'', unit:'pcs', threshold:'' }); setAdding(true); setEditCode(null); };
+  const startEdit = (m) => { setForm({ code:m.code, name:m.name, unit:m.unit||'pcs', threshold:String(m.threshold ?? '') }); setEditCode(m.code); setAdding(false); };
+  const cancel = () => { setEditCode(null); setAdding(false); };
+  const saveNew = async () => {
+    const code=form.code.trim().toUpperCase(), name=form.name.trim();
+    if(!code){ toast('Enter a code'); return; }
+    if(!name){ toast('Enter a name'); return; }
+    if((rows||[]).some(m=>m.code===code)){ toast('That code already exists'); return; }
+    setBusy(true);
+    try {
+      await addMaterialRow({ code, name, unit:form.unit, threshold:parseInt(form.threshold,10)||0, active:true });
+      toast('Material added'); cancel(); await load();
+    } catch(e){ toast('Add failed: '+e.message); } finally { setBusy(false); }
+  };
+  const saveEdit = async () => {
+    const name=form.name.trim(); const newCode=form.code.trim().toUpperCase();
+    if(!name){ toast('Enter a name'); return; }
+    if(!newCode){ toast('Enter a code'); return; }
+    setBusy(true);
+    try {
+      if(newCode!==editCode){
+        if((rows||[]).some(m=>m.code===newCode)){ toast('That code already exists'); setBusy(false); return; }
+        await changeMaterialCode(editCode, newCode);
+      }
+      await updateMaterialRow(newCode, { name, unit:form.unit, threshold:parseInt(form.threshold,10)||0 });
+      toast('Saved'); cancel(); await load();
+    } catch(e){ toast('Save failed: '+e.message); } finally { setBusy(false); }
+  };
+  const remove = async (m) => {
+    if(!confirm('Remove "'+m.name+'" ('+m.code+')? It will be hidden but its history is kept.')) return;
+    setBusy(true);
+    try { await deleteMaterialRow(m.code); toast('Removed'); await load(); }
+    catch(e){ toast('Remove failed: '+e.message); } finally { setBusy(false); }
+  };
+  const active = (rows||[]).filter(m=>m.active!==false);
+  return html`
+    <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+      <span><b>RSR</b><span class="tag">MATERIALS</span></span>
+      <button onClick=${onBack} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
+    </div></div></header>
+    <div class="wrap">
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <label style="margin:0">Materials${rows?` (${active.length})`:''}</label>
+          ${!adding && editCode===null ? html`<button class="btn" style="width:auto;padding:9px 14px" onClick=${startAdd}>+ Add material</button>` : ''}
+        </div>
+        <p class="note" style="margin:6px 0 0">Code is the permanent ID. Name can include the brand (e.g. "Welding gloves (Tianjin Orange)"). Changing a name is safe; change a code only when needed.</p>
+      </div>
+
+      ${(adding || editCode!==null) ? html`
+        <div class="card">
+          <label>${adding?'New material':'Edit material'}</label>
+          <div class="field"><label>Code</label>
+            <input value=${form.code} onInput=${e=>setForm(f=>({...f,code:e.target.value}))} placeholder="e.g. EH-001" style="text-transform:uppercase" /></div>
+          <div class="field"><label>Name (with brand)</label>
+            <input value=${form.name} onInput=${e=>setForm(f=>({...f,name:e.target.value}))} placeholder="e.g. Welding gloves (Tianjin Orange)" /></div>
+          <div class="field"><label>Unit</label>
+            <select value=${form.unit} onChange=${e=>setForm(f=>({...f,unit:e.target.value}))}>
+              ${UNITS.map(u=>html`<option value=${u} selected=${form.unit===u}>${u}</option>`)}
+            </select></div>
+          <div class="field"><label>Low-stock min</label>
+            <input type="number" min="0" inputmode="numeric" value=${form.threshold} onInput=${e=>setForm(f=>({...f,threshold:e.target.value.replace(/[^0-9]/g,'')}))} placeholder="0" /></div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn" disabled=${busy} onClick=${adding?saveNew:saveEdit}>${busy?'Saving…':(adding?'Add':'Save')}</button>
+            <button class="btn ghost" onClick=${cancel}>Cancel</button>
+          </div>
+        </div>` : ''}
+
+      <div class="card">
+        ${rows==null ? html`<div class="empty">Loading…</div>`
+          : active.length ? active.map(m=>html`
+            <div class="row" key=${m.code} style="align-items:center">
+              <div>
+                <div class="name"><span class="mono" style="color:var(--ink-dim);font-weight:700;font-size:12px">${m.code}</span> ${m.name}</div>
+                <div class="unit">${m.unit||'pcs'} · min ${m.threshold||0}</div>
+              </div>
+              <div style="display:flex;gap:6px">
+                <button title="Edit" onClick=${()=>startEdit(m)} style="background:none;border:none;color:var(--ink-dim);cursor:pointer;font-size:15px;padding:2px 4px">✎</button>
+                <button title="Remove" onClick=${()=>remove(m)} style="background:none;border:none;color:#d64045;cursor:pointer;font-size:15px;padding:2px 4px">🗑</button>
+              </div>
+            </div>`)
+          : html`<div class="empty">No materials yet. Tap "Add material".</div>`}
+      </div>
+    </div>`;
 }
 
 function MatUsage({ toast, onBack }) {
@@ -832,6 +953,7 @@ function App() {
 
   // ---- admin: material issuance monitor (read-only) ----
   if (adminTab === 'matusage') return html`<${MatUsage} toast=${flash} onBack=${() => setAdminTab('issued')} />`;
+  if (adminTab === 'materials') return html`<${MaterialsAdmin} toast=${flash} onBack=${() => setAdminTab('dash')} />`;
   if (adminTab === 'warehouse') return html`<${Warehouse} onBack=${() => setAdminTab('dash')} />`;
 
   // ---- admin: approve coordinator material / tool requests ----
@@ -868,6 +990,12 @@ function App() {
               </div>`;
             })
             : html`<div class="empty">No materials issued yet.</div>`}
+        </div>
+        <div class="card" style="cursor:pointer" onClick=${() => setAdminTab('materials')}>
+          <div class="brand" style="display:flex;align-items:center;justify-content:space-between">
+            <span><div class="name">📦 Materials list</div><div class="unit">Add / edit codes, names (with brand), units</div></span>
+            <span style="color:var(--ink-dim);font-weight:700">→</span>
+          </div>
         </div>
         <div class="card" style="cursor:pointer" onClick=${() => setAdminTab('matusage')}>
           <div class="brand" style="display:flex;align-items:center;justify-content:space-between">
