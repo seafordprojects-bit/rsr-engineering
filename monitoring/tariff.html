@@ -21,20 +21,27 @@
   header.top .sub{color:var(--muted);font-size:12.5px}
   a.back{color:var(--steel);text-decoration:none;font-size:13px}
 
-  .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:15px;margin-bottom:14px}
-  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 12px;font-weight:700}
-  label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin:9px 0 4px}
+  .tabs{display:flex;gap:8px;margin-bottom:14px}
+  .tab{flex:1;text-align:center;padding:10px;border:1px solid var(--line);border-radius:11px;background:var(--paper);font-weight:700;font-size:14px;color:var(--ink)}
+  .tab.on{background:var(--steel);color:#fff;border-color:var(--steel)}
+
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:14px;margin-bottom:14px}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);margin:0 0 11px;font-weight:700}
+  label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin:8px 0 4px}
   input,select{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:#fcfcfd;font-family:inherit;color:var(--ink)}
   input:focus,select:focus{outline:2px solid var(--steel);border-color:var(--steel)}
   .row{display:flex;gap:10px}.row>div{flex:1}
-  button.primary{width:100%;margin-top:13px;padding:13px;border:0;border-radius:11px;background:var(--steel);color:#fff;font-size:15px;font-weight:700}
+  button.primary{width:100%;margin-top:12px;padding:12px;border:0;border-radius:11px;background:var(--steel);color:#fff;font-size:14.5px;font-weight:700}
   button.primary:active{background:var(--steel-d)}
   button.primary:disabled{opacity:.5}
   button.ghost{margin-top:8px;width:100%;padding:11px;border:1px solid var(--line);background:#fcfcfd;color:var(--muted);border-radius:11px;font-weight:600;font-size:13.5px}
-  .msg{margin-top:10px;font-size:13px;padding:9px 11px;border-radius:9px;display:none}
+
+  .msg{font-size:13px;padding:9px 11px;border-radius:9px;margin-bottom:12px;display:none}
   .msg.ok{display:block;background:var(--okbg);color:var(--ok);border:1px solid #bfe3cf}
   .msg.err{display:block;background:var(--overbg);color:var(--over);border:1px solid #f0bdba}
+  .note{font-size:12.5px;color:var(--muted);background:var(--paper);border:1px solid var(--line);border-radius:11px;padding:10px 12px;margin-bottom:13px;line-height:1.45}
 
+  /* work items list */
   .catlabel{font-size:11px;font-weight:800;letter-spacing:.6px;color:var(--muted);text-transform:uppercase;margin:16px 4px 8px}
   .item{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--paper);
         border:1px solid var(--line);border-radius:12px;padding:11px 13px;margin-bottom:9px}
@@ -45,6 +52,18 @@
   .acts{display:flex;gap:6px;flex-shrink:0}
   .acts button{border:1px solid var(--line);background:#fcfcfd;border-radius:8px;font-size:12px;font-weight:700;padding:7px 9px;color:var(--ink)}
   .acts .del{border-color:#f0cab0;background:#fbeae1;color:var(--warn)}
+
+  /* factor options */
+  .grp{font-size:11px;font-weight:800;letter-spacing:.6px;color:var(--steel-d);text-transform:uppercase;margin:16px 4px 8px}
+  .opt{display:flex;align-items:center;gap:9px;background:var(--paper);border:1px solid var(--line);border-radius:11px;padding:9px 11px;margin-bottom:8px}
+  .opt.off{opacity:.5}
+  .olabel{flex:1;font-size:14px;font-weight:600}
+  .opt input.f{width:74px;text-align:center;padding:8px;font-family:var(--mono);font-weight:700}
+  .opt button{border:1px solid var(--line);background:#fcfcfd;border-radius:8px;font-size:12px;font-weight:700;padding:7px 9px;color:var(--ink)}
+  .opt button.save{background:var(--steel);color:#fff;border-color:var(--steel)}
+  .opt button.dirty{background:var(--warn);color:#fff;border-color:var(--warn)}
+  .opt button.del{border-color:#f0cab0;background:#fbeae1;color:var(--warn)}
+
   .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:18px 0}
   .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
 </style>
@@ -64,7 +83,7 @@
     <header class="top">
       <div>
         <h1>Work Tariff</h1>
-        <div class="sub">Standard works &middot; time per unit</div>
+        <div class="sub">Standard rates &amp; correction factors</div>
       </div>
       <a class="back" href="index.html">&larr; Menu</a>
     </header>
@@ -80,104 +99,171 @@
 
     const UNITS=[["each","each"],["metre","metre"],["m2","m\u00b2"],["kg","kg"],["set","set"],["lot","lot"]];
     const unitLabel=(u)=>{ const f=UNITS.find(x=>x[0]===u); return f? f[1]:u; };
+    const GROUPS=[
+      ["position","Working position"],["access","Access / staging"],["size","Piece size"],
+      ["location","Location on vessel"],["complexity","Complexity / curvature"],["stage","Stage height / crane distance"],
+    ];
+    const grpName=(g)=>{ const f=GROUPS.find(x=>x[0]===g); return f? f[1]:g; };
 
     function App(){
-      const [items,setItems]=useState(null);
-      const [editId,setEditId]=useState(null);
-      const [name,setName]=useState("");
-      const [unit,setUnit]=useState("each");
-      const [mh,setMh]=useState("");
-      const [cat,setCat]=useState("");
+      const [tab,setTab]=useState("items");
       const [busy,setBusy]=useState(false);
       const [msg,setMsg]=useState(null);
 
-      useEffect(()=>{ load(); },[]);
-      async function load(){
+      // items
+      const [items,setItems]=useState(null);
+      const [editId,setEditId]=useState(null);
+      const [name,setName]=useState(""); const [unit,setUnit]=useState("each");
+      const [mh,setMh]=useState(""); const [cat,setCat]=useState(""); const [useF,setUseF]=useState(false);
+
+      // factors
+      const [frows,setFrows]=useState(null);
+      const [fedit,setFedit]=useState({});
+      const [aGrp,setAGrp]=useState("position"); const [aLabel,setALabel]=useState(""); const [aF,setAF]=useState("1.0");
+
+      useEffect(()=>{ loadItems(); loadFactors(); },[]);
+
+      async function loadItems(){
         const {data,error}=await sb.from("work_tariff").select("*").order("category").order("name");
         if(error){ console.error(error); setMsg({type:"err",text:error.message}); setItems([]); return; }
         setItems(data||[]);
       }
+      async function loadFactors(){
+        const {data,error}=await sb.from("correction_factor").select("*").order("grp").order("sort").order("label");
+        if(error){ console.error(error); setFrows([]); return; }
+        setFrows(data||[]);
+        const e={}; (data||[]).forEach(r=>e[r.id]=String(r.factor)); setFedit(e);
+      }
 
-      function clearForm(){ setEditId(null); setName(""); setUnit("each"); setMh(""); setCat(""); }
-      function editItem(it){ setEditId(it.id); setName(it.name); setUnit(it.unit); setMh(String(it.manhours_per_unit)); setCat(it.category||""); window.scrollTo(0,0); }
-
-      async function save(){
+      // ---- items actions ----
+      function clearForm(){ setEditId(null); setName(""); setUnit("each"); setMh(""); setCat(""); setUseF(false); }
+      function editItem(it){ setEditId(it.id); setName(it.name); setUnit(it.unit); setMh(String(it.manhours_per_unit)); setCat(it.category||""); setUseF(!!it.use_factors); window.scrollTo(0,0); }
+      async function saveItem(){
         setMsg(null);
         const rate=Number(mh);
         if(!name.trim()) return setMsg({type:"err",text:"Enter a work name."});
         if(isNaN(rate)||rate<0) return setMsg({type:"err",text:"Enter valid man-hours per unit."});
         setBusy(true);
-        const payload={ name:name.trim(), unit, manhours_per_unit:rate, category:cat.trim()||null };
+        const payload={ name:name.trim(), unit, manhours_per_unit:rate, category:cat.trim()||null, use_factors:useF };
         let error;
         if(editId){ ({error}=await sb.from("work_tariff").update(payload).eq("id",editId)); }
         else { ({error}=await sb.from("work_tariff").insert(payload)); }
         setBusy(false);
         if(error){ setMsg({type:"err",text:error.message}); return; }
-        setMsg({type:"ok",text:editId?"Updated.":"Added."});
-        clearForm(); load();
+        setMsg({type:"ok",text:editId?"Updated.":"Added."}); clearForm(); loadItems();
       }
-      async function toggle(it){
-        setBusy(true);
-        const {error}=await sb.from("work_tariff").update({active:!it.active}).eq("id",it.id);
-        setBusy(false);
+      async function toggleItem(it){ setBusy(true); const {error}=await sb.from("work_tariff").update({active:!it.active}).eq("id",it.id); setBusy(false); if(error){setMsg({type:"err",text:error.message});return;} loadItems(); }
+      async function delItem(it){ setBusy(true); const {error}=await sb.from("work_tariff").delete().eq("id",it.id); setBusy(false); if(error){ setMsg({type:"err",text:"Can't delete (a job order may use it). Hide it instead."}); return;} setMsg({type:"ok",text:"Deleted."}); loadItems(); }
+
+      // ---- factor actions ----
+      async function saveFactor(r){
+        const v=Number(fedit[r.id]); if(isNaN(v)||v<=0){ setMsg({type:"err",text:"Factor must be positive."}); return; }
+        setBusy(true); const {error}=await sb.from("correction_factor").update({factor:v}).eq("id",r.id); setBusy(false);
         if(error){ setMsg({type:"err",text:error.message}); return; }
-        load();
+        setMsg({type:"ok",text:`${r.label} set to ${v}`}); loadFactors();
       }
-      async function del(it){
-        setBusy(true);
-        const {error}=await sb.from("work_tariff").delete().eq("id",it.id);
-        setBusy(false);
-        if(error){ setMsg({type:"err",text:"Can't delete (a job order may use it). Set it inactive instead."}); return; }
-        setMsg({type:"ok",text:"Deleted."}); load();
+      async function toggleFactor(r){ setBusy(true); const {error}=await sb.from("correction_factor").update({active:!r.active}).eq("id",r.id); setBusy(false); if(error){setMsg({type:"err",text:error.message});return;} loadFactors(); }
+      async function delFactor(r){ setBusy(true); const {error}=await sb.from("correction_factor").delete().eq("id",r.id); setBusy(false); if(error){setMsg({type:"err",text:error.message});return;} loadFactors(); }
+      async function addFactor(){
+        if(!aLabel.trim()){ setMsg({type:"err",text:"Enter an option name."}); return; }
+        const v=Number(aF); if(isNaN(v)||v<=0){ setMsg({type:"err",text:"Enter a valid factor."}); return; }
+        setBusy(true); const {error}=await sb.from("correction_factor").insert({grp:aGrp,label:aLabel.trim(),factor:v,sort:99}); setBusy(false);
+        if(error){ setMsg({type:"err",text:error.message}); return; }
+        setALabel(""); setAF("1.0"); setMsg({type:"ok",text:"Option added."}); loadFactors();
       }
 
-      if(items===null) return html`<div class="loading">Loading&hellip;</div>`;
+      function ItemsView(){
+        if(items===null) return html`<div class="loading">Loading&hellip;</div>`;
+        const groups={}; items.forEach(it=>{ const k=it.category||"Uncategorised"; (groups[k]=groups[k]||[]).push(it); });
+        const cats=Object.keys(groups).sort();
+        return html`
+          <div class="card">
+            <h2>${editId?"Edit work item":"Add work item"}</h2>
+            <label>Work name</label>
+            <input value=${name} onInput=${e=>setName(e.target.value)} placeholder="e.g. Install anode" />
+            <div class="row">
+              <div>
+                <label>Unit</label>
+                <select value=${unit} onChange=${e=>setUnit(e.target.value)}>
+                  ${UNITS.map(([v,l])=> html`<option value=${v}>${l}</option>`)}
+                </select>
+              </div>
+              <div>
+                <label>Man-hours per ${unitLabel(unit)}</label>
+                <input type="number" inputmode="decimal" value=${mh} onInput=${e=>setMh(e.target.value)} placeholder="0" />
+              </div>
+            </div>
+            <label>Category (optional)</label>
+            <input value=${cat} onInput=${e=>setCat(e.target.value)} placeholder="e.g. Steel renewal, Anodes, Piping" />
+            <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+              <input type="checkbox" style="width:auto" checked=${useF} onChange=${e=>setUseF(e.target.checked)} />
+              <span>Apply correction factors (steel renewal)</span>
+            </label>
+            <button class="primary" disabled=${busy} onClick=${saveItem}>${busy?"Saving\u2026":(editId?"Update":"Add to tariff")}</button>
+            ${editId && html`<button class="ghost" onClick=${clearForm}>Cancel edit</button>`}
+          </div>
+          ${items.length===0
+            ? html`<div class="empty">No work items yet. Add your first above.</div>`
+            : cats.map(c=> html`
+                <div class="catlabel">${c}</div>
+                ${groups[c].map(it=> html`
+                  <div class="item ${it.active?"":"off"}">
+                    <div>
+                      <div class="iname">${it.name}</div>
+                      <div class="irate"><b>${fmtNum(it.manhours_per_unit,3)}</b> man-hr / ${unitLabel(it.unit)}${it.use_factors?" \u00b7 \u00d7factors":""}${it.active?"":" \u00b7 inactive"}</div>
+                    </div>
+                    <div class="acts">
+                      <button onClick=${()=>editItem(it)}>Edit</button>
+                      <button onClick=${()=>toggleItem(it)}>${it.active?"Hide":"Show"}</button>
+                      <button class="del" onClick=${()=>delItem(it)}>Del</button>
+                    </div>
+                  </div>`)}
+              `)}
+        `;
+      }
 
-      // group by category
-      const groups={}; items.forEach(it=>{ const k=it.category||"Uncategorised"; (groups[k]=groups[k]||[]).push(it); });
-      const cats=Object.keys(groups).sort();
+      function FactorsView(){
+        if(frows===null) return html`<div class="loading">Loading&hellip;</div>`;
+        const groups={}; frows.forEach(r=>{ (groups[r.grp]=groups[r.grp]||[]).push(r); });
+        const ord=GROUPS.map(g=>g[0]).filter(g=>groups[g]);
+        return html`
+          <div class="note">Each steel job = qty \u00d7 base \u00d7 (one option from every group, multiplied). <b>1.0</b> = no change. Set your real Butler values.</div>
+          ${ord.map(g=> html`
+            <div class="grp">${grpName(g)}</div>
+            ${groups[g].map(r=>{
+              const dirty=String(r.factor)!==String(fedit[r.id]);
+              return html`
+                <div class="opt ${r.active?"":"off"}">
+                  <span class="olabel">${r.label}${r.active?"":" \u00b7 hidden"}</span>
+                  <input class="f" type="number" inputmode="decimal" step="0.01" value=${fedit[r.id]} onInput=${e=>setFedit({...fedit,[r.id]:e.target.value})} />
+                  <button class="save ${dirty?"dirty":""}" disabled=${busy} onClick=${()=>saveFactor(r)}>${dirty?"Save*":"Save"}</button>
+                  <button disabled=${busy} onClick=${()=>toggleFactor(r)}>${r.active?"Hide":"Show"}</button>
+                  <button class="del" disabled=${busy} onClick=${()=>delFactor(r)}>\u00d7</button>
+                </div>`;
+            })}
+          `)}
+          <div class="card">
+            <h2>Add an option</h2>
+            <label>Group</label>
+            <select value=${aGrp} onChange=${e=>setAGrp(e.target.value)}>
+              ${GROUPS.map(([v,l])=> html`<option value=${v}>${l}</option>`)}
+            </select>
+            <div class="row">
+              <div><label>Option name</label><input value=${aLabel} onInput=${e=>setALabel(e.target.value)} placeholder="e.g. Very confined" /></div>
+              <div><label>Factor</label><input type="number" inputmode="decimal" step="0.01" value=${aF} onInput=${e=>setAF(e.target.value)} /></div>
+            </div>
+            <button class="primary" disabled=${busy} onClick=${addFactor}>Add option</button>
+          </div>
+        `;
+      }
 
       return html`
-        <div class="card">
-          <h2>${editId?"Edit work item":"Add work item"}</h2>
-          <label>Work name</label>
-          <input value=${name} onInput=${e=>setName(e.target.value)} placeholder="e.g. Install anode" />
-          <div class="row">
-            <div>
-              <label>Unit</label>
-              <select value=${unit} onChange=${e=>setUnit(e.target.value)}>
-                ${UNITS.map(([v,l])=> html`<option value=${v}>${l}</option>`)}
-              </select>
-            </div>
-            <div>
-              <label>Man-hours per ${unitLabel(unit)}</label>
-              <input type="number" inputmode="decimal" value=${mh} onInput=${e=>setMh(e.target.value)} placeholder="0" />
-            </div>
-          </div>
-          <label>Category (optional)</label>
-          <input value=${cat} onInput=${e=>setCat(e.target.value)} placeholder="e.g. Steel, Anodes, Piping" />
-          <button class="primary" disabled=${busy} onClick=${save}>${busy?"Saving\u2026":(editId?"Update":"Add to tariff")}</button>
-          ${editId && html`<button class="ghost" onClick=${clearForm}>Cancel edit</button>`}
-          ${msg && html`<div class="msg ${msg.type}">${msg.text}</div>`}
+        <div class="tabs">
+          <div class="tab ${tab==="items"?"on":""}" onClick=${()=>{setTab("items");setMsg(null);}}>Work items</div>
+          <div class="tab ${tab==="factors"?"on":""}" onClick=${()=>{setTab("factors");setMsg(null);}}>Correction factors</div>
         </div>
-
-        ${items.length===0
-          ? html`<div class="empty">No work items yet. Add your first above.</div>`
-          : cats.map(c=> html`
-              <div class="catlabel">${c}</div>
-              ${groups[c].map(it=> html`
-                <div class="item ${it.active?"":"off"}">
-                  <div>
-                    <div class="iname">${it.name}</div>
-                    <div class="irate"><b>${fmtNum(it.manhours_per_unit,3)}</b> man-hr / ${unitLabel(it.unit)}${it.active?"":" \u00b7 inactive"}</div>
-                  </div>
-                  <div class="acts">
-                    <button onClick=${()=>editItem(it)}>Edit</button>
-                    <button onClick=${()=>toggle(it)}>${it.active?"Hide":"Show"}</button>
-                    <button class="del" onClick=${()=>del(it)}>Del</button>
-                  </div>
-                </div>`)}
-            `)}
+        ${msg && html`<div class="msg ${msg.type}">${msg.text}</div>`}
+        ${tab==="items" ? ItemsView() : FactorsView()}
       `;
     }
 
