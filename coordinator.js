@@ -85,7 +85,7 @@ async function getStockItems() {
     const rows = (data || []).filter(m => m.active !== false);
     if (rows.length) {
       return rows
-        .map(m => ({ name: m.name, unit: m.unit || 'pcs', code: m.code || '' }))
+        .map(m => ({ name: ((m.brand||'').trim() ? (m.name + ' — ' + m.brand.trim()) : m.name), unit: m.unit || 'pcs', code: m.code || '' }))
         .sort((a, b) => (a.code || 'zzz').localeCompare(b.code || 'zzz') || a.name.localeCompare(b.name));
     }
   } catch (e) { /* fall through to stock_item */ }
