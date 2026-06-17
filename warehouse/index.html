@@ -117,7 +117,7 @@ const peso=v=>'\u20b1'+(Number(v)||0).toLocaleString('en-PH',{maximumFractionDig
 function todayYmd(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
 function fmt(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});}
 function fmtDT(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleString('en-PH',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});}
-function itemOpts(sel){const list=catalog.length?catalog:ITEMS;return '<option value="">— Item —</option>'+list.map(i=>`<option value="${i.n}"${i.n===sel?' selected':''}>${i.n}</option>`).join('');}
+function itemOpts(sel){const list=catalog.length?catalog:ITEMS;return '<option value="">— Item —</option>'+list.map(i=>`<option value="${i.n}"${i.n===sel?' selected':''}>${i.code?i.code+' · ':''}${i.n}</option>`).join('');}
 
 let WH_PIN='5555', stockMap={}, prices={}, sites=[], dispatchPrefill=null, unitMap={}, catalog=[], reorderMap={};
 const SITE_CODES={'Carmen':'CAR','Mandaue':'MAN','Lapu-Lapu':'LAP'};
@@ -157,8 +157,19 @@ async function loadStock(){
   catch(e){try{const{data}=await sb.from('warehouse_stock').select('item_name,qty,unit');rows=data||[];}catch(e2){try{const{data}=await sb.from('warehouse_stock').select('item_name,qty');rows=data||[];}catch(e3){}}}
   rows.forEach(r=>{stockMap[r.item_name]=Number(r.qty)||0;if(r.unit)unitMap[r.item_name]=r.unit;if(r.reorder_qty!=null)reorderMap[r.item_name]=Number(r.reorder_qty)||0;});
   const baseNames=ITEMS.map(i=>i.n);
-  const extra=rows.map(r=>r.item_name).filter(n=>n&&!baseNames.includes(n)).sort((a,b)=>a.localeCompare(b));
-  catalog=ITEMS.concat(extra.map(n=>({n,u:unitMap[n]||'pcs',th:0})));
+  // Prefer the shared `materials` master (code-based). Fall back to hardcoded ITEMS.
+  let mats=[];
+  try{ const{data}=await sb.from('materials').select('*'); mats=(data||[]).filter(m=>m.active!==false); }catch(e){}
+  if(mats.length){
+    catalog=mats.map(m=>({n:m.name,u:m.unit||'pcs',th:Number(m.threshold)||0,code:m.code}));
+    // include any stock rows not in the master (orphans), so nothing is hidden
+    const known=mats.map(m=>m.name);
+    const extra=rows.map(r=>r.item_name).filter(n=>n&&!known.includes(n)).sort((a,b)=>a.localeCompare(b));
+    catalog=catalog.concat(extra.map(n=>({n,u:unitMap[n]||'pcs',th:0,code:''})));
+  } else {
+    const extra=rows.map(r=>r.item_name).filter(n=>n&&!baseNames.includes(n)).sort((a,b)=>a.localeCompare(b));
+    catalog=ITEMS.concat(extra.map(n=>({n,u:unitMap[n]||'pcs',th:0})));
+  }
 }
 async function upsertStock(name,qty,unit){
   let r=await sb.from('warehouse_stock').upsert({item_name:name,qty:qty,unit:unit,updated_at:new Date().toISOString()},{onConflict:'item_name'});
@@ -302,7 +313,7 @@ async function renderStock(c){
     +'<div class="sc"><table class="tbl"><thead><tr><th>Item</th><th>Unit</th><th style="text-align:right">On hand</th><th>Min</th><th>Reorder qty</th><th>Status</th></tr></thead><tbody>'
     +catalog.map(i=>{const q=stockMap[i.n]||0;const b=q<=0?'<span class="badge bdanger">Out</span>':(i.th>0&&q<=i.th)?'<span class="badge bwarn">Low</span>':'<span class="badge bok">OK</span>';
       const rq=reorderMap[i.n]!=null?reorderMap[i.n]:'';
-      return `<tr><td style="font-weight:600">${i.n}</td><td style="color:var(--tx2)">${i.u}</td><td style="text-align:right;font-size:16px;font-weight:700;color:${q<=0?'var(--r)':(i.th>0&&q<=i.th)?'var(--ad)':'var(--tx)'}">${q}</td><td style="color:var(--tx2)">${i.th>0?i.th:'—'}</td><td><input type="number" min="0" value="${rq}" placeholder="${i.th>0?i.th:'—'}" onchange="saveReorderQty('${i.n.replace(/'/g,"\\'")}',this.value)" style="width:62px;padding:5px 6px;border:1px solid var(--bd);border-radius:7px;background:var(--bg2);color:var(--tx);font-family:inherit;font-size:13px" /></td><td>${b}</td></tr>`;}).join('')
+      return `<tr><td style="font-weight:600">${i.code?'<span style="color:var(--tx2);font-weight:700;font-size:12px">'+i.code+'</span> ':''}${i.n}</td><td style="color:var(--tx2)">${i.u}</td><td style="text-align:right;font-size:16px;font-weight:700;color:${q<=0?'var(--r)':(i.th>0&&q<=i.th)?'var(--ad)':'var(--tx)'}">${q}</td><td style="color:var(--tx2)">${i.th>0?i.th:'—'}</td><td><input type="number" min="0" value="${rq}" placeholder="${i.th>0?i.th:'—'}" onchange="saveReorderQty('${i.n.replace(/'/g,"\\'")}',this.value)" style="width:62px;padding:5px 6px;border:1px solid var(--bd);border-radius:7px;background:var(--bg2);color:var(--tx);font-family:inherit;font-size:13px" /></td><td>${b}</td></tr>`;}).join('')
     +'</tbody></table></div>';
   // automatic reorder sweep whenever the Stock tab opens (no button needed)
   setTimeout(()=>{ autoReorderCheck(catalog.map(i=>i.n)).catch(()=>{}); }, 50);
