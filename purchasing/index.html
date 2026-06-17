@@ -127,12 +127,13 @@ let CACHE={ requisitions:[], purchases:[], purchase_request:[], item_prices:[], 
 const DB = {
   get(t){ return CACHE[t]||[]; },
   async load(){
-    const [r,p,lpr,ip,ws]=await Promise.all([
+    const [r,p,lpr,ip,ws,mat]=await Promise.all([
       sb.from('requisitions').select('*').order('created_at',{ascending:true}),
       sb.from('purchases').select('*').order('created_at',{ascending:true}),
       sb.from('purchase_request').select('*').order('created_at',{ascending:false}).limit(300),
       sb.from('item_prices').select('item_name,price').order('item_name',{ascending:true}),
       sb.from('warehouse_stock').select('item_name,unit').order('item_name',{ascending:true}),
+      sb.from('materials').select('*'),
     ]);
     if(r.error) toast('Load requisitions failed: '+r.error.message);
     if(p.error) toast('Load purchases failed: '+p.error.message);
@@ -141,6 +142,7 @@ const DB = {
     CACHE.purchase_request=(lpr&&lpr.data)||[];
     CACHE.item_prices=(ip&&ip.data)||[];
     CACHE.warehouse_stock=(ws&&ws.data)||[];
+    CACHE.materials=((mat&&mat.data)||[]).filter(m=>m.active!==false);
   },
   async insert(t,row){ if(!row.id) row.id=uid();
     const {error}=await sb.from(t).insert(row);
@@ -431,15 +433,22 @@ function viewPO(){
 function whPriceList(){
   const priceMap={};
   DB.get('item_prices').forEach(r=>{ priceMap[(r.item_name||'').toLowerCase()]={name:r.item_name,price:Number(r.price)||0}; });
+  const unitMap={};
+  DB.get('warehouse_stock').forEach(s=>{ if(s.item_name) unitMap[s.item_name.toLowerCase()]=s.unit||''; });
   const seen={}; const out=[];
-  // every warehouse material first (so unpriced ones show with a blank box)
+  // 1) every material in the master first (so ALL brands show, even at zero stock)
+  DB.get('materials').forEach(m=>{
+    const nm=m.name; if(!nm) return; const k=nm.toLowerCase(); if(seen[k]) return; seen[k]=1;
+    out.push({name:nm, code:m.code||'', unit:m.unit||unitMap[k]||'', price:(priceMap[k]?priceMap[k].price:null)});
+  });
+  // 2) any warehouse_stock item not in the master (orphan) still shows
   DB.get('warehouse_stock').forEach(s=>{
     const nm=s.item_name; if(!nm) return; const k=nm.toLowerCase(); if(seen[k]) return; seen[k]=1;
-    out.push({name:nm, price:(priceMap[k]?priceMap[k].price:null)});
+    out.push({name:nm, code:'', unit:s.unit||'', price:(priceMap[k]?priceMap[k].price:null)});
   });
-  // any priced item not in warehouse_stock (edge case) still shows
-  DB.get('item_prices').forEach(r=>{ const k=(r.item_name||'').toLowerCase(); if(k&&!seen[k]){ seen[k]=1; out.push({name:r.item_name, price:Number(r.price)||0}); } });
-  return out.sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+  // 3) any priced item not seen yet
+  DB.get('item_prices').forEach(r=>{ const k=(r.item_name||'').toLowerCase(); if(k&&!seen[k]){ seen[k]=1; out.push({name:r.item_name, code:'', unit:'', price:Number(r.price)||0}); } });
+  return out.sort((a,b)=>(a.code||'zzz').localeCompare(b.code||'zzz') || (a.name||'').localeCompare(b.name||''));
 }
 async function saveWhPrice(idx){
   const list=whPriceList();
@@ -465,7 +474,7 @@ function viewPrices(){
     wh.forEach((r,idx)=>{
       const has=(r.price!=null&&r.price>0);
       h+=`<div class="srcrow" style="align-items:center">
-        <div class="src"><div style="font-weight:600">${r.name}</div>${has?'':'<div class="srcsub" style="color:var(--amber-ink,#ba7517)">no price yet</div>'}</div>
+        <div class="src"><div style="font-weight:600">${r.code?'<span style="color:var(--muted);font-weight:700;font-size:12px">'+r.code+'</span> ':''}${r.name}</div>${has?'':'<div class="srcsub" style="color:var(--amber-ink,#ba7517)">no price yet</div>'}</div>
         <div style="display:flex;gap:6px;align-items:center">
           <span style="color:var(--muted)">₱</span>
           <input type="number" min="0" step="0.01" id="whp-${idx}" value="${has?r.price:''}" placeholder="0.00" style="width:84px;padding:7px 8px;border:1px solid ${has?'var(--line)':'var(--amber,#ba7517)'};border-radius:8px;text-align:right;font-family:inherit;font-size:13px"/>
