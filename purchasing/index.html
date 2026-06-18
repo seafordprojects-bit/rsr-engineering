@@ -490,9 +490,21 @@ function viewPO(){
       </div>
       <div class="meta">${detail}</div>${extra}
       <div class="meta">${recvLine}</div>
+      ${(p.status!=='received' && !(got>0)) ? `<div class="actions" style="margin-top:8px"><button class="btn ghost small" style="color:#c0392b" onclick="cancelPurchase('${p.id}')">Cancel / redo this purchase</button></div>` : ''}
     </div>`;
   });
   return h;
+}
+async function cancelPurchase(id){
+  const p=DB.get('purchases').find(x=>x.id===id); if(!p){ return; }
+  if(Number(p.qty_received)>0 || p.status==='received'){ toast('Already received — cannot cancel here'); return; }
+  if(!confirm('Cancel this purchase ('+p.ref+' · '+p.item+')?\n\nIt will be removed and the request goes back to "To buy" so you can redo it with the correct item.')) return;
+  try{
+    await sb.from('purchases').delete().eq('id',id);
+    if(p.requisition_id){ await sb.from('requisitions').update({status:'accepted'}).eq('id',p.requisition_id); }
+    toast('Purchase cancelled — redo it in To buy');
+    await DB.load(); render();
+  }catch(e){ toast('Cancel failed: '+(e&&e.message?e.message:e)); }
 }
 
 function whPriceList(){
