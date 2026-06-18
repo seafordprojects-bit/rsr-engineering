@@ -1004,12 +1004,6 @@ function App() {
             })
             : html`<div class="empty">No materials issued yet.</div>`}
         </div>
-        <div class="card" style="cursor:pointer" onClick=${() => setAdminTab('materials')}>
-          <div class="brand" style="display:flex;align-items:center;justify-content:space-between">
-            <span><div class="name">📦 Materials list</div><div class="unit">Add / edit codes, names (with brand), units</div></span>
-            <span style="color:var(--ink-dim);font-weight:700">→</span>
-          </div>
-        </div>
         <div class="card" style="cursor:pointer" onClick=${() => setAdminTab('matusage')}>
           <div class="brand" style="display:flex;align-items:center;justify-content:space-between">
             <span><div class="name">⏳ Usage life (days)</div><div class="unit">Set how long each material should last</div></span>
