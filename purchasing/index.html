@@ -594,6 +594,22 @@ function toggleAddSource(key){
   const b=document.getElementById('as-'+key);
   if(b) b.style.display = (OPEN_SRC===key)?'block':'none';
 }
+let OPEN_SRC_EDIT=null;
+function editSource(id){
+  OPEN_SRC_EDIT = (OPEN_SRC_EDIT===id)?null:id;
+  const b=document.getElementById('se-'+id);
+  if(b) b.style.display=(OPEN_SRC_EDIT===id)?'block':'none';
+}
+async function saveSourceEdit(id){
+  const nm=(document.getElementById('se-name-'+id).value||'').trim();
+  const ln=(document.getElementById('se-link-'+id).value||'').trim();
+  try{
+    const{error}=await sb.from('material_sources').update({source_name:nm||null,link:ln||null,updated_at:new Date().toISOString()}).eq('id',id);
+    if(error)throw error;
+    OPEN_SRC_EDIT=null;
+    toast('Source updated'); await DB.load(); render();
+  }catch(e){ toast('Update failed: '+(e&&e.message?e.message:e)); }
+}
 function swapSourceField(key){
   const t=document.getElementById('as-type-'+key).value;
   const f=document.getElementById('as-link-'+key);
@@ -795,8 +811,19 @@ function viewPrices(){
             <span style="color:var(--muted)">₱</span>
             <input type="number" min="0" step="0.01" id="sp-${s.id}" value="${s.price!=null?s.price:''}" placeholder="0.00" style="width:74px;padding:5px 7px;border:1px solid var(--line);border-radius:8px;text-align:right;font-family:inherit;font-size:12px"/>
             <button class="btn small" style="padding:3px 8px" onclick="updateSourcePrice('${s.id}')">↑</button>
+            <button class="btn small ghost" style="padding:3px 7px" onclick="editSource('${s.id}')" title="Edit name/link">✎</button>
             <button class="btn small ghost" style="padding:3px 7px;color:#c0392b" onclick="delSource('${s.id}')">🗑</button>
             ${sourceChangeNote(s.id)}
+          </div>
+          <div id="se-${s.id}" style="display:${OPEN_SRC_EDIT===s.id?'block':'none'};border:1px solid var(--line);border-radius:8px;padding:8px;margin:2px 0 6px;background:var(--card2,#faf9f5)">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+              <input id="se-name-${s.id}" value="${(s.source_name||'').replace(/"/g,'&quot;')}" placeholder="${s.source_type==='store'?'store name':'seller name'}" style="flex:1;min-width:110px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
+            </div>
+            <input id="se-link-${s.id}" value="${(s.link||'').replace(/"/g,'&quot;')}" placeholder="${s.source_type==='store'?'location / Google Maps link':'link (https://...)'}" style="width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px;margin-top:5px"/>
+            <div style="display:flex;gap:6px;margin-top:5px">
+              <button class="btn small" onclick="saveSourceEdit('${s.id}')">Save</button>
+              <button class="btn small ghost" onclick="editSource('${s.id}')">Cancel</button>
+            </div>
           </div>`;
         });
       } else {
