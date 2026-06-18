@@ -185,7 +185,7 @@ function openReturn(reqId){
   const r=DB.get('requisitions').find(x=>x.id===reqId);
   modal(`
     <h2>Return request</h2>
-    <p class="msub">${r.ref} · ${r.item} · ${r.qty} ${r.unit} — send back to the warehouse</p>
+    <p class="msub">${r.ref} · ${r.item}${r.unit?' · '+r.unit:''} — send back to the warehouse</p>
     <div class="field"><label>Reason</label>
       <select id="rt_reason"><option>Already in stock</option><option>Duplicate request</option>
       <option>Wrong item / qty</option><option>Needs approval first</option><option>Other</option></select></div>
@@ -229,12 +229,12 @@ function openPO(reqId){
   const r=DB.get('requisitions').find(x=>x.id===reqId);
   modal(`
     <h2>Create purchase order</h2>
-    <p class="msub">${r.ref} · ${r.item} · ${r.qty} ${r.unit}</p>
+    <p class="msub">${r.ref} · ${r.item}${r.unit?' · '+r.unit:''}</p>
     ${brandPickerHTML(r.item)}
     <div class="field"><label>Supplier / store name</label><input id="po_sup" placeholder="e.g. WeldPro on Lazada"></div>
     <div class="field"><label>Website / link</label><input id="po_url" type="url" inputmode="url" placeholder="https://..."></div>
     <div class="row2">
-      <div class="field"><label>Quantity (${r.unit})</label><input id="po_qty" type="number" inputmode="decimal" min="0" step="any" value="${r.qty}"></div>
+      <div class="field"><label>Quantity (${r.unit||'pcs'})</label><input id="po_qty" type="number" inputmode="decimal" min="0" step="any" placeholder="how many"></div>
       <div class="field"><label>Unit price (₱)</label><input id="po_unit" type="number" inputmode="decimal" placeholder="0.00"></div>
     </div>
     <div class="row2">
@@ -268,17 +268,42 @@ function brandPickerHTML(itemName){
       ${opts}
     </select></div>`;
 }
+// When a purchase is made, feed the price + supplier into the item's sources
+// so the Prices tab reflects what we actually paid and where.
+async function recordSourceFromPurchase({code,item,type,supplier,link,price}){
+  if(!price||price<=0) return; // nothing to record
+  try{
+    // find an existing source for this item + same supplier/type
+    const existing=DB.get('material_sources').find(s=>
+      (s.item_name||'')===item &&
+      (s.source_type||'')===type &&
+      ((s.source_name||'').toLowerCase()===(supplier||'').toLowerCase())
+    );
+    if(existing){
+      // log price change if it moved, then update
+      if(existing.price!=null && Number(existing.price)!==Number(price)){
+        await sb.from('source_price_history').insert({source_id:existing.id,code:code||null,item_name:item,old_price:existing.price,new_price:price});
+      }
+      await sb.from('material_sources').update({price, link:link||existing.link||null, updated_at:new Date().toISOString()}).eq('id',existing.id);
+    } else {
+      await sb.from('material_sources').insert({code:code||null,item_name:item,source_type:type,source_name:supplier||null,link:link||null,price});
+    }
+  }catch(e){ /* non-blocking: purchase still succeeds */ }
+}
 async function savePO(reqId){
   const r=DB.get('requisitions').find(x=>x.id===reqId);
   const sup=val('po_sup'); if(!sup){ toast('Enter a supplier / store'); return; }
   const unit=parseFloat(val('po_unit'))||0;
-  const qty=parseFloat(val('po_qty')); const useQty=(!isNaN(qty)&&qty>0)?qty:r.qty;
+  const qty=parseFloat(val('po_qty')); if(isNaN(qty)||qty<=0){ toast('Enter the quantity'); return; }
+  const useQty=qty;
   const ship=parseFloat(val('po_ship'))||0;
   const chosenItem=(val('po_brand')||'').trim()||r.item;
+  const matCode=(DB.get('materials').find(m=>{const b=(m.brand||'').trim();const nm=b?(m.name+' — '+b):m.name;return nm===chosenItem;})||{}).code||'';
   const ref=await seq('PO');
   await DB.insert('purchases',{ref, requisition_id:reqId, item:chosenItem, unit:r.unit, qty:useQty, job:r.job,
     type:'online', party:sup, website:val('po_url'), unit_price:unit, shipping:ship, amount:(unit*useQty)+ship,
     terms:val('po_terms'), expected:val('po_eta'), status:'ordered', date:today()});
+  await recordSourceFromPurchase({code:matCode,item:chosenItem,type:'online',supplier:sup,link:val('po_url'),price:unit});
   await DB.update('requisitions',reqId,{status:'ordered'});
   closeModal(); toast('PO '+ref+' sent to '+sup); render();
 }
@@ -287,11 +312,11 @@ function openStore(reqId){
   const r=DB.get('requisitions').find(x=>x.id===reqId);
   modal(`
     <h2>Record store purchase</h2>
-    <p class="msub">${r.ref} · ${r.item} · ${r.qty} ${r.unit} — already bought over the counter</p>
+    <p class="msub">${r.ref} · ${r.item}${r.unit?' · '+r.unit:''} — already bought over the counter</p>
     ${brandPickerHTML(r.item).replace(/id="po_brand"/,'id="st_brand"')}
     <div class="field"><label>Store / vendor</label><input id="st_store" placeholder="e.g. ACE Hardware Mandaue"></div>
     <div class="row2">
-      <div class="field"><label>Quantity (${r.unit})</label><input id="st_qty" type="number" inputmode="decimal" min="0" step="any" value="${r.qty}"></div>
+      <div class="field"><label>Quantity (${r.unit||'pcs'})</label><input id="st_qty" type="number" inputmode="decimal" min="0" step="any" placeholder="how many"></div>
       <div class="field"><label>Unit price (₱)</label><input id="st_unit" type="number" inputmode="decimal" placeholder="0.00"></div>
     </div>
     <div class="row2">
@@ -311,13 +336,18 @@ async function saveStore(reqId){
   const r=DB.get('requisitions').find(x=>x.id===reqId);
   const store=val('st_store'), orno=val('st_or'); if(!store||!orno){ toast('Enter store and OR no.'); return; }
   const unit=parseFloat(val('st_unit'))||0;
-  const qty=parseFloat(val('st_qty')); const useQty=(!isNaN(qty)&&qty>0)?qty:r.qty;
+  const qty=parseFloat(val('st_qty')); if(isNaN(qty)||qty<=0){ toast('Enter the quantity'); return; }
+  const useQty=qty;
   const amt=parseFloat(val('st_amt'))|| (unit*useQty) ||0;
   const ref=await seq('SP');
   const chosenItem=(val('st_brand')||'').trim()||r.item;
+  const matCode=(DB.get('materials').find(m=>{const b=(m.brand||'').trim();const nm=b?(m.name+' — '+b):m.name;return nm===chosenItem;})||{}).code||'';
+  // unit price from receipt total if not given
+  const effUnit = unit>0 ? unit : (useQty>0 ? amt/useQty : 0);
   await DB.insert('purchases',{ref, requisition_id:reqId, item:chosenItem, unit:r.unit, qty:useQty, job:r.job,
     type:'store', party:store, or_no:orno, unit_price:unit, amount:amt,
     payment:val('st_pay'), bought_by:val('st_by'), status:'bought', date:today()});
+  await recordSourceFromPurchase({code:matCode,item:chosenItem,type:'store',supplier:store,link:'',price:effUnit});
   await DB.update('requisitions',reqId,{status:'bought'});
   closeModal(); toast('Store purchase recorded — '+ref); render();
 }
@@ -349,7 +379,7 @@ function viewInbox(){
   reqs.forEach(r=>{
     h+=`<div class="card">
       <div class="item-row">
-        <div><div class="ttl">${r.item} · ${r.qty} ${r.unit}</div>
+        <div><div class="ttl">${r.item}${r.unit?' · '+r.unit:''}</div>
           <div class="sub">${r.ref} · ${r.job}</div></div>
         ${statusPill(r.status)}
       </div>
@@ -417,7 +447,7 @@ function viewBuy(){
   reqs.forEach(r=>{
     h+=`<div class="card">
       <div class="item-row">
-        <div><div class="ttl">${r.item} · ${r.qty} ${r.unit}</div>
+        <div><div class="ttl">${r.item}${r.unit?' · '+r.unit:''}</div>
           <div class="sub">${r.ref} · ${r.job}</div></div>
         ${statusPill(r.status)}
       </div>
@@ -801,7 +831,7 @@ function go(tab){ TAB=tab; render(); }
 /* ---- utils ---- */
 function val(id){ const e=document.getElementById(id); return e? e.value.trim():''; }
 function modal(html){ document.getElementById('modal-root').innerHTML=
-  `<div class="modal-bg" onclick="if(event.target===this)closeModal()"><div class="modal">${html}</div></div>`; }
+  `<div class="modal-bg"><div class="modal">${html}</div></div>`; }
 function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
 function toast(msg){ const r=document.getElementById('toast-root');
   r.innerHTML=`<div class="toast">${msg}</div>`; clearTimeout(window._tt);
