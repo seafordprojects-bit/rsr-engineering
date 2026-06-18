@@ -529,7 +529,13 @@ function whPriceList(){
     out.push(Object.assign({name:nm, code:'', unit:s.unit||''}, pick(k)));
   });
   DB.get('item_prices').forEach(r=>{ const k=(r.item_name||'').toLowerCase(); if(k&&!seen[k]){ seen[k]=1; out.push(Object.assign({name:r.item_name, code:'', unit:''}, pick(k))); } });
-  return out.sort((a,b)=>(a.code||'zzz').localeCompare(b.code||'zzz') || (a.name||'').localeCompare(b.name||''));
+  const codeByName={}; out.forEach(r=>{ codeByName[r.name]=r.code||''; });
+  const hasPrice=(nm)=>sourcesFor(nm, codeByName[nm]).some(s=>s.price!=null&&Number(s.price)>0);
+  return out.sort((a,b)=>{
+    const pa=hasPrice(a.name)?0:1, pb=hasPrice(b.name)?0:1;
+    if(pa!==pb) return pa-pb;                        // priced first
+    return (a.code||'zzz').localeCompare(b.code||'zzz') || (a.name||'').localeCompare(b.name||'');
+  });
 }
 // last price change for an item+source, as a % indicator string
 function priceChangeNote(name, source){
@@ -567,14 +573,18 @@ function updateNextCode(){
   if(lbl) lbl.textContent = pf ? nextCodeFor(pf) : '—';
 }
 /* ---- multiple buying SOURCES per material (canvass) ---- */
-function sourcesFor(item){ return DB.get('material_sources').filter(s=>(s.item_name||'')===item); }
+function sourcesFor(item, code){
+  const ms=DB.get('material_sources');
+  if(code){ const byCode=ms.filter(s=>(s.code||'')===code); if(byCode.length) return byCode; }
+  return ms.filter(s=>(s.item_name||'')===item);
+}
 function mapHref(loc){
   const v=(loc||'').trim();
   if(/^https?:\/\//i.test(v)) return v;                       // already a maps URL
   return 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(v); // text -> maps search
 }
-function cheapestSource(item){
-  const list=sourcesFor(item).filter(s=>s.price!=null&&Number(s.price)>0);
+function cheapestSource(item, code){
+  const list=sourcesFor(item, code).filter(s=>s.price!=null&&Number(s.price)>0);
   if(!list.length) return null;
   return list.reduce((a,b)=>Number(b.price)<Number(a.price)?b:a);
 }
@@ -647,8 +657,20 @@ async function saveBrand(code){
   const br=(document.getElementById('be-brand-'+code).value||'').trim();
   if(!nm){ toast('Enter the item name'); return; }
   try{
+    const newLabel = br ? (nm+' — '+br) : nm;
     const{error}=await sb.from('materials').update({name:nm,brand:br}).eq('code',code);
     if(error)throw error;
+    // keep sources/prices matched: re-point any rows for this code (or the old
+    // name) to the new combined label, so nothing gets orphaned by the rename.
+    try{
+      await sb.from('material_sources').update({item_name:newLabel}).eq('code',code);
+      // heal older rows that have no code yet but used the old name
+      const oldLabel = m.brand ? (m.name+' — '+m.brand) : m.name;
+      if(oldLabel!==newLabel){
+        await sb.from('material_sources').update({item_name:newLabel, code:code}).is('code',null).eq('item_name',oldLabel);
+        await sb.from('material_sources').update({item_name:newLabel, code:code}).is('code',null).eq('item_name',m.name);
+      }
+    }catch(_){}
     OPEN_BRAND=null;
     toast(code+' updated');
     await DB.load(); render();
@@ -710,7 +732,7 @@ async function saveWhPrice(idx){
 }
 function viewPrices(){
   const wh=whPriceList();
-  const priced=wh.filter(r=>sourcesFor(r.name).some(s=>s.price!=null&&Number(s.price)>0)).length;
+  const priced=wh.filter(r=>sourcesFor(r.name, r.code).some(s=>s.price!=null&&Number(s.price)>0)).length;
   let h=`<div class="hint">Current warehouse price per material (used to charge projects at the latest price). Items with no price yet show a blank box — fill it in and tap Save. Editing here updates the warehouse too.</div>`;
   h+=`<div class="card"><div class="item-row"><div class="ttl">Warehouse current prices</div><span class="pill gray">${priced}/${wh.length} priced</span></div>`;
   h+=`<button class="btn small" style="margin:4px 0 8px" onclick="toggleNewMat(true)">+ Register new brand / material</button>
@@ -735,10 +757,16 @@ function viewPrices(){
       <div style="color:var(--muted);font-size:11px;margin-top:6px">Registers into the materials master — it will then appear in the warehouse, issuance, and coordinator too.</div>
     </div>`;
   if(wh.length){
+    let dividerShown=false;
     wh.forEach((r,idx)=>{
       const baseName = r.brand ? r.name.replace(' — '+r.brand,'') : r.name;
-      const srcs = sourcesFor(r.name);
-      const cheap = cheapestSource(r.name);
+      const srcs = sourcesFor(r.name, r.code);
+      const itemPriced = srcs.some(s=>s.price!=null&&Number(s.price)>0);
+      if(!itemPriced && !dividerShown){
+        dividerShown=true;
+        h+=`<div style="margin:12px 0 6px;padding-top:8px;border-top:2px solid var(--line);font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Still need a price</div>`;
+      }
+      const cheap = cheapestSource(r.name, r.code);
       const key = r.code || ('i'+idx);
       h+=`<div class="srcrow" style="display:block;padding:10px 0;border-bottom:1px solid var(--line)">
         <div style="font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
