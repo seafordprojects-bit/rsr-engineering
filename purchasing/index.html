@@ -518,12 +518,25 @@ function updateNextCode(){
 }
 /* ---- multiple buying SOURCES per material (canvass) ---- */
 function sourcesFor(item){ return DB.get('material_sources').filter(s=>(s.item_name||'')===item); }
+function mapHref(loc){
+  const v=(loc||'').trim();
+  if(/^https?:\/\//i.test(v)) return v;                       // already a maps URL
+  return 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(v); // text -> maps search
+}
 function cheapestSource(item){
   const list=sourcesFor(item).filter(s=>s.price!=null&&Number(s.price)>0);
   if(!list.length) return null;
   return list.reduce((a,b)=>Number(b.price)<Number(a.price)?b:a);
 }
 function toggleAddSource(key){ const b=document.getElementById('as-'+key); if(b) b.style.display=b.style.display==='none'?'block':'none'; }
+function swapSourceField(key){
+  const t=document.getElementById('as-type-'+key).value;
+  const f=document.getElementById('as-link-'+key);
+  const nm=document.getElementById('as-name-'+key);
+  if(!f) return;
+  if(t==='store'){ f.placeholder='location / Google Maps link — for store'; if(nm) nm.placeholder='store name'; }
+  else { f.placeholder='link (https://...) — for online'; if(nm) nm.placeholder='seller name'; }
+}
 async function addSource(code,item){
   const t=document.getElementById('as-type-'+code).value;
   const nm=(document.getElementById('as-name-'+code).value||'').trim();
@@ -531,7 +544,7 @@ async function addSource(code,item){
   const pr=document.getElementById('as-price-'+code).value;
   const price=pr!==''?parseFloat(pr):null;
   if(price!=null&&(isNaN(price)||price<0)){ toast('Price invalid'); return; }
-  if(!nm&&!ln){ toast('Enter a store name or link'); return; }
+  if(!nm&&!ln){ toast('Enter a store name or link/location'); return; }
   try{
     const{error}=await sb.from('material_sources').insert({code:code||null,item_name:item,source_type:t,source_name:nm||null,link:ln||null,price:price});
     if(error)throw error;
@@ -688,7 +701,7 @@ function viewPrices(){
           const tag = s.source_type==='online'?'<span class="pill purple tag" style="font-size:11px">Online</span>':'<span class="pill teal tag" style="font-size:11px">Store</span>';
           const label = s.source_type==='online'
             ? (s.link?`<a href="${(s.link||'').replace(/"/g,'&quot;')}" target="_blank" style="color:var(--accent,#5b4ddb);text-decoration:underline">${s.source_name||'link'}</a>`:(s.source_name||'—'))
-            : (s.source_name||'—');
+            : (s.link?`${s.source_name||'store'} <a href="${mapHref(s.link)}" target="_blank" style="color:var(--accent,#5b4ddb);text-decoration:underline;font-size:11px">📍 map</a>`:(s.source_name||'—'));
           h+=`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;${isCheap?'background:#eaf7ee;border-radius:8px;padding:4px 6px':''}">
             ${tag}
             <span style="flex:1;min-width:100px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}${isCheap?' <b style="color:#1e8449">✓ cheapest</b>':''}</span>
@@ -707,7 +720,7 @@ function viewPrices(){
           </div>
           <div id="as-${key}" style="display:none;border:1px dashed var(--line);border-radius:8px;padding:8px;margin-top:2px">
             <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-              <select id="as-type-${r.code||key}" style="padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px">
+              <select id="as-type-${r.code||key}" onchange="swapSourceField('${r.code||key}')" style="padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px">
                 <option value="online">Online</option><option value="store">Store</option>
               </select>
               <input id="as-name-${r.code||key}" placeholder="store / seller name" style="flex:1;min-width:110px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
