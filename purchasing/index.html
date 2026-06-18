@@ -123,11 +123,11 @@ const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
 const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
 const sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
 
-let CACHE={ requisitions:[], purchases:[], purchase_request:[], item_prices:[], warehouse_stock:[], materials:[], price_history:[] };
+let CACHE={ requisitions:[], purchases:[], purchase_request:[], item_prices:[], warehouse_stock:[], materials:[], price_history:[], material_sources:[] };
 const DB = {
   get(t){ return CACHE[t]||[]; },
   async load(){
-    const [r,p,lpr,ip,ws,mat,ph]=await Promise.all([
+    const [r,p,lpr,ip,ws,mat,ph,ms]=await Promise.all([
       sb.from('requisitions').select('*').order('created_at',{ascending:true}),
       sb.from('purchases').select('*').order('created_at',{ascending:true}),
       sb.from('purchase_request').select('*').order('created_at',{ascending:false}).limit(300),
@@ -135,6 +135,7 @@ const DB = {
       sb.from('warehouse_stock').select('item_name,unit').order('item_name',{ascending:true}),
       sb.from('materials').select('*'),
       sb.from('price_history').select('*').order('changed_at',{ascending:false}).limit(500),
+      sb.from('material_sources').select('*').order('created_at',{ascending:true}),
     ]);
     if(r.error) toast('Load requisitions failed: '+r.error.message);
     if(p.error) toast('Load purchases failed: '+p.error.message);
@@ -145,6 +146,7 @@ const DB = {
     CACHE.warehouse_stock=(ws&&ws.data)||[];
     CACHE.materials=((mat&&mat.data)||[]).filter(m=>m.active!==false);
     CACHE.price_history=(ph&&ph.data)||[];
+    CACHE.material_sources=(ms&&ms.data)||[];
   },
   async insert(t,row){ if(!row.id) row.id=uid();
     const {error}=await sb.from(t).insert(row);
@@ -514,6 +516,54 @@ function updateNextCode(){
   const lbl=document.getElementById('nm-code');
   if(lbl) lbl.textContent = pf ? nextCodeFor(pf) : '—';
 }
+/* ---- multiple buying SOURCES per material (canvass) ---- */
+function sourcesFor(item){ return DB.get('material_sources').filter(s=>(s.item_name||'')===item); }
+function cheapestSource(item){
+  const list=sourcesFor(item).filter(s=>s.price!=null&&Number(s.price)>0);
+  if(!list.length) return null;
+  return list.reduce((a,b)=>Number(b.price)<Number(a.price)?b:a);
+}
+function toggleAddSource(key){ const b=document.getElementById('as-'+key); if(b) b.style.display=b.style.display==='none'?'block':'none'; }
+async function addSource(code,item){
+  const t=document.getElementById('as-type-'+code).value;
+  const nm=(document.getElementById('as-name-'+code).value||'').trim();
+  const ln=(document.getElementById('as-link-'+code).value||'').trim();
+  const pr=document.getElementById('as-price-'+code).value;
+  const price=pr!==''?parseFloat(pr):null;
+  if(price!=null&&(isNaN(price)||price<0)){ toast('Price invalid'); return; }
+  if(!nm&&!ln){ toast('Enter a store name or link'); return; }
+  try{
+    const{error}=await sb.from('material_sources').insert({code:code||null,item_name:item,source_type:t,source_name:nm||null,link:ln||null,price:price});
+    if(error)throw error;
+    toast('Source added'); await DB.load(); render();
+  }catch(e){ toast('Add failed: '+(e&&e.message?e.message:e)); }
+}
+async function updateSourcePrice(id){
+  const el=document.getElementById('sp-'+id); if(!el) return;
+  const v=el.value!==''?parseFloat(el.value):null;
+  if(v!=null&&(isNaN(v)||v<0)){ toast('Price invalid'); return; }
+  const src=DB.get('material_sources').find(s=>s.id===id); if(!src) return;
+  try{
+    if(src.price!=null && v!=null && Number(src.price)!==v){
+      await sb.from('source_price_history').insert({source_id:id,code:src.code||null,item_name:src.item_name,old_price:src.price,new_price:v});
+    }
+    const{error}=await sb.from('material_sources').update({price:v,updated_at:new Date().toISOString()}).eq('id',id);
+    if(error)throw error;
+    toast('Price updated'); await DB.load(); render();
+  }catch(e){ toast('Update failed: '+(e&&e.message?e.message:e)); }
+}
+async function delSource(id){
+  if(!confirm('Remove this source?')) return;
+  try{ const{error}=await sb.from('material_sources').delete().eq('id',id); if(error)throw error; toast('Removed'); await DB.load(); render(); }
+  catch(e){ toast('Delete failed: '+(e&&e.message?e.message:e)); }
+}
+function sourceChangeNote(id){
+  const h=DB.get('source_price_history').filter(x=>x.source_id===id&&x.old_price!=null).sort((a,b)=>new Date(b.changed_at)-new Date(a.changed_at))[0];
+  if(!h) return '';
+  const o=Number(h.old_price),n=Number(h.new_price); if(!o||o===n) return '';
+  const pct=Math.round(((n-o)/o)*100); const up=n>o;
+  return `<span style="font-size:11px;color:${up?'#c0392b':'#1e8449'}">${up?'▲':'▼'} ${Math.abs(pct)}% (was ${money(o)})</span>`;
+}
 /* ---- edit brand/name of a material directly from the Prices tab ---- */
 function editBrand(code){
   const m=DB.get('materials').find(x=>x.code===code); if(!m){ toast('Not in materials master'); return; }
@@ -588,7 +638,7 @@ async function saveWhPrice(idx){
 }
 function viewPrices(){
   const wh=whPriceList();
-  const priced=wh.filter(r=>(r.online_price!=null&&r.online_price>0)||(r.store_price!=null&&r.store_price>0)||(r.price!=null&&r.price>0)).length;
+  const priced=wh.filter(r=>sourcesFor(r.name).some(s=>s.price!=null&&Number(s.price)>0)).length;
   let h=`<div class="hint">Current warehouse price per material (used to charge projects at the latest price). Items with no price yet show a blank box — fill it in and tap Save. Editing here updates the warehouse too.</div>`;
   h+=`<div class="card"><div class="item-row"><div class="ttl">Warehouse current prices</div><span class="pill gray">${priced}/${wh.length} priced</span></div>`;
   h+=`<button class="btn small" style="margin:4px 0 8px" onclick="toggleNewMat(true)">+ Register new brand / material</button>
@@ -614,10 +664,10 @@ function viewPrices(){
     </div>`;
   if(wh.length){
     wh.forEach((r,idx)=>{
-      const oHas=(r.online_price!=null), sHas=(r.store_price!=null);
-      const onNote=priceChangeNote(r.name,'online'), stNote=priceChangeNote(r.name,'store');
-      const cheaper = (oHas&&sHas) ? (r.online_price<r.store_price?'online':(r.store_price<r.online_price?'store':'')) : '';
       const baseName = r.brand ? r.name.replace(' — '+r.brand,'') : r.name;
+      const srcs = sourcesFor(r.name);
+      const cheap = cheapestSource(r.name);
+      const key = r.code || ('i'+idx);
       h+=`<div class="srcrow" style="display:block;padding:10px 0;border-bottom:1px solid var(--line)">
         <div style="font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           ${r.code?'<span style="color:var(--muted);font-weight:700;font-size:12px">'+r.code+'</span> ':''}${baseName}
@@ -631,22 +681,45 @@ function viewPrices(){
             <button class="btn small" onclick="saveBrand('${r.code}')">Save</button>
           </div>
         </div>`:''}
-        <div style="display:flex;flex-direction:column;gap:6px">
-          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-            <span class="pill purple tag" style="min-width:54px;text-align:center">Online${cheaper==='online'?' ✓':''}</span>
+        <div style="display:flex;flex-direction:column;gap:5px">`;
+      if(srcs.length){
+        srcs.forEach(s=>{
+          const isCheap = cheap && s.id===cheap.id && srcs.filter(x=>x.price!=null&&Number(x.price)>0).length>1;
+          const tag = s.source_type==='online'?'<span class="pill purple tag" style="font-size:11px">Online</span>':'<span class="pill teal tag" style="font-size:11px">Store</span>';
+          const label = s.source_type==='online'
+            ? (s.link?`<a href="${(s.link||'').replace(/"/g,'&quot;')}" target="_blank" style="color:var(--accent,#5b4ddb);text-decoration:underline">${s.source_name||'link'}</a>`:(s.source_name||'—'))
+            : (s.source_name||'—');
+          h+=`<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;${isCheap?'background:#eaf7ee;border-radius:8px;padding:4px 6px':''}">
+            ${tag}
+            <span style="flex:1;min-width:100px;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}${isCheap?' <b style="color:#1e8449">✓ cheapest</b>':''}</span>
             <span style="color:var(--muted)">₱</span>
-            <input type="number" min="0" step="0.01" id="op-${idx}" value="${oHas?r.online_price:''}" placeholder="0.00" style="width:80px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;text-align:right;font-family:inherit;font-size:13px"/>
-            <input type="url" id="ol-${idx}" value="${(r.online_link||'').replace(/"/g,'&quot;')}" placeholder="link (https://...)" style="flex:1;min-width:120px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
-            ${onNote}
+            <input type="number" min="0" step="0.01" id="sp-${s.id}" value="${s.price!=null?s.price:''}" placeholder="0.00" style="width:74px;padding:5px 7px;border:1px solid var(--line);border-radius:8px;text-align:right;font-family:inherit;font-size:12px"/>
+            <button class="btn small" style="padding:3px 8px" onclick="updateSourcePrice('${s.id}')">↑</button>
+            <button class="btn small ghost" style="padding:3px 7px;color:#c0392b" onclick="delSource('${s.id}')">🗑</button>
+            ${sourceChangeNote(s.id)}
+          </div>`;
+        });
+      } else {
+        h+=`<div style="font-size:12px;color:var(--muted)">No sources yet — add where you buy this.</div>`;
+      }
+      h+=`<div>
+            <button class="btn small ghost" style="padding:3px 9px;font-size:12px" onclick="toggleAddSource('${key}')">+ Add source</button>
           </div>
-          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-            <span class="pill teal tag" style="min-width:54px;text-align:center">Store${cheaper==='store'?' ✓':''}</span>
-            <span style="color:var(--muted)">₱</span>
-            <input type="number" min="0" step="0.01" id="sp-${idx}" value="${sHas?r.store_price:''}" placeholder="0.00" style="width:80px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;text-align:right;font-family:inherit;font-size:13px"/>
-            <input type="text" id="sn-${idx}" value="${(r.store_name||'').replace(/"/g,'&quot;')}" placeholder="store name" style="flex:1;min-width:120px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
-            ${stNote}
+          <div id="as-${key}" style="display:none;border:1px dashed var(--line);border-radius:8px;padding:8px;margin-top:2px">
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+              <select id="as-type-${r.code||key}" style="padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px">
+                <option value="online">Online</option><option value="store">Store</option>
+              </select>
+              <input id="as-name-${r.code||key}" placeholder="store / seller name" style="flex:1;min-width:110px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
+            </div>
+            <input id="as-link-${r.code||key}" placeholder="link (https://...) — for online" style="width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px;margin-top:5px"/>
+            <div style="display:flex;gap:6px;align-items:center;margin-top:5px">
+              <span style="color:var(--muted)">₱</span>
+              <input type="number" min="0" step="0.01" id="as-price-${r.code||key}" placeholder="0.00" style="width:90px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;text-align:right;font-family:inherit;font-size:12px"/>
+              <button class="btn small" onclick="addSource('${r.code||''}','${r.name.replace(/'/g,"\\'")}')">Add</button>
+              <button class="btn small ghost" onclick="toggleAddSource('${key}')">Cancel</button>
+            </div>
           </div>
-          <div><button class="btn small" onclick="saveWhPrice(${idx})">Save</button></div>
         </div>
       </div>`;
     });
