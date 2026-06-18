@@ -772,7 +772,7 @@ function viewPrices(){
         <div style="font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           ${r.code?'<span style="color:var(--muted);font-weight:700;font-size:12px">'+r.code+'</span> ':''}${baseName}
           ${r.brand?'<span class="pill gray" style="font-size:11px;padding:1px 8px">'+r.brand+'</span>':''}
-          ${r.code?'<button class="btn small ghost" style="padding:2px 8px;font-size:11px" onclick="editBrand(\''+r.code+'\')">✎ brand</button>':''}
+          ${r.code?'<button class="btn small ghost" style="padding:2px 8px;font-size:11px" onclick="editBrand(\''+r.code+'\')">✎ edit</button>':''}
         </div>
         ${r.code?`<div id="be-${r.code}" style="display:${OPEN_BRAND===r.code?'block':'none'};border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;background:var(--card2,#faf9f5)">
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
