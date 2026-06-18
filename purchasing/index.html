@@ -571,6 +571,12 @@ function updateNextCode(){
   const pf=document.getElementById('nm-prefix').value;
   const lbl=document.getElementById('nm-code');
   if(lbl) lbl.textContent = pf ? nextCodeFor(pf) : '—';
+  // auto-fill the item name from an existing material that uses this prefix
+  const nameEl=document.getElementById('nm-name');
+  if(pf && nameEl && !nameEl.value.trim()){
+    const ex=DB.get('materials').find(m=>((m.code||'').toUpperCase().startsWith(pf.toUpperCase()+'-')));
+    if(ex) nameEl.value = ex.name || '';
+  }
 }
 /* ---- multiple buying SOURCES per material (canvass) ---- */
 function sourcesFor(item, code){
