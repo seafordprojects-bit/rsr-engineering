@@ -234,12 +234,16 @@ function openPO(reqId){
     <div class="field"><label>Supplier / store name</label><input id="po_sup" placeholder="e.g. WeldPro on Lazada"></div>
     <div class="field"><label>Website / link</label><input id="po_url" type="url" inputmode="url" placeholder="https://..."></div>
     <div class="row2">
+      <div class="field"><label>Quantity (${r.unit})</label><input id="po_qty" type="number" inputmode="decimal" min="0" step="any" value="${r.qty}"></div>
       <div class="field"><label>Unit price (₱)</label><input id="po_unit" type="number" inputmode="decimal" placeholder="0.00"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Shipping fee (₱)</label><input id="po_ship" type="number" inputmode="decimal" min="0" step="any" placeholder="0.00"></div>
       <div class="field"><label>Expected delivery</label><input id="po_eta" type="date" value="${today()}"></div>
     </div>
     <div class="field"><label>Payment terms</label>
       <select id="po_terms"><option>COD</option><option>15 days</option><option selected>30 days</option><option>60 days</option></select></div>
-    <div class="hint">The link and unit price are saved to the Prices tab so you can canvass websites for this item later.</div>
+    <div class="hint">Total = (unit price × qty) + shipping. The link and unit price are saved to the Prices tab for canvassing later.</div>
     <div class="btn-pair">
       <button class="btn ghost" onclick="closeModal()">Cancel</button>
       <button class="btn" onclick="savePO('${reqId}')">Send PO</button>
@@ -268,10 +272,12 @@ async function savePO(reqId){
   const r=DB.get('requisitions').find(x=>x.id===reqId);
   const sup=val('po_sup'); if(!sup){ toast('Enter a supplier / store'); return; }
   const unit=parseFloat(val('po_unit'))||0;
+  const qty=parseFloat(val('po_qty')); const useQty=(!isNaN(qty)&&qty>0)?qty:r.qty;
+  const ship=parseFloat(val('po_ship'))||0;
   const chosenItem=(val('po_brand')||'').trim()||r.item;
   const ref=await seq('PO');
-  await DB.insert('purchases',{ref, requisition_id:reqId, item:chosenItem, unit:r.unit, qty:r.qty, job:r.job,
-    type:'online', party:sup, website:val('po_url'), unit_price:unit, amount:unit*r.qty,
+  await DB.insert('purchases',{ref, requisition_id:reqId, item:chosenItem, unit:r.unit, qty:useQty, job:r.job,
+    type:'online', party:sup, website:val('po_url'), unit_price:unit, shipping:ship, amount:(unit*useQty)+ship,
     terms:val('po_terms'), expected:val('po_eta'), status:'ordered', date:today()});
   await DB.update('requisitions',reqId,{status:'ordered'});
   closeModal(); toast('PO '+ref+' sent to '+sup); render();
@@ -285,14 +291,15 @@ function openStore(reqId){
     ${brandPickerHTML(r.item).replace(/id="po_brand"/,'id="st_brand"')}
     <div class="field"><label>Store / vendor</label><input id="st_store" placeholder="e.g. ACE Hardware Mandaue"></div>
     <div class="row2">
+      <div class="field"><label>Quantity (${r.unit})</label><input id="st_qty" type="number" inputmode="decimal" min="0" step="any" value="${r.qty}"></div>
       <div class="field"><label>Unit price (₱)</label><input id="st_unit" type="number" inputmode="decimal" placeholder="0.00"></div>
-      <div class="field"><label>Amount paid (₱)</label><input id="st_amt" type="number" inputmode="decimal" placeholder="receipt total"></div>
     </div>
     <div class="row2">
+      <div class="field"><label>Amount paid (₱)</label><input id="st_amt" type="number" inputmode="decimal" placeholder="receipt total"></div>
       <div class="field"><label>OR / invoice no.</label><input id="st_or" placeholder="OR no."></div>
-      <div class="field"><label>Paid with</label>
-        <select id="st_pay"><option>Cash</option><option>Petty cash</option><option>Company card</option></select></div>
     </div>
+    <div class="field"><label>Paid with</label>
+      <select id="st_pay"><option>Cash</option><option>Petty cash</option><option>Company card</option></select></div>
     <div class="field"><label>Bought by</label><input id="st_by" placeholder="Name"></div>
     <div class="hint">Store and unit price go to the Prices tab for canvass. If you only enter the receipt total, the unit price is worked out as total ÷ qty. Your warehouse app stocks the goods in from this record.</div>
     <div class="btn-pair">
@@ -304,10 +311,11 @@ async function saveStore(reqId){
   const r=DB.get('requisitions').find(x=>x.id===reqId);
   const store=val('st_store'), orno=val('st_or'); if(!store||!orno){ toast('Enter store and OR no.'); return; }
   const unit=parseFloat(val('st_unit'))||0;
-  const amt=parseFloat(val('st_amt'))|| (unit*r.qty) ||0;
+  const qty=parseFloat(val('st_qty')); const useQty=(!isNaN(qty)&&qty>0)?qty:r.qty;
+  const amt=parseFloat(val('st_amt'))|| (unit*useQty) ||0;
   const ref=await seq('SP');
   const chosenItem=(val('st_brand')||'').trim()||r.item;
-  await DB.insert('purchases',{ref, requisition_id:reqId, item:chosenItem, unit:r.unit, qty:r.qty, job:r.job,
+  await DB.insert('purchases',{ref, requisition_id:reqId, item:chosenItem, unit:r.unit, qty:useQty, job:r.job,
     type:'store', party:store, or_no:orno, unit_price:unit, amount:amt,
     payment:val('st_pay'), bought_by:val('st_by'), status:'bought', date:today()});
   await DB.update('requisitions',reqId,{status:'bought'});
@@ -433,7 +441,7 @@ function viewPO(){
     if(p.type==='online'){
       detail=`Supplier <b>${p.party}</b> · terms ${p.terms} · expected ${p.expected}`;
       extra=`<div class="meta">🔗 ${p.website?`<a href="${p.website}" target="_blank" rel="noopener">${domain(p.website)}</a>`:'no link'}`
-        +`${p.unit_price?' · '+money(p.unit_price)+'/'+p.unit:''}${p.amount?' · total '+money(p.amount):''}</div>`;
+        +`${p.unit_price?' · '+money(p.unit_price)+'/'+p.unit:''}${Number(p.shipping)>0?' · ship '+money(p.shipping):''}${p.amount?' · total '+money(p.amount):''}</div>`;
     }else{
       detail=`Store <b>${p.party}</b> · OR ${p.or_no} · ${p.payment}`;
       extra=`<div class="meta">${p.unit_price?money(p.unit_price)+'/'+p.unit+' · ':''}total ${money(p.amount)}${p.bought_by?' · by '+p.bought_by:''}</div>`;
