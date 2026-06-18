@@ -514,6 +514,24 @@ function updateNextCode(){
   const lbl=document.getElementById('nm-code');
   if(lbl) lbl.textContent = pf ? nextCodeFor(pf) : '—';
 }
+/* ---- edit brand/name of a material directly from the Prices tab ---- */
+function editBrand(code){
+  const m=DB.get('materials').find(x=>x.code===code); if(!m){ toast('Not in materials master'); return; }
+  const box=document.getElementById('be-'+code);
+  if(box){ box.style.display = box.style.display==='none'?'block':'none'; }
+}
+async function saveBrand(code){
+  const m=DB.get('materials').find(x=>x.code===code); if(!m) return;
+  const nm=(document.getElementById('be-name-'+code).value||'').trim();
+  const br=(document.getElementById('be-brand-'+code).value||'').trim();
+  if(!nm){ toast('Enter the item name'); return; }
+  try{
+    const{error}=await sb.from('materials').update({name:nm,brand:br}).eq('code',code);
+    if(error)throw error;
+    toast(code+' updated');
+    await DB.load(); render();
+  }catch(e){ toast('Update failed: '+(e&&e.message?e.message:e)); }
+}
 async function saveNewMat(){
   const pf=document.getElementById('nm-prefix').value;
   const name=(document.getElementById('nm-name').value||'').trim();
@@ -599,8 +617,20 @@ function viewPrices(){
       const oHas=(r.online_price!=null), sHas=(r.store_price!=null);
       const onNote=priceChangeNote(r.name,'online'), stNote=priceChangeNote(r.name,'store');
       const cheaper = (oHas&&sHas) ? (r.online_price<r.store_price?'online':(r.store_price<r.online_price?'store':'')) : '';
+      const baseName = r.brand ? r.name.replace(' — '+r.brand,'') : r.name;
       h+=`<div class="srcrow" style="display:block;padding:10px 0;border-bottom:1px solid var(--line)">
-        <div style="font-weight:600;margin-bottom:6px">${r.code?'<span style="color:var(--muted);font-weight:700;font-size:12px">'+r.code+'</span> ':''}${r.name}</div>
+        <div style="font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          ${r.code?'<span style="color:var(--muted);font-weight:700;font-size:12px">'+r.code+'</span> ':''}${baseName}
+          ${r.brand?'<span class="pill gray" style="font-size:11px;padding:1px 8px">'+r.brand+'</span>':''}
+          ${r.code?'<button class="btn small ghost" style="padding:2px 8px;font-size:11px" onclick="editBrand(\''+r.code+'\')">✎ brand</button>':''}
+        </div>
+        ${r.code?`<div id="be-${r.code}" style="display:none;border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;background:var(--card2,#faf9f5)">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <input id="be-name-${r.code}" value="${baseName.replace(/"/g,'&quot;')}" placeholder="item name" style="flex:1;min-width:120px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
+            <input id="be-brand-${r.code}" value="${(r.brand||'').replace(/"/g,'&quot;')}" placeholder="brand" style="flex:1;min-width:100px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
+            <button class="btn small" onclick="saveBrand('${r.code}')">Save</button>
+          </div>
+        </div>`:''}
         <div style="display:flex;flex-direction:column;gap:6px">
           <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
             <span class="pill purple tag" style="min-width:54px;text-align:center">Online${cheaper==='online'?' ✓':''}</span>
