@@ -123,17 +123,18 @@ const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
 const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
 const sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
 
-let CACHE={ requisitions:[], purchases:[], purchase_request:[], item_prices:[], warehouse_stock:[] };
+let CACHE={ requisitions:[], purchases:[], purchase_request:[], item_prices:[], warehouse_stock:[], materials:[], price_history:[] };
 const DB = {
   get(t){ return CACHE[t]||[]; },
   async load(){
-    const [r,p,lpr,ip,ws,mat]=await Promise.all([
+    const [r,p,lpr,ip,ws,mat,ph]=await Promise.all([
       sb.from('requisitions').select('*').order('created_at',{ascending:true}),
       sb.from('purchases').select('*').order('created_at',{ascending:true}),
       sb.from('purchase_request').select('*').order('created_at',{ascending:false}).limit(300),
-      sb.from('item_prices').select('item_name,price').order('item_name',{ascending:true}),
+      sb.from('item_prices').select('*').order('item_name',{ascending:true}),
       sb.from('warehouse_stock').select('item_name,unit').order('item_name',{ascending:true}),
       sb.from('materials').select('*'),
+      sb.from('price_history').select('*').order('changed_at',{ascending:false}).limit(500),
     ]);
     if(r.error) toast('Load requisitions failed: '+r.error.message);
     if(p.error) toast('Load purchases failed: '+p.error.message);
@@ -143,6 +144,7 @@ const DB = {
     CACHE.item_prices=(ip&&ip.data)||[];
     CACHE.warehouse_stock=(ws&&ws.data)||[];
     CACHE.materials=((mat&&mat.data)||[]).filter(m=>m.active!==false);
+    CACHE.price_history=(ph&&ph.data)||[];
   },
   async insert(t,row){ if(!row.id) row.id=uid();
     const {error}=await sb.from(t).insert(row);
@@ -454,24 +456,38 @@ function viewPO(){
 }
 
 function whPriceList(){
-  const priceMap={};
-  DB.get('item_prices').forEach(r=>{ priceMap[(r.item_name||'').toLowerCase()]={name:r.item_name,price:Number(r.price)||0}; });
+  const pmap={};
+  DB.get('item_prices').forEach(r=>{ pmap[(r.item_name||'').toLowerCase()]=r; });
   const unitMap={};
   DB.get('warehouse_stock').forEach(s=>{ if(s.item_name) unitMap[s.item_name.toLowerCase()]=s.unit||''; });
+  const pick=k=>{ const r=pmap[k]||{}; return {
+    online_price:(r.online_price!=null?Number(r.online_price):null),
+    online_link:r.online_link||'',
+    store_price:(r.store_price!=null?Number(r.store_price):null),
+    store_name:r.store_name||'',
+    price:(r.price!=null?Number(r.price):null)
+  };};
   const seen={}; const out=[];
-  // 1) every material in the master first (so ALL brands show, even at zero stock)
   DB.get('materials').forEach(m=>{
     const b=(m.brand||'').trim(); const nm=b?(m.name+' — '+b):m.name; if(!nm) return; const k=nm.toLowerCase(); if(seen[k]) return; seen[k]=1;
-    out.push({name:nm, code:m.code||'', brand:b, unit:m.unit||unitMap[k]||'', price:(priceMap[k]?priceMap[k].price:null)});
+    out.push(Object.assign({name:nm, code:m.code||'', brand:b, unit:m.unit||unitMap[k]||''}, pick(k)));
   });
-  // 2) any warehouse_stock item not in the master (orphan) still shows
   DB.get('warehouse_stock').forEach(s=>{
     const nm=s.item_name; if(!nm) return; const k=nm.toLowerCase(); if(seen[k]) return; seen[k]=1;
-    out.push({name:nm, code:'', unit:s.unit||'', price:(priceMap[k]?priceMap[k].price:null)});
+    out.push(Object.assign({name:nm, code:'', unit:s.unit||''}, pick(k)));
   });
-  // 3) any priced item not seen yet
-  DB.get('item_prices').forEach(r=>{ const k=(r.item_name||'').toLowerCase(); if(k&&!seen[k]){ seen[k]=1; out.push({name:r.item_name, code:'', unit:'', price:Number(r.price)||0}); } });
+  DB.get('item_prices').forEach(r=>{ const k=(r.item_name||'').toLowerCase(); if(k&&!seen[k]){ seen[k]=1; out.push(Object.assign({name:r.item_name, code:'', unit:''}, pick(k))); } });
   return out.sort((a,b)=>(a.code||'zzz').localeCompare(b.code||'zzz') || (a.name||'').localeCompare(b.name||''));
+}
+// last price change for an item+source, as a % indicator string
+function priceChangeNote(name, source){
+  const hist=DB.get('price_history').filter(h=>h.item_name===name && h.source===source && h.old_price!=null);
+  if(!hist.length) return '';
+  const h=hist[0]; const o=Number(h.old_price), n=Number(h.new_price);
+  if(!o||o===n) return '';
+  const pct=Math.round(((n-o)/o)*100);
+  const up=n>o;
+  return `<span style="font-size:11px;color:${up?'#c0392b':'#1e8449'}">${up?'▲':'▼'} ${Math.abs(pct)}% (was ${money(o)})</span>`;
 }
 /* ---- register a NEW brand/material into the materials master (on the fly) ---- */
 function matPrefixes(){
@@ -524,20 +540,37 @@ async function saveWhPrice(idx){
   const list=whPriceList();
   const row=list[idx]; if(!row){ return; }
   const name=row.name;
-  const el=document.getElementById('whp-'+idx);
-  const v=el?parseFloat(el.value):NaN;
-  if(el && el.value===''){ toast('Enter a price'); return; }
-  if(isNaN(v)||v<0){ toast('Enter a valid price'); return; }
+  const op=document.getElementById('op-'+idx), ol=document.getElementById('ol-'+idx);
+  const sp=document.getElementById('sp-'+idx), sn=document.getElementById('sn-'+idx);
+  const onlineP = op&&op.value!=='' ? parseFloat(op.value) : null;
+  const storeP  = sp&&sp.value!=='' ? parseFloat(sp.value) : null;
+  if(onlineP!=null && (isNaN(onlineP)||onlineP<0)){ toast('Online price invalid'); return; }
+  if(storeP!=null && (isNaN(storeP)||storeP<0)){ toast('Store price invalid'); return; }
+  // legacy single price = whichever is lower (used to charge projects)
+  const eff=[onlineP,storeP].filter(x=>x!=null && x>0);
+  const legacy = eff.length? Math.min.apply(null,eff) : (row.price!=null?row.price:null);
+  const patch={ item_name:name, code:row.code||null,
+    online_price:onlineP, online_link:(ol?ol.value.trim():'')||null,
+    store_price:storeP, store_name:(sn?sn.value.trim():'')||null,
+    updated_at:new Date().toISOString() };
+  if(legacy!=null) patch.price=legacy;
   try{
-    const{error}=await sb.from('item_prices').upsert({item_name:name,price:v,updated_at:new Date().toISOString()},{onConflict:'item_name'});
+    // log changes (online + store) if the price moved
+    const logs=[];
+    if(onlineP!=null && row.online_price!=null && onlineP!==row.online_price)
+      logs.push({item_name:name,code:row.code||null,source:'online',old_price:row.online_price,new_price:onlineP});
+    if(storeP!=null && row.store_price!=null && storeP!==row.store_price)
+      logs.push({item_name:name,code:row.code||null,source:'store',old_price:row.store_price,new_price:storeP});
+    const{error}=await sb.from('item_prices').upsert(patch,{onConflict:'item_name'});
     if(error)throw error;
-    toast(name+' → '+money(v));
+    if(logs.length){ await sb.from('price_history').insert(logs); }
+    toast(name+' saved');
     await DB.load(); render();
   }catch(e){ toast('Save failed: '+(e&&e.message?e.message:e)); }
 }
 function viewPrices(){
   const wh=whPriceList();
-  const priced=wh.filter(r=>r.price!=null&&r.price>0).length;
+  const priced=wh.filter(r=>(r.online_price!=null&&r.online_price>0)||(r.store_price!=null&&r.store_price>0)||(r.price!=null&&r.price>0)).length;
   let h=`<div class="hint">Current warehouse price per material (used to charge projects at the latest price). Items with no price yet show a blank box — fill it in and tap Save. Editing here updates the warehouse too.</div>`;
   h+=`<div class="card"><div class="item-row"><div class="ttl">Warehouse current prices</div><span class="pill gray">${priced}/${wh.length} priced</span></div>`;
   h+=`<button class="btn small" style="margin:4px 0 8px" onclick="toggleNewMat(true)">+ Register new brand / material</button>
@@ -563,13 +596,27 @@ function viewPrices(){
     </div>`;
   if(wh.length){
     wh.forEach((r,idx)=>{
-      const has=(r.price!=null&&r.price>0);
-      h+=`<div class="srcrow" style="align-items:center">
-        <div class="src"><div style="font-weight:600">${r.code?'<span style="color:var(--muted);font-weight:700;font-size:12px">'+r.code+'</span> ':''}${r.name}</div>${has?'':'<div class="srcsub" style="color:var(--amber-ink,#ba7517)">no price yet</div>'}</div>
-        <div style="display:flex;gap:6px;align-items:center">
-          <span style="color:var(--muted)">₱</span>
-          <input type="number" min="0" step="0.01" id="whp-${idx}" value="${has?r.price:''}" placeholder="0.00" style="width:84px;padding:7px 8px;border:1px solid ${has?'var(--line)':'var(--amber,#ba7517)'};border-radius:8px;text-align:right;font-family:inherit;font-size:13px"/>
-          <button class="btn small" onclick="saveWhPrice(${idx})">Save</button>
+      const oHas=(r.online_price!=null), sHas=(r.store_price!=null);
+      const onNote=priceChangeNote(r.name,'online'), stNote=priceChangeNote(r.name,'store');
+      const cheaper = (oHas&&sHas) ? (r.online_price<r.store_price?'online':(r.store_price<r.online_price?'store':'')) : '';
+      h+=`<div class="srcrow" style="display:block;padding:10px 0;border-bottom:1px solid var(--line)">
+        <div style="font-weight:600;margin-bottom:6px">${r.code?'<span style="color:var(--muted);font-weight:700;font-size:12px">'+r.code+'</span> ':''}${r.name}</div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <span class="pill purple tag" style="min-width:54px;text-align:center">Online${cheaper==='online'?' ✓':''}</span>
+            <span style="color:var(--muted)">₱</span>
+            <input type="number" min="0" step="0.01" id="op-${idx}" value="${oHas?r.online_price:''}" placeholder="0.00" style="width:80px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;text-align:right;font-family:inherit;font-size:13px"/>
+            <input type="url" id="ol-${idx}" value="${(r.online_link||'').replace(/"/g,'&quot;')}" placeholder="link (https://...)" style="flex:1;min-width:120px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
+            ${onNote}
+          </div>
+          <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+            <span class="pill teal tag" style="min-width:54px;text-align:center">Store${cheaper==='store'?' ✓':''}</span>
+            <span style="color:var(--muted)">₱</span>
+            <input type="number" min="0" step="0.01" id="sp-${idx}" value="${sHas?r.store_price:''}" placeholder="0.00" style="width:80px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;text-align:right;font-family:inherit;font-size:13px"/>
+            <input type="text" id="sn-${idx}" value="${(r.store_name||'').replace(/"/g,'&quot;')}" placeholder="store name" style="flex:1;min-width:120px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
+            ${stNote}
+          </div>
+          <div><button class="btn small" onclick="saveWhPrice(${idx})">Save</button></div>
         </div>
       </div>`;
     });
