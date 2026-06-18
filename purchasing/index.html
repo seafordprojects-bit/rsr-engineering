@@ -746,10 +746,65 @@ async function saveWhPrice(idx){
     await DB.load(); render();
   }catch(e){ toast('Save failed: '+(e&&e.message?e.message:e)); }
 }
+// Compare across brand variants of the same base item (e.g. all Welding gloves)
+let CMP_OPEN={};
+function toggleCmp(key){ CMP_OPEN[key]=!CMP_OPEN[key]; render(); }
+function brandCompareCard(){
+  const mats=DB.get('materials');
+  // group by base name (case-insensitive)
+  const groups={};
+  mats.forEach(m=>{
+    const base=(m.name||'').trim();
+    const key=base.toLowerCase();
+    if(!groups[key]) groups[key]={label:base, variants:[]};
+    groups[key].variants.push(m);
+  });
+  // only groups with 2+ brand variants are worth comparing
+  const multi=Object.values(groups).filter(g=>g.variants.length>1);
+  if(!multi.length) return '';
+  let h=`<div class="card"><div class="ttl" style="margin-bottom:4px">Compare brands</div>
+    <div class="hint" style="margin:0 0 8px">Items that come in multiple brands. Tap to see each brand's best price side by side.</div>`;
+  multi.sort((a,b)=>a.label.localeCompare(b.label)).forEach(g=>{
+    const key=g.label.toLowerCase().replace(/[^a-z0-9]/g,'');
+    // best price per variant
+    const rows=g.variants.map(m=>{
+      const label=(m.brand||'').trim()?(m.name+' — '+m.brand):m.name;
+      const cs=cheapestSource(label, m.code);
+      return {code:m.code, brand:(m.brand||'').trim()||'(no brand)', price:cs?Number(cs.price):null, where:cs?(cs.source_name||cs.source_type):''};
+    });
+    const priced=rows.filter(r=>r.price!=null);
+    const min=priced.length?Math.min.apply(null,priced.map(r=>r.price)):null;
+    h+=`<div style="border-top:1px solid var(--line);padding:8px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleCmp('${key}')">
+        <div style="font-weight:600">${g.label} <span class="pill gray" style="font-size:11px">${g.variants.length} brands</span></div>
+        <span style="color:var(--muted);font-weight:700">${CMP_OPEN[key]?'▲':'▼'}</span>
+      </div>`;
+    if(CMP_OPEN[key]){
+      const ordered=rows.slice().sort((a,b)=>{
+        if(a.price==null&&b.price==null) return 0;
+        if(a.price==null) return 1; if(b.price==null) return -1;
+        return a.price-b.price;
+      });
+      h+=`<div style="margin-top:6px;display:flex;flex-direction:column;gap:4px">`;
+      ordered.forEach(r=>{
+        const best=(r.price!=null&&r.price===min&&priced.length>1);
+        h+=`<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;${best?'background:#eaf7ee;border-radius:6px;padding:3px 6px':'padding:3px 6px'}">
+          <span><span style="color:var(--muted);font-weight:700">${r.code}</span> ${r.brand}${r.where?' · <span style="color:var(--muted)">'+r.where+'</span>':''}</span>
+          <span style="font-weight:600">${r.price!=null?money(r.price):'<span style=\"color:var(--muted)\">no price</span>'}${best?' <b style="color:#1e8449">✓ cheapest</b>':''}</span>
+        </div>`;
+      });
+      h+=`</div>`;
+    }
+    h+=`</div>`;
+  });
+  h+=`</div>`;
+  return h;
+}
 function viewPrices(){
   const wh=whPriceList();
   const priced=wh.filter(r=>sourcesFor(r.name, r.code).some(s=>s.price!=null&&Number(s.price)>0)).length;
   let h=`<div class="hint">Current warehouse price per material (used to charge projects at the latest price). Items with no price yet show a blank box — fill it in and tap Save. Editing here updates the warehouse too.</div>`;
+  h+=brandCompareCard();
   h+=`<div class="card"><div class="item-row"><div class="ttl">Warehouse current prices</div><span class="pill gray">${priced}/${wh.length} priced</span></div>`;
   h+=`<button class="btn small" style="margin:4px 0 8px" onclick="toggleNewMat(true)">+ Register new brand / material</button>
     <div id="newmat-box" style="display:none;border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px;background:var(--card2,#faf9f5)">
