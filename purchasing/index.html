@@ -798,6 +798,19 @@ function editBrand(code){
   const box=document.getElementById('be-'+code);
   if(box){ box.style.display = (OPEN_BRAND===code)?'block':'none'; }
 }
+async function deleteOrphan(name){
+  // A codeless row = stray price/source/stock entry not tied to a material.
+  if(!confirm('Remove the stray entry "'+name+'"?\n\nThis isn\'t a real material (no code) — it\'s a leftover price/stock record. Removing it just cleans the list. If you actually need this item, register it properly with a code instead.')) return;
+  try{
+    await sb.from('item_prices').delete().eq('item_name',name);
+    await sb.from('material_sources').delete().eq('item_name',name);
+    // leave warehouse_stock alone (could hold real qty); only clear if zero
+    const st=DB.get('warehouse_stock').find(s=>s.item_name===name);
+    if(st && (Number(st.qty)||0)===0){ await sb.from('warehouse_stock').delete().eq('item_name',name); }
+    toast('Stray entry removed');
+    await DB.load(); render();
+  }catch(e){ toast('Remove failed: '+(e&&e.message?e.message:e)); }
+}
 async function deleteMaterial(code,name){
   const m=DB.get('materials').find(x=>x.code===code); if(!m){ toast('Not found'); return; }
   // warn if this material has purchases (kept for record integrity)
@@ -1011,7 +1024,9 @@ function viewPrices(){
           ${r.code?'<span style="color:var(--muted);font-weight:700;font-size:12px">'+r.code+'</span> ':''}${baseName}
           ${r.brand?'<span class="pill gray" style="font-size:11px;padding:1px 8px">'+r.brand+'</span>':''}
           ${r.code?'<button class="btn small ghost" style="padding:2px 8px;font-size:11px" onclick="editBrand(\''+r.code+'\')">✎ edit</button>':''}
-          ${r.code?'<button class="btn small ghost" style="padding:2px 7px;font-size:11px;color:#c0392b" onclick="deleteMaterial(\''+r.code+'\',\''+r.name.replace(/'/g,"\\'")+'\')" title="Delete this item">🗑</button>':''}
+          ${r.code
+            ? '<button class="btn small ghost" style="padding:2px 7px;font-size:11px;color:#c0392b" onclick="deleteMaterial(\''+r.code+'\',\''+r.name.replace(/'/g,"\\'")+'\')" title="Delete this item">🗑</button>'
+            : '<button class="btn small ghost" style="padding:2px 7px;font-size:11px;color:#c0392b" onclick="deleteOrphan(\''+r.name.replace(/'/g,"\\'")+'\')" title="Remove this stray entry">🗑</button>'}
         </div>
         ${r.code?`<div id="be-${r.code}" style="display:${OPEN_BRAND===r.code?'block':'none'};border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;background:var(--card2,#faf9f5)">
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
