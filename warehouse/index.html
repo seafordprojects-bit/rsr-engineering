@@ -593,7 +593,7 @@ async function renderInventory(c){
         let out='';
         const rowHtml=(i,idx)=>{
           const isCounted=isCnt(i.n);
-          if(isCounted && INV_EDIT!==idx){
+          if(isCounted && INV_EDIT!==i.n){
             return `<div class="irow nop" style="grid-template-columns:minmax(0,1fr) 90px 60px;align-items:center">
               <div><div style="font-weight:600">${i.n}</div><div style="font-size:12px;color:var(--tx3)">${i.u}${i.th>0?' · min '+i.th:''}</div></div>
               <div style="text-align:center;font-weight:700">${stockMap[i.n]||0}</div>
@@ -613,7 +613,7 @@ async function renderInventory(c){
       })()
     +'</div>';
 }
-function editInv(idx){ INV_EDIT=(INV_EDIT===idx)?null:idx; if(_stockC) renderStock(_stockC); }
+function editInv(idx){ const it=catalog[idx]; if(!it) return; INV_EDIT=(INV_EDIT===it.n)?null:it.n; if(_stockC) renderStock(_stockC); }
 async function saveInv(idx){
   const it=catalog[idx];if(!it)return;
   const v=parseInt(document.getElementById('inv-'+idx).value,10);
