@@ -156,7 +156,7 @@ async function loadStock(){
   try{const{data,error}=await sb.from('warehouse_stock').select('item_name,qty,unit,reorder_qty');if(error)throw error;rows=data||[];}
   catch(e){try{const{data}=await sb.from('warehouse_stock').select('item_name,qty,unit');rows=data||[];}catch(e2){try{const{data}=await sb.from('warehouse_stock').select('item_name,qty');rows=data||[];}catch(e3){}}}
   rows.forEach(r=>{stockMap[r.item_name]=Number(r.qty)||0;if(r.unit)unitMap[r.item_name]=r.unit;if(r.reorder_qty!=null)reorderMap[r.item_name]=Number(r.reorder_qty)||0;});
-  countedSet={}; rows.forEach(r=>{ if(r.item_name) countedSet[r.item_name]=true; });
+  rows.forEach(r=>{ if(r.item_name) countedSet[r.item_name]=true; });
   const baseNames=ITEMS.map(i=>i.n);
   // Prefer the shared `materials` master (code-based). Fall back to hardcoded ITEMS.
   let mats=[];
@@ -586,11 +586,13 @@ async function renderInventory(c){
     +'<div class="btn-row"><button class="btn btn-primary" onclick="saveNewItem()">+ Add to warehouse</button></div></div>'
     +'<div class="sc"><div class="sc-title">Inventory count</div><div class="sc-sub">Set the actual on-hand quantity for each item (opening balance or correction). Prices are managed in the Purchasing app.</div>'
     +(()=>{
-        const counted=catalog.filter(i=>countedSet[i.n]);
-        const notyet=catalog.filter(i=>!countedSet[i.n]);
+        const ncnt={}; Object.keys(countedSet).forEach(k=>{ ncnt[k.toLowerCase().replace(/\s+/g,' ').trim()]=true; });
+        const isCnt=(nm)=>!!countedSet[nm] || !!ncnt[(nm||'').toLowerCase().replace(/\s+/g,' ').trim()];
+        const counted=catalog.filter(i=>isCnt(i.n));
+        const notyet=catalog.filter(i=>!isCnt(i.n));
         let out='';
         const rowHtml=(i,idx)=>{
-          const isCounted=countedSet[i.n];
+          const isCounted=isCnt(i.n);
           if(isCounted && INV_EDIT!==idx){
             return `<div class="irow nop" style="grid-template-columns:minmax(0,1fr) 90px 60px;align-items:center">
               <div><div style="font-weight:600">${i.n}</div><div style="font-size:12px;color:var(--tx3)">${i.u}${i.th>0?' · min '+i.th:''}</div></div>
