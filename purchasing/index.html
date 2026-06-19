@@ -571,6 +571,9 @@ function whPriceList(){
     const b=(m.brand||'').trim(); const nm=b?(m.name+' — '+b):m.name; if(!nm) return;
     const dk=(m.code||nm).toLowerCase(); if(seen[dk]) return; seen[dk]=1;   // dedupe by CODE
     const k=nm.toLowerCase();
+    seen['n:'+k]=1; seen[k]=1;   // also block any codeless name-based duplicate of this material
+    const baseK=(m.name||'').toLowerCase();   // base name without brand
+    if(baseK){ seen['n:'+baseK]=1; seen[baseK]=1; }
     out.push(Object.assign({name:nm, code:m.code||'', brand:b, unit:m.unit||unitMap[k]||''}, pick(k)));
   });
   DB.get('warehouse_stock').forEach(s=>{
