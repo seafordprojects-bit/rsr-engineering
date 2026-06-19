@@ -145,6 +145,7 @@ const DB = {
     CACHE.item_prices=(ip&&ip.data)||[];
     CACHE.warehouse_stock=(ws&&ws.data)||[];
     CACHE.materials=((mat&&mat.data)||[]).filter(m=>m.active!==false);
+    CACHE.allMaterialCodes=((mat&&mat.data)||[]).map(m=>(m.code||'').toUpperCase()).filter(Boolean);
     CACHE.price_history=(ph&&ph.data)||[];
     CACHE.material_sources=(ms&&ms.data)||[];
   },
@@ -607,7 +608,9 @@ function matPrefixes(){
 }
 function nextCodeFor(prefix){
   let max=0;
-  DB.get('materials').forEach(m=>{ const mm=(m.code||'').match(new RegExp('^'+prefix+'-(\\d+)$','i')); if(mm){ const n=parseInt(mm[1],10); if(n>max)max=n; } });
+  const re=new RegExp('^'+prefix+'-(\\d+)$','i');
+  (CACHE.allMaterialCodes||[]).forEach(code=>{ const mm=code.match(re); if(mm){ const n=parseInt(mm[1],10); if(n>max)max=n; } });
+  DB.get('materials').forEach(m=>{ const mm=(m.code||'').match(re); if(mm){ const n=parseInt(mm[1],10); if(n>max)max=n; } });
   return prefix.toUpperCase()+'-'+String(max+1).padStart(3,'0');
 }
 function norm(s){ return (s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
@@ -868,7 +871,20 @@ async function saveNewMat(){
   const code=nextCodeFor(pf);
   try{
     const{error}=await sb.from('materials').insert({code,name,brand,unit,threshold:0,active:true});
-    if(error)throw error;
+    if(error){
+      // code already exists (maybe a soft-deleted one) — offer to revive/reuse it
+      if((error.message||'').toLowerCase().includes('duplicate')){
+        if(confirm('Code '+code+' already exists (it may have been deleted before).\n\nRevive it as "'+fullLabel+'"?')){
+          const{error:e2}=await sb.from('materials').update({name,brand,unit,active:true}).eq('code',code);
+          if(e2) throw e2;
+          toast(code+' revived as '+fullLabel);
+          document.getElementById('nm-name').value=''; document.getElementById('nm-brand').value='';
+          await DB.load(); render(); return;
+        }
+        return;
+      }
+      throw error;
+    }
     toast(code+' · '+fullLabel+' registered');
     document.getElementById('nm-name').value=''; document.getElementById('nm-brand').value='';
     await DB.load(); render();
