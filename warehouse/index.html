@@ -163,6 +163,8 @@ async function loadStock(){
   if(mats.length){
     const mlab=m=>{const b=(m.brand||'').trim();return b?(m.name+' — '+b):m.name;};
     catalog=mats.map(m=>({n:mlab(m),u:m.unit||'pcs',th:Number(m.threshold)||0,code:m.code,brand:m.brand||''}));
+    // sort by code so families (CT-001, CT-002, CT-003...) group together in order
+    catalog.sort((a,b)=>(a.code||'zzz').localeCompare(b.code||'zzz',undefined,{numeric:true}) || (a.n||'').localeCompare(b.n||''));
     // include any stock rows not in the master (orphans), so nothing is hidden
     const known=mats.map(mlab);
     const extra=rows.map(r=>r.item_name).filter(n=>n&&!known.includes(n)).sort((a,b)=>a.localeCompare(b));
