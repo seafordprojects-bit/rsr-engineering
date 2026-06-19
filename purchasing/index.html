@@ -646,14 +646,27 @@ function currentPrice(code,name){
   let r=null;
   if(code) r=ip.find(x=>(x.code||'')===code);
   if(!r) r=ip.find(x=>(x.item_name||'')===name);
-  return r&&r.price!=null?Number(r.price):null;
+  if(r&&r.price!=null) return Number(r.price);
+  // fall back to the cheapest source previously entered (material_sources)
+  const srcs=DB.get('material_sources').filter(s=> (code&&(s.code||'')===code) || (s.item_name||'')===name );
+  const priced=srcs.filter(s=>s.price!=null&&Number(s.price)>0);
+  if(priced.length){ return Math.min.apply(null,priced.map(s=>Number(s.price))); }
+  return null;
 }
 function priceMeta(code,name){
   const ip=DB.get('item_prices');
   let r=null;
   if(code) r=ip.find(x=>(x.code||'')===code);
   if(!r) r=ip.find(x=>(x.item_name||'')===name);
-  return { supplier:(r&&r.store_name)||'', link:(r&&r.online_link)||'' };
+  if(r&&(r.store_name||r.online_link)) return { supplier:r.store_name||'', link:r.online_link||'' };
+  // fall back to a source previously entered
+  const srcs=DB.get('material_sources').filter(s=> (code&&(s.code||'')===code) || (s.item_name||'')===name );
+  if(srcs.length){
+    const priced=srcs.filter(s=>s.price!=null&&Number(s.price)>0).sort((a,b)=>Number(a.price)-Number(b.price));
+    const s=priced[0]||srcs[0];
+    return { supplier:s.source_name||'', link:s.link||'' };
+  }
+  return { supplier:'', link:'' };
 }
 // Purchase history for a code/item (most recent first), with supplier + unit price
 function purchaseHistoryFor(code,name){
