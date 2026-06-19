@@ -119,7 +119,7 @@ function fmt(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocale
 function fmtDT(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleString('en-PH',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});}
 function itemOpts(sel){const list=catalog.length?catalog:ITEMS;return '<option value="">— Item —</option>'+list.map(i=>`<option value="${i.n}"${i.n===sel?' selected':''}>${i.code?i.code+' · ':''}${i.n}</option>`).join('');}
 
-let WH_PIN='5555', stockMap={}, prices={}, sites=[], dispatchPrefill=null, unitMap={}, catalog=[], reorderMap={}, countedSet={}, INV_EDIT=null, _stockC=null;
+let WH_PIN='5555', stockMap={}, prices={}, sites=[], dispatchPrefill=null, unitMap={}, catalog=[], reorderMap={}, countedSet={}, INV_EDIT=null, _stockC=null, _invC=null;
 const SITE_CODES={'Carmen':'CAR','Mandaue':'MAN','Lapu-Lapu':'LAP'};
 function siteCode(name){return SITE_CODES[name]||((name||'XXX').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase());}
 
@@ -578,6 +578,7 @@ async function renderLog(c){
 
 /* ── INVENTORY (set on-hand) ── */
 async function renderInventory(c){
+  _invC=c;
   await loadStock();
   c.innerHTML='<div class="sc"><div class="sc-title">Add a material</div><div class="sc-sub">For old stock not yet on the list. Type the name, unit, and how many are in the warehouse now.</div>'
     +'<div class="fr3"><div class="fg"><label class="fl">Material name</label><input class="fi" id="ni-name" placeholder="e.g. Steel plate 6mm"/></div>'
@@ -613,7 +614,7 @@ async function renderInventory(c){
       })()
     +'</div>';
 }
-function editInv(idx){ const it=catalog[idx]; if(!it) return; INV_EDIT=(INV_EDIT===it.n)?null:it.n; if(_stockC) renderStock(_stockC); }
+function editInv(idx){ const it=catalog[idx]; if(!it) return; INV_EDIT=(INV_EDIT===it.n)?null:it.n; if(_invC) renderInventory(_invC); }
 async function saveInv(idx){
   const it=catalog[idx];if(!it)return;
   const v=parseInt(document.getElementById('inv-'+idx).value,10);
@@ -622,7 +623,7 @@ async function saveInv(idx){
   if(err){toast('Failed: '+err.message,'err');return;}
   stockMap[it.n]=v;countedSet[it.n]=true;INV_EDIT=null;toast(it.n+' set to '+v);
   try{ await autoReorderCheck([it.n]); }catch(e){}
-  if(_stockC) renderStock(_stockC);
+  if(_invC) renderInventory(_invC);
 }
 async function saveNewItem(){
   const name=document.getElementById('ni-name').value.trim();
