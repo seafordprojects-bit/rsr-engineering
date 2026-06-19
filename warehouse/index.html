@@ -1,641 +1,1116 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
-<title>Main Warehouse | RSR</title>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>RSR Purchasing</title>
 <style>
-*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
-:root{--p:#27500A;--pl:#EAF3DE;--pm:#639922;--pd:#122606;--b:#0C447C;--bl:#E6F1FB;--bm:#378ADD;--am:#EF9F27;--al:#FAEEDA;--ad:#633806;--r:#791F1F;--rl:#FCEBEB;--rm:#F09595;--bg:#fff;--bg2:#F7F7F5;--bg3:#EFEFEC;--bd:#E0DED8;--bd2:#C8C6BE;--tx:#1A1A18;--tx2:#5A5955;--tx3:#9A9890;--rad:10px;--radl:14px;--radx:18px}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:15px;background:var(--bg3);color:var(--tx);min-height:100vh}
-.app{max-width:720px;margin:0 auto;background:var(--bg);min-height:100vh}
-.screen{display:none}.screen.active{display:block}
-.lw{flex:1;display:flex;align-items:center;justify-content:center;padding:2rem;background:var(--pl);min-height:100vh}
-.lb{background:var(--bg);border-radius:var(--radx);padding:2.5rem 2rem;width:100%;max-width:340px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.1)}
-.lav{width:72px;height:72px;border-radius:50%;background:var(--pl);border:3px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:28px;margin:0 auto 14px}
-.pin-dots{display:flex;justify-content:center;gap:14px;margin-bottom:16px}
-.pd{width:18px;height:18px;border-radius:50%;background:var(--bd2)}.pd.on{background:var(--p)}
-.num-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
-.nb{padding:18px;font-size:20px;font-weight:500;border:1.5px solid var(--bd);border-radius:var(--radl);background:var(--bg);color:var(--tx);cursor:pointer}
-.nb:active{background:var(--pl);border-color:var(--pm)}
-.lbtn{width:100%;padding:16px;font-size:17px;font-weight:600;border-radius:var(--radl);border:none;background:var(--p);color:#fff;cursor:pointer}
-.tb{padding:13px 16px;background:var(--pl);border-bottom:1.5px solid var(--pm);display:flex;align-items:center;justify-content:space-between}
-.tdot{width:38px;height:38px;border-radius:50%;background:#fff;border:2px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:18px}
-.ttitle{font-size:16px;font-weight:700;color:var(--p)}.tsub{font-size:12px;color:var(--pm);margin-top:1px}
-.lout{padding:8px 14px;font-size:13px;border-radius:8px;border:1.5px solid var(--pm);background:transparent;color:var(--p);cursor:pointer;font-weight:600;text-decoration:none}
-.tabs{display:flex;overflow-x:auto;background:var(--bg);border-bottom:1px solid var(--bd);padding:6px 6px}
-.tab{padding:10px 16px;font-size:13px;font-weight:600;cursor:pointer;color:var(--tx2);border:none;background:transparent;font-family:inherit;white-space:nowrap;flex:0 0 auto;text-align:center;position:relative;border-radius:9px;margin:0 2px}
-.tab.active{background:var(--p);color:#fff;font-weight:700}
-.dot{position:absolute;top:6px;right:8px;width:8px;height:8px;border-radius:50%}
-.pc{padding:16px;padding-bottom:48px}
-.sc{background:var(--bg);border:1px solid var(--bd);border-radius:var(--radx);padding:16px;margin-bottom:12px}
-.sc-title{font-size:16px;font-weight:700;margin-bottom:4px}.sc-sub{font-size:13px;color:var(--tx2);margin-bottom:14px}
-.fl{font-size:13px;font-weight:500;color:var(--tx2);margin-bottom:5px;display:block}.fl span{color:var(--r)}
-.fi{width:100%;padding:12px 14px;font-size:15px;border-radius:var(--radl);border:1.5px solid var(--bd2);background:var(--bg);color:var(--tx)}
-.fi:focus{outline:none;border-color:var(--pm);box-shadow:0 0 0 3px var(--pl)}
-.fg{margin-bottom:12px}.fr3{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-.btn{padding:12px 18px;font-size:14px;font-weight:600;border-radius:var(--radl);cursor:pointer;border:none}
-.btn-primary{background:var(--p);color:#fff}.btn-secondary{background:transparent;color:var(--tx);border:1.5px solid var(--bd2)}
-.btn-sm{padding:9px 14px;font-size:13px}.btn-row{display:flex;gap:8px;justify-content:flex-end;margin-top:14px}
-.irow{display:grid;grid-template-columns:minmax(0,2fr) 70px 78px 38px;gap:8px;align-items:center;margin-bottom:8px}
-.irow.nop{grid-template-columns:minmax(0,2fr) 70px 38px}
-.rm{height:46px;display:flex;align-items:center;justify-content:center;border:1.5px solid var(--bd2);border-radius:var(--radl);cursor:pointer;font-size:18px;color:var(--tx3);background:var(--bg2)}
-.add-row{width:100%;padding:12px;font-size:14px;font-weight:500;border-radius:var(--radl);border:2px dashed var(--bd2);background:transparent;color:var(--tx2);cursor:pointer;margin-top:4px}
-.mstrip{display:grid;gap:10px;margin-bottom:14px;grid-template-columns:repeat(3,1fr)}
-.mbox{background:var(--bg2);border-radius:var(--radl);padding:12px 8px;text-align:center;border:1px solid var(--bd)}
-.mv{font-size:22px;font-weight:700}.ml{font-size:11px;color:var(--tx2);margin-top:2px}
-.tbl{width:100%;border-collapse:collapse;font-size:14px}
-.tbl th{text-align:left;padding:9px 8px;font-size:12px;font-weight:600;color:var(--tx2);border-bottom:1.5px solid var(--bd);background:var(--bg2)}
-.tbl td{padding:10px 8px;border-bottom:1px solid var(--bd);vertical-align:middle}.tbl tr:last-child td{border-bottom:none}
-.badge{display:inline-block;font-size:11px;padding:3px 9px;border-radius:99px;font-weight:600;white-space:nowrap}
-.bok{background:var(--pl);color:var(--p)}.bwarn{background:var(--al);color:var(--ad)}.bdanger{background:var(--rl);color:var(--r)}.binfo{background:var(--bl);color:var(--b)}
-.dcard{border:1px solid var(--bd);border-radius:var(--radl);margin-bottom:10px;overflow:hidden}
-.dcard-hdr{padding:13px 16px;background:var(--bg2);display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;cursor:pointer}
-.dcard-body{padding:13px 16px;display:none}.dcard-body.open{display:block}
-.disp-num-box{background:var(--bg2);border-radius:var(--radl);padding:12px 14px;margin-bottom:14px;display:flex;align-items:center;gap:12px;border:1px solid var(--bd)}
-.disp-num{font-size:20px;font-weight:700;font-family:monospace;color:var(--pd)}
-.toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%);padding:12px 22px;border-radius:var(--radl);font-size:14px;font-weight:600;display:none;z-index:9999;max-width:90vw;text-align:center;box-shadow:0 4px 16px rgba(0,0,0,.15)}
-.tok{background:#122606;color:#EAF3DE}.terr{background:#5C1515;color:#FCEBEB}
-.empty{text-align:center;color:var(--tx3);padding:18px;font-size:14px}
+  :root{
+    --bg:#f4f6f5; --surface:#ffffff; --surface-2:#fbfcfb;
+    --ink:#16211e; --muted:#6a756f; --line:#e4e8e6;
+    --teal:#0f6e56; --teal-soft:#e1f5ee; --teal-ink:#085041;
+    --purple:#534ab7;
+--purple-light:#ECEAF9;
+--purple-mid:#7b73c9; --purple-soft:#eeedfe; --purple-ink:#3c3489;
+    --amber:#ba7517; --amber-soft:#faeeda; --amber-ink:#854f0b;
+    --green:#3b6d11; --green-soft:#eaf3de; --green-ink:#27500a;
+    --gray-soft:#f1efe8; --gray-ink:#5f5e5a;
+    --radius:12px; --shadow:0 1px 2px rgba(20,33,30,.06),0 1px 8px rgba(20,33,30,.04);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg); color:var(--ink); line-height:1.5; -webkit-font-smoothing:antialiased}
+  .wrap{max-width:540px; margin:0 auto; min-height:100vh}
+  header{background:var(--purple-light,#ECEAF9); border-bottom:1.5px solid var(--purple); padding:13px 16px; position:sticky; top:0; z-index:5; display:flex; align-items:center; justify-content:space-between}
+  .hdr-l{display:flex; align-items:center; gap:10px}
+  .hdr-ico{width:38px; height:38px; border-radius:50%; background:#fff; border:2px solid var(--purple); display:flex; align-items:center; justify-content:center; font-size:18px; flex:0 0 38px}
+  header h1{font-size:16px; margin:0; font-weight:700; color:var(--purple); letter-spacing:.2px}
+  header p{margin:1px 0 0; font-size:12px; color:var(--purple-mid,#7b73c9)}
+  .reset{background:transparent; border:1.5px solid var(--purple); color:var(--purple);
+    font-size:13px; font-weight:600; padding:8px 14px; border-radius:8px; cursor:pointer; text-decoration:none; display:inline-block}
+  main{padding:16px 14px}
+  .tabhead{font-size:13px; color:var(--muted); margin:2px 0 12px; font-weight:500}
+  .hint{font-size:12.5px; color:var(--muted); background:var(--bg2,#f4f6f5); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin:0 0 12px; line-height:1.45}
+  .card{background:var(--surface); border:1px solid var(--line); border-radius:var(--radius);
+    padding:14px; margin-bottom:12px; box-shadow:var(--shadow)}
+  label{display:block; font-size:12px; color:var(--muted); margin:0 0 5px; font-weight:500}
+  input,select,textarea{width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:10px;
+    font-size:15px; background:var(--surface-2); color:var(--ink); font-family:inherit}
+  textarea{resize:vertical; min-height:64px}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--purple); outline-offset:1px; border-color:var(--purple)}
+  .field{margin-bottom:12px}
+  .row2{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+  button{cursor:pointer; font-family:inherit}
+  .btn{width:100%; padding:13px; border:none; border-radius:10px; font-size:15px; font-weight:600;
+    background:var(--purple); color:#fff}
+  .btn:active{opacity:.85}
+  .btn.ghost{background:var(--surface); color:var(--ink); border:1px solid var(--line)}
+  .btn.teal{background:var(--teal)}
+  .btn.small{width:auto; padding:9px 13px; font-size:13px}
+  .btn-pair{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+  .item-row{display:flex; justify-content:space-between; align-items:flex-start; gap:10px}
+  .item-row .ttl{font-weight:600; font-size:15px}
+  .item-row .sub{font-size:12.5px; color:var(--muted); margin-top:2px}
+  .pill{font-size:11px; font-weight:600; padding:3px 9px; border-radius:20px; white-space:nowrap}
+  .pill.teal{background:var(--teal-soft); color:var(--teal-ink)}
+  .pill.purple{background:var(--purple-soft); color:var(--purple-ink)}
+  .pill.amber{background:var(--amber-soft); color:var(--amber-ink)}
+  .pill.green{background:var(--green-soft); color:var(--green-ink)}
+  .pill.gray{background:var(--gray-soft); color:var(--gray-ink)}
+  .pill.tag{font-size:10px; padding:2px 7px; margin-right:6px; vertical-align:middle}
+  .meta{font-size:12px; color:var(--muted); margin-top:8px; line-height:1.6}
+  .meta b{color:var(--ink); font-weight:600}
+  .meta a{color:var(--purple-ink); font-weight:600; text-decoration:none}
+  .actions{margin-top:12px}
+  .empty{text-align:center; color:var(--muted); padding:34px 18px; font-size:14px}
+  .empty .big{font-size:15px; color:var(--ink); font-weight:600; margin-bottom:4px}
+  .addbar{display:flex; justify-content:flex-end; margin-bottom:10px}
+  .srcrow{display:flex; justify-content:space-between; align-items:flex-start; gap:10px;
+    padding:10px 0; border-bottom:1px dashed var(--line)}
+  .srcrow:last-child{border-bottom:none}
+  .src a{color:var(--purple-ink); font-weight:600; text-decoration:none; font-size:14px}
+  .src .nolink{font-weight:600; font-size:14px}
+  .srcsub{font-size:12px; color:var(--muted); margin-top:3px}
+  .srcprice{text-align:right; white-space:nowrap}
+  .up{font-weight:700; font-size:15px}
+  .up .per{font-weight:500; font-size:11px; color:var(--muted)}
+  .srcprice .pill{margin-top:4px; display:inline-block}
+  .pillbar{display:flex; gap:6px; background:var(--bg2,#f4f6f5); border:1px solid var(--line); border-radius:12px; padding:5px; margin:0 0 14px}
+  .pillbar button{flex:1; padding:9px 8px; font-size:12px; font-weight:700; border:none; border-radius:8px; cursor:pointer; font-family:inherit; white-space:nowrap; background:transparent; color:var(--muted); position:relative}
+  .pillbar button.on{background:var(--purple); color:#fff}
+  .pillbar .badge{display:inline-block; margin-left:5px; background:var(--amber); color:#fff; font-size:10px; min-width:16px; height:16px; line-height:16px; border-radius:9px; padding:0 4px; vertical-align:middle}
+  .modal-bg{position:fixed; inset:0; background:rgba(20,33,30,.5); display:flex; align-items:flex-end;
+    justify-content:center; z-index:20}
+  .modal{background:var(--surface); width:100%; max-width:540px; border-radius:18px 18px 0 0;
+    padding:18px 16px 24px; max-height:90vh; overflow:auto}
+  .modal h2{font-size:16px; margin:0 0 4px}
+  .modal .msub{font-size:12.5px; color:var(--muted); margin:0 0 16px}
+  .toast{position:fixed; bottom:96px; left:50%; transform:translateX(-50%); background:var(--ink);
+    color:#fff; padding:11px 16px; border-radius:24px; font-size:13.5px; z-index:30;
+    box-shadow:var(--shadow); max-width:90%; text-align:center}
+  .hint{font-size:12px; color:var(--muted); background:var(--gray-soft); padding:10px 12px;
+    border-radius:10px; margin-bottom:14px}
 </style>
 </head>
 <body>
-<div class="app">
-<div id="toast" class="toast"></div>
-
-<!-- LOGIN -->
-<div id="sl" class="screen">
-  <div class="lw"><div class="lb">
-    <div class="lav">🏭</div>
-    <div style="font-size:21px;font-weight:700;margin-bottom:4px">Main Warehouse</div>
-    <div style="font-size:14px;color:var(--tx2);margin-bottom:20px">Enter PIN to continue</div>
-    <div class="pin-dots"><div class="pd" id="p0"></div><div class="pd" id="p1"></div><div class="pd" id="p2"></div><div class="pd" id="p3"></div></div>
-    <div class="num-grid">
-      <button class="nb" onclick="numTap('1')">1</button><button class="nb" onclick="numTap('2')">2</button><button class="nb" onclick="numTap('3')">3</button>
-      <button class="nb" onclick="numTap('4')">4</button><button class="nb" onclick="numTap('5')">5</button><button class="nb" onclick="numTap('6')">6</button>
-      <button class="nb" onclick="numTap('7')">7</button><button class="nb" onclick="numTap('8')">8</button><button class="nb" onclick="numTap('9')">9</button>
-      <button class="nb" onclick="nc()" style="font-size:13px">Clear</button>
-      <button class="nb" onclick="nb2()" style="font-size:18px">&#x232B;</button>
-      <button class="nb" onclick="numTap('0')">0</button>
+<div class="wrap">
+  <header>
+    <div class="hdr-l">
+      <div class="hdr-ico">🛒</div>
+      <div><h1>RSR Purchasing</h1><p>Procurement</p></div>
     </div>
-    <button class="lbtn" onclick="doLogin()">Sign in</button>
-    <div id="lerr" style="font-size:13px;color:var(--r);margin-top:10px;display:none">Incorrect PIN.</div>
-    <div style="font-size:12px;color:var(--tx3);margin-top:10px">Default: 5555</div>
-  </div></div>
+    <a class="reset" href="../admin/">← Admin</a>
+  </header>
+  <main id="view"></main>
 </div>
+<div id="modal-root"></div>
+<div id="toast-root"></div>
 
-<!-- APP -->
-<div id="sa" class="screen active">
-  <div class="tb">
-    <div style="display:flex;align-items:center;gap:10px">
-      <div class="tdot">🏭</div>
-      <div><div class="ttitle">Main Warehouse</div><div class="tsub" id="hg">Stock management</div></div>
-    </div>
-    <a class="lout" href="../admin/">← Admin</a>
-  </div>
-  <div class="pc" id="main-content"></div>
-</div>
-
-</div>
-
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
 <script>
+/* =====================================================================
+   DATA LAYER — Supabase (shared DB with the warehouse app).
+     requisitions : warehouse writes (short-stock / reorder). Purchasing
+                    reads + updates status: for_purchase→accepted→ordered/bought.
+     purchases    : purchasing writes. Both online + store rows carry
+                    party, unit_price and amount, so Prices can compare
+                    every source per item. Online rows also carry a website.
+   The app reads from an in-memory CACHE (so views stay synchronous);
+   every write goes to Supabase then reloads the cache and re-renders.
+   ===================================================================== */
 const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
 const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
 const sb=supabase.createClient(KIOSK_URL,KIOSK_KEY);
 
-const ITEMS=[
-  {n:'Electrode handle',u:'pcs',th:3},{n:'Welding gloves',u:'pair',th:3},{n:'Cutting tip',u:'pcs',th:5},
-  {n:'Dark glass',u:'pcs',th:3},{n:'Clear glass',u:'pcs',th:3},{n:'Trouble light',u:'pcs',th:2},
-  {n:'Electrical tape',u:'pcs',th:5},{n:'Chalk stone',u:'pcs',th:5},{n:'Dry chalk',u:'pcs',th:5},
-  {n:'Flint stone',u:'pcs',th:5},{n:'Striker',u:'pcs',th:3},{n:'Y-connector',u:'pcs',th:2},
-  {n:'Cutting disk',u:'pcs',th:5},{n:'Oxygen regulator',u:'unit',th:1},{n:'LPG regulator',u:'unit',th:1},{n:'Steel square',u:'pcs',th:1}
-];
-function gu(n){const c=catalog.find(i=>i.n===n);if(c)return c.u;return (ITEMS.find(i=>i.n===n)||{u:'pcs'}).u;}
-function gth(n){const c=catalog.find(i=>i.n===n);if(c)return c.th;return (ITEMS.find(i=>i.n===n)||{th:0}).th;}
-const peso=v=>'\u20b1'+(Number(v)||0).toLocaleString('en-PH',{maximumFractionDigits:2});
-function todayYmd(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
-function fmt(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});}
-function fmtDT(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleString('en-PH',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});}
-function itemOpts(sel){const list=catalog.length?catalog:ITEMS;return '<option value="">— Item —</option>'+list.map(i=>`<option value="${i.n}"${i.n===sel?' selected':''}>${i.code?i.code+' · ':''}${i.n}</option>`).join('');}
+let CACHE={ requisitions:[], purchases:[], purchase_request:[], item_prices:[], warehouse_stock:[], materials:[], price_history:[], material_sources:[] };
+const DB = {
+  get(t){ return CACHE[t]||[]; },
+  async load(){
+    const [r,p,lpr,ip,ws,mat,ph,ms]=await Promise.all([
+      sb.from('requisitions').select('*').order('created_at',{ascending:true}),
+      sb.from('purchases').select('*').order('created_at',{ascending:true}),
+      sb.from('purchase_request').select('*').order('created_at',{ascending:false}).limit(300),
+      sb.from('item_prices').select('*').order('item_name',{ascending:true}),
+      sb.from('warehouse_stock').select('item_name,unit').order('item_name',{ascending:true}),
+      sb.from('materials').select('*'),
+      sb.from('price_history').select('*').order('changed_at',{ascending:false}).limit(500),
+      sb.from('material_sources').select('*').order('created_at',{ascending:true}),
+    ]);
+    if(r.error) toast('Load requisitions failed: '+r.error.message);
+    if(p.error) toast('Load purchases failed: '+p.error.message);
+    CACHE.requisitions=r.data||[];
+    CACHE.purchases=p.data||[];
+    CACHE.purchase_request=(lpr&&lpr.data)||[];
+    CACHE.item_prices=(ip&&ip.data)||[];
+    CACHE.warehouse_stock=(ws&&ws.data)||[];
+    CACHE.materials=((mat&&mat.data)||[]).filter(m=>m.active!==false);
+    CACHE.price_history=(ph&&ph.data)||[];
+    CACHE.material_sources=(ms&&ms.data)||[];
+  },
+  async insert(t,row){ if(!row.id) row.id=uid();
+    const {error}=await sb.from(t).insert(row);
+    if(error){ toast('Save failed: '+error.message); throw error; }
+    await DB.load(); return row; },
+  async update(t,id,patch){
+    const {error}=await sb.from(t).update(patch).eq('id',id);
+    if(error){ toast('Update failed: '+error.message); throw error; }
+    await DB.load(); return (CACHE[t]||[]).find(x=>x.id===id); }
+};
+function uid(){ return Date.now().toString(36)+Math.random().toString(36).slice(2,6); }
+function today(){ return new Date().toISOString().slice(0,10); }
+/* next ref number for a prefix, derived from the live table (no per-device counters) */
+async function seq(prefix){
+  const table = (prefix==='REQ') ? 'requisitions' : 'purchases';
+  const {data}=await sb.from(table).select('ref').like('ref',prefix+'-%')
+    .order('ref',{ascending:false}).limit(1);
+  let n=1;
+  if(data && data[0]){ const m=(data[0].ref||'').match(/(\d+)\s*$/); if(m) n=parseInt(m[1],10)+1; }
+  return prefix+'-'+String(n).padStart(4,'0');
+}
+function domain(u){ try{ return new URL(u).hostname.replace(/^www\./,''); }catch(e){ return u; } }
+/* effective unit price: use entered unit price, else derive from total ÷ qty */
+function unitOf(p){ if(p.unit_price>0) return p.unit_price; if(p.amount>0 && p.qty>0) return p.amount/p.qty; return 0; }
+function isApprox(p){ return !(p.unit_price>0) && p.amount>0 && p.qty>0; }
 
-let WH_PIN='5555', stockMap={}, prices={}, sites=[], dispatchPrefill=null, unitMap={}, catalog=[], reorderMap={}, countedSet={}, INV_EDIT=null, _stockC=null, _invC=null;
-const SITE_CODES={'Carmen':'CAR','Mandaue':'MAN','Lapu-Lapu':'LAP'};
-function siteCode(name){return SITE_CODES[name]||((name||'XXX').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase());}
 
-function toast(m,t){const el=document.getElementById('toast');el.textContent=m;el.className='toast '+(t==='err'?'terr':'tok');el.style.display='block';clearTimeout(el._t);el._t=setTimeout(()=>el.style.display='none',3200);}
-
-/* login */
-let pv='';
-function numTap(d){if(pv.length>=6)return;pv+=d;upd();}
-function nc(){pv='';upd();}
-function nb2(){pv=pv.slice(0,-1);upd();}
-function upd(){for(let i=0;i<4;i++){const e=document.getElementById('p'+i);if(e)e.className='pd'+(i<pv.length?' on':'');}}
-(async function init(){
-  document.querySelectorAll('#sa .tab[data-tab]').forEach(b=>b.addEventListener('click',function(){swTab(this.getAttribute('data-tab'));}));
-  try{const{data}=await sb.from('sites').select('name').order('name');sites=(data||[]).map(s=>s.name);}catch(e){sites=['Carmen','Mandaue'];}
-  renderHome();
-})();
-async function doLogin(){
-  if(pv!==WH_PIN){document.getElementById('lerr').style.display='block';pv='';upd();return;}
-  document.getElementById('lerr').style.display='none';
-  document.getElementById('sl').classList.remove('active');
-  document.getElementById('sa').classList.add('active');
-  const h=new Date().getHours();
-  document.getElementById('hg').textContent=h<12?'Good morning':h<17?'Good afternoon':'Good evening';
-  pv='';upd();
-  try{const{data}=await sb.from('sites').select('name').order('name');sites=(data||[]).map(s=>s.name);}catch(e){sites=['Carmen','Mandaue'];}
-  renderHome();
-  // automatic reorder sweep once on login (no button needed)
-  try{ await loadStock(); await autoReorderCheck(catalog.map(i=>i.n)); }catch(e){}
+/* =====================================================================
+   ACTIONS
+   ===================================================================== */
+async function acceptReq(reqId){
+  await DB.update('requisitions',reqId,{status:'accepted', accepted_at:today()});
+  toast('Request accepted — see To buy'); render();
+}
+function openReturn(reqId){
+  const r=DB.get('requisitions').find(x=>x.id===reqId);
+  modal(`
+    <h2>Return request</h2>
+    <p class="msub">${r.ref} · ${r.item}${r.unit?' · '+r.unit:''} — send back to the warehouse</p>
+    <div class="field"><label>Reason</label>
+      <select id="rt_reason"><option>Already in stock</option><option>Duplicate request</option>
+      <option>Wrong item / qty</option><option>Needs approval first</option><option>Other</option></select></div>
+    <div class="field"><label>Note (optional)</label><textarea id="rt_note" placeholder="Anything the warehouse should know"></textarea></div>
+    <div class="btn-pair">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="saveReturn('${reqId}')">Return request</button>
+    </div>`);
+}
+async function saveReturn(reqId){
+  await DB.update('requisitions',reqId,{status:'returned', return_reason:val('rt_reason'),
+    return_note:val('rt_note'), returned_at:today()});
+  closeModal(); toast('Returned to warehouse'); render();
 }
 
-async function loadStock(){
-  stockMap={};unitMap={};reorderMap={};
-  let rows=[];
-  try{const{data,error}=await sb.from('warehouse_stock').select('item_name,qty,unit,reorder_qty');if(error)throw error;rows=data||[];}
-  catch(e){try{const{data}=await sb.from('warehouse_stock').select('item_name,qty,unit');rows=data||[];}catch(e2){try{const{data}=await sb.from('warehouse_stock').select('item_name,qty');rows=data||[];}catch(e3){}}}
-  rows.forEach(r=>{stockMap[r.item_name]=Number(r.qty)||0;if(r.unit)unitMap[r.item_name]=r.unit;if(r.reorder_qty!=null)reorderMap[r.item_name]=Number(r.reorder_qty)||0;});
-  rows.forEach(r=>{ if(r.item_name) countedSet[r.item_name]=true; });
-  const baseNames=ITEMS.map(i=>i.n);
-  // Prefer the shared `materials` master (code-based). Fall back to hardcoded ITEMS.
-  let mats=[];
-  try{ const{data}=await sb.from('materials').select('*'); mats=(data||[]).filter(m=>m.active!==false); }catch(e){}
-  if(mats.length){
-    const mlab=m=>{const b=(m.brand||'').trim();return b?(m.name+' — '+b):m.name;};
-    catalog=mats.map(m=>({n:mlab(m),u:m.unit||'pcs',th:Number(m.threshold)||0,code:m.code,brand:m.brand||''}));
-    // sort by code so families (CT-001, CT-002, CT-003...) group together in order
-    catalog.sort((a,b)=>(a.code||'zzz').localeCompare(b.code||'zzz',undefined,{numeric:true}) || (a.n||'').localeCompare(b.n||''));
-    // include any stock rows not in the master (orphans), so nothing is hidden
-    const known=mats.map(mlab);
-    const extra=rows.map(r=>r.item_name).filter(n=>n&&!known.includes(n)).sort((a,b)=>a.localeCompare(b));
-    catalog=catalog.concat(extra.map(n=>({n,u:unitMap[n]||'pcs',th:0,code:''})));
-  } else {
-    const extra=rows.map(r=>r.item_name).filter(n=>n&&!baseNames.includes(n)).sort((a,b)=>a.localeCompare(b));
-    catalog=ITEMS.concat(extra.map(n=>({n,u:unitMap[n]||'pcs',th:0})));
-  }
+function openDirect(){
+  modal(`
+    <h2>Direct purchase</h2>
+    <p class="msub">A buy with no warehouse requisition. It goes straight to To buy (already accepted).</p>
+    <div class="field"><label>Item</label><input id="d_item" placeholder="Material name"></div>
+    <div class="row2">
+      <div class="field"><label>Qty</label><input id="d_qty" type="number" inputmode="decimal" placeholder="0"></div>
+      <div class="field"><label>Unit</label><input id="d_unit" placeholder="pc / kg / L"></div>
+    </div>
+    <div class="field"><label>For (vessel / job)</label><input id="d_job" placeholder="Optional"></div>
+    <div class="btn-pair">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="saveDirect()">Add to To buy</button>
+    </div>`);
 }
-async function upsertStock(name,qty,unit){
-  let r=await sb.from('warehouse_stock').upsert({item_name:name,qty:qty,unit:unit,updated_at:new Date().toISOString()},{onConflict:'item_name'});
-  if(r.error){r=await sb.from('warehouse_stock').upsert({item_name:name,qty:qty,updated_at:new Date().toISOString()},{onConflict:'item_name'});}
-  return r.error;
+async function saveDirect(){
+  const item=val('d_item'), qty=parseFloat(val('d_qty'));
+  if(!item||!(qty>0)){ toast('Enter item and qty'); return; }
+  const ref=await seq('REQ');
+  await DB.insert('requisitions',{ref, date:today(), status:'accepted', accepted_at:today(),
+    item, unit:val('d_unit')||'pc', qty, job:val('d_job')||'—', requested_by:'Purchasing (direct)'});
+  closeModal(); toast('Added to To buy'); render();
 }
-/* save the per-item reorder qty (blank clears it) */
-async function saveReorderQty(name,v){
-  const val=(v===''||v==null)?null:(parseInt(v,10)||0);
-  reorderMap[name]=val==null?undefined:val;
+
+function openPO(reqId){
+  const r=DB.get('requisitions').find(x=>x.id===reqId);
+  modal(`
+    <h2>Create purchase order</h2>
+    <p class="msub">${r.ref} · ${r.item}${r.unit?' · '+r.unit:''}</p>
+    ${brandPickerHTML(r.item)}
+    ${prevLinksHTML(r.item)}
+    <div class="field"><label>Supplier / store name</label><input id="po_sup" placeholder="e.g. WeldPro on Lazada"></div>
+    <div class="field"><label>Website / link</label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="po_url" type="url" inputmode="url" placeholder="https://..." style="flex:1">
+        <button type="button" class="btn ghost small" onclick="openPoLink()" style="white-space:nowrap">↗ open</button>
+      </div></div>
+    <div class="row2">
+      <div class="field"><label>Quantity (${r.unit||'pcs'})</label><input id="po_qty" type="number" inputmode="decimal" min="0" step="any" placeholder="how many"></div>
+      <div class="field"><label>Unit price (₱)</label><input id="po_unit" type="number" inputmode="decimal" placeholder="0.00"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Shipping fee (₱)</label><input id="po_ship" type="number" inputmode="decimal" min="0" step="any" placeholder="0.00"></div>
+      <div class="field"><label>Order date</label><input id="po_date" type="date" value="${today()}"></div>
+    </div>
+    <div class="field"><label>Expected delivery</label><input id="po_eta" type="date" value="${today()}"></div>
+    <div class="field"><label>Payment terms</label>
+      <select id="po_terms"><option>COD</option><option>15 days</option><option selected>30 days</option><option>60 days</option></select></div>
+    <div class="hint">Total = (unit price × qty) + shipping. The link and unit price are saved to the Prices tab for canvassing later.</div>
+    <div class="btn-pair">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="savePO('${reqId}')">Send PO</button>
+    </div>`);
+}
+// Build a brand picker for the requested base item. Lists master materials whose
+// base name matches; lets you pick a specific brand variant (or buy as-is).
+function brandVariantsFor(itemName){
+  const base=(itemName||'').split(' — ')[0].trim().toLowerCase();
+  return DB.get('materials').filter(m=>{
+    const mn=(m.name||'').trim().toLowerCase();
+    return mn===base && (m.brand||'').trim();
+  });
+}
+function brandPickerHTML(itemName){
+  const vars=brandVariantsFor(itemName);
+  if(!vars.length) return ''; // no brand variants registered for this item
+  const opts=vars.map(m=>`<option value="${(m.name+' — '+m.brand).replace(/"/g,'&quot;')}">${m.brand} (${m.code})</option>`).join('');
+  return `<div class="field"><label>Brand</label>
+    <select id="po_brand">
+      <option value="">— buy as "${(itemName||'').replace(/"/g,'&quot;')}" (no specific brand) —</option>
+      ${opts}
+    </select></div>`;
+}
+// When a purchase is made, feed the price + supplier into the item's sources
+// so the Prices tab reflects what we actually paid and where.
+async function recordSourceFromPurchase({code,item,type,supplier,link,price}){
+  if(!price||price<=0) return; // nothing to record
   try{
-    const{error}=await sb.from('warehouse_stock').upsert({item_name:name,reorder_qty:val,updated_at:new Date().toISOString()},{onConflict:'item_name'});
-    if(error) throw error;
-    toast(val==null?'Reorder qty cleared':'Reorder qty saved');
-  }catch(e){ toast('Could not save reorder qty: '+(e&&e.message?e.message:e),'err'); }
-}
-/* WAREHOUSE → PURCHASING auto-reorder.
-   For each item whose new on-hand <= its low threshold (th), write ONE
-   requisition into the Purchasing inbox — unless an open requisition for
-   that item already exists (dedup). Requested qty = the item's reorder
-   qty, or the threshold if none set. Never blocks the dispatch. */
-async function autoReorderCheck(names){
-  let open={};
-  try{
-    const{data,error}=await sb.from('requisitions').select('item,status')
-      .in('status',['for_purchase','accepted','ordered']);
-    if(error) throw error;
-    (data||[]).forEach(r=>{open[(r.item||'').toLowerCase()]=true;});
-  }catch(e){ toast('Auto-reorder skipped: '+(e&&e.message?e.message:'requisitions table not found'),'err'); return; }
-  // daily usage from last 30 days of dispatches (for prediction, same as site issuance)
-  const daily={};
-  try{
-    const since=new Date(Date.now()-30*86400000).toISOString();
-    const{data}=await sb.from('dispatches').select('items,created_at').gte('created_at',since).limit(500);
-    const use={};(data||[]).forEach(r=>(r.items||[]).forEach(it=>{const nm=it.n||it.name;use[nm]=(use[nm]||0)+(it.qty||0);}));
-    Object.keys(use).forEach(k=>daily[k]=use[k]/30);
-  }catch(e){}
-  const H=14; // forecast horizon (days)
-  let made=0;
-  for(const name of names){
-    const th=gth(name); if(!(th>0)) continue;            // no threshold = never auto-reorder
-    if(open[(name||'').toLowerCase()]) continue;          // already an open request → dedup
-    const cur=stockMap[name]||0, du=daily[name]||0;
-    const lowNow=cur<=th;
-    const predLow=du>0 && (cur-du*H)<=th;                 // predicted to fall to/below Min within H days
-    if(!(lowNow||predLow)) continue;
-    // qty: prefer the item's reorder field; else size to cover Min + forecast usage
-    const want=(reorderMap[name]!=null&&reorderMap[name]>0)
-      ? reorderMap[name]
-      : Math.max(1, Math.max(th*2, Math.ceil(du*H)+th) - cur);
-    let ref='';
-    try{const{data}=await sb.from('requisitions').select('ref').like('ref','REQ-%').order('ref',{ascending:false}).limit(1);
-      let nn=1; if(data&&data[0]){const m=(data[0].ref||'').match(/(\d+)\s*$/); if(m) nn=parseInt(m[1],10)+1;} ref='REQ-'+String(nn).padStart(4,'0');}catch(e){ ref='REQ-'+Date.now().toString().slice(-6); }
-    try{
-      const{error}=await sb.from('requisitions').insert({id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),
-        ref, date:todayYmd(), item:name, unit:gu(name), qty:want, job:'Stock replenishment',
-        requested_by:'Warehouse (reorder)', status:'for_purchase', created_at:new Date().toISOString()});
-      if(error) throw error;
-      open[(name||'').toLowerCase()]=true; made++; // guard within this same run
-    }catch(e){ toast('Reorder failed for '+name+': '+(e&&e.message?e.message:e),'err'); }
-  }
-  if(made>0) toast('Auto-request sent to Purchasing ('+made+' item'+(made>1?'s':'')+')');
-  return made;
-}
-/* manual sweep: reload stock, then check every catalog item at once */
-async function checkAllReorders(btn){
-  if(btn){btn.disabled=true;btn.textContent='Checking…';}
-  try{
-    await loadStock();
-    const names=catalog.map(i=>i.n);
-    const made=await autoReorderCheck(names);
-    if(made===0) toast('Nothing to reorder — all items above their Min, or requests already open');
-  }catch(e){ toast('Check failed: '+(e&&e.message?e.message:e),'err'); }
-  if(btn){btn.disabled=false;btn.textContent='🛒 Check reorders now → Purchasing';}
-}
-async function loadPrices(){prices={};try{const{data}=await sb.from('item_prices').select('item_name,price');(data||[]).forEach(r=>prices[r.item_name]=Number(r.price)||0);}catch(e){}}
-async function refreshBadge(){let n=0;try{const{count}=await sb.from('requests').select('*',{count:'exact',head:true}).in('status',['Pending','Partial']);n=count||0;}catch(e){}const d=document.getElementById('req-dot');if(d)d.style.display=n>0?'block':'none';}
-
-function renderHome(){
-  const c=document.getElementById('main-content');c.scrollTop=0;
-  const card=(name,ico,title,sub,bg,iconbg,dot)=>`<div onclick="swTab('${name}')" style="background:${bg};border-radius:16px;padding:16px;cursor:pointer;position:relative;min-height:118px">
-    <div style="width:44px;height:44px;border-radius:12px;background:${iconbg};display:flex;align-items:center;justify-content:center;font-size:20px;margin-bottom:12px">${ico}</div>
-    <div style="font-weight:800;font-size:16px;color:var(--tx)">${title}</div>
-    <div style="font-size:12px;color:var(--tx2);margin-top:2px">${sub}</div>
-    ${dot?'<span id="req-dot" style="position:absolute;top:14px;right:14px;width:10px;height:10px;border-radius:50%;background:var(--r);display:none"></span>':''}</div>`;
-  c.innerHTML='<div style="font-size:12px;font-weight:800;letter-spacing:.5px;color:var(--tx3);text-transform:uppercase;margin:4px 2px 12px">Quick actions</div>'
-    +'<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">'
-    +card('stock','📦','Stock','Current on-hand','var(--bl)','var(--bm)')
-    +card('inventory','🔢','Inventory','Count / set stock','var(--pl)','var(--pm)')
-    +card('delivery','📥','Record delivery','Supplier stock in','var(--al)','var(--am)')
-    +card('flow','🚚','Supply','Requests · dispatch · log','var(--bg2)','var(--p)',true)
-    +'</div>';
-  refreshBadge();
-}
-async function swTab(name){
- try{
-  const m=document.getElementById('main-content');m.scrollTop=0;
-  const titles={stock:'Stock',inventory:'Inventory',delivery:'Record delivery',flow:'Supply'};
-  m.innerHTML='<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px"><button onclick="renderHome()" style="border:1.5px solid var(--bd);background:#fff;border-radius:10px;padding:8px 12px;font-size:13px;font-weight:700;cursor:pointer">← Home</button><div style="font-weight:800;font-size:16px">'+(titles[name]||'')+'</div></div><div id="sec-content"><div class="empty">Loading…</div></div>';
-  const c=document.getElementById('sec-content');
-  if(name==='stock')await renderStock(c);
-  else if(name==='delivery')await renderDelivery(c);
-  else if(name==='inventory')await renderInventory(c);
-  else if(name==='flow')await renderFlow(c);
-  refreshBadge();
- }catch(e){const c=document.getElementById('sec-content')||document.getElementById('main-content');if(c)c.innerHTML='<div class="sc"><div class="empty">Could not open this section.<br>'+(e&&e.message?e.message:e)+'</div></div>';}
-}
-
-/* ── DISPATCHING (combined: Requests → Create dispatch → Dispatch log) ── */
-let currentFlowSub='requests';
-function fsubCss(on){return 'flex:1;padding:9px 8px;font-size:12px;font-weight:700;border:none;border-radius:8px;cursor:pointer;font-family:inherit;white-space:nowrap;'+(on?'background:var(--p);color:#fff':'background:transparent;color:var(--tx2)');}
-async function renderFlow(c){
-  c.innerHTML=`<div style="display:flex;gap:6px;background:var(--bg2);border:1px solid var(--bd);border-radius:12px;padding:5px;margin-bottom:14px">
-    <button type="button" id="fsub-requests" style="${fsubCss(false)}" onclick="swFlow('requests')">Requests</button>
-    <button type="button" id="fsub-dispatch" style="${fsubCss(false)}" onclick="swFlow('dispatch')">Create dispatch</button>
-    <button type="button" id="fsub-log" style="${fsubCss(false)}" onclick="swFlow('log')">Dispatch log</button>
-  </div><div id="flow-content"></div>`;
-  await swFlow(currentFlowSub||'requests');
-}
-async function swFlow(sub){
-  try{
-    currentFlowSub=sub;
-    ['requests','dispatch','log'].forEach(t=>{const b=document.getElementById('fsub-'+t);if(b)b.style.cssText=fsubCss(t===sub);});
-    const fc=document.getElementById('flow-content');if(!fc)return;fc.scrollTop=0;fc.innerHTML='<div class="empty">Loading…</div>';
-    if(sub==='requests')await renderRequests(fc);
-    else if(sub==='dispatch')await renderDispatch(fc);
-    else if(sub==='log')await renderLog(fc);
-    refreshBadge();
-  }catch(e){const fc=document.getElementById('flow-content');if(fc)fc.innerHTML='<div class="sc"><div class="empty">Could not open.<br>'+(e&&e.message?e.message:e)+'</div></div>';}
-}
-
-/* ── STOCK ── */
-async function renderStock(c){
-  _stockC=c;
-  await Promise.all([loadStock(),loadPrices()]);
-  let low=0,zero=0,total=0;
-  catalog.forEach(i=>{const q=stockMap[i.n]||0;total+=q;if(q<=0)zero++;else if(i.th>0&&q<=i.th)low++;});
-  c.innerHTML='<div class="mstrip">'
-    +`<div class="mbox"><div class="mv">${total}</div><div class="ml">Total on hand</div></div>`
-    +`<div class="mbox" style="border-color:var(--am)"><div class="mv" style="color:var(--ad)">${low}</div><div class="ml">Low stock</div></div>`
-    +`<div class="mbox" style="border-color:var(--rm)"><div class="mv" style="color:var(--r)">${zero}</div><div class="ml">Out of stock</div></div></div>`
-    +'<div class="sc"><table class="tbl"><thead><tr><th>Item</th><th>Unit</th><th style="text-align:right">On hand</th><th>Min</th><th>Reorder qty</th><th>Status</th></tr></thead><tbody>'
-    +catalog.map(i=>{const q=stockMap[i.n]||0;const b=q<=0?'<span class="badge bdanger">Out</span>':(i.th>0&&q<=i.th)?'<span class="badge bwarn">Low</span>':'<span class="badge bok">OK</span>';
-      const rq=reorderMap[i.n]!=null?reorderMap[i.n]:'';
-      return `<tr><td style="font-weight:600">${i.code?'<span style="color:var(--tx2);font-weight:700;font-size:12px">'+i.code+'</span> ':''}${i.n}</td><td style="color:var(--tx2)">${i.u}</td><td style="text-align:right;font-size:16px;font-weight:700;color:${q<=0?'var(--r)':(i.th>0&&q<=i.th)?'var(--ad)':'var(--tx)'}">${q}</td><td style="color:var(--tx2)">${i.th>0?i.th:'—'}</td><td><input type="number" min="0" value="${rq}" placeholder="${i.th>0?i.th:'—'}" onchange="saveReorderQty('${i.n.replace(/'/g,"\\'")}',this.value)" style="width:62px;padding:5px 6px;border:1px solid var(--bd);border-radius:7px;background:var(--bg2);color:var(--tx);font-family:inherit;font-size:13px" /></td><td>${b}</td></tr>`;}).join('')
-    +'</tbody></table></div>';
-  // automatic reorder sweep whenever the Stock tab opens (no button needed)
-  setTimeout(()=>{ autoReorderCheck(catalog.map(i=>i.n)).catch(()=>{}); }, 50);
-}
-
-/* ── REQUESTS ── */
-async function renderRequests(c){
-  let rows=[];try{const{data}=await sb.from('requests').select('*').in('status',['Pending','Approved','Partial']).order('created_at',{ascending:false}).limit(100);rows=data||[];}catch(e){}
-  window._reqs=rows;
-  if(!rows.length){c.innerHTML='<div class="sc"><div class="empty">No open requests.</div></div>';return;}
-  let drMap={};try{const ids=rows.map(r=>r.id);if(ids.length){const{data}=await sb.from('dispatches').select('request_id,dr_no,id').in('request_id',ids);(data||[]).forEach(d=>{if(d.request_id){(drMap[d.request_id]=drMap[d.request_id]||[]).push(d.dr_no||d.id);}});}}catch(e){}
-  const stBadge=s=>({Pending:'bwarn',Approved:'binfo',Partial:'bwarn',Dispatched:'binfo',Received:'bok',Cancelled:''}[s]||'');
-  c.innerHTML=rows.map(r=>{
-    const its=(r.items||[]);
-    const total=its.reduce((s,i)=>s+(Number(i.qty)||0),0);
-    const itemRows=its.map(i=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${i.n}</span><span style="font-family:monospace;color:var(--tx2);white-space:nowrap">${i.qty}${i.u?' '+i.u:''}</span></div>`).join('');
-    return `<div class="sc" style="max-width:420px;margin:0 auto 14px;padding:18px 16px">
-      <div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:12px;margin-bottom:10px">
-        <div style="font-size:15px;font-weight:700;color:var(--p)">Material Request</div>
-        <div style="font-family:monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.id}${r.dr_no?' · '+r.dr_no:''}</div>
-        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtDT(r.created_at||r.date)} · ${r.site||'—'}</div>
-      </div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Requested by</span><span style="font-weight:600">${r.by_name||'—'}</span></div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Status</span><span class="badge ${stBadge(r.status)}">${(r.status||'').toUpperCase()}</span></div>
-      ${r.urgent?'<div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Priority</span><span class="badge bdanger">URGENT</span></div>':''}
-      ${r.status==='Partial'?`<div style="background:var(--al);color:var(--ad);font-size:12px;padding:8px 10px;border-radius:8px;margin-top:6px">⚠ Partially given — only the items below are still owed.${(drMap[r.id]&&drMap[r.id].length)?' Already dispatched: <b>'+drMap[r.id].join(', ')+'</b>.':' (see Dispatch log)'}</div>`:''}
-      ${r.remarks?`<div style="font-size:12px;color:var(--tx3);margin-top:4px">“${r.remarks}”</div>`:''}
-      <div style="border-top:1.5px dashed var(--bd2);margin:10px 0 8px;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>${r.status==='Partial'?'Still owed':'Item'}</span><span>Qty</span></div>
-      ${itemRows}
-      <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:10px;display:flex;justify-content:space-between;align-items:baseline">
-        <span style="font-size:13px;font-weight:700;text-transform:uppercase;color:var(--tx2)">${r.status==='Partial'?'Outstanding':'Total'}</span>
-        <span style="font-size:20px;font-weight:800;color:var(--p)">${total} units</span></div>
-      <div class="btn-row">
-        ${r.status!=='Dispatched'?`<button class="btn btn-secondary btn-sm" onclick="cancelReq('${r.id}')">Cancel</button><button class="btn btn-primary btn-sm" onclick="dispatchFromReq('${r.id}')">Dispatch →</button>`:'<span class="badge binfo">Dispatched · awaiting site receive</span>'}
-      </div></div>`;
-  }).join('');
-}
-async function cancelReq(id){try{await sb.from('requests').update({status:'Cancelled',updated_at:new Date().toISOString()}).eq('id',id);toast('Request cancelled');swFlow('requests');}catch(e){toast('Failed: '+e.message,'err');}}
-function dispatchFromReq(id){const r=(window._reqs||[]).find(x=>x.id===id);if(!r)return;dispatchPrefill=r;currentFlowSub='dispatch';swTab('flow');}
-
-/* ── RECORD DELIVERY (supplier → warehouse) ── */
-let dcRows=0;
-async function renderDelivery(c){
-  dcRows=0;
-  // load purchases awaiting warehouse receipt (PO 'ordered' + store 'bought', not yet received)
-  let awaiting=[];
-  try{
-    const{data}=await sb.from('purchases').select('*').in('status',['ordered','bought']).order('date',{ascending:false}).limit(100);
-    awaiting=(data||[]).filter(p=>{const got=Number(p.qty_received)||0; const ord=Number(p.qty)||0; return got<ord;});
-  }catch(e){}
-  let awaitHtml='';
-  if(awaiting.length){
-    awaitHtml='<div class="sc"><div class="sc-title">Awaiting receipt from Purchasing</div>'
-      +'<div class="sc-sub">Items bought by Purchasing. Verify against the physical receipt, enter the qty actually received, then Receive to add it to stock.</div>'
-      +awaiting.map(p=>{
-        const ord=Number(p.qty)||0, got=Number(p.qty_received)||0, left=Math.max(0,ord-got);
-        const kind=(p.type==='store')?'Store':'PO';
-        const refTxt=p.ref||'—'; const supplier=p.party||'—'; const orno=p.or_no?(' · OR '+p.or_no):'';
-        const up=Number(p.unit_price)||0; const lineTot=up>0?up*ord:(Number(p.amount)||0);
-        const priceLine=up>0?`<div style="font-size:12px;margin-bottom:8px"><b>Ordered price:</b> ${peso(up)}/${p.unit||'pc'} · total ${peso(lineTot)} <span style="color:var(--tx3)">— verify vs receipt</span></div>`:'';
-        return `<div style="border:1px solid var(--bd);border-radius:10px;padding:10px;margin-bottom:8px">
-          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;margin-bottom:4px">
-            <div style="font-weight:700">${p.item||'—'} <span style="color:var(--tx2);font-weight:400">(${p.unit||'pc'})</span></div>
-            <span class="badge ${p.type==='store'?'bok':'bwarn'}">${kind}</span>
-          </div>
-          <div style="font-size:12px;color:var(--tx2);margin-bottom:6px">${refTxt} · ${supplier}${orno} · ordered ${ord}${got>0?(' · received '+got):''}</div>
-          ${priceLine}
-          <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end">
-            <div><label class="fl">Qty received</label><input class="fi" type="number" min="0" max="${left}" value="${left}" id="rcv-q-${p.id}" style="text-align:center"/></div>
-            <div><label class="fl">Received by</label><input class="fi" id="rcv-by-${p.id}" placeholder="Your name"/></div>
-            <button class="btn btn-primary btn-sm" onclick="receivePurchase('${p.id}')">Receive</button>
-          </div>
-        </div>`;
-      }).join('')
-      +'</div>';
-  }
-  c.innerHTML=awaitHtml+'<div class="sc"><div class="sc-title">Record incoming delivery</div><div class="sc-sub">Manual entry for off-system deliveries. Items received from a supplier. Stock updates immediately on save.</div>'
-    +'<div class="fr3"><div class="fg"><label class="fl">Supplier <span>*</span></label><input class="fi" id="del-sup" placeholder="Supplier name"/></div>'
-    +'<div class="fg"><label class="fl">Supplier DR / invoice</label><input class="fi" id="del-ref" placeholder="e.g. SDR-2026-041"/></div></div>'
-    +'<div class="fr3"><div class="fg"><label class="fl">Date <span>*</span></label><input class="fi" type="date" id="del-date"/></div>'
-    +'<div class="fg"><label class="fl">Received by <span>*</span></label><input class="fi" id="del-by" placeholder="Your name"/></div></div>'
-    +'<label class="fl">Items received <span>*</span></label>'
-    +'<div style="display:grid;grid-template-columns:minmax(0,2fr) 70px 78px 38px;gap:8px;margin-bottom:6px"><span class="fl" style="margin:0">Item</span><span class="fl" style="margin:0">Qty</span><span class="fl" style="margin:0">Unit \u20b1</span><span></span></div>'
-    +'<div id="del-rows"></div><button class="add-row" onclick="addDelRow()">+ Add item</button>'
-    +'<div class="btn-row"><button class="btn btn-secondary btn-sm" onclick="swTab(\'delivery\')">Clear</button><button class="btn btn-primary" onclick="saveDelivery()">Save &amp; add to stock</button></div></div>';
-  document.getElementById('del-date').value=todayYmd();
-  addDelRow();addDelRow();
-}
-function addDelRow(name,qty){
-  dcRows++;const id='del-'+dcRows;
-  const div=document.createElement('div');div.className='irow';div.id=id;
-  div.innerHTML=`<select class="fi" id="dn-${id}" onchange="document.getElementById('dpr-${id}').value=(window._prices&&window._prices[this.value])||document.getElementById('dpr-${id}').value">${itemOpts(name||'')}</select>
-    <input class="fi" type="number" min="1" value="${qty||1}" id="dq-${id}" style="text-align:center"/>
-    <input class="fi" type="number" min="0" step="0.01" placeholder="\u20b1" id="dpr-${id}" style="text-align:center"/>
-    <div class="rm" onclick="document.getElementById('${id}').remove()">&#x2715;</div>`;
-  document.getElementById('del-rows').appendChild(div);
-}
-async function saveDelivery(){
-  await loadPrices();window._prices=prices;
-  const sup=document.getElementById('del-sup').value.trim();
-  const by=document.getElementById('del-by').value.trim();
-  const date=document.getElementById('del-date').value;
-  const ref=document.getElementById('del-ref').value.trim();
-  if(!sup||!by){toast('Supplier and received-by are required','err');return;}
-  const items=[];let empty=false;
-  document.querySelectorAll('#del-rows .irow').forEach(r=>{const id=r.id;const n=document.getElementById('dn-'+id).value;const q=parseInt(document.getElementById('dq-'+id).value)||0;const pr=parseFloat(document.getElementById('dpr-'+id).value)||0;if(n&&q>0)items.push({n,u:gu(n),qty:q,price:pr});else if(!n&&q>0)empty=true;});
-  if(empty){toast('Select an item for all rows','err');return;}
-  if(!items.length){toast('Add at least one item','err');return;}
-  await loadStock();
-  const n=new Date(),z=x=>String(x).padStart(2,'0');
-  const id='PO-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
-  const total=items.reduce((s,it)=>s+it.qty*(it.price||0),0);
-  try{
-    await sb.from('purchases').insert([{id,supplier:sup,invoice:ref||null,date,received_by:by,items,grand_total:total,created_at:new Date().toISOString()}]);
-    for(const it of items){const cur=stockMap[it.n]||0;const m=(catalog||[]).find(x=>x.n===it.n);const row={item_name:it.n,qty:cur+it.qty,unit:gu(it.n),updated_at:new Date().toISOString()};if(m&&m.code)row.code=m.code;await sb.from('warehouse_stock').upsert(row,{onConflict:'item_name'});}
-    toast('Delivery recorded · stock updated');
-    swTab('stock');
-  }catch(e){toast('Failed: '+e.message,'err');}
-}
-/* receive a Purchasing buy (full or partial) into warehouse stock */
-async function receivePurchase(id){
-  const qEl=document.getElementById('rcv-q-'+id), byEl=document.getElementById('rcv-by-'+id);
-  const recv=parseInt(qEl&&qEl.value,10)||0;
-  const by=(byEl&&byEl.value.trim())||'';
-  if(recv<=0){toast('Enter the qty received','err');return;}
-  if(!by){toast('Enter who received it','err');return;}
-  try{
-    const{data:rows,error}=await sb.from('purchases').select('*').eq('id',id).limit(1);
-    if(error)throw error;
-    const p=rows&&rows[0]; if(!p){toast('Purchase not found','err');return;}
-    const ord=Number(p.qty)||0, prev=Number(p.qty_received)||0, left=Math.max(0,ord-prev);
-    const got=Math.min(recv,left);
-    if(got<=0){toast('Already fully received','err');return;}
-    // add to warehouse stock (carry the material code from the master if known)
-    await loadStock();
-    const cur=stockMap[p.item]||0;
-    let matCode=p.code||'';
-    if(!matCode){ const m=(catalog||[]).find(x=>x.n===p.item); matCode=(m&&m.code)||''; }
-    const stockRow={item_name:p.item,qty:cur+got,unit:p.unit||gu(p.item),updated_at:new Date().toISOString()};
-    if(matCode) stockRow.code=matCode;
-    await sb.from('warehouse_stock').upsert(stockRow,{onConflict:'item_name'});
-    // prices are owned by the Purchasing app; warehouse does not write item_prices
-    // update the purchase: accumulate received qty, mark received if complete
-    const totalGot=prev+got;
-    const newStatus=(totalGot>=ord)?'received':p.status;
-    await sb.from('purchases').update({qty_received:totalGot,received_by:by,received_at:todayYmd(),status:newStatus}).eq('id',id);
-    toast(got+' × '+p.item+' received'+(totalGot<ord?(' (partial, '+(ord-totalGot)+' still due)'):' · complete'));
-    swTab('delivery'); // reload the receive screen
-  }catch(e){toast('Receive failed: '+(e&&e.message?e.message:e),'err');}
-}
-
-/* ── CREATE DISPATCH (warehouse → site) ── */
-let dpRows=0, dpReqId=null;
-async function renderDispatch(c){
-  await Promise.all([loadStock()]);
-  dpRows=0; dpReqId=dispatchPrefill?dispatchPrefill.id:null;
-  const siteOpts=(sites.length?sites:['Carmen','Mandaue']).map(s=>`<option value="${s}"${dispatchPrefill&&dispatchPrefill.site===s?' selected':''}>${s}</option>`).join('');
-  c.innerHTML='<div class="sc"><div class="sc-title">Create dispatch</div><div class="sc-sub">Send items to a site. Reduces warehouse stock; the site then receives it.</div>'
-    +(dpReqId?`<div class="disp-num-box"><div><div style="font-size:11px;color:var(--tx2)">Against request</div><div class="disp-num" style="font-size:14px">${dpReqId}</div></div></div>`:'')
-    +'<div class="fr3"><div class="fg"><label class="fl">Destination site <span>*</span></label><select class="fi" id="dp-site">'+siteOpts+'</select></div>'
-    +'<div class="fg"><label class="fl">Dispatched by <span>*</span></label><input class="fi" id="dp-by" placeholder="Your name"/></div></div>'
-    +'<label class="fl">Items to dispatch <span>*</span></label>'
-    +(dpReqId?'<div style="font-size:12px;color:var(--tx2);margin:-2px 0 8px">Pre-filled with what was requested. To give less, lower a qty or remove a row — whatever isn\'t given keeps the request open as <b>Partial</b>.</div>':'')
-    +'<div style="display:grid;grid-template-columns:minmax(0,2fr) 70px 38px;gap:8px;margin-bottom:6px"><span class="fl" style="margin:0">Item</span><span class="fl" style="margin:0">Qty</span><span></span></div>'
-    +'<div id="dp-rows"></div><button class="add-row" onclick="addDpRow()">+ Add item</button>'
-    +'<div class="btn-row"><button class="btn btn-secondary btn-sm" onclick="dispatchPrefill=null;swFlow(\'dispatch\')">Clear</button><button class="btn btn-primary" onclick="saveDispatch()">Dispatch &amp; get DR no</button></div></div>';
-  if(dispatchPrefill&&(dispatchPrefill.items||[]).length)dispatchPrefill.items.forEach(it=>addDpRow(it.n,it.qty,it.qty));else addDpRow();
-  dispatchPrefill=null;
-}
-function addDpRow(name,qty,reqQty){
-  dpRows++;const id='dp-'+dpRows;
-  const div=document.createElement('div');div.className='irow nop';div.id=id;
-  div.innerHTML=`<div><select class="fi" id="pn-${id}">${itemOpts(name||'')}</select>${reqQty?`<div style="font-size:11px;color:var(--tx3);margin-top:3px">requested: ${reqQty}</div>`:''}</div>
-    <input class="fi" type="number" min="0" value="${qty||1}" id="pq-${id}" style="text-align:center"/>
-    <div class="rm" onclick="document.getElementById('${id}').remove()">&#x2715;</div>`;
-  document.getElementById('dp-rows').appendChild(div);
-}
-async function saveDispatch(){
-  const site=document.getElementById('dp-site').value;
-  const by=document.getElementById('dp-by').value.trim();
-  if(!site){toast('Pick a destination site','err');return;}
-  if(!by){toast('Enter who is dispatching','err');return;}
-  const items=[];let empty=false;
-  document.querySelectorAll('#dp-rows .irow').forEach(r=>{const id=r.id;const n=document.getElementById('pn-'+id).value;const q=parseInt(document.getElementById('pq-'+id).value)||0;if(n&&q>0)items.push({n,u:gu(n),qty:q});else if(!n&&q>0)empty=true;});
-  if(empty){toast('Select an item for all rows','err');return;}
-  if(!items.length){toast('Add at least one item','err');return;}
-  await loadStock();
-  const dcode=siteCode(site);
-  let drNo='';try{const{data,error}=await sb.rpc('next_no',{p_prefix:'DR',p_site:dcode});if(!error&&data)drNo=data;}catch(e){}
-  if(!drNo){const n=new Date(),z=x=>String(x).padStart(2,'0');drNo='DR-'+dcode+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
-  const n=new Date(),z=x=>String(x).padStart(2,'0');
-  const id='DSP-'+n.getFullYear()+z(n.getMonth()+1)+z(n.getDate())+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());
-  try{
-    await sb.from('dispatches').insert([{id,dr_no:drNo,site,request_id:dpReqId,items,dispatched_by:by,date:todayYmd(),created_at:new Date().toISOString()}]);
-    for(const it of items){const cur=stockMap[it.n]||0;const nq=Math.max(0,cur-it.qty);stockMap[it.n]=nq;await sb.from('warehouse_stock').upsert({item_name:it.n,qty:nq,updated_at:new Date().toISOString()},{onConflict:'item_name'});}
-    try{ await autoReorderCheck(items.map(it=>it.n)); }catch(e){}
-    if(dpReqId){
-      let reqItems=[];try{const{data}=await sb.from('requests').select('items').eq('id',dpReqId).single();reqItems=(data&&data.items)||[];}catch(e){}
-      const givenMap={};items.forEach(it=>{givenMap[it.n]=(givenMap[it.n]||0)+it.qty;});
-      const remaining=reqItems.map(ri=>({n:ri.n,u:ri.u,qty:Math.max(0,(Number(ri.qty)||0)-(givenMap[ri.n]||0))})).filter(ri=>ri.qty>0);
-      const done=remaining.length===0;
-      const patch=done?{status:'Dispatched',dr_no:drNo,updated_at:new Date().toISOString()}
-                       :{status:'Partial',items:remaining,dr_no:drNo,updated_at:new Date().toISOString()};
-      let u=await sb.from('requests').update(patch).eq('id',dpReqId);
-      if(u.error){const{dr_no,...p2}=patch;await sb.from('requests').update(p2).eq('id',dpReqId);}
+    // find an existing source for this item + same supplier/type (match by code first)
+    const existing=DB.get('material_sources').find(s=>
+      (code ? (s.code||'')===code : (s.item_name||'')===item) &&
+      (s.source_type||'')===type &&
+      ((s.source_name||'').toLowerCase()===(supplier||'').toLowerCase())
+    );
+    if(existing){
+      // log price change if it moved, then update
+      if(existing.price!=null && Number(existing.price)!==Number(price)){
+        await sb.from('source_price_history').insert({source_id:existing.id,code:code||null,item_name:item,old_price:existing.price,new_price:price});
+      }
+      await sb.from('material_sources').update({price, link:link||existing.link||null, updated_at:new Date().toISOString()}).eq('id',existing.id);
+    } else {
+      await sb.from('material_sources').insert({code:code||null,item_name:item,source_type:type,source_name:supplier||null,link:link||null,price});
     }
-    const c=document.getElementById('flow-content')||document.getElementById('main-content');
-    c.innerHTML=`<div class="sc" style="text-align:center"><div style="font-size:40px">✅</div><div class="sc-title" style="margin-top:8px">Dispatch created</div>
-      <div class="disp-num-box" style="justify-content:center;margin-top:12px"><div class="disp-num">${drNo}</div></div>
-      <div class="sc-sub">${items.reduce((s,i)=>s+i.qty,0)} item(s) to ${site}. The site can now receive it.</div>
-      <button class="btn btn-primary" onclick="swFlow('log')">View dispatch log</button></div>`;
-    toast('Dispatched '+drNo);
-  }catch(e){toast('Failed: '+e.message,'err');}
+  }catch(e){ /* non-blocking: purchase still succeeds */ }
+}
+// Build a picker of previously-used links/suppliers for this item (from purchases)
+function prevSourcesForItem(item){
+  const base=(item||'').split(' — ')[0].trim().toLowerCase();
+  const seen={}; const out=[];
+  DB.get('purchases').forEach(p=>{
+    const pi=(p.item||'').toLowerCase();
+    if(!(pi===(item||'').toLowerCase() || pi.split(' — ')[0].trim()===base)) return;
+    const key=((p.party||'')+'|'+(p.website||'')).toLowerCase();
+    if(seen[key]) return; seen[key]=1;
+    out.push({supplier:p.party||'', link:p.website||'', price:Number(p.unit_price)||null, date:p.date||''});
+  });
+  // also include the saved price-meta link/supplier
+  return out;
+}
+function prevLinksHTML(item){
+  const list=prevSourcesForItem(item).filter(s=>s.supplier||s.link);
+  if(!list.length) return '';
+  window._prevLinks=list;
+  const opts=list.map((s,i)=>`<option value="${i}">${s.supplier||'—'}${s.price!=null?' · ₱'+s.price:''}${s.date?' · '+s.date:''}</option>`).join('');
+  return `<div class="field"><label>Previous suppliers (tap to reuse)</label>
+    <select id="po_prev" onchange="pickPrevLink()">
+      <option value="">— choose a previous supplier/link —</option>${opts}
+    </select></div>`;
+}
+function pickPrevLink(){
+  const sel=document.getElementById('po_prev'); if(!sel||sel.value==='') return;
+  const s=(window._prevLinks||[])[parseInt(sel.value,10)]; if(!s) return;
+  const sup=document.getElementById('po_sup'), url=document.getElementById('po_url'), unit=document.getElementById('po_unit');
+  if(sup&&s.supplier) sup.value=s.supplier;
+  if(url&&s.link) url.value=s.link;
+  if(unit&&s.price!=null&&!unit.value) unit.value=s.price;
+}
+function openPoLink(){
+  const url=document.getElementById('po_url'); const v=url?url.value.trim():'';
+  if(!v){ toast('No link to open'); return; }
+  const full=/^https?:\/\//i.test(v)?v:('https://'+v);
+  window.open(full,'_blank','noopener');
+}
+async function savePO(reqId){
+  const r=DB.get('requisitions').find(x=>x.id===reqId);
+  const sup=val('po_sup'); if(!sup){ toast('Enter a supplier / store'); return; }
+  const unit=parseFloat(val('po_unit'))||0;
+  const qty=parseFloat(val('po_qty')); if(isNaN(qty)||qty<=0){ toast('Enter the quantity'); return; }
+  const useQty=qty;
+  const ship=parseFloat(val('po_ship'))||0;
+  const chosenItem=(val('po_brand')||'').trim()||r.item;
+  const matCode=(DB.get('materials').find(m=>{const b=(m.brand||'').trim();const nm=b?(m.name+' — '+b):m.name;return nm===chosenItem;})||{}).code||'';
+  const ref=await seq('PO');
+  await DB.insert('purchases',{ref, requisition_id:reqId, item:chosenItem, unit:r.unit, qty:useQty, job:r.job,
+    type:'online', party:sup, website:val('po_url'), unit_price:unit, shipping:ship, amount:(unit*useQty)+ship,
+    terms:val('po_terms'), expected:val('po_eta'), status:'ordered', date:val('po_date')||today()});
+  await recordSourceFromPurchase({code:matCode,item:chosenItem,type:'online',supplier:sup,link:val('po_url'),price:unit});
+  await DB.update('requisitions',reqId,{status:'ordered'});
+  closeModal(); toast('PO '+ref+' sent to '+sup); render();
 }
 
-/* ── DISPATCH LOG (grouped by request) ── */
-async function renderLog(c){
-  let rows=[];try{const{data}=await sb.from('dispatches').select('*').order('created_at',{ascending:false}).limit(120);rows=data||[];}catch(e){}
-  if(!rows.length){c.innerHTML='<div class="sc"><div class="empty">No dispatches yet.</div></div>';return;}
-  const groups=[],idx={};
-  rows.forEach(r=>{const key=r.request_id||('__'+r.id);if(idx[key]===undefined){idx[key]=groups.length;groups.push({reqId:r.request_id||null,site:r.site,disps:[]});}groups[idx[key]].disps.push(r);});
-  groups.forEach(g=>g.disps.sort((a,b)=>new Date(a.created_at||0)-new Date(b.created_at||0)));
-  const slip=r=>{
-    const its=(r.items||[]);const tu=its.reduce((s,x)=>s+(Number(x.qty)||0),0);
-    const itemRows=its.map(it=>`<div style="display:flex;justify-content:space-between;font-size:13px;padding:3px 0"><span>${it.n}</span><span style="font-family:monospace;color:var(--tx2);white-space:nowrap">${it.qty}${it.u?' '+it.u:''}</span></div>`).join('');
-    const recv=(r.short_items&&r.short_items.length)?'<span class="badge bdanger">SHORT</span>':(r.received?'<span class="badge bok">RECEIVED</span>':'<span class="badge bwarn">IN TRANSIT</span>');
-    return `<div style="border:1.5px dashed var(--bd2);border-radius:12px;padding:14px;margin-top:10px">
-      <div style="text-align:center;border-bottom:1.5px dashed var(--bd2);padding-bottom:10px;margin-bottom:10px">
-        <div style="font-size:14px;font-weight:800;color:var(--p)">Dispatch Receipt</div>
-        <div style="font-family:monospace;font-size:13px;color:var(--pm);margin-top:2px">${r.dr_no||r.id}</div>
-        <div style="font-size:12px;color:var(--tx2);margin-top:2px">${fmtDT(r.created_at||r.date)} · to ${r.site||'—'}</div>
+function openStore(reqId){
+  const r=DB.get('requisitions').find(x=>x.id===reqId);
+  modal(`
+    <h2>Record store purchase</h2>
+    <p class="msub">${r.ref} · ${r.item}${r.unit?' · '+r.unit:''} — already bought over the counter</p>
+    ${brandPickerHTML(r.item).replace(/id="po_brand"/,'id="st_brand"')}
+    <div class="field"><label>Store / vendor</label><input id="st_store" placeholder="e.g. ACE Hardware Mandaue"></div>
+    <div class="row2">
+      <div class="field"><label>Quantity (${r.unit||'pcs'})</label><input id="st_qty" type="number" inputmode="decimal" min="0" step="any" placeholder="how many"></div>
+      <div class="field"><label>Unit price (₱)</label><input id="st_unit" type="number" inputmode="decimal" placeholder="0.00"></div>
+    </div>
+    <div class="row2">
+      <div class="field"><label>Amount paid (₱)</label><input id="st_amt" type="number" inputmode="decimal" placeholder="receipt total"></div>
+      <div class="field"><label>OR / invoice no.</label><input id="st_or" placeholder="OR no."></div>
+    </div>
+    <div class="field"><label>Paid with</label>
+      <select id="st_pay"><option>Cash</option><option>Petty cash</option><option>Company card</option></select></div>
+    <div class="row2">
+      <div class="field"><label>Bought by</label><input id="st_by" placeholder="Name"></div>
+      <div class="field"><label>Purchase date</label><input id="st_date" type="date" value="${today()}"></div>
+    </div>
+    <div class="hint">Store and unit price go to the Prices tab for canvass. If you only enter the receipt total, the unit price is worked out as total ÷ qty. Your warehouse app stocks the goods in from this record.</div>
+    <div class="btn-pair">
+      <button class="btn ghost" onclick="closeModal()">Cancel</button>
+      <button class="btn teal" onclick="saveStore('${reqId}')">Save purchase</button>
+    </div>`);
+}
+async function saveStore(reqId){
+  const r=DB.get('requisitions').find(x=>x.id===reqId);
+  const store=val('st_store'), orno=val('st_or'); if(!store||!orno){ toast('Enter store and OR no.'); return; }
+  const unit=parseFloat(val('st_unit'))||0;
+  const qty=parseFloat(val('st_qty')); if(isNaN(qty)||qty<=0){ toast('Enter the quantity'); return; }
+  const useQty=qty;
+  const amt=parseFloat(val('st_amt'))|| (unit*useQty) ||0;
+  const ref=await seq('SP');
+  const chosenItem=(val('st_brand')||'').trim()||r.item;
+  const matCode=(DB.get('materials').find(m=>{const b=(m.brand||'').trim();const nm=b?(m.name+' — '+b):m.name;return nm===chosenItem;})||{}).code||'';
+  // unit price from receipt total if not given
+  const effUnit = unit>0 ? unit : (useQty>0 ? amt/useQty : 0);
+  await DB.insert('purchases',{ref, requisition_id:reqId, item:chosenItem, unit:r.unit, qty:useQty, job:r.job,
+    type:'store', party:store, or_no:orno, unit_price:unit, amount:amt,
+    payment:val('st_pay'), bought_by:val('st_by'), status:'bought', date:val('st_date')||today()});
+  await recordSourceFromPurchase({code:matCode,item:chosenItem,type:'store',supplier:store,link:'',price:effUnit});
+  await DB.update('requisitions',reqId,{status:'bought'});
+  closeModal(); toast('Store purchase recorded — '+ref); render();
+}
+
+/* =====================================================================
+   RENDER
+   ===================================================================== */
+let TAB='inbox';
+const TABS=[
+  {id:'inbox',  label:'Requests',  ic:'📨'},
+  {id:'approve',label:'Site Approvals', ic:'✅'},
+  {id:'buy',    label:'To buy',    ic:'🧾'},
+  {id:'po',     label:'Purchases', ic:'📑'},
+  {id:'prices', label:'Prices',    ic:'🏷️'},
+];
+
+function statusPill(s){
+  const map={ for_purchase:['amber','New'], accepted:['teal','Accepted'],
+    ordered:['purple','PO sent'], bought:['teal','Bought'],
+    received:['green','Received'], returned:['gray','Returned'] };
+  const [c,t]=map[s]||['gray',s]; return `<span class="pill ${c}">${t}</span>`;
+}
+function money(n){ return n? '₱'+Number(n).toLocaleString('en-PH',{minimumFractionDigits:2}) : ''; }
+
+function viewInbox(){
+  const reqs=DB.get('requisitions').filter(r=>r.status==='for_purchase').slice().reverse();
+  let h=`<div class="hint">New material requests from your warehouse app — including low-stock reorders. Accept one to move it into buying, or return it to the warehouse with a reason.</div>`;
+  if(!reqs.length){ return h+`<div class="empty"><div class="big">Inbox empty</div>New requests from the warehouse arrive here.</div>`; }
+  reqs.forEach(r=>{
+    h+=`<div class="card">
+      <div class="item-row">
+        <div><div class="ttl">${r.item}${r.unit?' · '+r.unit:''}</div>
+          <div class="sub">${r.ref} · ${r.job}</div></div>
+        ${statusPill(r.status)}
       </div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Dispatched by</span><span style="font-weight:700">${r.dispatched_by||'—'}</span></div>
-      <div style="display:flex;justify-content:space-between;font-size:13px;padding:2px 0"><span style="color:var(--tx2)">Status</span>${recv}</div>
-      <div style="border-top:1.5px dashed var(--bd2);margin:8px 0;padding-top:8px;display:flex;justify-content:space-between;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3)"><span>Item</span><span>Qty</span></div>
-      ${itemRows}
-      <div style="border-top:1.5px dashed var(--bd2);margin-top:8px;padding-top:8px;display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:13px;font-weight:800;text-transform:uppercase;color:var(--tx2)">Total</span><span style="font-size:18px;font-weight:800;color:var(--p)">${tu} units</span></div>
+      <div class="meta">Requested by <b>${r.requested_by||r.by||'—'}</b> · ${r.date}</div>
+      <div class="actions btn-pair">
+        <button class="btn small" onclick="acceptReq('${r.id}')">Accept</button>
+        <button class="btn ghost small" onclick="openReturn('${r.id}')">Return</button>
+      </div>
+    </div>`;
+  });
+  return h;
+}
+
+/* ── SITE APPROVALS (Liquidation LPR purchase_request) ── */
+async function decideLpr(id,status){
+  try{
+    const{error}=await sb.from('purchase_request').update({status,approved_by:'Purchasing',approved_at:new Date().toISOString()}).eq('id',id);
+    if(error)throw error;
+    toast(status==='Approved'?'Approved — site can buy':'Rejected');
+    await DB.load(); render();
+  }catch(e){ toast('Failed: '+(e&&e.message?e.message:e)); }
+}
+function lprKind(no){ return (no||'').startsWith('LTR')?'Tool':'Material'; }
+function viewApprovals(){
+  const all=DB.get('purchase_request');
+  const pend=all.filter(r=>r.status==='Pending');
+  const done=all.filter(r=>r.status!=='Pending').slice(0,25);
+  let h=`<div class="hint">Site purchase requests from Liquidation. Approve to let site personnel buy the items (this does not touch warehouse stock — bought items flow straight to that site's stock).</div>`;
+  const slip=(r,act)=>{
+    const items=(r.items||'').split(',').map(s=>s.trim()).filter(Boolean);
+    const badge = r.status==='Approved'?'<span class="pill teal">Approved</span>'
+      : r.status==='Rejected'?'<span class="pill" style="background:#fde8e8;color:#c0392b">Rejected</span>'
+      : r.status==='Bought'?'<span class="pill purple">Bought</span>'
+      : '<span class="pill amber">Pending</span>';
+    return `<div class="card">
+      <div class="item-row">
+        <div><div class="ttl">${r.pr_no||'—'}</div>
+          <div class="sub">${lprKind(r.pr_no)} · ${r.date||'—'}${r.site?(' · '+r.site):''}${r.requested_by?(' · '+r.requested_by):''}</div></div>
+        ${badge}
+      </div>
+      ${items.map((it,i)=>`<div class="meta">${i+1}. ${it}</div>`).join('')}
+      ${act?`<div class="actions btn-pair">
+        <button class="btn small" onclick="decideLpr('${r.id}','Approved')">Approve</button>
+        <button class="btn ghost small" onclick="decideLpr('${r.id}','Rejected')">Reject</button>
+      </div>`:''}
     </div>`;
   };
-  c.innerHTML='<div class="sc"><div class="sc-title">Dispatch log</div><div class="sc-sub">'+groups.length+' request(s) · '+rows.length+' dispatch(es) · tap to open</div>'
-    +groups.map(g=>{
-      const drNos=g.disps.map(d=>d.dr_no||d.id);
-      const totalUnits=g.disps.reduce((s,d)=>s+(d.items||[]).reduce((a,x)=>a+(Number(x.qty)||0),0),0);
-      const headTitle=g.reqId||drNos[0];
-      const sub=g.reqId?(drNos.length+(drNos.length>1?' dispatches · ':' dispatch · ')+drNos.join(', ')):(g.site||'—');
-      return `<div class="dcard">
-        <div class="dcard-hdr" onclick="var b=this.parentNode.querySelector('.dcard-body');b.classList.toggle('open');this.querySelector('.chev').textContent=b.classList.contains('open')?'▾':'▸'">
-          <div style="display:flex;align-items:center;gap:9px;min-width:0"><span class="chev" style="color:var(--tx3);font-size:13px">▸</span>
-          <div style="min-width:0"><div style="font-weight:700;font-family:monospace;color:var(--pd)">${headTitle}</div><div style="font-size:12px;color:var(--tx2);overflow:hidden;text-overflow:ellipsis">${sub}</div></div></div>
-          <span class="badge binfo" style="white-space:nowrap">${g.disps.length}× · ${totalUnits}u</span>
-        </div>
-        <div class="dcard-body">${g.disps.map(slip).join('')}</div>
-      </div>`;
-    }).join('')
-    +'</div>';
+  h+=`<div class="tabhead" style="margin-top:6px">Pending approval${all.length?` (${pend.length})`:''}</div>`;
+  h+= pend.length ? pend.map(r=>slip(r,true)).join('') : `<div class="empty">No requests waiting for approval.</div>`;
+  if(done.length){
+    h+=`<button type="button" onclick="toggleDecided()" style="width:100%;display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:14px;padding:11px 12px;background:var(--bg2,#f4f6f5);border:1px solid var(--line);border-radius:10px;cursor:pointer;font-family:inherit;font-size:13px;font-weight:700;color:var(--ink)">
+      <span>Decided (${done.length})</span><span style="color:var(--muted)">${DECIDED_OPEN?'▲':'▼'}</span></button>`;
+    if(DECIDED_OPEN){ h+=`<div style="margin-top:10px">`+done.map(r=>slip(r,false)).join('')+`</div>`; }
+  }
+  return h;
+}
+let DECIDED_OPEN=false;
+function toggleDecided(){ DECIDED_OPEN=!DECIDED_OPEN; render(); }
+
+function viewBuy(){
+  const reqs=DB.get('requisitions').filter(r=>r.status==='accepted').slice().reverse();
+  let h=`<div class="tabhead">Requests you've accepted. Buy each online (with a PO) or record a store purchase already made.</div>
+    <div class="addbar"><button class="btn small ghost" onclick="openDirect()">+ Direct purchase</button></div>`;
+  if(!reqs.length){ return h+`<div class="empty"><div class="big">Nothing to buy yet</div>Accept a request in the inbox first.</div>`; }
+  reqs.forEach(r=>{
+    h+=`<div class="card">
+      <div class="item-row">
+        <div><div class="ttl">${r.item}${r.unit?' · '+r.unit:''}</div>
+          <div class="sub">${r.ref} · ${r.job}</div></div>
+        ${statusPill(r.status)}
+      </div>
+      <div class="meta">By <b>${r.requested_by||r.by||'—'}</b>${r.accepted_at?' · accepted '+r.accepted_at:''}</div>
+      <div class="actions btn-pair">
+        <button class="btn small" onclick="openPO('${r.id}')">Online · PO</button>
+        <button class="btn teal small" onclick="openStore('${r.id}')">Store buy</button>
+      </div>
+    </div>`;
+  });
+  return h;
 }
 
-/* ── INVENTORY (set on-hand) ── */
-async function renderInventory(c){
-  _invC=c;
-  await loadStock();
-  c.innerHTML='<div class="sc"><div class="sc-title">Add a material</div><div class="sc-sub">For old stock not yet on the list. Type the name, unit, and how many are in the warehouse now.</div>'
-    +'<div class="fr3"><div class="fg"><label class="fl">Material name</label><input class="fi" id="ni-name" placeholder="e.g. Steel plate 6mm"/></div>'
-    +'<div class="fg"><label class="fl">Unit</label><input class="fi" id="ni-unit" placeholder="pcs / m / kg / set" value="pcs"/></div></div>'
-    +'<div class="fg"><label class="fl">Quantity on hand</label><input class="fi" type="number" min="0" id="ni-qty" value="0"/></div>'
-    +'<div class="btn-row"><button class="btn btn-primary" onclick="saveNewItem()">+ Add to warehouse</button></div></div>'
-    +'<div class="sc"><div class="sc-title">Inventory count</div><div class="sc-sub">Set the actual on-hand quantity for each item (opening balance or correction). Prices are managed in the Purchasing app.</div>'
-    +(()=>{
-        const ncnt={}; Object.keys(countedSet).forEach(k=>{ ncnt[k.toLowerCase().replace(/\s+/g,' ').trim()]=true; });
-        const isCnt=(nm)=>!!countedSet[nm] || !!ncnt[(nm||'').toLowerCase().replace(/\s+/g,' ').trim()];
-        const counted=catalog.filter(i=>isCnt(i.n));
-        const notyet=catalog.filter(i=>!isCnt(i.n));
-        let out='';
-        const rowHtml=(i,idx)=>{
-          const isCounted=isCnt(i.n);
-          if(isCounted && INV_EDIT!==i.n){
-            return `<div class="irow nop" style="grid-template-columns:minmax(0,1fr) 90px 60px;align-items:center">
-              <div><div style="font-weight:600">${i.n}</div><div style="font-size:12px;color:var(--tx3)">${i.u}${i.th>0?' · min '+i.th:''}</div></div>
-              <div style="text-align:center;font-weight:700">${stockMap[i.n]||0}</div>
-              <button class="btn btn-sm" style="background:transparent;border:1px solid var(--ln,#ccc)" onclick="editInv(${idx})">✎ edit</button></div>`;
-          }
-          return `<div class="irow nop" style="grid-template-columns:minmax(0,1fr) 90px 60px;align-items:center">
-            <div><div style="font-weight:600">${i.n}</div><div style="font-size:12px;color:var(--tx3)">${i.u}${i.th>0?' · min '+i.th:''}</div></div>
-            <input class="fi" type="number" min="0" id="inv-${idx}" value="${stockMap[i.n]||0}" style="text-align:center"/>
-            <button class="btn btn-primary btn-sm" onclick="saveInv(${idx})">Set</button></div>`;
-        };
-        counted.forEach(i=>{ out+=rowHtml(i, catalog.indexOf(i)); });
-        if(notyet.length){
-          out+='<div style="margin:12px 0 6px;padding-top:8px;border-top:2px solid var(--ln,#ddd);font-size:12px;font-weight:700;color:var(--tx3);text-transform:uppercase;letter-spacing:.04em">Not yet counted</div>';
-          notyet.forEach(i=>{ out+=rowHtml(i, catalog.indexOf(i)); });
-        }
-        return out;
-      })()
-    +'</div>';
+function viewPO(){
+  const ps=DB.get('purchases').filter(p=>p.type==='online'||p.type==='store').slice().reverse();
+  let h=`<div class="tabhead">Everything purchasing has bought. Online POs wait for the warehouse to receive; store buys are already in hand.</div>`;
+  if(!ps.length){ return h+`<div class="empty"><div class="big">No purchases yet</div>Buy an accepted request from the To buy tab.</div>`; }
+  ps.forEach(p=>{
+    const typePill = p.type==='online'?`<span class="pill purple">Online PO</span>`:`<span class="pill teal">Store</span>`;
+    let detail, extra='';
+    if(p.type==='online'){
+      detail=`Supplier <b>${p.party}</b> · terms ${p.terms} · expected ${p.expected}`;
+      extra=`<div class="meta">🔗 ${p.website?`<a href="${p.website}" target="_blank" rel="noopener">${domain(p.website)}</a>`:'no link'}`
+        +`${p.unit_price?' · '+money(p.unit_price)+'/'+p.unit:''}${Number(p.shipping)>0?' · ship '+money(p.shipping):''}${p.amount?' · total '+money(p.amount):''}</div>`;
+    }else{
+      detail=`Store <b>${p.party}</b> · OR ${p.or_no} · ${p.payment}`;
+      extra=`<div class="meta">${p.unit_price?money(p.unit_price)+'/'+p.unit+' · ':''}total ${money(p.amount)}${p.bought_by?' · by '+p.bought_by:''}</div>`;
+    }
+    const ord=Number(p.qty)||0, got=Number(p.qty_received)||0;
+    const recvLine = p.status==='received'
+      ? `Status: ${statusPill('received')} <span style="color:var(--muted)">received by ${p.received_by||'warehouse'}${p.received_at?' on '+p.received_at:''}</span>`
+      : got>0
+        ? `Status: ${statusPill(p.type==='online'?'ordered':'bought')} <span style="color:var(--muted)">partial — ${got} of ${ord} received</span>`
+        : `Status: ${statusPill(p.type==='online'?'ordered':'bought')} <span style="color:var(--muted)">${p.type==='online'?'awaiting delivery (warehouse receives)':'goods in hand (warehouse stocks in)'}</span>`;
+    h+=`<div class="card">
+      <div class="item-row">
+        <div><div class="ttl">${p.item} · ${p.qty} ${p.unit}</div>
+          <div class="sub">${p.ref} · ${p.job}</div></div>
+        ${typePill}
+      </div>
+      <div class="meta">${detail}</div>${extra}
+      <div class="meta">${recvLine}</div>
+      ${(p.status!=='received' && !(got>0)) ? `<div class="actions" style="margin-top:8px"><button class="btn ghost small" style="color:#c0392b" onclick="cancelPurchase('${p.id}')">Cancel / redo this purchase</button></div>` : ''}
+    </div>`;
+  });
+  return h;
 }
-function editInv(idx){ const it=catalog[idx]; if(!it) return; INV_EDIT=(INV_EDIT===it.n)?null:it.n; if(_invC) renderInventory(_invC); }
-async function saveInv(idx){
-  const it=catalog[idx];if(!it)return;
-  const v=parseInt(document.getElementById('inv-'+idx).value,10);
-  if(isNaN(v)||v<0){toast('Enter a valid qty','err');return;}
-  const err=await upsertStock(it.n,v,it.u);
-  if(err){toast('Failed: '+err.message,'err');return;}
-  stockMap[it.n]=v;countedSet[it.n]=true;INV_EDIT=null;toast(it.n+' set to '+v);
-  try{ await autoReorderCheck([it.n]); }catch(e){}
-  if(_invC) renderInventory(_invC);
+async function cancelPurchase(id){
+  const p=DB.get('purchases').find(x=>x.id===id); if(!p){ return; }
+  if(Number(p.qty_received)>0 || p.status==='received'){ toast('Already received — cannot cancel here'); return; }
+  if(!confirm('Cancel this purchase ('+p.ref+' · '+p.item+')?\n\nIt will be removed and the request goes back to "To buy" so you can redo it with the correct item.')) return;
+  try{
+    await sb.from('purchases').delete().eq('id',id);
+    if(p.requisition_id){ await sb.from('requisitions').update({status:'accepted'}).eq('id',p.requisition_id); }
+    toast('Purchase cancelled — redo it in To buy');
+    await DB.load(); render();
+  }catch(e){ toast('Cancel failed: '+(e&&e.message?e.message:e)); }
 }
-async function saveNewItem(){
-  const name=document.getElementById('ni-name').value.trim();
-  const unit=(document.getElementById('ni-unit').value.trim())||'pcs';
-  const qty=parseInt(document.getElementById('ni-qty').value,10)||0;
-  if(!name){toast('Enter a material name','err');return;}
-  if(catalog.find(i=>i.n.toLowerCase()===name.toLowerCase())){toast('That material is already listed','err');return;}
-  const err=await upsertStock(name,qty,unit);
-  if(err){toast('Failed: '+err.message,'err');return;}
-  toast(name+' added');
-  swTab('inventory');
+
+function whPriceList(){
+  const pmap={};
+  DB.get('item_prices').forEach(r=>{ pmap[(r.item_name||'').toLowerCase()]=r; });
+  const unitMap={};
+  DB.get('warehouse_stock').forEach(s=>{ if(s.item_name) unitMap[s.item_name.toLowerCase()]=s.unit||''; });
+  const pick=k=>{ const r=pmap[k]||{}; return {
+    online_price:(r.online_price!=null?Number(r.online_price):null),
+    online_link:r.online_link||'',
+    store_price:(r.store_price!=null?Number(r.store_price):null),
+    store_name:r.store_name||'',
+    price:(r.price!=null?Number(r.price):null)
+  };};
+  const seen={}; const out=[];
+  DB.get('materials').forEach(m=>{
+    const b=(m.brand||'').trim(); const nm=b?(m.name+' — '+b):m.name; if(!nm) return;
+    const dk=(m.code||nm).toLowerCase(); if(seen[dk]) return; seen[dk]=1;   // dedupe by CODE
+    const k=nm.toLowerCase();
+    seen['n:'+k]=1; seen[k]=1;   // also block any codeless name-based duplicate of this material
+    const baseK=(m.name||'').toLowerCase();   // base name without brand
+    if(baseK){ seen['n:'+baseK]=1; seen[baseK]=1; }
+    out.push(Object.assign({name:nm, code:m.code||'', brand:b, unit:m.unit||unitMap[k]||''}, pick(k)));
+  });
+  DB.get('warehouse_stock').forEach(s=>{
+    const nm=s.item_name; if(!nm) return; const k=nm.toLowerCase(); const dk='n:'+k; if(seen[dk]||seen[k]) return; seen[dk]=1;
+    out.push(Object.assign({name:nm, code:'', unit:s.unit||''}, pick(k)));
+  });
+  DB.get('item_prices').forEach(r=>{ const k=(r.item_name||'').toLowerCase(); const dk='n:'+k; if(k&&!seen[dk]&&!seen[k]){ seen[dk]=1; out.push(Object.assign({name:r.item_name, code:'', unit:''}, pick(k))); } });
+  const codeByName={}; out.forEach(r=>{ codeByName[r.name]=r.code||''; });
+  const hasPrice=(r)=>{ const c=currentPrice(r.code||codeByName[r.name], r.name); return c!=null&&c>0; };
+  return out.sort((a,b)=>{
+    const pa=hasPrice(a)?0:1, pb=hasPrice(b)?0:1;
+    if(pa!==pb) return pa-pb;                        // priced first
+    return (a.code||'zzz').localeCompare(b.code||'zzz') || (a.name||'').localeCompare(b.name||'');
+  });
 }
+// last price change for an item+source, as a % indicator string
+function priceChangeNote(name, source){
+  const hist=DB.get('price_history').filter(h=>h.item_name===name && h.source===source && h.old_price!=null);
+  if(!hist.length) return '';
+  const h=hist[0]; const o=Number(h.old_price), n=Number(h.new_price);
+  if(!o||o===n) return '';
+  const pct=Math.round(((n-o)/o)*100);
+  const up=n>o;
+  return `<span style="font-size:11px;color:${up?'#c0392b':'#1e8449'}">${up?'▲':'▼'} ${Math.abs(pct)}% (was ${money(o)})</span>`;
+}
+/* ---- register a NEW brand/material into the materials master (on the fly) ---- */
+function matPrefixes(){
+  const set={};
+  DB.get('materials').forEach(m=>{ const pf=((m.code||'').match(/^([A-Za-z]+)-/)||[])[1]; if(pf) set[pf.toUpperCase()]=1; });
+  return Object.keys(set).sort();
+}
+function nextCodeFor(prefix){
+  let max=0;
+  DB.get('materials').forEach(m=>{ const mm=(m.code||'').match(new RegExp('^'+prefix+'-(\\d+)$','i')); if(mm){ const n=parseInt(mm[1],10); if(n>max)max=n; } });
+  return prefix.toUpperCase()+'-'+String(max+1).padStart(3,'0');
+}
+function norm(s){ return (s||'').toLowerCase().replace(/[^a-z0-9]/g,''); }
+function similarMaterial(name){
+  const n=norm(name);
+  return DB.get('materials').find(m=>{ const a=norm(m.name); return a===n || (a.length>4 && (a.includes(n)||n.includes(a))); });
+}
+function toggleNewMat(show){
+  const box=document.getElementById('newmat-box'); if(box) box.style.display=show?'block':'none';
+  if(show){ const sel=document.getElementById('nm-prefix'); if(sel) updateNextCode(); }
+}
+function effectivePrefix(){
+  const sel=document.getElementById('nm-prefix'); if(!sel) return '';
+  if(sel.value==='__new__'){ const t=document.getElementById('nm-newpfx'); return t?t.value.trim().toUpperCase():''; }
+  return sel.value;
+}
+function onPrefixChange(){
+  const sel=document.getElementById('nm-prefix');
+  const box=document.getElementById('nm-newpfx');
+  if(box) box.style.display = (sel.value==='__new__')?'inline-block':'none';
+  if(sel.value==='__new__' && box) box.focus();
+  updateNextCode();
+}
+function updateNextCode(){
+  const pf=effectivePrefix();
+  const lbl=document.getElementById('nm-code');
+  if(lbl) lbl.textContent = pf ? nextCodeFor(pf) : '—';
+  // auto-fill the item name from an existing material that uses this prefix
+  const nameEl=document.getElementById('nm-name');
+  if(pf && nameEl && !nameEl.value.trim()){
+    const ex=DB.get('materials').find(m=>((m.code||'').toUpperCase().startsWith(pf.toUpperCase()+'-')));
+    if(ex) nameEl.value = ex.name || '';
+  }
+}
+/* ---- multiple buying SOURCES per material (canvass) ---- */
+function sourcesFor(item, code){
+  const ms=DB.get('material_sources');
+  if(code){ const byCode=ms.filter(s=>(s.code||'')===code); if(byCode.length) return byCode; }
+  return ms.filter(s=>(s.item_name||'')===item);
+}
+function mapHref(loc){
+  const v=(loc||'').trim();
+  if(/^https?:\/\//i.test(v)) return v;                       // already a maps URL
+  return 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(v); // text -> maps search
+}
+function cheapestSource(item, code){
+  const list=sourcesFor(item, code).filter(s=>s.price!=null&&Number(s.price)>0);
+  if(!list.length) return null;
+  return list.reduce((a,b)=>Number(b.price)<Number(a.price)?b:a);
+}
+let OPEN_SRC=null; // which item's add-source box is open (survives re-render)
+// Current saved price for a code/item (from item_prices)
+function currentPrice(code,name){
+  const ip=DB.get('item_prices');
+  let r=null;
+  if(code) r=ip.find(x=>(x.code||'')===code);
+  if(!r) r=ip.find(x=>(x.item_name||'')===name);
+  if(r&&r.price!=null) return Number(r.price);
+  // fall back to the cheapest source previously entered (material_sources)
+  const srcs=DB.get('material_sources').filter(s=> (code&&(s.code||'')===code) || (s.item_name||'')===name );
+  const priced=srcs.filter(s=>s.price!=null&&Number(s.price)>0);
+  if(priced.length){ return Math.min.apply(null,priced.map(s=>Number(s.price))); }
+  return null;
+}
+function priceMeta(code,name){
+  const ip=DB.get('item_prices');
+  let r=null;
+  if(code) r=ip.find(x=>(x.code||'')===code);
+  if(!r) r=ip.find(x=>(x.item_name||'')===name);
+  if(r&&(r.store_name||r.online_link)) return { supplier:r.store_name||'', link:r.online_link||'' };
+  // fall back to a source previously entered
+  const srcs=DB.get('material_sources').filter(s=> (code&&(s.code||'')===code) || (s.item_name||'')===name );
+  if(srcs.length){
+    const priced=srcs.filter(s=>s.price!=null&&Number(s.price)>0).sort((a,b)=>Number(a.price)-Number(b.price));
+    const s=priced[0]||srcs[0];
+    return { supplier:s.source_name||'', link:s.link||'' };
+  }
+  return { supplier:'', link:'' };
+}
+// Purchase history for a code/item (most recent first), with supplier + unit price
+function purchaseHistoryFor(code,name){
+  return DB.get('purchases').filter(p=>{
+    if(code){ const m=DB.get('materials').find(x=>x.code===code); const lbl=m?((m.brand||'').trim()?m.name+' — '+m.brand:m.name):name; return p.item===lbl||p.item===name; }
+    return p.item===name;
+  }).filter(p=>Number(p.unit_price)>0)
+    .sort((a,b)=> new Date(b.date||b.created_at||0) - new Date(a.date||a.created_at||0));
+}
+async function saveCodePrice(code,name,idx){
+  const el=document.getElementById('cp-'+idx); if(!el) return;
+  const v=el.value!==''?parseFloat(el.value):null;
+  if(v!=null&&(isNaN(v)||v<0)){ toast('Price invalid'); return; }
+  const supEl=document.getElementById('cs-'+idx), lnEl=document.getElementById('cl-'+idx);
+  const supplier=supEl?supEl.value.trim():''; const link=lnEl?lnEl.value.trim():'';
+  const cur=currentPrice(code,name);
+  try{
+    if(cur!=null && v!=null && Number(cur)!==v){
+      await sb.from('price_history').insert({item_name:name,code:code||null,source:'manual',old_price:cur,new_price:v});
+    }
+    const fields={price:v, store_name:supplier||null, online_link:link||null, updated_at:new Date().toISOString()};
+    if(code){
+      const existing=DB.get('item_prices').find(x=>(x.code||'')===code);
+      if(existing){
+        await sb.from('item_prices').update(Object.assign({item_name:name},fields)).eq('id',existing.id);
+      } else {
+        await sb.from('item_prices').insert(Object.assign({item_name:name,code:code},fields));
+      }
+    } else {
+      await sb.from('item_prices').upsert(Object.assign({item_name:name},fields),{onConflict:'item_name'});
+    }
+    toast('Saved'); OPEN_PRICE=null; await DB.load(); render();
+  }catch(e){ toast('Save failed: '+(e&&e.message?e.message:e)); }
+}
+function toggleAddSource(key){
+  OPEN_SRC = (OPEN_SRC===key) ? null : key;
+  const b=document.getElementById('as-'+key);
+  if(b) b.style.display = (OPEN_SRC===key)?'block':'none';
+}
+let OPEN_SRC_EDIT=null;
+function editSource(id){
+  OPEN_SRC_EDIT = (OPEN_SRC_EDIT===id)?null:id;
+  const b=document.getElementById('se-'+id);
+  if(b) b.style.display=(OPEN_SRC_EDIT===id)?'block':'none';
+}
+async function saveSourceEdit(id){
+  const nm=(document.getElementById('se-name-'+id).value||'').trim();
+  const ln=(document.getElementById('se-link-'+id).value||'').trim();
+  try{
+    const{error}=await sb.from('material_sources').update({source_name:nm||null,link:ln||null,updated_at:new Date().toISOString()}).eq('id',id);
+    if(error)throw error;
+    OPEN_SRC_EDIT=null;
+    toast('Source updated'); await DB.load(); render();
+  }catch(e){ toast('Update failed: '+(e&&e.message?e.message:e)); }
+}
+function swapSourceField(key){
+  const t=document.getElementById('as-type-'+key).value;
+  const f=document.getElementById('as-link-'+key);
+  const nm=document.getElementById('as-name-'+key);
+  if(!f) return;
+  if(t==='store'){ f.placeholder='location / Google Maps link — for store'; if(nm) nm.placeholder='store name'; }
+  else { f.placeholder='link (https://...) — for online'; if(nm) nm.placeholder='seller name'; }
+}
+async function addSource(code,item){
+  const t=document.getElementById('as-type-'+code).value;
+  const nm=(document.getElementById('as-name-'+code).value||'').trim();
+  const ln=(document.getElementById('as-link-'+code).value||'').trim();
+  const pr=document.getElementById('as-price-'+code).value;
+  const price=pr!==''?parseFloat(pr):null;
+  if(price!=null&&(isNaN(price)||price<0)){ toast('Price invalid'); return; }
+  if(!nm&&!ln){ toast('Enter a store name or link/location'); return; }
+  try{
+    const{error}=await sb.from('material_sources').insert({code:code||null,item_name:item,source_type:t,source_name:nm||null,link:ln||null,price:price});
+    if(error)throw error;
+    OPEN_SRC=null;
+    toast('Source added'); await DB.load(); render();
+  }catch(e){ toast('Add failed: '+(e&&e.message?e.message:e)); }
+}
+async function updateSourcePrice(id){
+  const el=document.getElementById('sp-'+id); if(!el) return;
+  const v=el.value!==''?parseFloat(el.value):null;
+  if(v!=null&&(isNaN(v)||v<0)){ toast('Price invalid'); return; }
+  const src=DB.get('material_sources').find(s=>s.id===id); if(!src) return;
+  try{
+    if(src.price!=null && v!=null && Number(src.price)!==v){
+      await sb.from('source_price_history').insert({source_id:id,code:src.code||null,item_name:src.item_name,old_price:src.price,new_price:v});
+    }
+    const{error}=await sb.from('material_sources').update({price:v,updated_at:new Date().toISOString()}).eq('id',id);
+    if(error)throw error;
+    toast('Price updated'); await DB.load(); render();
+  }catch(e){ toast('Update failed: '+(e&&e.message?e.message:e)); }
+}
+async function delSource(id){
+  if(!confirm('Remove this source?')) return;
+  try{ const{error}=await sb.from('material_sources').delete().eq('id',id); if(error)throw error; toast('Removed'); await DB.load(); render(); }
+  catch(e){ toast('Delete failed: '+(e&&e.message?e.message:e)); }
+}
+function sourceChangeNote(id){
+  const h=DB.get('source_price_history').filter(x=>x.source_id===id&&x.old_price!=null).sort((a,b)=>new Date(b.changed_at)-new Date(a.changed_at))[0];
+  if(!h) return '';
+  const o=Number(h.old_price),n=Number(h.new_price); if(!o||o===n) return '';
+  const pct=Math.round(((n-o)/o)*100); const up=n>o;
+  return `<span style="font-size:11px;color:${up?'#c0392b':'#1e8449'}">${up?'▲':'▼'} ${Math.abs(pct)}% (was ${money(o)})</span>`;
+}
+/* ---- edit brand/name of a material directly from the Prices tab ---- */
+let OPEN_BRAND=null;
+function editBrand(code){
+  const m=DB.get('materials').find(x=>x.code===code); if(!m){ toast('Not in materials master'); return; }
+  OPEN_BRAND = (OPEN_BRAND===code)?null:code;
+  const box=document.getElementById('be-'+code);
+  if(box){ box.style.display = (OPEN_BRAND===code)?'block':'none'; }
+}
+async function deleteMaterial(code,name){
+  const m=DB.get('materials').find(x=>x.code===code); if(!m){ toast('Not found'); return; }
+  // warn if this material has purchases (kept for record integrity)
+  const used=DB.get('purchases').some(p=>{const b=(m.brand||'').trim();const lbl=b?m.name+' — '+m.brand:m.name; return p.item===lbl||p.item===name;});
+  const msg='Delete '+code+' · '+name+'?\n\nIt will be hidden from all lists (warehouse, issuance, prices, coordinator).'
+    +(used?'\n\n⚠ This item has purchase records — those stay for history, but the item is hidden.':'')
+    +'\n\nYou can restore it later from the materials list.';
+  if(!confirm(msg)) return;
+  try{
+    const{error}=await sb.from('materials').update({active:false}).eq('code',code);
+    if(error)throw error;
+    toast(code+' deleted (hidden)');
+    await DB.load(); render();
+  }catch(e){ toast('Delete failed: '+(e&&e.message?e.message:e)); }
+}
+async function saveBrand(code){
+  const m=DB.get('materials').find(x=>x.code===code); if(!m) return;
+  const nm=(document.getElementById('be-name-'+code).value||'').trim();
+  const br=(document.getElementById('be-brand-'+code).value||'').trim();
+  if(!nm){ toast('Enter the item name'); return; }
+  try{
+    const newLabel = br ? (nm+' — '+br) : nm;
+    const{error}=await sb.from('materials').update({name:nm,brand:br}).eq('code',code);
+    if(error)throw error;
+    // keep sources/prices matched: re-point any rows for this code (or the old
+    // name) to the new combined label, so nothing gets orphaned by the rename.
+    try{
+      await sb.from('material_sources').update({item_name:newLabel}).eq('code',code);
+      // heal older rows that have no code yet but used the old name
+      const oldLabel = m.brand ? (m.name+' — '+m.brand) : m.name;
+      if(oldLabel!==newLabel){
+        await sb.from('material_sources').update({item_name:newLabel, code:code}).is('code',null).eq('item_name',oldLabel);
+        await sb.from('material_sources').update({item_name:newLabel, code:code}).is('code',null).eq('item_name',m.name);
+      }
+    }catch(_){}
+    OPEN_BRAND=null;
+    toast(code+' updated');
+    await DB.load(); render();
+  }catch(e){ toast('Update failed: '+(e&&e.message?e.message:e)); }
+}
+async function saveNewMat(){
+  const pf=effectivePrefix();
+  const name=(document.getElementById('nm-name').value||'').trim();
+  const brand=(document.getElementById('nm-brand').value||'').trim();
+  const unit=document.getElementById('nm-unit').value;
+  if(!pf){ toast('Pick or type a code prefix'); return; }
+  if(!/^[A-Z]{1,4}$/.test(pf)){ toast('Prefix must be 1-4 letters'); return; }
+  if(!name){ toast('Enter the material name'); return; }
+  const fullLabel=brand?(name+' — '+brand):name;
+  const dup=similarMaterial(fullLabel);
+  if(dup){
+    const dlab=(dup.brand?dup.name+' — '+dup.brand:dup.name);
+    if(!confirm('A similar material already exists:\n\n  '+dup.code+' · '+dlab+'\n\nAdd "'+fullLabel+'" as a NEW separate material anyway?')) return;
+  }
+  const code=nextCodeFor(pf);
+  try{
+    const{error}=await sb.from('materials').insert({code,name,brand,unit,threshold:0,active:true});
+    if(error)throw error;
+    toast(code+' · '+fullLabel+' registered');
+    document.getElementById('nm-name').value=''; document.getElementById('nm-brand').value='';
+    await DB.load(); render();
+  }catch(e){ toast('Add failed: '+(e&&e.message?e.message:e)); }
+}
+async function saveWhPrice(idx){
+  const list=whPriceList();
+  const row=list[idx]; if(!row){ return; }
+  const name=row.name;
+  const op=document.getElementById('op-'+idx), ol=document.getElementById('ol-'+idx);
+  const sp=document.getElementById('sp-'+idx), sn=document.getElementById('sn-'+idx);
+  const onlineP = op&&op.value!=='' ? parseFloat(op.value) : null;
+  const storeP  = sp&&sp.value!=='' ? parseFloat(sp.value) : null;
+  if(onlineP!=null && (isNaN(onlineP)||onlineP<0)){ toast('Online price invalid'); return; }
+  if(storeP!=null && (isNaN(storeP)||storeP<0)){ toast('Store price invalid'); return; }
+  // legacy single price = whichever is lower (used to charge projects)
+  const eff=[onlineP,storeP].filter(x=>x!=null && x>0);
+  const legacy = eff.length? Math.min.apply(null,eff) : (row.price!=null?row.price:null);
+  const patch={ item_name:name, code:row.code||null,
+    online_price:onlineP, online_link:(ol?ol.value.trim():'')||null,
+    store_price:storeP, store_name:(sn?sn.value.trim():'')||null,
+    updated_at:new Date().toISOString() };
+  if(legacy!=null) patch.price=legacy;
+  try{
+    // log changes (online + store) if the price moved
+    const logs=[];
+    if(onlineP!=null && row.online_price!=null && onlineP!==row.online_price)
+      logs.push({item_name:name,code:row.code||null,source:'online',old_price:row.online_price,new_price:onlineP});
+    if(storeP!=null && row.store_price!=null && storeP!==row.store_price)
+      logs.push({item_name:name,code:row.code||null,source:'store',old_price:row.store_price,new_price:storeP});
+    const{error}=await sb.from('item_prices').upsert(patch,{onConflict:'item_name'});
+    if(error)throw error;
+    if(logs.length){ await sb.from('price_history').insert(logs); }
+    toast(name+' saved');
+    await DB.load(); render();
+  }catch(e){ toast('Save failed: '+(e&&e.message?e.message:e)); }
+}
+// Compare across brand variants of the same base item (e.g. all Welding gloves)
+let CMP_OPEN={};
+function toggleCmp(key){ CMP_OPEN[key]=!CMP_OPEN[key]; render(); }
+function brandCompareCard(){
+  const mats=DB.get('materials');
+  // group by base name (case-insensitive)
+  const groups={};
+  mats.forEach(m=>{
+    const base=(m.name||'').trim();
+    const key=base.toLowerCase();
+    if(!groups[key]) groups[key]={label:base, variants:[]};
+    groups[key].variants.push(m);
+  });
+  // only groups with 2+ brand variants are worth comparing
+  let multi=Object.values(groups).filter(g=>g.variants.length>1);
+  if(!multi.length) return '';
+  // apply search query (match the base label)
+  if(PRICE_Q && PRICE_Q.trim()){
+    const ql=PRICE_Q.toLowerCase().trim().split(/\s+/);
+    multi=multi.filter(g=>{ const hay=g.label.toLowerCase(); return ql.every(w=>hay.includes(w)); });
+  }
+  if(!multi.length) return '';
+  let h=`<div class="card"><div class="ttl" style="margin-bottom:4px">Compare brands</div>
+    <div class="hint" style="margin:0 0 8px">Items that come in multiple brands. Tap to see each brand's price side by side.</div>`;
+  multi.sort((a,b)=>a.label.localeCompare(b.label)).forEach(g=>{
+    const key=g.label.toLowerCase().replace(/[^a-z0-9]/g,'');
+    // best price per variant
+    const rows=g.variants.map(m=>{
+      const label=(m.brand||'').trim()?(m.name+' — '+m.brand):m.name;
+      const cp=currentPrice(m.code, label);
+      const hist=purchaseHistoryFor(m.code, label);
+      const where=hist.length?(hist[0].party||''):'';
+      return {code:m.code, brand:(m.brand||'').trim()||'(no brand)', price:cp!=null?Number(cp):null, where};
+    });
+    const priced=rows.filter(r=>r.price!=null);
+    const min=priced.length?Math.min.apply(null,priced.map(r=>r.price)):null;
+    h+=`<div style="border-top:1px solid var(--line);padding:8px 0">
+      <div style="display:flex;justify-content:space-between;align-items:center;cursor:pointer" onclick="toggleCmp('${key}')">
+        <div style="font-weight:600">${g.label} <span class="pill gray" style="font-size:11px">${g.variants.length} brands</span></div>
+        <span style="color:var(--muted);font-weight:700">${CMP_OPEN[key]?'▲':'▼'}</span>
+      </div>`;
+    if(CMP_OPEN[key]){
+      const ordered=rows.slice().sort((a,b)=>{
+        if(a.price==null&&b.price==null) return 0;
+        if(a.price==null) return 1; if(b.price==null) return -1;
+        return a.price-b.price;
+      });
+      h+=`<div style="margin-top:6px;display:flex;flex-direction:column;gap:4px">`;
+      ordered.forEach(r=>{
+        const best=(r.price!=null&&r.price===min&&priced.length>1);
+        h+=`<div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;${best?'background:#eaf7ee;border-radius:6px;padding:3px 6px':'padding:3px 6px'}">
+          <span><span style="color:var(--muted);font-weight:700">${r.code}</span> ${r.brand}${r.where?' · <span style="color:var(--muted)">'+r.where+'</span>':''}</span>
+          <span style="font-weight:600">${r.price!=null?money(r.price):'<span style=\"color:var(--muted)\">no price</span>'}${best?' <b style="color:#1e8449">✓ cheapest</b>':''}</span>
+        </div>`;
+      });
+      h+=`</div>`;
+    }
+    h+=`</div>`;
+  });
+  h+=`</div>`;
+  return h;
+}
+let PRICE_Q='';
+let OPEN_PRICE=null; // which price row (by idx) is being edited
+function openPrice(idx){ OPEN_PRICE=(OPEN_PRICE===idx)?null:idx; render(); }
+function matchQuery(r,q){
+  if(!q||!q.trim()) return true;
+  const hay=((r.code||'')+' '+(r.name||'')+' '+(r.brand||'')).toLowerCase();
+  return q.toLowerCase().trim().split(/\s+/).every(w=>hay.includes(w));
+}
+function viewPrices(){
+  const whAll=whPriceList();
+  const wh=whAll.filter(r=>matchQuery(r,PRICE_Q));
+  const priced=whAll.filter(r=>{const c=currentPrice(r.code,r.name);return c!=null&&c>0;}).length;
+  let h=`<div class="hint">Current warehouse price per material (used to charge projects at the latest price). Items with no price yet show a blank box — fill it in and tap Save. Editing here updates the warehouse too.</div>`;
+  h+=brandCompareCard();
+  h+=`<div class="card"><div class="item-row"><div class="ttl">Warehouse current prices</div><span class="pill gray">${priced}/${wh.length} priced</span></div>`;
+  h+=`<input id="price-search" value="${(PRICE_Q||'').replace(/"/g,'&quot;')}" oninput="PRICE_Q=this.value;render();setTimeout(()=>{const e=document.getElementById('price-search');if(e){e.focus();e.setSelectionRange(e.value.length,e.value.length);}},0)" placeholder="🔍 Search by code, name, or brand…" style="width:100%;padding:9px 12px;border:1px solid var(--line);border-radius:9px;font-family:inherit;font-size:13px;margin:6px 0 8px"/>`;
+  h+=`<button class="btn small" style="margin:4px 0 8px" onclick="toggleNewMat(true)">+ Register new brand / material</button>
+    <div id="newmat-box" style="display:none;border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px;background:var(--card2,#faf9f5)">
+      <div style="font-weight:600;margin-bottom:6px">New brand / material</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+        <select id="nm-prefix" onchange="onPrefixChange()" style="padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit">
+          <option value="">— prefix —</option>
+          ${matPrefixes().map(p=>`<option value="${p}">${p}-</option>`).join('')}
+          <option value="__new__">➕ New prefix…</option>
+        </select>
+        <input id="nm-newpfx" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z]/g,'');updateNextCode()" placeholder="e.g. SP" maxlength="4" style="display:none;width:70px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;text-transform:uppercase"/>
+        <span style="color:var(--muted);font-size:12px">code: <b id="nm-code">—</b></span>
+      </div>
+      <input id="nm-name" placeholder="Item name, e.g. Welding gloves" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;margin-bottom:6px"/>
+      <input id="nm-brand" placeholder="Brand (optional), e.g. Tianjin Orange" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;margin-bottom:6px"/>
+      <div style="display:flex;gap:6px;align-items:center">
+        <select id="nm-unit" style="padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit">
+          ${['pcs','pair','unit','box','bottle','tool','set','roll','meter'].map(u=>`<option value="${u}">${u}</option>`).join('')}
+        </select>
+        <button class="btn small" onclick="saveNewMat()">Register</button>
+        <button class="btn small ghost" onclick="toggleNewMat(false)">Cancel</button>
+      </div>
+      <div style="color:var(--muted);font-size:11px;margin-top:6px">Registers into the materials master — it will then appear in the warehouse, issuance, and coordinator too.</div>
+    </div>`;
+  if(wh.length){
+    let dividerShown=false;
+    wh.forEach((r,idx)=>{
+      const baseName = r.brand ? r.name.replace(' — '+r.brand,'') : r.name;
+      const cur = currentPrice(r.code, r.name);
+      const itemPriced = cur!=null && cur>0;
+      if(!itemPriced && !dividerShown){
+        dividerShown=true;
+        h+=`<div style="margin:12px 0 6px;padding-top:8px;border-top:2px solid var(--line);font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em">Still need a price</div>`;
+      }
+      const hist = purchaseHistoryFor(r.code, r.name);
+      let histLine='';
+      h+=`<div class="srcrow" style="display:block;padding:10px 0;border-bottom:1px solid var(--line)">
+        <div style="font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+          ${r.code?'<span style="color:var(--muted);font-weight:700;font-size:12px">'+r.code+'</span> ':''}${baseName}
+          ${r.brand?'<span class="pill gray" style="font-size:11px;padding:1px 8px">'+r.brand+'</span>':''}
+          ${r.code?'<button class="btn small ghost" style="padding:2px 8px;font-size:11px" onclick="editBrand(\''+r.code+'\')">✎ edit</button>':''}
+          ${r.code?'<button class="btn small ghost" style="padding:2px 7px;font-size:11px;color:#c0392b" onclick="deleteMaterial(\''+r.code+'\',\''+r.name.replace(/'/g,"\\'")+'\')" title="Delete this item">🗑</button>':''}
+        </div>
+        ${r.code?`<div id="be-${r.code}" style="display:${OPEN_BRAND===r.code?'block':'none'};border:1px solid var(--line);border-radius:8px;padding:8px;margin-bottom:8px;background:var(--card2,#faf9f5)">
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+            <input id="be-name-${r.code}" value="${baseName.replace(/"/g,'&quot;')}" placeholder="item name" style="flex:1;min-width:120px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
+            <input id="be-brand-${r.code}" value="${(r.brand||'').replace(/"/g,'&quot;')}" placeholder="brand" style="flex:1;min-width:100px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
+            <button class="btn small" onclick="saveBrand('${r.code}')">Save</button>
+          </div>
+        </div>`:''}
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          ${(itemPriced && OPEN_PRICE!==idx) ? `
+            <span style="font-weight:600;font-size:14px">${money(cur)}</span>
+            ${priceMeta(r.code,r.name).supplier?`<span style="font-size:12px;color:var(--muted)">· ${priceMeta(r.code,r.name).supplier}</span>`:''}
+            ${priceMeta(r.code,r.name).link?`<a href="${(/^https?:\/\//i.test(priceMeta(r.code,r.name).link)?priceMeta(r.code,r.name).link:'https://'+priceMeta(r.code,r.name).link).replace(/"/g,'&quot;')}" target="_blank" style="font-size:12px;color:var(--accent,#5b4ddb);text-decoration:underline">↗ link</a>`:''}
+            <button class="btn small ghost" style="padding:3px 9px;font-size:12px" onclick="openPrice(${idx})">✎ edit</button>
+          ` : `
+            <span style="color:var(--muted)">₱</span>
+            <input type="number" min="0" step="0.01" id="cp-${idx}" value="${cur!=null?cur:''}" placeholder="0.00" style="width:80px;padding:6px 8px;border:1px solid ${itemPriced?'var(--line)':'#ba7517'};border-radius:8px;text-align:right;font-family:inherit;font-size:13px"/>
+            <input id="cs-${idx}" value="${(priceMeta(r.code,r.name).supplier||'').replace(/"/g,'&quot;')}" placeholder="supplier" style="flex:1;min-width:90px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
+            <button class="btn small" onclick="saveCodePrice('${r.code||''}','${r.name.replace(/'/g,"\\'")}',${idx})">Save</button>
+          `}
+        </div>
+        ${(itemPriced && OPEN_PRICE!==idx) ? '' : `<input id="cl-${idx}" value="${(priceMeta(r.code,r.name).link||'').replace(/"/g,'&quot;')}" placeholder="link / location (optional)" style="width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px;margin-top:5px"/>`}
+        ${histLine}
+      </div>`;
+    });
+  } else {
+    h+=`<div class="empty">No warehouse materials found. Add stock in the warehouse app first.</div>`;
+  }
+  h+=`</div>`;
+
+  const buys=DB.get('purchases').filter(p=>p.item && (p.type==='online'||p.type==='store'));
+  h+=`<div class="tabhead" style="margin-top:6px">Canvass history — every material you've bought, online and store together. Each source shows its unit price; the cheapest is flagged.</div>`;
+  if(!buys.length){ return h+`<div class="empty">No purchase price history yet. Online POs and store buys land here grouped by material.</div>`; }
+  const groups={};
+  buys.forEach(p=>{ const k=(p.item||'').trim().toLowerCase(); (groups[k]=groups[k]||[]).push(p); });
+  Object.keys(groups).sort().forEach(k=>{
+    const list=groups[k].slice().sort((a,b)=>(unitOf(a)||1e12)-(unitOf(b)||1e12));
+    const name=list[0].item;
+    const prices=list.map(unitOf).filter(n=>n>0);
+    const min=prices.length?Math.min(...prices):null;
+    h+=`<div class="card">
+      <div class="item-row"><div class="ttl">${name}</div>
+        <span class="pill gray">${list.length} ${list.length>1?'sources':'source'}</span></div>`;
+    list.forEach(p=>{
+      const u=unitOf(p);
+      const low=(min!==null && u===min && prices.length>1);
+      const tag=p.type==='online'?'<span class="pill purple tag">Online</span>':'<span class="pill teal tag">Store</span>';
+      const src=p.type==='online'
+        ? (p.website?`<a href="${p.website}" target="_blank" rel="noopener">${domain(p.website)}</a>`:`<span class="nolink">${p.party||'—'}</span>`)
+        : `<span class="nolink">${p.party||'—'}</span>`;
+      const sub=`${p.type==='online'&&p.party?p.party+' · ':''}${p.qty} ${p.unit} · ${p.date}${p.type==='store'&&p.or_no?' · OR '+p.or_no:''}`;
+      h+=`<div class="srcrow">
+        <div class="src"><div>${tag}${src}</div><div class="srcsub">${sub}</div></div>
+        <div class="srcprice">
+          <div class="up">${u?(isApprox(p)?'~':'')+money(u):'—'}${u?'<span class="per">/'+p.unit+'</span>':''}</div>
+          ${low?'<span class="pill green">lowest</span>':''}
+        </div>
+      </div>`;
+    });
+    h+=`</div>`;
+  });
+  return h;
+}
+
+function render(){
+  const map={inbox:viewInbox, approve:viewApprovals, buy:viewBuy, po:viewPO, prices:viewPrices};
+  const reqs=DB.get('requisitions');
+  const nNew=reqs.filter(r=>r.status==='for_purchase').length;
+  const nBuy=reqs.filter(r=>r.status==='accepted').length;
+  const nApp=DB.get('purchase_request').filter(r=>r.status==='Pending').length;
+  const pills=`<div class="pillbar">`+TABS.map(t=>{
+    let badge=0; if(t.id==='inbox') badge=nNew; if(t.id==='buy') badge=nBuy; if(t.id==='approve') badge=nApp;
+    return `<button class="${t.id===TAB?'on':''}" onclick="go('${t.id}')">${t.label}${badge?`<span class="badge">${badge}</span>`:''}</button>`;
+  }).join('')+`</div>`;
+  document.getElementById('view').innerHTML=pills+map[TAB]();
+  window.scrollTo(0,0);
+}
+function go(tab){ TAB=tab; render(); }
+
+/* ---- utils ---- */
+function val(id){ const e=document.getElementById(id); return e? e.value.trim():''; }
+function modal(html){ document.getElementById('modal-root').innerHTML=
+  `<div class="modal-bg"><div class="modal">${html}</div></div>`; }
+function closeModal(){ document.getElementById('modal-root').innerHTML=''; }
+function toast(msg){ const r=document.getElementById('toast-root');
+  r.innerHTML=`<div class="toast">${msg}</div>`; clearTimeout(window._tt);
+  window._tt=setTimeout(()=>r.innerHTML='',2600); }
+async function refresh(btn){
+  if(btn){btn.disabled=true;btn.textContent='Checking…';}
+  try{ await DB.load(); render(); toast('Up to date'); }
+  catch(e){ toast('Refresh failed: '+(e&&e.message?e.message:e)); if(btn){btn.disabled=false;btn.textContent='↻ Check for new requests';} }
+}
+
+async function boot(){
+  document.getElementById('view').innerHTML='<div class="empty"><div class="big">Loading…</div>Fetching from the database.</div>';
+  await DB.load();
+  render();
+}
+boot();
 </script>
 </body>
 </html>
