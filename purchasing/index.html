@@ -616,8 +616,20 @@ function toggleNewMat(show){
   const box=document.getElementById('newmat-box'); if(box) box.style.display=show?'block':'none';
   if(show){ const sel=document.getElementById('nm-prefix'); if(sel) updateNextCode(); }
 }
+function effectivePrefix(){
+  const sel=document.getElementById('nm-prefix'); if(!sel) return '';
+  if(sel.value==='__new__'){ const t=document.getElementById('nm-newpfx'); return t?t.value.trim().toUpperCase():''; }
+  return sel.value;
+}
+function onPrefixChange(){
+  const sel=document.getElementById('nm-prefix');
+  const box=document.getElementById('nm-newpfx');
+  if(box) box.style.display = (sel.value==='__new__')?'inline-block':'none';
+  if(sel.value==='__new__' && box) box.focus();
+  updateNextCode();
+}
 function updateNextCode(){
-  const pf=document.getElementById('nm-prefix').value;
+  const pf=effectivePrefix();
   const lbl=document.getElementById('nm-code');
   if(lbl) lbl.textContent = pf ? nextCodeFor(pf) : '—';
   // auto-fill the item name from an existing material that uses this prefix
@@ -824,11 +836,12 @@ async function saveBrand(code){
   }catch(e){ toast('Update failed: '+(e&&e.message?e.message:e)); }
 }
 async function saveNewMat(){
-  const pf=document.getElementById('nm-prefix').value;
+  const pf=effectivePrefix();
   const name=(document.getElementById('nm-name').value||'').trim();
   const brand=(document.getElementById('nm-brand').value||'').trim();
   const unit=document.getElementById('nm-unit').value;
-  if(!pf){ toast('Pick a code prefix'); return; }
+  if(!pf){ toast('Pick or type a code prefix'); return; }
+  if(!/^[A-Z]{1,4}$/.test(pf)){ toast('Prefix must be 1-4 letters'); return; }
   if(!name){ toast('Enter the material name'); return; }
   const fullLabel=brand?(name+' — '+brand):name;
   const dup=similarMaterial(fullLabel);
@@ -959,10 +972,12 @@ function viewPrices(){
     <div id="newmat-box" style="display:none;border:1px solid var(--line);border-radius:10px;padding:10px;margin-bottom:10px;background:var(--card2,#faf9f5)">
       <div style="font-weight:600;margin-bottom:6px">New brand / material</div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
-        <select id="nm-prefix" onchange="updateNextCode()" style="padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit">
+        <select id="nm-prefix" onchange="onPrefixChange()" style="padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit">
           <option value="">— prefix —</option>
           ${matPrefixes().map(p=>`<option value="${p}">${p}-</option>`).join('')}
+          <option value="__new__">➕ New prefix…</option>
         </select>
+        <input id="nm-newpfx" oninput="this.value=this.value.toUpperCase().replace(/[^A-Z]/g,'');updateNextCode()" placeholder="e.g. SP" maxlength="4" style="display:none;width:70px;padding:7px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;text-transform:uppercase"/>
         <span style="color:var(--muted);font-size:12px">code: <b id="nm-code">—</b></span>
       </div>
       <input id="nm-name" placeholder="Item name, e.g. Welding gloves" style="width:100%;padding:8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;margin-bottom:6px"/>
@@ -988,31 +1003,6 @@ function viewPrices(){
       }
       const hist = purchaseHistoryFor(r.code, r.name);
       let histLine='';
-      if(hist.length){
-        // best (latest) price per supplier
-        const bySup={};
-        hist.forEach(p=>{
-          const k=(p.party||'—');
-          if(!bySup[k]) bySup[k]={supplier:k, price:Number(p.unit_price), date:p.date||''};
-        });
-        const sups=Object.values(bySup);
-        const minP=Math.min.apply(null,sups.map(s=>s.price));
-        const rows=sups.sort((a,b)=>a.price-b.price).map(s=>{
-          const best=s.price===minP&&sups.length>1;
-          return `<div style="font-size:11px;${best?'color:#1e8449;font-weight:600':'color:var(--muted)'}">${best?'✓ ':''}${s.supplier} · ${money(s.price)}${s.date?' · '+s.date:''}</div>`;
-        }).join('');
-        let cmp='';
-        const last=hist[0];
-        if(cur!=null && Number(last.unit_price)!==cur){
-          const pct=Math.round(((cur-Number(last.unit_price))/Number(last.unit_price))*100);
-          const up=cur>Number(last.unit_price);
-          cmp=` <span style="color:${up?'#c0392b':'#1e8449'}">${up?'▲':'▼'} ${Math.abs(pct)}% vs last buy</span>`;
-        }
-        histLine=`<div style="margin-top:5px;padding:5px 7px;background:var(--card2,#faf9f5);border-radius:8px">
-          <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;margin-bottom:2px">Bought from${cmp}</div>
-          ${rows}
-        </div>`;
-      }
       h+=`<div class="srcrow" style="display:block;padding:10px 0;border-bottom:1px solid var(--line)">
         <div style="font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
           ${r.code?'<span style="color:var(--muted);font-weight:700;font-size:12px">'+r.code+'</span> ':''}${baseName}
