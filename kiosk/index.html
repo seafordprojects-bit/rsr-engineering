@@ -4417,9 +4417,12 @@ setTimeout(updateSyncBadge, 2500);
 (function(){
   if (!('serviceWorker' in navigator)) return;
   var refreshing = false;
-  // when the new SW takes control, reload once to run fresh code
+  // Only reload when the user explicitly taps the update bar (sets _userWantsReload).
+  // Avoids surprise reloads-to-splash while the kiosk is pinned/in use.
   navigator.serviceWorker.addEventListener('controllerchange', function(){
-    if (refreshing) return; refreshing = true; window.location.reload();
+    if (refreshing) return;
+    if (!window._userWantsReload) return;   // don't auto-reload unless user asked
+    refreshing = true; window.location.reload();
   });
   window.addEventListener('load', function(){
     navigator.serviceWorker.register('sw.js').then(function(reg){
@@ -4438,6 +4441,7 @@ setTimeout(updateSyncBadge, 2500);
               bar.style.display = 'flex';
               document.getElementById('pwa-reload').onclick = function(){
                 bar.style.display='none';
+                window._userWantsReload = true;
                 if (reg.waiting) reg.waiting.postMessage({type:'SKIP_WAITING'});
               };
             }
