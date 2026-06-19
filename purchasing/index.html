@@ -231,8 +231,13 @@ function openPO(reqId){
     <h2>Create purchase order</h2>
     <p class="msub">${r.ref} · ${r.item}${r.unit?' · '+r.unit:''}</p>
     ${brandPickerHTML(r.item)}
+    ${prevLinksHTML(r.item)}
     <div class="field"><label>Supplier / store name</label><input id="po_sup" placeholder="e.g. WeldPro on Lazada"></div>
-    <div class="field"><label>Website / link</label><input id="po_url" type="url" inputmode="url" placeholder="https://..."></div>
+    <div class="field"><label>Website / link</label>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input id="po_url" type="url" inputmode="url" placeholder="https://..." style="flex:1">
+        <button type="button" class="btn ghost small" onclick="openPoLink()" style="white-space:nowrap">↗ open</button>
+      </div></div>
     <div class="row2">
       <div class="field"><label>Quantity (${r.unit||'pcs'})</label><input id="po_qty" type="number" inputmode="decimal" min="0" step="any" placeholder="how many"></div>
       <div class="field"><label>Unit price (₱)</label><input id="po_unit" type="number" inputmode="decimal" placeholder="0.00"></div>
@@ -289,6 +294,44 @@ async function recordSourceFromPurchase({code,item,type,supplier,link,price}){
       await sb.from('material_sources').insert({code:code||null,item_name:item,source_type:type,source_name:supplier||null,link:link||null,price});
     }
   }catch(e){ /* non-blocking: purchase still succeeds */ }
+}
+// Build a picker of previously-used links/suppliers for this item (from purchases)
+function prevSourcesForItem(item){
+  const base=(item||'').split(' — ')[0].trim().toLowerCase();
+  const seen={}; const out=[];
+  DB.get('purchases').forEach(p=>{
+    const pi=(p.item||'').toLowerCase();
+    if(!(pi===(item||'').toLowerCase() || pi.split(' — ')[0].trim()===base)) return;
+    const key=((p.party||'')+'|'+(p.website||'')).toLowerCase();
+    if(seen[key]) return; seen[key]=1;
+    out.push({supplier:p.party||'', link:p.website||'', price:Number(p.unit_price)||null, date:p.date||''});
+  });
+  // also include the saved price-meta link/supplier
+  return out;
+}
+function prevLinksHTML(item){
+  const list=prevSourcesForItem(item).filter(s=>s.supplier||s.link);
+  if(!list.length) return '';
+  window._prevLinks=list;
+  const opts=list.map((s,i)=>`<option value="${i}">${s.supplier||'—'}${s.price!=null?' · ₱'+s.price:''}${s.date?' · '+s.date:''}</option>`).join('');
+  return `<div class="field"><label>Previous suppliers (tap to reuse)</label>
+    <select id="po_prev" onchange="pickPrevLink()">
+      <option value="">— choose a previous supplier/link —</option>${opts}
+    </select></div>`;
+}
+function pickPrevLink(){
+  const sel=document.getElementById('po_prev'); if(!sel||sel.value==='') return;
+  const s=(window._prevLinks||[])[parseInt(sel.value,10)]; if(!s) return;
+  const sup=document.getElementById('po_sup'), url=document.getElementById('po_url'), unit=document.getElementById('po_unit');
+  if(sup&&s.supplier) sup.value=s.supplier;
+  if(url&&s.link) url.value=s.link;
+  if(unit&&s.price!=null&&!unit.value) unit.value=s.price;
+}
+function openPoLink(){
+  const url=document.getElementById('po_url'); const v=url?url.value.trim():'';
+  if(!v){ toast('No link to open'); return; }
+  const full=/^https?:\/\//i.test(v)?v:('https://'+v);
+  window.open(full,'_blank','noopener');
 }
 async function savePO(reqId){
   const r=DB.get('requisitions').find(x=>x.id===reqId);
@@ -521,14 +564,16 @@ function whPriceList(){
   };};
   const seen={}; const out=[];
   DB.get('materials').forEach(m=>{
-    const b=(m.brand||'').trim(); const nm=b?(m.name+' — '+b):m.name; if(!nm) return; const k=nm.toLowerCase(); if(seen[k]) return; seen[k]=1;
+    const b=(m.brand||'').trim(); const nm=b?(m.name+' — '+b):m.name; if(!nm) return;
+    const dk=(m.code||nm).toLowerCase(); if(seen[dk]) return; seen[dk]=1;   // dedupe by CODE
+    const k=nm.toLowerCase();
     out.push(Object.assign({name:nm, code:m.code||'', brand:b, unit:m.unit||unitMap[k]||''}, pick(k)));
   });
   DB.get('warehouse_stock').forEach(s=>{
-    const nm=s.item_name; if(!nm) return; const k=nm.toLowerCase(); if(seen[k]) return; seen[k]=1;
+    const nm=s.item_name; if(!nm) return; const k=nm.toLowerCase(); const dk='n:'+k; if(seen[dk]||seen[k]) return; seen[dk]=1;
     out.push(Object.assign({name:nm, code:'', unit:s.unit||''}, pick(k)));
   });
-  DB.get('item_prices').forEach(r=>{ const k=(r.item_name||'').toLowerCase(); if(k&&!seen[k]){ seen[k]=1; out.push(Object.assign({name:r.item_name, code:'', unit:''}, pick(k))); } });
+  DB.get('item_prices').forEach(r=>{ const k=(r.item_name||'').toLowerCase(); const dk='n:'+k; if(k&&!seen[dk]&&!seen[k]){ seen[dk]=1; out.push(Object.assign({name:r.item_name, code:'', unit:''}, pick(k))); } });
   const codeByName={}; out.forEach(r=>{ codeByName[r.name]=r.code||''; });
   const hasPrice=(nm)=>sourcesFor(nm, codeByName[nm]).some(s=>s.price!=null&&Number(s.price)>0);
   return out.sort((a,b)=>{
@@ -603,6 +648,13 @@ function currentPrice(code,name){
   if(!r) r=ip.find(x=>(x.item_name||'')===name);
   return r&&r.price!=null?Number(r.price):null;
 }
+function priceMeta(code,name){
+  const ip=DB.get('item_prices');
+  let r=null;
+  if(code) r=ip.find(x=>(x.code||'')===code);
+  if(!r) r=ip.find(x=>(x.item_name||'')===name);
+  return { supplier:(r&&r.store_name)||'', link:(r&&r.online_link)||'' };
+}
 // Purchase history for a code/item (most recent first), with supplier + unit price
 function purchaseHistoryFor(code,name){
   return DB.get('purchases').filter(p=>{
@@ -615,13 +667,25 @@ async function saveCodePrice(code,name,idx){
   const el=document.getElementById('cp-'+idx); if(!el) return;
   const v=el.value!==''?parseFloat(el.value):null;
   if(v!=null&&(isNaN(v)||v<0)){ toast('Price invalid'); return; }
+  const supEl=document.getElementById('cs-'+idx), lnEl=document.getElementById('cl-'+idx);
+  const supplier=supEl?supEl.value.trim():''; const link=lnEl?lnEl.value.trim():'';
   const cur=currentPrice(code,name);
   try{
     if(cur!=null && v!=null && Number(cur)!==v){
       await sb.from('price_history').insert({item_name:name,code:code||null,source:'manual',old_price:cur,new_price:v});
     }
-    await sb.from('item_prices').upsert({item_name:name,code:code||null,price:v,updated_at:new Date().toISOString()},{onConflict:'item_name'});
-    toast('Price saved'); await DB.load(); render();
+    const fields={price:v, store_name:supplier||null, online_link:link||null, updated_at:new Date().toISOString()};
+    if(code){
+      const existing=DB.get('item_prices').find(x=>(x.code||'')===code);
+      if(existing){
+        await sb.from('item_prices').update(Object.assign({item_name:name},fields)).eq('id',existing.id);
+      } else {
+        await sb.from('item_prices').insert(Object.assign({item_name:name,code:code},fields));
+      }
+    } else {
+      await sb.from('item_prices').upsert(Object.assign({item_name:name},fields),{onConflict:'item_name'});
+    }
+    toast('Saved'); await DB.load(); render();
   }catch(e){ toast('Save failed: '+(e&&e.message?e.message:e)); }
 }
 function toggleAddSource(key){
@@ -913,11 +977,13 @@ function viewPrices(){
             <button class="btn small" onclick="saveBrand('${r.code}')">Save</button>
           </div>
         </div>`:''}
-        <div style="display:flex;gap:6px;align-items:center">
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           <span style="color:var(--muted)">₱</span>
-          <input type="number" min="0" step="0.01" id="cp-${idx}" value="${cur!=null?cur:''}" placeholder="0.00" style="width:90px;padding:6px 8px;border:1px solid ${itemPriced?'var(--line)':'#ba7517'};border-radius:8px;text-align:right;font-family:inherit;font-size:13px"/>
+          <input type="number" min="0" step="0.01" id="cp-${idx}" value="${cur!=null?cur:''}" placeholder="0.00" style="width:80px;padding:6px 8px;border:1px solid ${itemPriced?'var(--line)':'#ba7517'};border-radius:8px;text-align:right;font-family:inherit;font-size:13px"/>
+          <input id="cs-${idx}" value="${(priceMeta(r.code,r.name).supplier||'').replace(/"/g,'&quot;')}" placeholder="supplier" style="flex:1;min-width:90px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px"/>
           <button class="btn small" onclick="saveCodePrice('${r.code||''}','${r.name.replace(/'/g,"\\'")}',${idx})">Save</button>
         </div>
+        <input id="cl-${idx}" value="${(priceMeta(r.code,r.name).link||'').replace(/"/g,'&quot;')}" placeholder="link / location (optional)" style="width:100%;padding:6px 8px;border:1px solid var(--line);border-radius:8px;font-family:inherit;font-size:12px;margin-top:5px"/>
         ${histLine}
       </div>`;
     });
