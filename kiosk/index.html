@@ -1549,7 +1549,7 @@ function checkExportReminder(){/* replaced by autoExportCSV */}
 // ── FIX 3: Simple Screen Management ──
 // Dim after 30 mins → black after dim → tap to wake anytime
 let wakeLock=null,dimTimer=null,blackTimer=null,screenBlack=false;
-const DIM_AFTER_MS=30*60*1000;   // dim after 30 mins
+const DIM_AFTER_MS=5*60*1000;   // dim after 5 mins
 const BLACK_AFTER_MS=60*1000;    // go black 60 secs after dim
 
 async function requestWakeLock(){
