@@ -1091,11 +1091,29 @@ function showAllowanceBanner(emp){
 
 async function initCamera(){
   const dot=document.getElementById('cam-dot'),txt=document.getElementById('cam-status-txt');
-  try{
-    camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user',width:{ideal:400},height:{ideal:400}},audio:false});
-    const v=document.getElementById('cam-video');v.srcObject=camStream;await v.play();
-    camReady=true;dot.className='cam-dot active';txt.textContent='Camera ready';
-  }catch(e){camReady=false;dot.className='cam-dot error';txt.textContent='Camera unavailable';}
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    camReady=false;if(dot)dot.className='cam-dot error';
+    if(txt)txt.textContent='Camera API missing - enable Webcam Access (PLUS) in Fully Kiosk and load over HTTPS';
+    return;
+  }
+  const tries=[
+    {video:{facingMode:'user',width:{ideal:400},height:{ideal:400}},audio:false},
+    {video:{facingMode:'user'},audio:false},
+    {video:true,audio:false}
+  ];
+  let lastErr=null;
+  for(const constraints of tries){
+    try{
+      camStream=await navigator.mediaDevices.getUserMedia(constraints);
+      const v=document.getElementById('cam-video');
+      v.srcObject=camStream;
+      try{await v.play();}catch(pe){console.warn('video play warning (non-fatal):',pe&&pe.name);}
+      camReady=true;if(dot)dot.className='cam-dot active';if(txt)txt.textContent='Camera ready';
+      return;
+    }catch(e){lastErr=e;console.warn('getUserMedia failed:',constraints,e&&e.name,e&&e.message);}
+  }
+  camReady=false;if(dot)dot.className='cam-dot error';
+  if(txt)txt.textContent='Camera unavailable: '+(lastErr?lastErr.name:'unknown');
 }
 
 function capturePhoto(){
@@ -4038,8 +4056,6 @@ function exportUndertimeCSV(){
   downloadFile('undertime_'+todayKey().replace(/\//g,'-')+'.csv',csv,'text/csv');
 }
 
-// Fresh start — clear all stored data
-localStorage.clear();
 updateStats();renderRoster();updatePhotoFilter();updateSiteBadge();initCamera();loadData();requestWakeLock();resetDimTimer();scheduleMidnightReset();cleanupOldData();scheduleMonthlyExport();
 // Run absence check on load and schedule daily at midnight
 setTimeout(()=>{
