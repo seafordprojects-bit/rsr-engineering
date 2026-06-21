@@ -666,6 +666,10 @@ function App() {
   const [empVac, setEmpVac] = useState('');
   const [coordPin, setCoordPin] = useState('');
   const [sitePin, setSitePin] = useState('');
+  const [tgTokenV, setTgTokenV] = useState('');
+  const [tgGroupV, setTgGroupV] = useState('');
+  const [tgBackupV, setTgBackupV] = useState('');
+  const [tgLoaded, setTgLoaded] = useState(false);
   const [rate, setRate] = useState('');          // current/starting daily rate
   const [incRate, setIncRate] = useState('');     // new rate for an increase
   const [incDate, setIncDate] = useState('');
@@ -702,6 +706,14 @@ function App() {
     if (!sitePin.trim()) { flash('Enter a passcode'); return; }
     try { await setSetting('issuance_pin', sitePin.trim()); setSitePin(''); flash('Issuance passcode set'); }
     catch (e) { flash('Error: ' + e.message); }
+  };
+  const saveTg = async () => {
+    try {
+      await setSetting('tg_token', tgTokenV.trim());
+      await setSetting('tg_group', tgGroupV.trim());
+      await setSetting('tg_backup_group', tgBackupV.trim());
+      flash('Telegram settings saved');
+    } catch (e) { flash('Error: ' + e.message); }
   };
 
   const loadEmps = async () => { try { setEmps(await getEmployees()); } catch (_) {} };
@@ -778,6 +790,18 @@ function App() {
 
   useEffect(() => { if (authed && onAdminPage) loadEmps(); }, [authed]);
   useEffect(() => { if (authed && showSet) loadEmps(); }, [authed, showSet]);
+
+  useEffect(() => {
+    if (!(authed && showSet) || tgLoaded) return;
+    (async () => {
+      try {
+        const [tok, grp, bak] = await Promise.all([
+          getSetting('tg_token'), getSetting('tg_group'), getSetting('tg_backup_group'),
+        ]);
+        setTgTokenV(tok || ''); setTgGroupV(grp || ''); setTgBackupV(bak || ''); setTgLoaded(true);
+      } catch (_) {}
+    })();
+  }, [authed, showSet, tgLoaded]);
 
   useEffect(() => {
     if (!(authed && onAdminPage)) return;
@@ -1363,6 +1387,22 @@ function App() {
             <input type="password" inputmode="numeric" value=${sitePin} onInput=${e => setSitePin(e.target.value)} placeholder="e.g. 7777" />
           <//>
           <button class="btn" onClick=${saveSitePin}>Save issuance passcode</button>
+        </div>
+
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Telegram notifications</div>
+          <p class="note" style="margin:0 0 12px">Bot token and group IDs for punch notifications and photos. The attendance kiosk pulls these automatically — set them here once.</p>
+          <${Field} label="Bot token">
+            <input value=${tgTokenV} onInput=${e => setTgTokenV(e.target.value)} placeholder="123456789:ABC…" />
+          <//>
+          <${Field} label="Punch Log group ID (text notifications)">
+            <input value=${tgGroupV} onInput=${e => setTgGroupV(e.target.value)} placeholder="e.g. -5593083647" />
+          <//>
+          <${Field} label="Punch Photos group ID (every punch photo)">
+            <input value=${tgBackupV} onInput=${e => setTgBackupV(e.target.value)} placeholder="e.g. -5318493314" />
+          <//>
+          <button class="btn" onClick=${saveTg}>Save Telegram settings</button>
+          <p class="note" style="margin-top:10px">Tip: group IDs are negative numbers. After saving, hard-refresh the kiosk (or tap "Reload Telegram from Admin" on it) to pull the new values.</p>
         </div>
 
         <div class="card">
