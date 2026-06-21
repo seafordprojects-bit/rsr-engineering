@@ -606,21 +606,9 @@ textarea.field-input{resize:none;height:65px}
       <button onclick="saveSemaphoreSettings()" class="btn-primary" style="margin-top:8px">Save SMS settings</button>
       <div id="sms-settings-msg" style="font-size:12px;color:#085041;min-height:14px;margin-top:4px"></div>
       <h4 style="margin-top:16px">Telegram bot</h4>
-      <label class="field-label">Bot token</label>
-      <input type="text" id="tg-token" placeholder="123456789:ABCdefGHI..." class="field-input" />
-      <label class="field-label">Main group chat ID (punch notifications)</label>
-      <input type="text" id="tg-group" placeholder="-1001234567890" class="field-input" />
-      <label class="field-label">Position count group chat ID (attendance reports)</label>
-      <input type="text" id="tg-pos-group" placeholder="-1001234567890" class="field-input" />
-      <label class="field-label">Photo group chat ID (compiled album at Time Out)</label>
-      <input type="text" id="tg-photo-group" placeholder="-1001234567890" class="field-input" />
-      <label class="field-label">Photo backup group chat ID (every punch photo immediately)</label>
-      <input type="text" id="tg-backup-group" placeholder="-1001234567890" class="field-input" />
-      <label class="field-label">Manager chat IDs (one per line)</label>
-      <textarea id="tg-managers" placeholder="123456789&#10;987654321" class="field-input"></textarea>
-      <div style="display:flex;gap:8px;margin-top:10px">
-        <button onclick="saveTgSettings()" class="btn-primary" style="margin-top:0;flex:1">Save & activate</button>
-        <button onclick="sendTestMsg()" class="btn-sm" style="flex:1">Test</button>
+      <p style="font-size:12px;color:#555;margin:4px 0 10px;line-height:1.5">Telegram is now set in the <b>Admin page</b> (bot token &amp; group IDs). This kiosk pulls them automatically and uses them to send punch notifications and photos. No need to type anything here.</p>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button onclick="loadTgFromCloud(true)" class="btn-sm" style="flex:1">↻ Reload Telegram from Admin</button>
       </div>
       <div id="tg-msg" style="font-size:12px;margin-top:8px;min-height:14px;color:#085041"></div>
     </div>
@@ -4081,6 +4069,45 @@ setTimeout(()=>{
 const SUPABASE_URL = 'https://wpmcbjrisuyjvobvzaus.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
 const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ── TELEGRAM CONFIG FROM ADMIN (Supabase `settings` table) ──
+// The bot token + group IDs are encoded in the Admin page now, not here.
+// Pull them on startup; cache locally so punch notifications still work offline.
+async function loadTgFromCloud(showStatus){
+  const setMsg=(t,ok)=>{const el=document.getElementById('tg-msg');if(el){el.textContent=t;el.style.color=ok?'#085041':'#633806';if(showStatus)setTimeout(()=>{el.textContent='';},4000);}};
+  const keys=['tg_token','tg_group','tg_backup_group','tg_pos_group','tg_photo_group','mgr_ids'];
+  try{
+    const { data, error } = await sbClient.from('settings').select('key,value').in('key',keys);
+    if(error) throw error;
+    const map={}; (data||[]).forEach(r=>map[r.key]=r.value);
+    if(map.tg_token){
+      tgToken=(map.tg_token||'').trim();
+      tgGroup=(map.tg_group||'').trim();
+      tgBackupGroup=(map.tg_backup_group||'').trim();
+      tgPosGroup=(map.tg_pos_group||'').trim();
+      tgPhotoGroup=(map.tg_photo_group||'').trim();
+      mgrIds=(map.mgr_ids||'').split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
+      try{localStorage.setItem('rsr_tg',JSON.stringify({tgToken,tgGroup,tgBackupGroup,tgPosGroup,tgPhotoGroup,mgrIds}));}catch(e){}
+      setMsg('✅ Telegram loaded from Admin.',true);
+      return true;
+    }
+    setMsg('⚠ No Telegram settings found in Admin yet.',false);
+  }catch(e){
+    console.warn('loadTgFromCloud (will use cache):',e&&e.message);
+    setMsg('⚠ Offline — using last saved Telegram settings.',false);
+  }
+  // offline or not set → fall back to local cache
+  try{
+    const c=JSON.parse(localStorage.getItem('rsr_tg')||'null');
+    if(c&&c.tgToken){
+      tgToken=c.tgToken||'';tgGroup=c.tgGroup||'';tgBackupGroup=c.tgBackupGroup||'';
+      tgPosGroup=c.tgPosGroup||'';tgPhotoGroup=c.tgPhotoGroup||'';mgrIds=c.mgrIds||[];
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+loadTgFromCloud();
 
 // ── SYNC PUNCH RECORD TO SUPABASE ──
 // NOTE: syncRecordToSupabase + pushRecord are defined later (offline-queue version).
