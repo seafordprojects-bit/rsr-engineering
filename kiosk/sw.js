@@ -1,60 +1,65 @@
-/* RSR Kiosk service worker — offline cache + auto-update.
-   Bump CACHE_VERSION on every kiosk update so tablets fetch fresh files. */
-const CACHE_VERSION = 'rsr-kiosk-v6';
-const APP_SHELL = [
-  './',
-  './index.html',
-  './manifest.json',
-  './supabase.js',
-  './icon-192.png',
-  './icon-512.png'
-];
+// ============================================================
+//  sw.js — RSR Kiosk service worker
+//  Network-first for the page (so new deploys appear automatically),
+//  cache fallback for offline. Cross-origin calls (Supabase, AWS,
+//  Telegram, CDNs) are NOT intercepted — they pass straight through.
+// ============================================================
+const CACHE = 'rsr-kiosk-runtime-v1';
 
-// Install: pre-cache the app shell, then become the waiting worker.
-self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_VERSION).then((cache) => cache.addAll(APP_SHELL)).catch(() => {})
-  );
+self.addEventListener('install', () => {
+  // take over right away instead of waiting for old tabs to close
+  self.skipWaiting();
 });
 
-// Activate: delete old caches so we don't serve stale versions.
-self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_VERSION).map((k) => caches.delete(k)))
-    ).then(() => self.clients.claim())
-  );
+self.addEventListener('activate', (e) => {
+  e.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)));
+    await self.clients.claim();
+  })());
 });
 
-// Let the page tell us to activate immediately (the "Update now" button).
-self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+self.addEventListener('message', (e) => {
+  if (e.data && e.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
-self.addEventListener('fetch', (event) => {
-  const req = event.request;
-  const url = new URL(req.url);
+self.addEventListener('fetch', (e) => {
+  const req = e.request;
+  if (req.method !== 'GET') return;
 
-  // Only handle GET requests for our own origin's static files.
-  // NEVER cache or intercept Supabase / API / cross-origin calls — those
-  // must always hit the live network; the kiosk's own offline queue
-  // handles them when offline.
-  if (req.method !== 'GET') return;                 // skip POST/PATCH (Supabase writes)
-  if (url.origin !== self.location.origin) return;  // skip Supabase, CDNs, etc.
-  if (url.pathname.includes('/rest/') ||
-      url.pathname.includes('/auth/') ||
-      url.pathname.includes('/realtime/')) return;  // safety: skip any API-ish path
+  let url;
+  try { url = new URL(req.url); } catch (_) { return; }
 
-  // Network-first for the page itself (so updates show up when online),
-  // falling back to cache when offline.
-  event.respondWith(
-    fetch(req)
-      .then((res) => {
-        // refresh the cached copy on every successful online fetch
-        const copy = res.clone();
-        caches.open(CACHE_VERSION).then((cache) => cache.put(req, copy)).catch(() => {});
-        return res;
-      })
-      .catch(() => caches.match(req).then((hit) => hit || caches.match('./index.html')))
-  );
+  // Let cross-origin requests (Supabase, AWS, Telegram, CDN libs) pass through untouched.
+  if (url.origin !== self.location.origin) return;
+
+  const isHTML = req.mode === 'navigate' ||
+                 (req.headers.get('accept') || '').includes('text/html');
+
+  if (isHTML) {
+    // NETWORK-FIRST: always try to get the freshest page; fall back to cache offline.
+    e.respondWith((async () => {
+      try {
+        const fresh = await fetch(req, { cache: 'no-store' });
+        const cache = await caches.open(CACHE);
+        cache.put(req, fresh.clone());
+        return fresh;
+      } catch (err) {
+        const cached = await caches.match(req);
+        return cached || (await caches.match('./index.html')) || Response.error();
+      }
+    })());
+    return;
+  }
+
+  // Other same-origin assets: stale-while-revalidate (fast, but refreshes in background).
+  e.respondWith((async () => {
+    const cache = await caches.open(CACHE);
+    const cached = await cache.match(req);
+    const network = fetch(req).then((res) => {
+      if (res && res.status === 200) cache.put(req, res.clone());
+      return res;
+    }).catch(() => null);
+    return cached || (await network) || Response.error();
+  })());
 });
