@@ -4471,34 +4471,44 @@ setTimeout(updateSyncBadge, 2500);
 (function(){
   if (!('serviceWorker' in navigator)) return;
   var refreshing = false;
-  // Only reload when the user explicitly taps the update bar (sets _userWantsReload).
-  // Avoids surprise reloads-to-splash while the kiosk is pinned/in use.
+  // When the new worker takes control, reload once to load the fresh page.
   navigator.serviceWorker.addEventListener('controllerchange', function(){
     if (refreshing) return;
-    if (!window._userWantsReload) return;   // don't auto-reload unless user asked
-    refreshing = true; window.location.reload();
+    refreshing = true;
+    window.location.reload();
   });
+  // Don't interrupt someone mid-punch: only apply an update when the kiosk is idle.
+  function kioskBusy(){
+    try{
+      if (typeof curEmp !== 'undefined' && curEmp) return true;     // an employee is selected
+      if (document.querySelector('.modal-bg.show')) return true;    // a modal/overlay is open
+    }catch(e){}
+    return false;
+  }
+  function applyWhenIdle(reg){
+    (function tryApply(){
+      if (!reg.waiting) return;
+      if (kioskBusy()){ setTimeout(tryApply, 5000); return; }       // wait, then retry
+      reg.waiting.postMessage({type:'SKIP_WAITING'});               // activate -> controllerchange -> reload
+    })();
+  }
   window.addEventListener('load', function(){
-    navigator.serviceWorker.register('sw.js').then(function(reg){
-      // check for updates whenever we regain connection or every 10 min
+    // updateViaCache:'none' forces a fresh sw.js fetch (Fully Kiosk caches aggressively)
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function(reg){
       function check(){ reg.update().catch(function(){}); }
-      setInterval(check, 10*60*1000);
+      check();
+      setInterval(check, 60*1000);                                  // check every minute
       window.addEventListener('online', check);
+      document.addEventListener('visibilitychange', function(){
+        if (document.visibilityState === 'visible') check();        // check on screen wake
+      });
+      if (reg.waiting) applyWhenIdle(reg);                          // update already waiting
       reg.addEventListener('updatefound', function(){
         var nw = reg.installing;
         if (!nw) return;
         nw.addEventListener('statechange', function(){
-          // new version installed and an old one is already controlling => update ready
           if (nw.state === 'installed' && navigator.serviceWorker.controller){
-            var bar = document.getElementById('pwa-update');
-            if (bar){
-              bar.style.display = 'flex';
-              document.getElementById('pwa-reload').onclick = function(){
-                bar.style.display='none';
-                window._userWantsReload = true;
-                if (reg.waiting) reg.waiting.postMessage({type:'SKIP_WAITING'});
-              };
-            }
+            applyWhenIdle(reg);                                     // auto-apply, no manual tap
           }
         });
       });
