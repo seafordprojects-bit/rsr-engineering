@@ -1106,12 +1106,15 @@ async function initCamera(){
 
 function capturePhoto(){
   return new Promise(res=>{
-    if(!camReady){res(null);return;}
-    const v=document.getElementById('cam-video'),c=document.getElementById('cam-canvas');
-    c.width=400;c.height=400;
-    const ctx=c.getContext('2d');
-    ctx.save();ctx.translate(400,0);ctx.scale(-1,1);ctx.drawImage(v,0,0,400,400);ctx.restore();
-    res(c.toDataURL('image/jpeg',0.75));
+    try{
+      if(!camReady){res(null);return;}
+      const v=document.getElementById('cam-video'),c=document.getElementById('cam-canvas');
+      if(!v||!c||!v.videoWidth){res(null);return;}
+      c.width=400;c.height=400;
+      const ctx=c.getContext('2d');
+      ctx.save();ctx.translate(400,0);ctx.scale(-1,1);ctx.drawImage(v,0,0,400,400);ctx.restore();
+      res(c.toDataURL('image/jpeg',0.75));
+    }catch(e){console.warn('capturePhoto failed (non-fatal):',e&&e.message);res(null);}
   });
 }
 
@@ -1549,7 +1552,15 @@ async function requestWakeLock(){
   }catch(e){console.warn('Wake lock:',e);}
 }
 document.addEventListener('visibilitychange',async()=>{
-  if(document.visibilityState==='visible'&&!wakeLock)await requestWakeLock();
+  if(document.visibilityState==='visible'){
+    if(!wakeLock)await requestWakeLock();
+    // Camera stream can die while the screen is off; re-acquire it on wake
+    // so punch photos keep working. Re-init if the stream is missing or stale.
+    const v=document.getElementById('cam-video');
+    if(!camReady||!camStream||!camStream.active||(v&&!v.videoWidth)){
+      try{await initCamera();}catch(e){console.warn('camera re-init on wake failed:',e&&e.message);}
+    }
+  }
 });
 
 function dimScreen(){
