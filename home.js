@@ -685,6 +685,8 @@ function App() {
   const [tgGroupV, setTgGroupV] = useState('');
   const [tgBackupV, setTgBackupV] = useState('');
   const [tgLoaded, setTgLoaded] = useState(false);
+  const [shiftStartV, setShiftStartV] = useState('08:00');
+  const [dismissalV, setDismissalV] = useState('21:00');
   const [rate, setRate] = useState('');          // current/starting daily rate
   const [incRate, setIncRate] = useState('');     // new rate for an increase
   const [incDate, setIncDate] = useState('');
@@ -728,6 +730,15 @@ function App() {
       await setSetting('tg_group', tgGroupV.trim());
       await setSetting('tg_backup_group', tgBackupV.trim());
       flash('Telegram settings saved');
+    } catch (e) { flash('Error: ' + e.message); }
+  };
+  const saveTimes = async () => {
+    const re = /^\d{1,2}:\d{2}$/;
+    if (!re.test(shiftStartV) || !re.test(dismissalV)) { flash('Enter valid times (HH:MM)'); return; }
+    try {
+      await setSetting('shift_start', shiftStartV);
+      await setSetting('dismissal', dismissalV);
+      flash('Attendance times saved — kiosk picks them up on next refresh');
     } catch (e) { flash('Error: ' + e.message); }
   };
 
@@ -810,10 +821,12 @@ function App() {
     if (!(authed && showSet) || tgLoaded) return;
     (async () => {
       try {
-        const [tok, grp, bak] = await Promise.all([
+        const [tok, grp, bak, ss, dis] = await Promise.all([
           getSetting('tg_token'), getSetting('tg_group'), getSetting('tg_backup_group'),
+          getSetting('shift_start'), getSetting('dismissal'),
         ]);
         setTgTokenV(tok || ''); setTgGroupV(grp || ''); setTgBackupV(bak || ''); setTgLoaded(true);
+        if (ss) setShiftStartV(ss); if (dis) setDismissalV(dis);
       } catch (_) {}
     })();
   }, [authed, showSet, tgLoaded]);
@@ -1409,6 +1422,19 @@ function App() {
             <input type="password" inputmode="numeric" value=${sitePin} onInput=${e => setSitePin(e.target.value)} placeholder="e.g. 7777" />
           <//>
           <button class="btn" onClick=${saveSitePin}>Save issuance passcode</button>
+        </div>
+
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Attendance times (kiosk override)</div>
+          <p class="note" style="margin:0 0 12px">Sets the morning clock-in and evening clock-out used by the kiosk. The kiosk pulls these automatically. Example: set 07:00 and a 7:00 AM time-in with a 12:00 NN lunch-out computes as 5 hours.</p>
+          <${Field} label="Morning clock-in">
+            <input type="time" value=${shiftStartV} onInput=${e => setShiftStartV(e.target.value)} />
+          <//>
+          <${Field} label="Evening clock-out">
+            <input type="time" value=${dismissalV} onInput=${e => setDismissalV(e.target.value)} />
+          <//>
+          <button class="btn" onClick=${saveTimes}>Save attendance times</button>
+          <p class="note" style="margin-top:10px">After saving, the kiosk applies these on its next refresh (or hard-refresh the tablet).</p>
         </div>
 
         <div class="card">
