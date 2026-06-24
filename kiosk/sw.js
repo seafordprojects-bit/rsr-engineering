@@ -1,65 +1,4453 @@
-// ============================================================
-//  sw.js — RSR Kiosk service worker
-//  Network-first for the page (so new deploys appear automatically),
-//  cache fallback for offline. Cross-origin calls (Supabase, AWS,
-//  Telegram, CDNs) are NOT intercepted — they pass straight through.
-// ============================================================
-const CACHE = 'rsr-kiosk-runtime-v1';
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<script src="supabase.js"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>RSR Engineering Attendance</title>
+<link rel="manifest" href="manifest.json" />
+<meta name="theme-color" content="#11161c" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-title" content="RSR Kiosk" />
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#1a1a1a;background:#f5f5f0;min-height:100vh}
+.wrap{max-width:480px;margin:0 auto;padding:14px}
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.app-title{font-size:16px;font-weight:700;color:#1a1a1a;text-transform:uppercase;letter-spacing:0.08em;text-align:center}
+.hdr-right{text-align:right}
+.hdr-date{font-size:11px;color:#888}
+.site-badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 10px;border-radius:999px;margin-top:2px}
+.site-a{background:#E1F5EE;color:#085041}
+.site-b{background:#E6F1FB;color:#0C447C}
+.tabs{display:flex;gap:2px;margin-bottom:14px;background:#e8e8e3;border-radius:10px;padding:3px}
+.tab{flex:1;padding:7px 3px;font-size:11px;cursor:pointer;border:none;background:none;color:#666;border-radius:7px;font-weight:500;transition:all .2s;white-space:nowrap}
+.tab.active{background:#fff;color:#1a1a1a;box-shadow:0 1px 3px rgba(0,0,0,.1)}
+.tab.hidden{display:none}
+.section{display:none}.section.active{display:block}
+.clock-box{text-align:center;margin-bottom:12px;background:#fff;border-radius:16px;padding:14px;border:1px solid #e8e8e3}
+.big-time{font-size:36px;font-weight:600;letter-spacing:2px;font-variant-numeric:tabular-nums}
+.big-date{font-size:12px;color:#666;margin-top:2px}
+.shift-pill{display:inline-block;background:#f0f0eb;border-radius:999px;padding:2px 12px;font-size:10px;color:#555;margin-top:5px}
+.cam-status{display:flex;align-items:center;justify-content:center;gap:6px;font-size:11px;color:#888;margin-bottom:8px}
+.cam-dot{width:7px;height:7px;border-radius:50%;background:#ccc;flex-shrink:0}
+.cam-dot.active{background:#1D9E75}.cam-dot.error{background:#E24B4A}
+.pin-display{background:#fff;border:1px solid #e8e8e3;border-radius:16px;padding:14px 20px;text-align:center;margin-bottom:10px}
+.pin-dots{display:flex;justify-content:center;gap:20px;margin-bottom:7px;min-height:22px}
+.pin-dot{width:18px;height:18px;border-radius:50%;border:2px solid #ccc;background:transparent;transition:all .15s}
+.pin-dot.filled{background:#378ADD;border-color:#378ADD}
+.pin-hint{font-size:12px;color:#888}
+.emp-preview{background:#fff;border:1px solid #e8e8e3;border-radius:14px;padding:10px 14px;margin-bottom:10px;display:none}
+.prev-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px}
+.prev-photo{width:46px;height:46px;border-radius:50%;object-fit:cover;border:2px solid #e8e8e3;flex-shrink:0;display:none}
+.prev-name{font-weight:700;font-size:26px;color:#1B2A4A;line-height:1.1}
+.prev-dept{font-size:11px;color:#888;margin-top:2px}
+.prev-meta{text-align:right;flex-shrink:0}
+.prev-pin{font-size:13px;font-weight:700;color:#185FA5;background:#E6F1FB;padding:3px 10px;border-radius:20px;display:inline-block}
+.prev-site{font-size:11px;color:#aaa;margin-top:3px;text-align:right}
+.prev-punches{margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:4px 10px}
+.punch-row{display:flex;align-items:center;gap:6px;background:#f7f7f4;border-radius:8px;padding:5px 10px}
+.punch-lbl{font-size:11px;color:#aaa;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;min-width:68px}
+.punch-val{font-size:15px;font-weight:700;color:#1B2A4A}
+.punch-val.empty{color:#ccc;font-weight:400;font-size:13px}
+#screen-off-overlay{display:none;position:fixed;inset:0;background:#000;z-index:99999;cursor:pointer;flex-direction:column;align-items:center;justify-content:center;gap:12px}
+#screen-off-overlay.show{display:flex}
+#screen-dim-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:99998;cursor:pointer}
+#screen-dim-overlay.show{display:block}
+.mt-day-card{background:#fff;border-radius:14px;padding:14px 16px;margin-bottom:8px;border:1px solid #e8e8e3;box-shadow:0 1px 6px rgba(0,0,0,0.05)}
+.mt-day-card.absent{background:#FFF5F5;border-color:#FAD4D4}
+.mt-day-card.today{border-color:#185FA5;border-width:2px}
+.mt-day-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.mt-day-name{font-size:14px;font-weight:700;color:#1B2A4A}
+.mt-day-date{font-size:11px;color:#888}
+.mt-punch-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px}
+.mt-punch-item{background:#f7f7f4;border-radius:8px;padding:6px 8px;text-align:center}
+.mt-punch-lbl{font-size:9px;color:#aaa;text-transform:uppercase;letter-spacing:0.04em;font-weight:600}
+.mt-punch-val{font-size:12px;font-weight:700;color:#1B2A4A;margin-top:2px}
+.mt-punch-val.empty{color:#ccc;font-weight:400}
+.mt-hours{font-size:12px;font-weight:700;color:#0D8C7A;margin-top:8px;text-align:right}
+.mt-absent-label{font-size:14px;font-weight:600;color:#D64045;text-align:center;padding:8px 0}
+.punch-lbl{display:inline-block;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:600;margin-right:3px;margin-bottom:2px}
+.pl-in{background:#E1F5EE;color:#085041}.pl-out{background:#FCEBEB;color:#791F1F}
+.pl-break{background:#FAEEDA;color:#633806}.pl-resume{background:#E6F1FB;color:#0C447C}
+.bal-row{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+.bal-chip{display:inline-flex;align-items:center;gap:3px;background:#f0f0eb;border-radius:999px;padding:2px 9px;font-size:10px;color:#666}
+.bal-chip span{font-weight:600;color:#1a1a1a}
+.allowance-banner{display:none;background:#E1F5EE;border:1px solid #5DCAA5;border-radius:10px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#085041;font-weight:600;text-align:center}
+.allowance-banner.away{background:#FAEEDA;border-color:#FAC775;color:#633806}
+.keypad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px}
+.key{height:62px;font-size:24px;font-weight:500;border-radius:14px;cursor:pointer;border:1px solid #e8e8e3;background:#fff;color:#1a1a1a;display:flex;align-items:center;justify-content:center;user-select:none}
+.key:active{background:#f0f0eb;transform:scale(.97)}
+.key.del{font-size:16px;color:#888}.key.zero{grid-column:2}
+.punch-btns{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-bottom:10px}
+.pbtn{padding:13px 6px;font-size:15px;font-weight:700;border-radius:13px;cursor:pointer;border:none;text-align:center;user-select:none}
+.pbtn:disabled{opacity:.22;cursor:not-allowed}
+.pbtn-in{background:#1D9E75;color:#fff;grid-column:span 2}
+.pbtn-break{background:#EF9F27;color:#fff}
+.pbtn-resume{background:#378ADD;color:#fff}
+.pbtn-timeout{background:#E24B4A;color:#fff;grid-column:span 2}
+.pbtn-leave{background:#7F77DD;color:#fff;grid-column:span 2}
+.pbtn-undertime{background:#D85A30;color:#fff;grid-column:span 2}
+.pbtn.highlight-next{box-shadow:0 0 0 4px rgba(55,138,221,.35);animation:glow 1s infinite}
+@keyframes glow{0%,100%{box-shadow:0 0 0 4px rgba(55,138,221,.35)}50%{box-shadow:0 0 0 6px rgba(55,138,221,.15)}}
+.msg-box{border-radius:13px;padding:11px 14px;margin-bottom:8px;display:none}
+.msg-box.show{display:block}
+.msg-box.ok{background:#E1F5EE;border:1px solid #5DCAA5}
+.msg-box.err{background:#FCEBEB;border:1px solid #F09595}
+.msg-box.warn{background:#FAEEDA;border:1px solid #FAC775}
+.msg-title{font-size:13px;font-weight:600;margin-bottom:3px}
+.msg-title.ok{color:#085041}.msg-title.err{color:#791F1F}.msg-title.warn{color:#633806}
+.msg-sub{font-size:12px}
+.msg-sub.ok{color:#0F6E56}.msg-sub.err{color:#A32D2D}.msg-sub.warn{color:#854F0B}
+.photo-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:100;align-items:center;justify-content:center;flex-direction:column;gap:12px}
+.photo-overlay.show{display:flex}
+.photo-overlay img{width:160px;height:160px;border-radius:50%;object-fit:cover;border:4px solid #fff}
+.photo-overlay-name{color:#fff;font-size:15px;font-weight:600}
+.photo-overlay-sub{color:rgba(255,255,255,.7);font-size:12px}
+.tg-sending{color:rgba(255,255,255,.8);font-size:11px;margin-top:4px}
+.stats-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:14px}
+.stat{background:#fff;border-radius:13px;padding:11px;border:1px solid #e8e8e3;text-align:center}
+.stat-label{font-size:10px;color:#888;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px}
+.stat-val{font-size:20px;font-weight:600}
+.stat-val.late{color:#D85A30}.stat-val.leave{color:#534AB7}.stat-val.away{color:#EF9F27}
+.admin-lock{background:#fff;border:1px solid #e8e8e3;border-radius:16px;padding:2rem;text-align:center;max-width:320px;margin:0 auto}
+.admin-lock h3{font-size:16px;font-weight:600;margin-bottom:6px}
+.admin-lock p{font-size:13px;color:#888;margin-bottom:14px}
+.admin-lock input{width:100%;font-size:16px;padding:10px 14px;border:1px solid #e8e8e3;border-radius:10px;background:#f9f9f7;color:#1a1a1a;text-align:center;letter-spacing:3px;margin-bottom:10px}
+.admin-content{display:none}.admin-content.show{display:block}
+.timer-bar{background:#f0f0eb;border-radius:10px;padding:8px 14px;margin-bottom:12px;display:flex;align-items:center;gap:10px;border:1px solid #e8e8e3}
+#session-bar{display:none;background:#1B2A4A;padding:8px 14px;margin-bottom:8px;border-radius:10px;align-items:center;gap:10px}
+#session-bar.show{display:flex}
+#session-bar .s-role{font-size:11px;font-weight:700;color:rgba(255,255,255,0.7);white-space:nowrap}
+#session-bar .s-logout{background:rgba(255,255,255,0.15);border:none;color:white;font-size:11px;font-weight:600;padding:4px 12px;border-radius:8px;cursor:pointer;white-space:nowrap}
+#session-bar .s-logout:hover{background:rgba(255,255,255,0.25)}
+#session-bar .s-track{flex:1;background:rgba(255,255,255,0.15);border-radius:999px;height:6px}
+#session-bar .s-fill{height:6px;background:#12B89E;border-radius:999px;transition:width 1s linear}
+#session-bar .s-fill.urgent{background:#E24B4A}
+#session-bar .s-lbl{font-size:11px;color:rgba(255,255,255,0.7);min-width:28px;text-align:right;font-variant-numeric:tabular-nums}
+.timer-track{flex:1;height:5px;background:#ddd;border-radius:999px;overflow:hidden}
+.timer-fill{height:100%;background:#378ADD;border-radius:999px;transition:width 1s linear}
+.timer-fill.urgent{background:#E24B4A}
+.timer-lbl{font-size:11px;color:#888;min-width:28px;text-align:right;font-variant-numeric:tabular-nums}
+.toolbar{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.toolbar input,.toolbar select{font-size:13px;padding:8px 10px;border:1px solid #e8e8e3;border-radius:10px;background:#fff;color:#1a1a1a;flex:1;min-width:100px}
+.tbl-wrap{overflow-x:auto;background:#fff;border-radius:14px;border:1px solid #e8e8e3}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{text-align:left;padding:9px;font-weight:600;color:#888;font-size:10px;text-transform:uppercase;letter-spacing:.04em;border-bottom:1px solid #e8e8e3;white-space:nowrap}
+td{padding:9px;border-bottom:1px solid #f0f0eb;color:#1a1a1a;white-space:nowrap}
+tr:last-child td{border-bottom:none}
+.pill{display:inline-block;font-size:10px;padding:2px 7px;border-radius:999px;font-weight:600}
+.pill-in{background:#E1F5EE;color:#085041}.pill-out{background:#f0f0eb;color:#666}
+.pill-break{background:#FAEEDA;color:#633806}.pill-late{background:#FCEBEB;color:#791F1F}
+.pill-absent{background:#f0f0eb;color:#aaa}.pill-away{background:#FAEEDA;color:#633806}
+.pill-home{background:#E1F5EE;color:#085041}
+.pill-incomplete{background:#FFF3CD;color:#856404}
+.pill-pending{background:#EEEDFE;color:#3C3489}.pill-approved{background:#E1F5EE;color:#085041}.pill-rejected{background:#FCEBEB;color:#791F1F}
+.photo-thumb{width:34px;height:34px;border-radius:50%;object-fit:cover;border:1px solid #e8e8e3;vertical-align:middle}
+.no-photo{width:34px;height:34px;border-radius:50%;background:#f0f0eb;display:inline-flex;align-items:center;justify-content:center;font-size:9px;color:#aaa;vertical-align:middle}
+.photo-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:10px}
+.photo-card{background:#fff;border:1px solid #e8e8e3;border-radius:14px;overflow:hidden}
+.photo-card img{width:100%;aspect-ratio:1;object-fit:cover;display:block}
+.photo-card-info{padding:8px 10px}
+.photo-card-name{font-size:12px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.photo-card-meta{font-size:10px;color:#888;margin-top:2px}
+.card{background:#fff;border:1px solid #e8e8e3;border-radius:16px;padding:1.25rem;margin-bottom:12px}
+.card h4{font-size:13px;font-weight:600;margin-bottom:12px}
+.field-label{font-size:12px;color:#888;display:block;margin-bottom:4px;margin-top:10px}
+.field-label:first-of-type{margin-top:0}
+.field-input{width:100%;font-size:13px;padding:9px 12px;border:1px solid #e8e8e3;border-radius:10px;background:#f9f9f7;color:#1a1a1a}
+textarea.field-input{resize:none;height:65px}
+.btn-primary{width:100%;padding:12px;font-size:13px;font-weight:600;border-radius:12px;cursor:pointer;border:none;background:#378ADD;color:#fff;margin-top:12px}
+.btn-green{background:#1D9E75}.btn-sm{font-size:12px;padding:7px 14px;border-radius:10px;cursor:pointer;border:1px solid #e8e8e3;background:#fff;color:#1a1a1a}
+.leave-card{background:#fff;border:1px solid #e8e8e3;border-radius:14px;padding:1rem;margin-bottom:10px}
+.leave-card-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.leave-card-meta{font-size:12px;color:#888;margin-bottom:4px}
+.leave-card-reason{font-size:12px;color:#888;font-style:italic;margin-bottom:8px}
+.leave-card-btns{display:flex;gap:8px}
+.btn-approve{padding:7px 16px;font-size:12px;font-weight:600;border-radius:10px;cursor:pointer;border:none;background:#E1F5EE;color:#085041}
+.btn-reject{padding:7px 16px;font-size:12px;font-weight:600;border-radius:10px;cursor:pointer;border:none;background:#FCEBEB;color:#791F1F}
+.bal-editor{background:#f9f9f7;border-radius:10px;padding:10px 14px;margin-bottom:10px}
+.bal-editor-row{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.bal-editor-row:last-child{margin-bottom:0}
+.bal-editor-row label{font-size:12px;color:#888;flex:1}
+.bal-editor-row input{width:70px;font-size:13px;padding:5px 8px;border:1px solid #e8e8e3;border-radius:8px;background:#fff;color:#1a1a1a;text-align:center}
+.sec-title{font-size:11px;font-weight:600;color:#888;text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;margin-top:16px}
+.sec-title:first-of-type{margin-top:0}
+.empty-state{text-align:center;color:#aaa;padding:2rem;font-size:13px}
+.emp-row{display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid #f0f0eb}
+.emp-row:last-child{border-bottom:none}
+.emp-avatar{width:34px;height:34px;border-radius:50%;background:#E6F1FB;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#185FA5;flex-shrink:0}
+.emp-info{flex:1;min-width:0}
+.emp-name{font-size:13px;font-weight:600;white-space:normal;word-break:break-word}
+.emp-sub{font-size:11px;color:#888}
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;align-items:flex-end;justify-content:center}
+.modal-bg.show{display:flex}
+.modal{background:#fff;border-radius:20px 20px 0 0;padding:1.5rem;width:100%;max-width:480px}
+.modal h3{font-size:15px;font-weight:600;margin-bottom:14px}
+.allowance-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f0f0eb}
+.allowance-row:last-child{border-bottom:none}
+.allow-name{font-size:13px;font-weight:600}
+.allow-meta{font-size:11px;color:#888;margin-top:1px}
+.allow-amount{font-size:14px;font-weight:700;color:#1D9E75}
+.allow-override{display:flex;gap:6px;align-items:center;margin-top:6px}
+.allow-override input{width:80px;font-size:13px;padding:5px 8px;border:1px solid #e8e8e3;border-radius:8px;background:#f9f9f7;color:#1a1a1a;text-align:center}
+.notif-item{background:#f9f9f7;border-radius:10px;padding:8px 12px;margin-bottom:6px;font-size:12px;border-left:3px solid #378ADD}
+.notif-item.late-n{border-left-color:#E24B4A}
+.notif-item.summary-n{border-left-color:#7F77DD}
+.notif-time{font-size:10px;color:#aaa;margin-top:2px}
+.tg-sent{display:inline-block;font-size:10px;padding:1px 7px;border-radius:999px;font-weight:600;margin-left:6px;background:#E1F5EE;color:#085041}
+.tg-demo{display:inline-block;font-size:10px;padding:1px 7px;border-radius:999px;font-weight:600;margin-left:6px;background:#FAEEDA;color:#633806}
+.location-selector{background:#fff;border:1px solid #e8e8e3;border-radius:14px;padding:12px 14px;margin-bottom:10px}
+.location-selector label{font-size:11px;color:#888;display:block;margin-bottom:6px;font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.loc-btns{display:flex;gap:8px}
+.loc-btn{flex:1;padding:10px;font-size:12px;font-weight:600;border-radius:10px;cursor:pointer;border:2px solid #e8e8e3;background:#fff;color:#888;text-align:center}
+.loc-btn.selected-a{border-color:#1D9E75;background:#E1F5EE;color:#085041}
+.loc-btn.selected-b{border-color:#378ADD;background:#E6F1FB;color:#0C447C}
+.allowance-summary-card{background:#fff;border:1px solid #e8e8e3;border-radius:14px;padding:1rem;margin-bottom:10px}
+.allow-sum-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}
+.allow-sum-total{font-size:18px;font-weight:700;color:#1D9E75}
+</style>
+</head>
+<body>
 
-self.addEventListener('install', () => {
-  // take over right away instead of waiting for old tabs to close
-  self.skipWaiting();
-});
+<div id="photo-overlay" class="photo-overlay">
+  <img id="po-img" src="" alt="" />
+  <div class="photo-overlay-name" id="po-name"></div>
+  <div class="photo-overlay-sub" id="po-sub"></div>
+  <div class="tg-sending" id="po-tg"></div>
+</div>
 
-self.addEventListener('activate', (e) => {
-  e.waitUntil((async () => {
-    const keys = await caches.keys();
-    await Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)));
-    await self.clients.claim();
-  })());
-});
+<video id="cam-video" style="display:none" autoplay playsinline muted></video>
+<canvas id="cam-canvas" style="display:none"></canvas>
 
-self.addEventListener('message', (e) => {
-  if (e.data && e.data.type === 'SKIP_WAITING') self.skipWaiting();
-});
+<div class="wrap">
+  <div class="header">
+    <div style="text-align:center;width:100%">
+      <div class="app-title" id="app-title-el">RSR ENGINEERING</div>
+      <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
+        <span>Attendance Kiosk</span>
+        <span id="site-badge-wrap"></span>
+      </div>
+    </div>
+  </div>
 
-self.addEventListener('fetch', (e) => {
-  const req = e.request;
-  if (req.method !== 'GET') return;
+  <div id="sync-badge" style="display:none;align-items:center;justify-content:center;gap:8px;font-size:12px;font-weight:700;padding:7px 14px;border-radius:10px;margin-bottom:10px;text-align:center"></div>
 
-  let url;
-  try { url = new URL(req.url); } catch (_) { return; }
+  <div class="tabs" id="tab-bar">
+    <button class="tab active" id="tab-btn-clock" onclick="switchTab('clock',this)">Clock</button>
+    <button class="tab" id="tab-btn-mytime" onclick="switchTab('mytime',this)">My Time</button>
 
-  // Let cross-origin requests (Supabase, AWS, Telegram, CDN libs) pass through untouched.
-  if (url.origin !== self.location.origin) return;
 
-  const isHTML = req.mode === 'navigate' ||
-                 (req.headers.get('accept') || '').includes('text/html');
+    <button class="tab hidden" id="tab-btn-log" onclick="switchTab('log',this)">Log</button>
+    <button class="tab hidden" id="tab-btn-asst-leave" onclick="switchTab('asst-leave',this)">File Leave</button>
+    <button class="tab hidden" id="tab-btn-asst-status" onclick="switchTab('asst-status',this)">Leave Status</button>
+    <button class="tab hidden" id="tab-btn-allowance" onclick="switchTab('allowance',this)">Allowance</button>
+    <button class="tab hidden" id="tab-btn-undertime" onclick="switchTab('undertime',this)">Undertime</button>
+    <button class="tab hidden" id="tab-btn-photos" onclick="switchTab('photos',this)">Photos</button>
+    <button class="tab hidden" id="tab-btn-staff" onclick="switchTab('staff',this)">Staff</button>
+    <button class="tab hidden" id="tab-btn-settings" onclick="switchTab('settings',this)">Settings</button>
+    <button class="tab hidden" id="tab-btn-smslog" onclick="switchTab('smslog',this)">SMS Log</button>
+  </div>
 
-  if (isHTML) {
-    // NETWORK-FIRST: always try to get the freshest page; fall back to cache offline.
-    e.respondWith((async () => {
-      try {
-        const fresh = await fetch(req, { cache: 'no-store' });
-        const cache = await caches.open(CACHE);
-        cache.put(req, fresh.clone());
-        return fresh;
-      } catch (err) {
-        const cached = await caches.match(req);
-        return cached || (await caches.match('./index.html')) || Response.error();
+  <!-- CLOCK TAB -->
+  <div id="tab-clock" class="section active">
+    <div class="clock-box">
+      <div class="big-time" id="live-time">--:--:--</div>
+      <div class="big-date" id="live-date"></div>
+      <div><span class="shift-pill" id="shift-pill">Shift: 8:00 AM · Grace: until 8:10 AM</span></div>
+    </div>
+    <div class="cam-status">
+      <div class="cam-dot" id="cam-dot"></div>
+      <span id="cam-status-txt">Initializing camera...</span>
+    </div>
+    <div class="pin-display">
+      <div class="pin-dots" id="pin-dots">
+        <div class="pin-dot" id="d0"></div><div class="pin-dot" id="d1"></div>
+        <div class="pin-dot" id="d2"></div><div class="pin-dot" id="d3"></div>
+        <div class="pin-dot" id="d4"></div><div class="pin-dot" id="d5"></div>
+      </div>
+      <div class="pin-hint" id="pin-hint">Enter your 6-digit PIN</div>
+    </div>
+    <div class="emp-preview" id="emp-preview">
+      <div class="prev-row">
+        <div>
+          <div class="prev-name" id="prev-name"></div>
+          <div class="prev-dept" id="prev-dept"></div>
+        </div>
+
+      </div>
+      <div class="prev-punches" id="prev-punches"></div>
+      <div class="bal-row" id="prev-balance"></div>
+      <div id="ot-allow-banner" style="display:none;margin-top:8px;background:#EEEDFE;border:1px solid #9B95E8;border-radius:10px;padding:8px 12px;font-size:12px;color:#3C3489;font-weight:600;text-align:center"></div>
+    </div>
+    <div class="keypad">
+      <button class="key" onclick="kp('1')">1</button><button class="key" onclick="kp('2')">2</button><button class="key" onclick="kp('3')">3</button>
+      <button class="key" onclick="kp('4')">4</button><button class="key" onclick="kp('5')">5</button><button class="key" onclick="kp('6')">6</button>
+      <button class="key" onclick="kp('7')">7</button><button class="key" onclick="kp('8')">8</button><button class="key" onclick="kp('9')">9</button>
+      <button class="key del" onclick="kpDel()">&#9003;</button>
+      <button class="key zero" onclick="kp('0')">0</button>
+      <button class="key del" onclick="kpClr()" style="font-size:12px">CLR</button>
+    </div>
+    <div class="punch-btns">
+      <button class="pbtn pbtn-in" id="btn-timein" onclick="punch('timein')">Time In</button>
+      <button class="pbtn pbtn-break" id="btn-lunch-out" onclick="punch('lunch_out')">Lunch Out</button>
+      <button class="pbtn pbtn-resume" id="btn-lunch-in" onclick="punch('lunch_in')">Lunch In</button>
+      <button class="pbtn pbtn-break" id="btn-pm-out" onclick="punch('pm_out')">PM Break Out</button>
+      <button class="pbtn pbtn-resume" id="btn-pm-in" onclick="punch('pm_in')">PM Break In</button>
+      <button class="pbtn pbtn-timeout" id="btn-timeout" onclick="punch('timeout')">Time Out</button>
+      <button class="pbtn pbtn-leave" id="btn-leave" onclick="openLeaveModal()" disabled>File a Leave</button>
+      <button class="pbtn pbtn-undertime" id="btn-undertime" onclick="openUndertimeModal()" disabled>File Undertime / Half Day</button>
+    </div>
+    <div class="msg-box" id="punch-msg"><div class="msg-title" id="pm-title"></div><div class="msg-sub" id="pm-sub"></div></div>
+    <div class="stats-grid">
+      <div class="stat"><div class="stat-label">Working</div><div class="stat-val" id="s-present">0</div></div>
+      <div class="stat"><div class="stat-label">On break</div><div class="stat-val" id="s-break">0</div></div>
+      <div class="stat"><div class="stat-label">Timed out</div><div class="stat-val" id="s-timedout">0</div></div>
+      <div class="stat" style="grid-column:1/-1;max-width:160px;margin:0 auto;width:100%"><div class="stat-label">Total</div><div class="stat-val" id="s-total">0</div></div>
+    </div>
+  </div>
+
+  <!-- MY TIME TAB -->
+  <div id="tab-mytime" class="section">
+    <div id="mytime-login" class="card">
+      <h4 style="text-align:center;margin-bottom:4px">📅 My Weekly Time</h4>
+      <p style="font-size:12px;color:#888;text-align:center;margin-bottom:14px">Enter your PIN to view your timesheet</p>
+      <div style="display:flex;justify-content:center;gap:14px;margin-bottom:10px">
+        <div class="pin-dot" id="mt-d0"></div><div class="pin-dot" id="mt-d1"></div>
+        <div class="pin-dot" id="mt-d2"></div><div class="pin-dot" id="mt-d3"></div>
+        <div class="pin-dot" id="mt-d4"></div><div class="pin-dot" id="mt-d5"></div>
+      </div>
+      <div class="keypad">
+        <button class="key" onclick="mtKp('1')">1</button><button class="key" onclick="mtKp('2')">2</button><button class="key" onclick="mtKp('3')">3</button>
+        <button class="key" onclick="mtKp('4')">4</button><button class="key" onclick="mtKp('5')">5</button><button class="key" onclick="mtKp('6')">6</button>
+        <button class="key" onclick="mtKp('7')">7</button><button class="key" onclick="mtKp('8')">8</button><button class="key" onclick="mtKp('9')">9</button>
+        <button class="key del" onclick="mtKpDel()">&#9003;</button>
+        <button class="key zero" onclick="mtKp('0')">0</button>
+        <button class="key del" onclick="mtKpClr()" style="font-size:12px">CLR</button>
+      </div>
+      <div id="mt-err" style="font-size:12px;color:#A32D2D;min-height:14px;margin-top:6px;text-align:center"></div>
+    </div>
+    <div id="mytime-sheet" style="display:none">
+      <div class="card" style="margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-size:18px;font-weight:700;color:#1B2A4A" id="mt-empname"></div>
+            <div style="font-size:12px;color:#888" id="mt-empdept"></div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:11px;color:#888" id="mt-weekrange"></div>
+            <button onclick="mtLogout()" style="margin-top:6px;background:#FCEBEB;border:none;color:#A32D2D;cursor:pointer;font-size:11px;font-weight:600;padding:4px 10px;border-radius:8px">Logout</button>
+          </div>
+        </div>
+      </div>
+      <div id="mt-days"></div>
+      <div class="card" style="margin-top:10px;background:#1B2A4A">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:13px;font-weight:600;color:rgba(255,255,255,0.7)">Total Hours This Week</div>
+          <div style="font-size:22px;font-weight:700;color:#FFD700" id="mt-total-hours">0h 00m</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:8px">
+          <div style="font-size:11px;color:rgba(255,255,255,0.5)">OT Hours</div>
+          <div style="font-size:13px;font-weight:600;color:#12B89E" id="mt-total-ot">0h 00m</div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:4px">
+          <div style="font-size:11px;color:rgba(255,255,255,0.5)">Days Present</div>
+          <div style="font-size:13px;font-weight:600;color:#fff" id="mt-days-present">0 / 7</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MY LEAVE TAB -->
+  <div id="tab-leave" class="section">
+    <div style="font-size:13px;color:#888;margin-bottom:10px">Enter your PIN to view your leave balance and requests.</div>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <input type="text" id="lv-pin" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" class="field-input" style="font-size:16px;letter-spacing:4px;text-align:center;font-weight:600;flex:1" />
+      <button onclick="lookupLeave()" class="btn-sm">View</button>
+    </div>
+    <div id="lv-panel" style="display:none">
+      <div class="card" style="margin-bottom:10px">
+        <div style="font-weight:600;font-size:15px" id="lp-name"></div>
+        <div style="font-size:12px;color:#888;margin-top:2px" id="lp-dept"></div>
+        <div class="bal-row" id="lp-balance" style="margin-top:10px"></div>
+      </div>
+      <div class="sec-title">My leave requests</div>
+      <div id="lp-requests"></div>
+    </div>
+  </div>
+
+  <!-- ADMIN TAB -->
+  <div id="tab-admin" class="section">
+    <div class="admin-lock" id="admin-lock">
+      <h3>Admin access</h3>
+      <p>Enter your password to unlock admin features.</p>
+      <input type="password" id="admin-pw" placeholder="Password" onkeydown="if(event.key==='Enter')adminLogin()" />
+      <button onclick="adminLogin()" class="btn-primary" style="margin-top:0">Login</button>
+      
+      <div id="admin-err" style="font-size:12px;color:#A32D2D;margin-top:8px;min-height:14px"></div>
+    </div>
+    <div class="admin-content" id="admin-content">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span style="font-size:15px;font-weight:600">Admin panel</span>
+        <button onclick="adminLogout()" class="btn-sm">Logout</button>
+      </div>
+      <div class="timer-bar">
+        <span style="font-size:11px;color:#888">Auto-logout in</span>
+        <div class="timer-track"><div class="timer-fill" id="timer-fill" style="width:100%"></div></div>
+        <span class="timer-lbl" id="timer-lbl">30s</span>
+      </div>
+      <div class="sec-title">Pending leave requests</div>
+      <div id="admin-pending"></div>
+      <div class="sec-title">All leave requests</div>
+      <div id="admin-all"></div>
+      <div class="sec-title">Leave balance editor</div>
+      <div id="admin-balances"></div>
+      <button onclick="saveBalances()" class="btn-primary btn-green">Save all balances</button>
+      <div id="bal-msg" style="font-size:12px;margin-top:6px;min-height:14px;color:#085041;text-align:center"></div>
+      <div class="sec-title" style="margin-top:16px">Monthly Records Export</div>
+      <p style="font-size:12px;color:#888;margin-bottom:8px">Exports all permanent records (leaves, violations, undertime, SMS log) as a JSON backup file. Auto-runs on the 1st of every month.</p>
+      <button onclick="monthlyAutoExport();localStorage.removeItem('rsr_last_monthly_export');" class="btn-primary" style="margin-top:0">📁 Export Monthly Records Now</button>
+      <div class="sec-title" style="margin-top:16px">Change admin password</div>
+      <div style="display:flex;gap:8px">
+        <input type="password" id="new-pw" placeholder="New password" class="field-input" style="flex:1" />
+        <button onclick="changePassword()" class="btn-sm">Update</button>
+      </div>
+      <div id="pw-msg" style="font-size:12px;margin-top:6px;min-height:14px;color:#085041"></div>
+      <div class="sec-title" style="margin-top:16px">Change assistant password</div>
+      <div style="display:flex;gap:8px">
+        <input type="password" id="new-asst-pw" placeholder="Assistant password" class="field-input" style="flex:1" />
+        <button onclick="changeAsstPassword()" class="btn-sm">Update</button>
+      </div>
+      <div id="asst-pw-msg" style="font-size:12px;margin-top:6px;min-height:14px;color:#085041"></div>
+    </div>
+  </div>
+
+  <!-- ALLOWANCE TAB (admin only) -->
+  <div id="tab-allowance" class="section">
+    <div class="card">
+      <h4>Today's allowance summary — <span id="allow-date"></span></h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:12px">
+        <div class="stat"><div class="stat-label">Away today</div><div class="stat-val away" id="a-away-count">0</div></div>
+        <div class="stat"><div class="stat-label">Total allowance</div><div class="stat-val" style="color:#1D9E75;font-size:16px" id="a-total">₱0</div></div>
+        <div class="stat"><div class="stat-label">Employees</div><div class="stat-val" id="a-emp-count">0</div></div>
+      </div>
+      <button onclick="exportAllowanceCSV()" class="btn-primary" style="margin-top:0">Export Allowance CSV</button>
+    </div>
+    <div class="sec-title">Allowance records — manual override available</div>
+    <div id="allowance-records"></div>
+    <div class="card" style="margin-top:12px">
+      <h4>⭐ OT Allowance — <span id="ot-allow-date"></span></h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+        <div class="stat"><div class="stat-label">With OT Allowance</div><div class="stat-val" style="color:#534AB7" id="a-ot-count">0</div></div>
+        <div class="stat"><div class="stat-label">Total OT Allowance</div><div class="stat-val" style="color:#7F77DD;font-size:16px" id="a-ot-total">₱0</div></div>
+      </div>
+      <div style="font-size:11px;color:#888;margin-bottom:10px">On-time employees: out by <span id="ot-min-hrs-label">3</span>+ hours past PM Break In. Late employees: need 1 extra hour.</div>
+      <div id="ot-allowance-records"></div>
+    </div>
+  </div>
+
+  <!-- UNDERTIME TAB (admin only) -->
+  <div id="tab-undertime" class="section">
+    <div class="card">
+      <h4>Undertime & half day summary — <span id="ut-date"></span></h4>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px">
+        <div class="stat"><div class="stat-label">Undertime</div><div class="stat-val" style="color:#D85A30" id="ut-count">0</div></div>
+        <div class="stat"><div class="stat-label">Half days</div><div class="stat-val" style="color:#EF9F27" id="hd-count">0</div></div>
+        <div class="stat"><div class="stat-label">Total deduction</div><div class="stat-val" style="color:#E24B4A;font-size:14px" id="ut-total-deduct">₱0</div></div>
+      </div>
+      <button onclick="exportUndertimeCSV()" class="btn-primary" style="margin-top:0">Export Undertime CSV</button>
+    </div>
+    <div class="sec-title">Pre-filed requests — pending</div>
+    <div id="ut-pending"></div>
+    <div class="sec-title">Today's undertime records</div>
+    <div id="ut-records"></div>
+  </div>
+
+  <!-- LOG TAB (admin only) -->
+  <div id="tab-log" class="section">
+    <div class="toolbar">
+      <input type="text" id="search-log" placeholder="Search name or PIN..." oninput="renderLog()" />
+      <select id="filter-status" onchange="renderLog()">
+        <option value="">All</option><option value="working">Working</option>
+        <option value="late">Late</option><option value="break">On break</option>
+        <option value="out">Timed out</option><option value="absent">Absent</option>
+      </select>
+    </div>
+    <button onclick="exportCSV()" class="btn-primary" style="margin-bottom:10px;margin-top:0">Export CSV</button>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Photo</th><th>PIN</th><th>Name</th><th>Home</th><th>Today</th><th>Allowance</th><th>OT Allow</th><th>In</th><th>Late</th><th>L.Out</th><th>L.In</th><th>PM Out</th><th>PM In</th><th>Out</th><th>Worked</th><th>OT</th><th>Status</th></tr></thead>
+        <tbody id="log-body"></tbody>
+      </table>
+    </div>
+    <div id="log-empty" class="empty-state" style="display:none">No records found.</div>
+  </div>
+
+  <!-- PHOTOS TAB (admin only) -->
+  <div id="tab-photos" class="section">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <span style="font-size:14px;font-weight:600">Punch photos <span id="photo-count" style="font-size:12px;color:#888;font-weight:400"></span></span>
+      <button onclick="clearPhotos()" class="btn-sm">Clear all</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <select id="pf-emp" onchange="renderPhotos()" style="flex:1;font-size:12px;padding:8px;border:1px solid #e8e8e3;border-radius:10px;background:#fff">
+        <option value="">All employees</option>
+      </select>
+      <select id="pf-punch" onchange="renderPhotos()" style="flex:1;font-size:12px;padding:8px;border:1px solid #e8e8e3;border-radius:10px;background:#fff">
+        <option value="">All punches</option>
+        <option value="timein">Time In</option><option value="timeout">Time Out</option>
+        <option value="lunch_out">Lunch Out</option><option value="lunch_in">Lunch In</option>
+        <option value="pm_out">PM Break Out</option><option value="pm_in">PM Break In</option>
+      </select>
+    </div>
+    <div class="photo-grid" id="photo-grid"></div>
+    <div id="photo-empty" class="empty-state" style="display:none">No photos captured yet.</div>
+  </div>
+
+  <!-- STAFF TAB (admin only) -->
+  <div id="tab-staff" class="section">
+
+    <!-- CSV Import/Export bar -->
+    <div class="card" style="margin-bottom:12px">
+      <h4>Bulk import / export</h4>
+      <p style="font-size:12px;color:#888;margin-bottom:10px">Prepare your roster in Excel, save as CSV, then import here. All existing staff will be replaced on import.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button onclick="downloadTemplate()" class="btn-sm" style="flex:1">Download CSV template</button>
+        <button onclick="exportStaffCSV()" class="btn-sm" style="flex:1">Export staff list</button>
+      </div>
+      <label class="field-label" style="margin-top:10px">Import CSV file</label>
+      <input type="file" id="csv-import" accept=".csv" onchange="importStaffCSV(this)" style="width:100%;font-size:13px;padding:8px;border:1px solid #e8e8e3;border-radius:10px;background:#f9f9f7;color:#1a1a1a" />
+      <div id="import-msg" style="font-size:12px;margin-top:6px;min-height:14px"></div>
+    </div>
+
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+      <div class="card">
+        <h4>Add employee</h4>
+        <label class="field-label">6-digit PIN</label>
+        <input type="text" id="new-code" placeholder="e.g. 001234" maxlength="6" class="field-input" inputmode="numeric" />
+        <label class="field-label">Full name</label>
+        <input type="text" id="new-name" placeholder="Juan dela Cruz" class="field-input" />
+        <label class="field-label">Department</label>
+        <input type="text" id="new-dept" placeholder="e.g. Operations" class="field-input" />
+        <label class="field-label">Position</label>
+        <input type="text" id="new-position" placeholder="e.g. Supervisor" class="field-input" />
+        <label class="field-label">Mobile number</label>
+        <input type="text" id="new-phone" placeholder="e.g. 09171234567" class="field-input" />
+        <label class="field-label">Reference photo (for face verification)</label>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+          <video id="new-ref-video" style="width:80px;height:80px;border-radius:10px;object-fit:cover;background:#f0f0f0;display:none"></video>
+          <img id="new-ref-preview" style="width:80px;height:80px;border-radius:10px;object-fit:cover;border:2px solid #e8e8e3;display:none" />
+          <div>
+            <button type="button" onclick="captureRefPhoto('new')" class="btn-sm" style="display:block;margin-bottom:6px">📸 Capture Photo</button>
+            <button type="button" onclick="clearRefPhoto('new')" class="btn-sm" style="display:block;font-size:10px;color:#A32D2D">✕ Clear</button>
+          </div>
+        </div>
+        <div id="new-ref-note" style="font-size:10px;color:#888;margin-bottom:8px">📱 Photo saved to device storage when running as Android app</div>
+        <canvas id="new-ref-canvas" style="display:none"></canvas>
+        <input type="hidden" id="new-ref-photo" />
+        <label class="field-label">Network</label>
+        <select id="new-network" class="field-input">
+          <option value="smart">Smart / TNT / Sun</option>
+          <option value="globe">Globe / TM</option>
+          <option value="dito">Dito</option>
+        </select>
+        <label class="field-label">Home site location</label>
+        <select id="new-home-site" class="field-input">
+          <option value="A" id="site-opt-a">Site A</option>
+          <option value="B" id="site-opt-b">Site B</option>
+        </select>
+        <label class="field-label">Shift hours</label>
+        <input type="number" id="new-shift" value="8" min="1" max="24" class="field-input" />
+        <label class="field-label">Daily rate (₱)</label>
+        <input type="number" id="new-daily-rate" value="500" min="0" class="field-input" placeholder="e.g. 500" />
+        <button onclick="addEmployee()" class="btn-primary">Add employee</button>
+        <div id="add-msg" style="font-size:12px;margin-top:6px;min-height:14px"></div>
+      </div>
+      <div class="card" style="max-height:520px;overflow-y:auto">
+        <h4>Roster (<span id="roster-count">0</span>)</h4>
+        <div id="emp-roster"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SETTINGS TAB (admin only) -->
+  <div id="tab-settings" class="section">
+    <div class="card">
+      <h4>Site & allowance settings</h4>
+      <p style="font-size:12px;color:#888;margin-bottom:12px">Configure this tablet's active site and allowance rates for each location.</p>
+      <label class="field-label">This tablet's active site</label>
+      <select id="s-active-site" class="field-input" onchange="updateSiteBadge()">
+        <option value="A">Site A</option>
+        <option value="B">Site B</option>
+      </select>
+      <label class="field-label">Site A name</label>
+      <input type="text" id="s-site-a-name" value="Site A" class="field-input" />
+      <label class="field-label">Site B name</label>
+      <input type="text" id="s-site-b-name" value="Site B" class="field-input" />
+      <label class="field-label">Away allowance at Site A (₱ per day)</label>
+      <input type="number" id="s-allow-a" value="300" min="0" class="field-input" placeholder="e.g. 300" />
+      <label class="field-label">Away allowance at Site B (₱ per day)</label>
+      <input type="number" id="s-allow-b" value="300" min="0" class="field-input" placeholder="e.g. 300" />
+      <label class="field-label">OT allowance (₱ per session, fixed)</label>
+      <input type="number" id="s-ot-allow" value="50" min="0" class="field-input" placeholder="e.g. 50" />
+      <label class="field-label">OT allowance minimum hours (default: 3)</label>
+      <input type="number" id="s-ot-min-hrs" value="3" min="1" max="12" step="0.5" class="field-input" placeholder="e.g. 3" />
+      <button onclick="saveSiteSettings()" class="btn-primary btn-green">Save site settings</button>
+      <div id="site-settings-msg" style="font-size:12px;margin-top:6px;min-height:14px;color:#085041"></div>
+    </div>
+    <div class="card">
+      <h4>SMS — Semaphore</h4>
+      <label class="field-label">Semaphore API key</label>
+      <input type="text" id="semaphore-key" placeholder="Your Semaphore API key" class="field-input" />
+      <label class="field-label">Sender name (max 11 chars)</label>
+      <input type="text" id="semaphore-sender" placeholder="e.g. RSR ENGRG" maxlength="11" class="field-input" />
+      <button onclick="saveSemaphoreSettings()" class="btn-primary" style="margin-top:8px">Save SMS settings</button>
+      <div id="sms-settings-msg" style="font-size:12px;color:#085041;min-height:14px;margin-top:4px"></div>
+      <h4 style="margin-top:16px">Telegram bot</h4>
+      <p style="font-size:12px;color:#555;margin:4px 0 10px;line-height:1.5">Telegram is now set in the <b>Admin page</b> (bot token &amp; group IDs). This kiosk pulls them automatically and uses them to send punch notifications and photos. No need to type anything here.</p>
+      <div style="display:flex;gap:8px;margin-top:6px">
+        <button onclick="loadTgFromCloud(true)" class="btn-sm" style="flex:1">↻ Reload Telegram from Admin</button>
+      </div>
+      <div id="tg-msg" style="font-size:12px;margin-top:8px;min-height:14px;color:#085041"></div>
+    </div>
+    <div class="card">
+      <h4>Shift & timing</h4>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        <div><label class="field-label">Shift start</label><input type="time" id="s-start" value="08:00" class="field-input" /></div>
+        <div><label class="field-label">Grace period (mins)</label><input type="number" id="s-grace" value="10" min="0" max="60" class="field-input" /></div>
+        <div><label class="field-label">End of shift</label><input type="time" id="s-end" value="17:00" class="field-input" /></div>
+        <div><label class="field-label">Company name</label><input type="text" id="s-company" value="RSR Engineering" class="field-input" /></div>
+        <div><label class="field-label">Earliest Lunch In</label><input type="time" id="s-lunch-in-earliest" value="12:40" class="field-input" /></div>
+        <div><label class="field-label">Earliest PM Break In</label><input type="time" id="s-pm-in-earliest" value="17:40" class="field-input" /></div>
+        <div><label class="field-label">Early Lunch Out threshold</label><input type="time" id="s-lunch-out-early" value="12:00" class="field-input" /></div>
+        <div><label class="field-label">Latest Lunch Out allowed</label><input type="time" id="s-lunch-out-latest" value="12:30" class="field-input" /></div>
+        <div><label class="field-label">Early PM Break Out threshold</label><input type="time" id="s-pm-out-early" value="17:00" class="field-input" /></div>
+        <div><label class="field-label">Latest PM Break Out allowed</label><input type="time" id="s-pm-out-latest" value="17:30" class="field-input" /></div>
+        <div><label class="field-label">Dismissal time (within 1hr → auto-snap, beyond 1hr → admin notified)</label><input type="time" id="s-dismissal" value="21:00" class="field-input" /></div>
+      </div>
+      <button onclick="saveSettings()" class="btn-primary btn-green">Save settings</button>
+      <div id="settings-msg" style="font-size:12px;margin-top:8px;min-height:14px;color:#085041"></div>
+    </div>
+    <div class="card">
+      <h4>Notification log</h4>
+      <div id="notif-log" style="max-height:200px;overflow-y:auto">
+        <div class="empty-state" style="padding:1rem">No notifications yet.</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- TIMEOUT ADJUSTMENT NOTICE MODAL -->
+<div class="modal-bg" id="timeout-notice-modal">
+  <div class="modal">
+    <div style="text-align:center;margin-bottom:12px">
+      <div style="font-size:36px">📋</div>
+      <h3 style="color:#185FA5;margin:6px 0">Time Out Adjustment Notice</h3>
+    </div>
+    <div style="background:#E6F1FB;border:1px solid #A8CCF0;border-radius:10px;padding:12px 14px;font-size:13px;color:#0d3b6e;margin-bottom:14px;line-height:1.8">
+      Your Time Out from <strong id="tan-date"></strong> was adjusted by admin:<br><br>
+      <div style="display:flex;justify-content:space-between;align-items:center;background:#fff;border-radius:8px;padding:8px 12px">
+        <div style="text-align:center">
+          <div style="font-size:10px;color:#888;text-transform:uppercase">Original</div>
+          <div style="font-size:16px;font-weight:700;color:#A32D2D" id="tan-from"></div>
+        </div>
+        <div style="font-size:20px;color:#888">→</div>
+        <div style="text-align:center">
+          <div style="font-size:10px;color:#888;text-transform:uppercase">Adjusted to</div>
+          <div style="font-size:16px;font-weight:700;color:#085041" id="tan-to"></div>
+        </div>
+      </div>
+      <br>Please acknowledge this notice to continue.
+    </div>
+    <button onclick="acknowledgeTimeoutNotice()" class="btn-primary" style="margin-top:0">✅ I Acknowledge</button>
+  </div>
+</div>
+
+<!-- LATE TIMEOUT WARNING MODAL -->
+<div class="modal-bg" id="late-timeout-modal">
+  <div class="modal">
+    <div style="text-align:center;margin-bottom:12px">
+      <div style="font-size:40px">⚠️</div>
+      <h3 style="color:#D85A30;margin:6px 0">Beyond Working Hours</h3>
+    </div>
+    <div style="background:#FFF3CD;border:1px solid #FAC775;border-radius:10px;padding:12px 14px;font-size:13px;color:#633806;margin-bottom:14px;line-height:1.7">
+      Your Time Out is <strong>more than 1 hour past the dismissal time</strong> (<span id="ltm-dismissal"></span>).<br><br>
+      Your punch will be recorded at <strong id="ltm-actual"></strong> but your admin will be notified and needs to <strong>confirm</strong> your time out.<br><br>
+      Please tap <b>I Understand</b> to proceed.
+    </div>
+    <div id="ltm-emp" style="font-size:13px;color:#888;text-align:center;margin-bottom:14px"></div>
+    <button onclick="confirmLateTimeout()" class="btn-primary" style="background:#D85A30;margin-top:0">I Understand — Proceed</button>
+    <button onclick="closeLateTimeoutModal()" class="btn-sm" style="width:100%;margin-top:8px">Cancel</button>
+  </div>
+</div>
+
+<!-- EARLY BREAK CONFIRMATION MODAL -->
+<div class="modal-bg" id="early-break-modal">
+  <div class="modal">
+    <h3 id="eb-title" style="color:#D85A30">⚠️ Early Lunch Out</h3>
+    <div id="eb-body" style="background:#FAEEDA;border:1px solid #FAC775;border-radius:10px;padding:10px 14px;font-size:13px;color:#633806;margin-bottom:14px;line-height:1.6"></div>
+    <div style="font-size:13px;color:#888;margin-bottom:8px">Re-enter your PIN to confirm:</div>
+    <div style="display:flex;justify-content:center;gap:16px;margin-bottom:8px" id="eb-pin-dots">
+      <div class="pin-dot" id="eb-d0"></div><div class="pin-dot" id="eb-d1"></div>
+      <div class="pin-dot" id="eb-d2"></div><div class="pin-dot" id="eb-d3"></div>
+      <div class="pin-dot" id="eb-d4"></div><div class="pin-dot" id="eb-d5"></div>
+    </div>
+    <div class="keypad" style="margin-bottom:10px">
+      <button class="key" onclick="ebKp('1')">1</button><button class="key" onclick="ebKp('2')">2</button><button class="key" onclick="ebKp('3')">3</button>
+      <button class="key" onclick="ebKp('4')">4</button><button class="key" onclick="ebKp('5')">5</button><button class="key" onclick="ebKp('6')">6</button>
+      <button class="key" onclick="ebKp('7')">7</button><button class="key" onclick="ebKp('8')">8</button><button class="key" onclick="ebKp('9')">9</button>
+      <button class="key del" onclick="ebKpDel()">&#9003;</button>
+      <button class="key zero" onclick="ebKp('0')">0</button>
+      <button class="key del" onclick="ebKpClr()" style="font-size:12px">CLR</button>
+    </div>
+    <div id="eb-err" style="font-size:12px;color:#A32D2D;min-height:14px;margin-bottom:8px;text-align:center"></div>
+    <button onclick="closeEarlyBreakModal()" class="btn-sm" style="width:100%">Cancel</button>
+  </div>
+</div>
+
+<!-- UNDERTIME / HALF DAY MODAL -->
+<div class="modal-bg" id="ut-modal">
+  <div class="modal">
+    <h3 id="ut-modal-title">File undertime / half day</h3>
+    <div id="ut-combined-notice" style="display:none;background:#E1F5EE;border:1px solid #5DCAA5;border-radius:10px;padding:8px 12px;font-size:12px;color:#085041;font-weight:600;margin-bottom:10px">
+      Time In will be recorded automatically when you submit.
+    </div>
+    <div id="ut-emp-info" style="font-size:13px;color:#888;margin-bottom:12px"></div>
+    <label class="field-label">Type</label>
+    <select id="ut-type" class="field-input" onchange="updateUTInfo()">
+      <option value="half_day">Half Day</option>
+      <option value="undertime">Undertime</option>
+    </select>
+    <label class="field-label">Date</label>
+    <input type="date" id="ut-date-input" class="field-input" />
+    <div id="ut-type-info" style="font-size:11px;color:#888;margin-top:6px;margin-bottom:4px"></div>
+    <label class="field-label">Expected time out</label>
+    <input type="time" id="ut-expected-out" class="field-input" />
+    <label class="field-label">Reason</label>
+    <textarea id="ut-reason" placeholder="Briefly describe the reason..." class="field-input"></textarea>
+    <div id="ut-deduction-preview" style="font-size:12px;color:#D85A30;font-weight:600;margin-top:8px;min-height:16px"></div>
+    <div id="ut-err" style="font-size:12px;margin-top:4px;min-height:14px;color:#A32D2D"></div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button onclick="closeUTModal()" class="btn-sm" style="flex:1">Cancel</button>
+      <button id="ut-submit-btn" onclick="submitUndertime()" class="btn-primary" style="margin-top:0;flex:2;background:#D85A30">Submit</button>
+    </div>
+  </div>
+</div>
+
+<!-- SMS LOG TAB -->
+<div id="tab-smslog" class="section">
+  <div class="card">
+    <h4>📱 SMS Log — Absence Notifications</h4>
+    <p style="font-size:12px;color:#888;margin-bottom:12px">Automatically sent SMS messages to absent employees.</p>
+    <div id="sms-log-list"></div>
+  </div>
+  <div class="card" style="margin-top:12px">
+    <h4>🚨 Absence Violation Records</h4>
+    <p style="font-size:12px;color:#888;margin-bottom:12px">Employees who have triggered 3 consecutive absences (lifetime count).</p>
+    <div id="violation-list"></div>
+  </div>
+</div>
+
+<!-- ASSISTANT LEAVE STATUS TAB -->
+<div id="tab-asst-status" class="section">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px">
+    <button onclick="logoutAssistant()" class="btn-sm" style="color:#A32D2D;flex-shrink:0">Logout</button>
+    <div class="timer-bar" style="flex:1;margin-bottom:0">
+      <span style="font-size:11px;color:#888;white-space:nowrap">Auto-logout in</span>
+      <div class="timer-track"><div class="timer-fill" id="asst-timer-fill2" style="width:100%"></div></div>
+      <span class="timer-lbl" id="asst-timer-lbl2">30s</span>
+    </div>
+  </div>
+  <div class="card">
+    <h4>📋 Leave Status Monitor</h4>
+    <p style="font-size:12px;color:#888;margin-bottom:12px">View-only — all leave requests and their current status. No approval actions available here.</p>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+      <button onclick="filterLeaveStatus('all')" id="lsf-all" class="btn-sm" style="background:#1B2A4A;color:#fff">All</button>
+      <button onclick="filterLeaveStatus('Pending')" id="lsf-pending" class="btn-sm">Pending</button>
+      <button onclick="filterLeaveStatus('Approved')" id="lsf-approved" class="btn-sm">Approved</button>
+      <button onclick="filterLeaveStatus('Rejected')" id="lsf-rejected" class="btn-sm">Rejected</button>
+    </div>
+    <div id="asst-status-list"></div>
+  </div>
+</div>
+
+<!-- ASSISTANT FILE LEAVE TAB -->
+<div id="tab-asst-leave" class="section">
+  <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px">
+    <button onclick="logoutAssistant()" class="btn-sm" style="color:#A32D2D;flex-shrink:0">Logout</button>
+    <div class="timer-bar" style="flex:1;margin-bottom:0">
+      <span style="font-size:11px;color:#888;white-space:nowrap">Auto-logout in</span>
+      <div class="timer-track"><div class="timer-fill" id="asst-timer-fill" style="width:100%"></div></div>
+      <span class="timer-lbl" id="asst-timer-lbl">30s</span>
+    </div>
+  </div>
+  <div class="card">
+    <h4>File Leave on Behalf of Employee</h4>
+    <p style="font-size:12px;color:#888;margin-bottom:12px">Select the employee and fill in their leave details.</p>
+    <label class="field-label">Employee</label>
+    <select id="asst-emp-select" class="field-input">
+      <option value="">— Select employee —</option>
+    </select>
+    <label class="field-label">Leave type</label>
+    <select id="asst-leave-type" class="field-input" onchange="updateAsstLeaveMinDate()">
+      <option value="Sick Leave">Sick Leave (2 days paid)</option>
+      <option value="Vacation Leave">Vacation Leave (2 days paid)</option>
+      <option value="Leave Without Pay">Leave Without Pay (LWP)</option>
+      <option value="Emergency Leave">Emergency Leave</option>
+      <option value="Other">Other</option>
+    </select>
+    <label class="field-label">Start date</label>
+    <input type="date" id="asst-start-date" class="field-input" />
+    <label class="field-label">End date</label>
+    <input type="date" id="asst-end-date" class="field-input" />
+    <label class="field-label">Reason</label>
+    <textarea id="asst-reason" placeholder="e.g. Sick — informed via phone" class="field-input" rows="2"></textarea>
+    <div id="asst-leave-err" style="font-size:12px;color:#A32D2D;min-height:14px;margin-top:4px"></div>
+    <button onclick="submitAsstLeave()" class="btn-primary" style="margin-top:12px">Submit Leave</button>
+    <div id="asst-leave-msg" style="font-size:12px;color:#085041;margin-top:8px;min-height:14px"></div>
+  </div>
+  <div class="sec-title">Recent leaves filed by assistant</div>
+  <div id="asst-leave-list"></div>
+
+  <!-- STRAIGHT DUTY SECTION -->
+  <div class="card" style="margin-top:12px;border:1px solid #E8A830">
+    <h4 style="color:#633806">⚡ File Straight Duty</h4>
+    <p style="font-size:12px;color:#888;margin-bottom:12px">For emergency work during break time. Admin approves via Telegram. Break will not be deducted if approved.</p>
+    <label class="field-label">Employee</label>
+    <select id="sd-emp-select" class="field-input">
+      <option value="">— Select employee —</option>
+    </select>
+    <label class="field-label">Date</label>
+    <input type="date" id="sd-date" class="field-input" />
+    <label class="field-label">Reason</label>
+    <textarea id="sd-reason" placeholder="e.g. Emergency repair works" class="field-input" rows="2"></textarea>
+    <div id="sd-err" style="font-size:12px;color:#A32D2D;min-height:14px;margin-top:4px"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px">
+      <button onclick="submitStraightDuty('lunch')" style="background:#FAEEDA;border:1px solid #FAC775;color:#633806;font-size:12px;font-weight:700;padding:10px;border-radius:10px;cursor:pointer">
+        🍽️ Straight Duty<br><span style="font-size:10px;font-weight:400">Lunch 12:00–1:00 PM</span>
+      </button>
+      <button onclick="submitStraightDuty('pm')" style="background:#E6F1FB;border:1px solid #A8CCF0;color:#185FA5;font-size:12px;font-weight:700;padding:10px;border-radius:10px;cursor:pointer">
+        ☕ Straight Duty<br><span style="font-size:10px;font-weight:400">PM Break 5:00–6:00 PM</span>
+      </button>
+    </div>
+    <div id="sd-msg" style="font-size:12px;color:#085041;margin-top:8px;min-height:14px"></div>
+  </div>
+
+  <div class="sec-title" style="margin-top:12px">Recent straight duties filed</div>
+  <div id="sd-list"></div>
+  <div id="asst-timer-lbl" style="font-size:11px;color:#aaa;text-align:center;margin-top:12px">Auto-logout in 30s</div>
+  <button onclick="logoutAssistant()" class="btn-sm" style="width:100%;margin-top:6px;color:#A32D2D">Logout Assistant</button>
+</div>
+
+<!-- EDIT EMPLOYEE MODAL -->
+<div class="modal-bg" id="edit-modal">
+  <div class="modal">
+    <h3>Edit employee</h3>
+    <div id="edit-pin-display" style="font-size:12px;color:#888;margin-bottom:12px"></div>
+    <label class="field-label">Full name</label>
+    <input type="text" id="edit-name" class="field-input" />
+    <label class="field-label">Department</label>
+    <input type="text" id="edit-dept" class="field-input" />
+    <label class="field-label">Position</label>
+    <input type="text" id="edit-position" class="field-input" />
+    <label class="field-label">Mobile number</label>
+    <input type="text" id="edit-phone" placeholder="e.g. 09171234567" class="field-input" />
+    <label class="field-label">Reference photo (for face verification)</label>
+    <div style="display:flex;gap:10px;align-items:center;margin-bottom:8px">
+      <img id="edit-ref-preview" style="width:80px;height:80px;border-radius:10px;object-fit:cover;border:2px solid #e8e8e3;background:#f0f0f0" />
+      <div>
+        <button type="button" onclick="captureRefPhoto('edit')" class="btn-sm" style="display:block;margin-bottom:6px">📸 Capture New Photo</button>
+        <button type="button" onclick="clearRefPhoto('edit')" class="btn-sm" style="display:block;font-size:10px;color:#A32D2D">✕ Clear Photo</button>
+      </div>
+    </div>
+    <div id="edit-ref-note" style="font-size:10px;color:#888;margin-bottom:8px">📱 Photo saved to device storage when running as Android app</div>
+    <canvas id="edit-ref-canvas" style="display:none"></canvas>
+    <input type="hidden" id="edit-ref-photo" />
+    <label class="field-label">Network</label>
+    <select id="edit-network" class="field-input">
+      <option value="smart">Smart / TNT / Sun</option>
+      <option value="globe">Globe / TM</option>
+      <option value="dito">Dito</option>
+    </select>
+    <label class="field-label">Home site location</label>
+    <select id="edit-home-site" class="field-input">
+      <option value="A" id="edit-site-opt-a">Site A</option>
+      <option value="B" id="edit-site-opt-b">Site B</option>
+    </select>
+    <label class="field-label">Shift hours</label>
+    <input type="number" id="edit-shift" min="1" max="24" class="field-input" />
+    <label class="field-label">Daily rate (₱) — used for undertime deduction</label>
+    <input type="number" id="edit-daily-rate" min="0" class="field-input" placeholder="e.g. 500" />
+    <div style="font-size:12px;font-weight:600;color:#888;margin-top:14px;margin-bottom:8px;text-transform:uppercase;letter-spacing:.05em">Leave balance</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+      <div>
+        <label class="field-label" style="margin-top:0">VL days</label>
+        <input type="number" id="edit-vl" min="0" max="30" class="field-input" />
+      </div>
+      <div>
+        <label class="field-label" style="margin-top:0">SL days</label>
+        <input type="number" id="edit-sl" min="0" max="30" class="field-input" />
+      </div>
+      <div>
+      </div>
+    </div>
+    <div id="edit-err" style="font-size:12px;margin-top:8px;min-height:14px;color:#A32D2D"></div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button onclick="closeEditModal()" class="btn-sm" style="flex:1">Cancel</button>
+      <button onclick="saveEditEmployee()" class="btn-primary" style="margin-top:0;flex:2;background:#1D9E75">Save changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- LEAVE MODAL -->
+<div class="modal-bg" id="leave-modal">
+  <div class="modal">
+    <h3>File a leave</h3>
+    <div id="lm-emp" style="font-size:13px;color:#888;margin-bottom:10px"></div>
+    <label class="field-label">Leave type</label>
+    <select id="lm-type" onchange="updateLeaveBal();updateLeaveMinDate()" class="field-input">
+      <option value="Sick Leave">Sick Leave (2 days paid)</option>
+      <option value="Vacation Leave">Vacation Leave (2 days paid)</option>
+      <option value="Leave Without Pay">Leave Without Pay (LWP)</option>
+      <option value="Emergency Leave">Emergency Leave</option>
+    </select>
+    <label class="field-label">Start date</label><input type="date" id="lm-start" class="field-input" />
+    <label class="field-label">End date</label><input type="date" id="lm-end" class="field-input" />
+    <label class="field-label">Reason</label>
+    <textarea id="lm-reason" placeholder="Briefly describe the reason..." class="field-input"></textarea>
+    <div id="lm-bal" style="font-size:11px;color:#888;margin-top:6px"></div>
+    <div id="lm-err" style="font-size:12px;margin-top:4px;min-height:14px;color:#A32D2D"></div>
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button onclick="closeLeaveModal()" class="btn-sm" style="flex:1">Cancel</button>
+      <button onclick="submitLeave()" class="btn-primary" style="margin-top:0;flex:1;background:#7F77DD">Submit</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const PIN_LEN=6,ADMIN_TO=30;
+const PUNCHES=['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'];
+const PLABELS={timein:'Time In',lunch_out:'Lunch Out',lunch_in:'Lunch In',pm_out:'PM Break Out',pm_in:'PM Break In',timeout:'Time Out'};
+const BPAIRS=[['lunch_out','lunch_in'],['pm_out','pm_in']];
+const BIDS={timein:'btn-timein',lunch_out:'btn-lunch-out',lunch_in:'btn-lunch-in',pm_out:'btn-pm-out',pm_in:'btn-pm-in',timeout:'btn-timeout'};
+const ATABS=[];
+// Note: leave filing is assistant-only — not in admin or employee tabs
+const ASSTABS=[];
+const WMSGS={
+  timein:{lunch_out:'Not clocked in yet.',lunch_in:'Not clocked in yet.',pm_out:'Not clocked in yet.',pm_in:'Not clocked in yet.',timeout:'Not clocked in yet.'},
+  lunch_out:{timein:'Already clocked in.',lunch_in:'Not on lunch break yet.',pm_out:'Take lunch break first.',pm_in:'Take lunch break first.',timeout:'Take lunch break before timing out.'},
+  lunch_in:{timein:'Already clocked in.',lunch_out:'Not on lunch break.',pm_out:'Return from lunch first.',pm_in:'Return from lunch first.',timeout:'Return from lunch before timing out.'},
+  pm_out:{timein:'Already clocked in.',lunch_out:'Already had lunch break.',lunch_in:'Already returned from lunch.',pm_in:'Not on PM break yet.',timeout:'Take PM break before timing out.'},
+  pm_in:{timein:'Already clocked in.',lunch_out:'Already had lunch break.',lunch_in:'Already returned from lunch.',pm_out:'Not on PM break.',timeout:'Return from PM break before timing out.'},
+  timeout:{timein:'Already clocked in.',lunch_out:'Already completed breaks.',lunch_in:'Already completed breaks.',pm_out:'Already completed breaks.',pm_in:'Already returned from PM break.'},
+};
+
+let employees=[];
+let records={},leaveRequests=[],undertimeRequests=[],punchPhotos=[],notifLog=[];
+let allowanceOverrides={};
+let adminPassword='admin123',adminLoggedIn=false;
+let assistantPassword='assist123',assistantLoggedIn=false;
+let assistantTimer=null,assistantSecs=30;
+const ASST_TO=30;
+let shiftH=8,shiftM=0,graceMins=10,endH=17,endM=0,company='RSR Engineering';
+let lunchInEarliestH=12,lunchInEarliestM=40,pmInEarliestH=17,pmInEarliestM=40;
+let lunchOutEarlyH=12,lunchOutEarlyM=0,pmOutEarlyH=17,pmOutEarlyM=0;
+let lunchOutLatestH=12,lunchOutLatestM=30,pmOutLatestH=17,pmOutLatestM=30;
+let dismissalH=21,dismissalM=0; // Admin-set dismissal time (9PM default)
+// Within 1hr after dismissal → auto-snap to dismissal time
+// More than 1hr after dismissal → punch proceeds + Telegram notification
+let earlyBreakConfirmed=false;
+let activeSite='A',siteAName='Site A',siteBName='Site B',allowA=300,allowB=300;
+let otAllowanceAmt=50,otAllowanceMinHrs=3;
+let pin='',curEmp=null,msgTimer=null;
+let adminSecs=ADMIN_TO,adminTick=null;
+let tgToken='',tgGroup='',tgPosGroup='',tgPhotoGroup='',tgBackupGroup='',mgrIds=[];
+let semaphoreKey='',semaphoreSender='RSR ENGRG';
+let smsLog=[];
+let straightDutyRequests={}; // pending straight duty approvals
+let straightDutyLog=[]; // approved/rejected straight duties // {empCode,empName,phone,date,day,message,status}
+let absenceViolations={}; // {empCode:{count,history:[{startDate,endDate,days}]}}
+let tgLastUpdateId=0,tgPolling=null;
+let lateLunchRequests={};
+let suspendedEmployees={}; // {empCode: {reason, suspendedOn, tgMsgIds}}
+let absenceLog={}; // {empCode: [dateStr, dateStr, ...]} tracks consecutive absences
+let latePmOutRequests={};
+let lateTimeInRequests={};
+let lateTimeoutRequests={};
+let earlyLunchOutRequests={};
+let earlyPmOutRequests={};
+let incompleteTimeInRequests={}; // employees who need admin approval due to incomplete previous day
+let lateTimeoutConfirmed=false;
+let timeoutAdjustments={}; // {empCode: {from, to, date, acknowledged}}
+let camStream=null,camReady=false,summaryDone=false;
+
+function todayKey(){return new Date().toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});}
+function nowStr(){return new Date().toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});}
+function nowShort(){return new Date().toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true});}
+function msToHM(ms){if(!ms||ms<0)return'0h 0m';return Math.floor(ms/3600000)+'h '+Math.floor((ms%3600000)/60000)+'m';}
+function msToH(ms){if(!ms||ms<0)return'0.00';return(ms/3600000).toFixed(2);}
+function fmt12(h,m){return(h%12||12)+':'+(m<10?'0':'')+m+' '+(h>=12?'PM':'AM');}
+function ddiff(s,e){return Math.round((new Date(e)-new Date(s))/86400000)+1;}
+function lkey(t){return t==='Vacation Leave'?'VL':t==='Sick Leave'?'SL':t==='Leave Without Pay'?'LWP':'EL';}
+function siteName(s){return s==='A'?siteAName:siteBName;}
+function getRec(code){const k=code+'_'+todayKey();if(!records[k])records[k]={code,punches:{},msMap:{},isLate:false,lateMs:0,photos:{},clockedSite:null,hasAllowance:false,allowanceAmt:0};return records[k];}
+function findEmp(code){return employees.find(e=>e.pin&&e.pin===code);}
+function getStatus(rec){if(!rec.punches.timein)return'absent';if(rec.punches.timeout)return'out';for(const[bo,bi]of BPAIRS)if(rec.punches[bo]&&!rec.punches[bi])return'break';return rec.isLate?'late':'working';}
+function isIncomplete(rec){return !!(rec.punches.timein&&!rec.punches.timeout);}
+function getNext(rec){
+  // Build list of required punches — skip break punches if straight duty approved
+  const required=['timein'];
+  if(!rec.straightDutyLunch){required.push('lunch_out','lunch_in');}
+  if(!rec.straightDutyPm){required.push('pm_out','pm_in');}
+  required.push('timeout');
+  for(const p of required)if(!rec.punches[p])return p;
+  return null;
+}
+function calcBreak(rec){
+  let t=0;
+  // Lunch break: skip deduction if straight duty approved
+  if(!rec.straightDutyLunch){
+    if(rec.msMap.lunch_out&&rec.msMap.lunch_in&&rec.msMap.lunch_out>0&&rec.msMap.lunch_in>0)
+      t+=(rec.msMap.lunch_in-rec.msMap.lunch_out);
+  }
+  // PM break: skip deduction if straight duty approved
+  if(!rec.straightDutyPm){
+    if(rec.msMap.pm_out&&rec.msMap.pm_in&&rec.msMap.pm_out>0&&rec.msMap.pm_in>0)
+      t+=3600000;
+  }
+  return t;
+}
+function effectiveStart(rec){
+  if(!rec.msMap.timein)return null;
+  const shiftStart=new Date(rec.msMap.timein);shiftStart.setHours(shiftH,shiftM,0,0);
+  const graceEnd=new Date(shiftStart.getTime()+graceMins*60000);
+  // Early or within grace period → count from shift start (8:00 AM)
+  // Late (after grace) → count from actual punch time
+  if(rec.msMap.timein<=graceEnd.getTime())return shiftStart.getTime();
+  return rec.msMap.timein;
+}
+function calcWorked(rec){
+  if(!rec.msMap.timein||!rec.msMap.timeout)return null;
+  return(rec.msMap.timeout-effectiveStart(rec))-calcBreak(rec);
+}
+function calcWorkedPartial(rec){
+  if(rec.msMap.timein&&rec.msMap.timeout)return calcWorked(rec);
+  if(!rec.msMap.timein)return null;
+  const allMs=Object.values(rec.msMap).filter(v=>v&&typeof v==='number');
+  if(allMs.length===0)return null;
+  const lastMs=Math.max(...allMs);
+  const worked=(lastMs-effectiveStart(rec))-calcBreak(rec);
+  return Math.max(0,worked);
+}
+function chkLate(ms){const now=new Date(ms),s=new Date(now);s.setHours(shiftH,shiftM,0,0);const g=new Date(s.getTime()+graceMins*60000);return now>g?{late:true,lateMs:now-s}:{late:false,lateMs:0};}
+function onLeaveToday(code){const t=todayKey();return leaveRequests.some(r=>r.code===code&&r.status==='Approved'&&r.startDate<=t&&r.endDate>=t);}
+function onLWPToday(code){const t=todayKey();return leaveRequests.some(r=>r.code===code&&r.status==='Approved'&&r.type==='Leave Without Pay'&&r.startDate<=t&&r.endDate>=t);}
+
+function isAwayDeployment(emp){return emp.homeSite!==activeSite;}
+function getAllowanceAmt(emp){
+  const key=emp.code+'_'+todayKey();
+  if(allowanceOverrides[key]!==undefined)return allowanceOverrides[key];
+  if(!isAwayDeployment(emp))return 0;
+  return activeSite==='A'?allowA:allowB;
+}
+
+function updateSiteBadge(){
+  const at=document.getElementById('app-title-el');
+  if(at)at.textContent=(company||'RSR Engineering').toUpperCase();
+  activeSite=document.getElementById('s-active-site')?.value||activeSite;
+  const wrap=document.getElementById('site-badge-wrap');
+  if(wrap){const cls=activeSite==='A'?'site-a':'site-b';wrap.innerHTML=`<span class="site-badge ${cls}">${siteName(activeSite)}</span>`;}
+  const oa=document.getElementById('site-opt-a');if(oa)oa.textContent=siteAName;
+  const ob=document.getElementById('site-opt-b');if(ob)ob.textContent=siteBName;
+}
+
+function showAllowanceBanner(emp){
+  const banner=document.getElementById('allowance-banner');
+  const amt=getAllowanceAmt(emp);
+  if(isAwayDeployment(emp)){
+    banner.className='allowance-banner away';
+    banner.textContent=`Away deployment — ${emp.name} is from ${siteName(emp.homeSite)}. Daily allowance: ₱${amt.toLocaleString()}`;
+    banner.style.display='block';
+  } else {
+    banner.className='allowance-banner';
+    banner.textContent=`Home site — ${emp.name} is assigned to ${siteName(emp.homeSite)}. No allowance.`;
+    banner.style.display='block';
+  }
+}
+
+async function initCamera(){
+  const dot=document.getElementById('cam-dot'),txt=document.getElementById('cam-status-txt');
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    camReady=false;if(dot)dot.className='cam-dot error';
+    if(txt)txt.textContent='Camera API missing - enable Webcam Access (PLUS) in Fully Kiosk and load over HTTPS';
+    return;
+  }
+  const tries=[
+    {video:{facingMode:'user',width:{ideal:400},height:{ideal:400}},audio:false},
+    {video:{facingMode:'user'},audio:false},
+    {video:true,audio:false}
+  ];
+  let lastErr=null;
+  for(const constraints of tries){
+    try{
+      camStream=await navigator.mediaDevices.getUserMedia(constraints);
+      const v=document.getElementById('cam-video');
+      v.srcObject=camStream;
+      try{await v.play();}catch(pe){console.warn('video play warning (non-fatal):',pe&&pe.name);}
+      camReady=true;if(dot)dot.className='cam-dot active';if(txt)txt.textContent='Camera ready';
+      return;
+    }catch(e){lastErr=e;console.warn('getUserMedia failed:',constraints,e&&e.name,e&&e.message);}
+  }
+  camReady=false;if(dot)dot.className='cam-dot error';
+  if(txt)txt.textContent='Camera unavailable: '+(lastErr?lastErr.name:'unknown');
+}
+
+function capturePhoto(){
+  return new Promise(res=>{
+    try{
+      if(!camReady){res(null);return;}
+      const v=document.getElementById('cam-video'),c=document.getElementById('cam-canvas');
+      if(!v||!c||!v.videoWidth){res(null);return;}
+      c.width=400;c.height=400;
+      const ctx=c.getContext('2d');
+      ctx.save();ctx.translate(400,0);ctx.scale(-1,1);ctx.drawImage(v,0,0,400,400);ctx.restore();
+      res(c.toDataURL('image/jpeg',0.75));
+    }catch(e){console.warn('capturePhoto failed (non-fatal):',e&&e.message);res(null);}
+  });
+}
+
+function stampPhoto(dataUrl,empName,punchType,timeStr){
+  return new Promise(res=>{
+    if(!dataUrl){res(null);return;}
+    const img=new Image();
+    img.onload=()=>{
+      const c=document.createElement('canvas');
+      c.width=img.width;c.height=img.height;
+      const ctx=c.getContext('2d');
+      ctx.drawImage(img,0,0);
+      // Dark semi-transparent bar at bottom
+      const barH=54;
+      ctx.fillStyle='rgba(0,0,0,0.55)';
+      ctx.fillRect(0,c.height-barH,c.width,barH);
+      // Punch type label
+      ctx.fillStyle='#ffffff';
+      ctx.font='bold 15px Arial';
+      ctx.fillText(PLABELS[punchType]||punchType,10,c.height-barH+20);
+      // Employee name
+      ctx.font='13px Arial';
+      ctx.fillStyle='#e0e0e0';
+      ctx.fillText(empName,10,c.height-barH+36);
+      // Timestamp right-aligned
+      ctx.font='bold 13px Arial';
+      ctx.fillStyle='#FFD700';
+      ctx.textAlign='right';
+      ctx.fillText(timeStr,c.width-10,c.height-barH+20);
+      // Date right-aligned below
+      ctx.font='11px Arial';
+      ctx.fillStyle='#cccccc';
+      ctx.fillText(todayKey(),c.width-10,c.height-barH+36);
+      ctx.textAlign='left';
+      res(c.toDataURL('image/jpeg',0.85));
+    };
+    img.onerror=()=>res(dataUrl);
+    img.src=dataUrl;
+  });
+}
+
+function showPhotoOverlay(dataUrl,name,punchType,tgActive){
+  if(!dataUrl)return;
+  document.getElementById('po-img').src=dataUrl;
+  document.getElementById('po-name').textContent=name+' — '+PLABELS[punchType];
+  document.getElementById('po-sub').textContent=nowShort()+' · '+todayKey();
+  document.getElementById('po-tg').textContent=tgActive?'Sending photo to Telegram...':'';
+  const ov=document.getElementById('photo-overlay');if(ov)ov.classList.add('show');
+  setTimeout(()=>{if(ov)ov.classList.remove('show');},3000);
+}
+
+async function tgSendPhoto(chatId,caption,photoDataUrl){
+  if(!tgToken||!chatId)return false;
+  try{const blob=await(await fetch(photoDataUrl)).blob();const fd=new FormData();fd.append('chat_id',chatId);fd.append('caption',caption);fd.append('parse_mode','HTML');fd.append('photo',blob,'punch.jpg');const r=await fetch(`https://api.telegram.org/bot${tgToken}/sendPhoto`,{method:'POST',body:fd});return r.ok;}catch(e){return false;}
+}
+
+async function tgSendMediaGroup(chatId,mediaArray){
+  // Send multiple photos as album
+  if(!tgToken||!chatId||!mediaArray.length)return false;
+  try{
+    const fd=new FormData();
+    const media=[];
+    for(let i=0;i<mediaArray.length;i++){
+      const {dataUrl,caption}=mediaArray[i];
+      const blob=await(await fetch(dataUrl)).blob();
+      const fname='photo'+i+'.jpg';
+      fd.append(fname,blob,fname);
+      const m={type:'photo',media:'attach://'+fname};
+      if(i===0&&caption)m.caption=caption;
+      if(i===0&&caption)m.parse_mode='HTML';
+      media.push(m);
+    }
+    fd.append('chat_id',chatId);
+    fd.append('media',JSON.stringify(media));
+    const r=await fetch(`https://api.telegram.org/bot${tgToken}/sendMediaGroup`,{method:'POST',body:fd});
+    return r.ok;
+  }catch(e){return false;}
+}
+
+async function sendPhotoSummaryToPhotoGroup(emp,rec){
+  if(!tgToken||tgToken.length<20||!tgPhotoGroup)return;
+  if(!rec.photos||!Object.keys(rec.photos).length)return;
+  const t=todayKey();
+  const pos=emp.position&&emp.position!=='—'?emp.position:emp.dept;
+  const worked=calcWorked(rec);
+  const caption=`📸 <b>Punch Photos — ${emp.name}</b>\n💼 ${pos} · ${emp.dept}\n📅 ${t}\n⏱ Worked: ${worked!==null?msToH(worked)+'h':'—'}\n🏢 ${company}`;
+  const punchOrder=['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'];
+  const stamped=[];
+  for(const p of punchOrder){
+    if(!rec.photos[p])continue;
+    const timeStr=rec.punches[p]||nowShort();
+    const stampedData=await stampPhoto(rec.photos[p],emp.name,p,timeStr);
+    stamped.push({dataUrl:stampedData,punchType:p});
+  }
+  if(!stamped.length)return;
+  if(stamped.length===1){
+    await tgSendPhoto(tgPhotoGroup,caption,stamped[0].dataUrl);
+  } else {
+    const mediaArray=stamped.map((s,i)=>({dataUrl:s.dataUrl,caption:i===0?caption:null}));
+    await tgSendMediaGroup(tgPhotoGroup,mediaArray);
+  }
+}
+
+async function tgSendText(chatId,text){
+  if(!tgToken||!chatId)return false;
+  try{const r=await fetch(`https://api.telegram.org/bot${tgToken}/sendMessage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId,text,parse_mode:'HTML'})});return r.ok;}catch(e){return false;}
+}
+
+
+async function tgSendWithButtons(chatId,text,buttons){
+  if(!tgToken||!chatId)return null;
+  try{
+    const r=await fetch(`https://api.telegram.org/bot${tgToken}/sendMessage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId,text,parse_mode:'HTML',reply_markup:{inline_keyboard:[buttons]}})});
+    const d=await r.json();return d.ok?d.result.message_id:null;
+  }catch(e){return null;}
+}
+async function tgAnswerCallback(callbackId,text){
+  if(!tgToken)return;
+  try{await fetch(`https://api.telegram.org/bot${tgToken}/answerCallbackQuery`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({callback_query_id:callbackId,text,show_alert:false})});}catch(e){}
+}
+async function tgEditMessage(chatId,msgId,text){
+  if(!tgToken||!chatId||!msgId)return;
+  try{await fetch(`https://api.telegram.org/bot${tgToken}/editMessageText`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId,message_id:msgId,text,parse_mode:'HTML'})});}catch(e){}
+}
+async function sendPunchNotif(emp,punchType,isLate,lateMs,photoData,hasAllowance,allowAmt){
+  const emoji={timein:'✅',timeout:'🔴',lunch_out:'🍽️',lunch_in:'🔄',pm_out:'☕',pm_in:'🔄'}[punchType]||'📋';
+  const lateNote=isLate?`\n⚠️ LATE by ${msToHM(lateMs)}`:'';
+  const awayNote=hasAllowance?`\n💰 Away allowance: ₱${allowAmt.toLocaleString()} (deployed to ${siteName(activeSite)} from ${siteName(emp.homeSite)})`:'';
+  const pos=emp.position&&emp.position!=='—'?emp.position:emp.dept;
+  const msg=`${emoji} <b>${PLABELS[punchType]}</b>\n👤 ${emp.name}\n💼 ${pos} · ${emp.dept}\n📍 ${siteName(activeSite)}${lateNote}${awayNote}\n🕐 ${nowShort()} · ${todayKey()}\n🏢 ${company}`;
+  const isLive=tgToken&&tgToken.length>20;let sent=false;
+  if(isLive){
+    // 1. Main group → text notification only (no photos)
+    if(tgGroup)await tgSendText(tgGroup,msg);
+    // 2. Photo backup group → stamped photo immediately on every punch
+    if(!photoData&&tgGroup){
+      await tgSendText(tgGroup,`⚠️ <b>No Photo Captured</b>\n👤 ${emp.name}\n💼 ${pos}\n📋 ${PLABELS[punchType]} at ${nowShort()}\n🏢 ${company}\n\nCamera was unavailable during this punch.`);
+    }
+    if(tgBackupGroup&&photoData){
+      const stampedBackup=await stampPhoto(photoData,emp.name,punchType,nowShort());
+      if(stampedBackup)await tgSendPhoto(tgBackupGroup,msg,stampedBackup);
+    }
+    // 3. On timeout → compiled stamped album to photo group
+    if(punchType==='timeout'&&tgPhotoGroup){
+      const rec=records[emp.code+'_'+todayKey()];
+      if(rec)await sendPhotoSummaryToPhotoGroup(emp,rec);
+    }
+    sent=true;
+  }
+  logNotif(`${PLABELS[punchType]}: ${emp.name} @ ${siteName(activeSite)}${isLate?' ⚠️ LATE':''}${hasAllowance?' 💰 Allowance':''}`,isLate?'late-n':'',sent);
+}
+
+
+
+
+function countByPosition(empList){
+  const counts={};
+  empList.forEach(e=>{
+    const pos=e.position&&e.position!=='—'?e.position:e.dept;
+    counts[pos]=(counts[pos]||0)+1;
+  });
+  return Object.entries(counts).map(([p,n])=>`• ${p}: ${n}`).join('\n');
+}
+async function sendLateArrivalAlert(emp,lateMs,timeIn){
+  if(!tgToken||tgToken.length<20)return;
+  const t=todayKey();
+  // All who have clocked in (on time + late)
+  const clockedIn=employees.filter(e=>{const r=records[e.code+'_'+t];return r&&r.punches.timein;});
+  const lateEmps=clockedIn.filter(e=>{const r=records[e.code+'_'+t];return r&&r.isLate;});
+  const onTimeEmps=clockedIn.filter(e=>{const r=records[e.code+'_'+t];return r&&!r.isLate;});
+  const pos=emp.position&&emp.position!=='—'?emp.position:emp.dept;
+  let msg=`⚠️ <b>Late Arrival Update</b>\n👤 ${emp.name} (${pos}) clocked in at ${timeIn} — late by ${msToHM(lateMs)}\n📍 ${siteName(activeSite)} · ${company}\n`;
+  msg+=`\n✅ <b>On Time (${onTimeEmps.length}):</b>\n${countByPosition(onTimeEmps)||'• None'}`;
+  msg+=`\n\n⚠️ <b>Late (${lateEmps.length}):</b>\n${countByPosition(lateEmps)||'• None'}`;
+  const notIn=employees.filter(e=>!onLeaveToday(e.code)&&(!records[e.code+'_'+t]||!records[e.code+'_'+t].punches.timein));
+  if(notIn.length)msg+=`\n\n❌ <b>Not Yet In (${notIn.length}):</b>\n${countByPosition(notIn)}`;
+  const posTargets=[tgPosGroup,tgGroup].filter(g=>g);
+  for(const g of posTargets)await tgSendText(g,msg);
+  for(const id of mgrIds)if(id)await tgSendText(id,msg);
+}
+
+async function sendMorningReport(){
+  if(!tgToken||tgToken.length<20)return;
+  const t=todayKey();
+  const onTime=employees.filter(e=>{const r=records[e.code+'_'+t];return r&&r.punches.timein&&!r.isLate&&!onLeaveToday(e.code);});
+  const late=employees.filter(e=>{const r=records[e.code+'_'+t];return r&&r.punches.timein&&r.isLate;});
+  const notIn=employees.filter(e=>!onLeaveToday(e.code)&&(!records[e.code+'_'+t]||!records[e.code+'_'+t].punches.timein));
+  const onLeave=employees.filter(e=>onLeaveToday(e.code));
+  let msg=`📋 <b>8:30 AM Attendance Report</b>\n🏢 ${company} · ${siteName(activeSite)} · ${t}\n`;
+  msg+=`\n✅ On time: ${onTime.length}  ⚠️ Late: ${late.length}  ❌ Not in: ${notIn.length}  🌴 On leave: ${onLeave.length}`;
+  if(onTime.length){
+    msg+='\n\n✅ <b>On Time:</b>\n';
+    msg+=onTime.map(e=>{const pos=e.position&&e.position!=='—'?e.position:e.dept;return`• ${e.name} (${pos}) — ${records[e.code+'_'+t].punches.timein}`;}).join('\n');
+  }
+  if(late.length){
+    msg+='\n\n⚠️ <b>Late:</b>\n';
+    msg+=late.map(e=>{const pos=e.position&&e.position!=='—'?e.position:e.dept;const r=records[e.code+'_'+t];return`• ${e.name} (${pos}) — ${r.punches.timein} · Late by ${msToHM(r.lateMs)}`;}).join('\n');
+  }
+  if(notIn.length){
+    msg+='\n\n❌ <b>Not Yet In:</b>\n';
+    msg+=notIn.map(e=>{const pos=e.position&&e.position!=='—'?e.position:e.dept;return`• ${e.name} (${pos})`;}).join('\n');
+  }
+  if(onLeave.length){
+    msg+='\n\n🌴 <b>On Leave:</b>\n';
+    msg+=onLeave.map(e=>{const pos=e.position&&e.position!=='—'?e.position:e.dept;return`• ${e.name} (${pos})`;}).join('\n');
+  }
+  const posTargets2=[tgPosGroup,tgGroup].filter(g=>g);
+  for(const g of posTargets2)await tgSendText(g,msg);
+  for(const id of mgrIds)if(id)await tgSendText(id,msg);
+  logNotif('8:30 AM morning report sent','summary-n',true);
+}
+
+function scheduleMorningReport(){
+  const now=new Date();
+  const target=new Date(now);target.setHours(8,30,0,0);
+  if(now>=target)target.setDate(target.getDate()+1); // schedule for tomorrow if already past
+  const delay=target-now;
+  setTimeout(function fire(){
+    sendMorningReport();
+    setInterval(sendMorningReport,86400000); // repeat daily
+  },delay);
+}
+
+function buildSummary(){
+  const t=todayKey();
+  const late=employees.filter(e=>{const r=records[e.code+'_'+t];return r&&r.isLate;});
+  const absent=employees.filter(e=>!onLeaveToday(e.code)&&(!records[e.code+'_'+t]||!records[e.code+'_'+t].punches.timein));
+  const away=employees.filter(e=>{const r=records[e.code+'_'+t];return r&&r.hasAllowance;});
+  const present=employees.filter(e=>{const r=records[e.code+'_'+t];return r&&r.punches.timein;}).length;
+  const totalAllow=away.reduce((s,e)=>{const r=records[e.code+'_'+t];return s+(r?r.allowanceAmt:0);},0);
+  let msg=`📊 <b>Daily Summary — ${siteName(activeSite)}</b>\n🏢 ${company} · ${t}\n\n✅ Present: ${present}\n⚠️ Late: ${late.length}\n❌ Absent: ${absent.length}\n💰 Away allowance: ₱${totalAllow.toLocaleString()} (${away.length} employees)`;
+  if(late.length)msg+='\n\n⚠️ <b>Late:</b>\n'+late.map(e=>`• ${e.name} — ${msToHM(records[e.code+'_'+t].lateMs)}`).join('\n');
+  if(absent.length)msg+='\n\n❌ <b>Absent:</b>\n'+absent.map(e=>`• ${e.name} (${e.dept})`).join('\n');
+  if(away.length)msg+='\n\n💰 <b>Away allowance:</b>\n'+away.map(e=>{const r=records[e.code+'_'+t];return`• ${e.name} — ₱${r.allowanceAmt.toLocaleString()} (from ${siteName(e.homeSite)})`;}).join('\n');
+  return msg;
+}
+
+async function sendSummary(){
+  const msg=buildSummary();const isLive=tgToken&&tgToken.length>20;
+  if(isLive){for(const id of mgrIds)if(id)await tgSendText(id,msg);}
+  logNotif('Daily summary sent','summary-n',isLive);
+  const tsEl=document.getElementById('tab-settings');if(tsEl&&tsEl.classList.contains('active'))renderNotifLog();
+}
+
+async function sendTestMsg(){
+  const isLive=tgToken&&tgToken.length>20;
+  const msg=`🔔 <b>Test notification</b>\n✅ Telegram bot connected!\n📍 ${siteName(activeSite)}\n🏢 ${company}\n🕐 ${nowShort()}`;
+  if(isLive){for(const id of mgrIds)if(id)await tgSendText(id,msg);}
+  logNotif('Test message sent','',isLive);renderNotifLog();
+  document.getElementById('tg-msg').textContent=isLive?'Test sent!':'Demo mode — add bot token.';
+  setTimeout(()=>document.getElementById('tg-msg').textContent='',3000);
+}
+
+function logNotif(text,cls,sent){notifLog.unshift({text,cls,sent,time:nowShort(),date:todayKey()});if(notifLog.length>60)notifLog.pop();}
+
+setInterval(()=>{
+  const now=new Date();
+  if(now.getHours()===endH&&now.getMinutes()===endM&&!summaryDone){summaryDone=true;sendSummary();autoExportCSV();checkAndSendAbsenceSMS();sendIncompleteRecordsSummary();setTimeout(()=>summaryDone=false,70000);}
+},30000);
+
+function sessionLogout(){if(adminLoggedIn)adminLogout();else if(assistantLoggedIn)logoutAssistant();}
+
+function showSessionBar(role){
+  const bar=document.getElementById('session-bar');if(bar)bar.classList.add('show');
+  const r=document.getElementById('session-role');if(r)r.textContent=role;
+}
+function hideSessionBar(){
+  const bar=document.getElementById('session-bar');if(bar)bar.classList.remove('show');
+}
+function updSessionBar(secs,total){
+  const pct=(secs/total)*100;
+  const f=document.getElementById('session-fill');if(f){f.style.width=pct+'%';f.className='s-fill'+(secs<=10?' urgent':'');}
+  const l=document.getElementById('session-lbl');if(l)l.textContent=secs+'s';
+}
+
+function startAdminTimer(){stopAdminTimer();adminSecs=ADMIN_TO;updTimer();showSessionBar('Admin');adminTick=setInterval(()=>{adminSecs--;updTimer();updSessionBar(adminSecs,ADMIN_TO);if(adminSecs<=0)adminLogout();},1000);}
+function stopAdminTimer(){if(adminTick){clearInterval(adminTick);adminTick=null;}hideSessionBar();}
+function resetAdminTimer(){if(!adminLoggedIn)return;adminSecs=ADMIN_TO;updTimer();}
+function updTimer(){const pct=(adminSecs/ADMIN_TO)*100;const f=document.getElementById('timer-fill'),l=document.getElementById('timer-lbl');if(f){f.style.width=pct+'%';f.className='timer-fill'+(adminSecs<=10?' urgent':'');}if(l)l.textContent=adminSecs+'s';updSessionBar(adminSecs,ADMIN_TO);}
+document.addEventListener('click',()=>{if(adminLoggedIn)resetAdminTimer();if(assistantLoggedIn)resetAssistantTimer();});
+document.addEventListener('keydown',()=>{if(adminLoggedIn)resetAdminTimer();if(assistantLoggedIn)resetAssistantTimer();});
+document.addEventListener('scroll',()=>{if(adminLoggedIn)resetAdminTimer();if(assistantLoggedIn)resetAssistantTimer();},true);
+document.addEventListener('touchstart',()=>{if(adminLoggedIn)resetAdminTimer();if(assistantLoggedIn)resetAssistantTimer();},true);
+function showATabs(){ATABS.forEach(t=>{const b=document.getElementById('tab-btn-'+t);if(b)b.classList.remove('hidden');});const clk=document.getElementById('tab-btn-clock');if(clk)clk.style.display='none';const myt=document.getElementById('tab-btn-mytime');if(myt)myt.style.display='none';}
+function hideATabs(){ATABS.forEach(t=>{const b=document.getElementById('tab-btn-'+t);if(b)b.classList.add('hidden');});}
+
+function updateClock(){
+  const now=new Date();
+  document.getElementById('live-time').textContent=now.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
+  document.getElementById('live-date').textContent=now.toLocaleDateString('en-PH',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+  const hd=document.getElementById('hdr-date');if(hd)hd.textContent=now.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});
+}
+
+
+// ── DOWNLOAD HELPER (works in browser + Android WebView) ──
+function downloadFile(filename, content, mimeType){
+  try{
+    const blob=new Blob([content],{type:mimeType});
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement('a');
+    a.href=url;
+    a.download=filename;
+    a.style.display='none';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(()=>{document.body.removeChild(a);URL.revokeObjectURL(url);},1000);
+    // Try Android bridge if available (for WebView app)
+    if(window.Android&&window.Android.saveFile){
+      window.Android.saveFile(filename,content,mimeType);
+    }
+    return true;
+  }catch(e){console.warn('Download failed:',e);return false;}
+}
+
+// ── FIX 1: Cleanup old data > 10 days ──
+function cleanupOldData(){
+  try{
+    const today=new Date();
+    Object.keys(records).forEach(k=>{
+      const parts=k.split('_');const dateStr=parts[parts.length-1];
+      const d=new Date(dateStr);
+      if(!isNaN(d)&&(today-d)>10*86400000)delete records[k];
+    });
+    saveData();
+  }catch(e){}
+}
+
+// ── MONTHLY AUTO-EXPORT OF PERMANENT RECORDS ──
+function monthlyAutoExport(){
+  try{
+    const now=new Date();
+    const monthLabel=now.toLocaleDateString('en-PH',{year:'numeric',month:'long'});
+    const fileDate=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const lastMonthlyExport=localStorage.getItem('rsr_last_monthly_export');
+    if(lastMonthlyExport===fileDate)return; // already exported this month
+
+    const exportData={
+      exportDate: todayKey(),
+      exportMonth: monthLabel,
+      company,
+      employees: employees.map(e=>({
+        code:e.code, name:e.name, dept:e.dept,
+        position:e.position, phone:e.phone,
+        network:e.network, homeSite:e.homeSite,
+        balance:e.balance
+      })),
+      leaveRequests,
+      undertimeRequests,
+      absenceViolations,
+      smsLog: smsLog.slice(0,200),
+      suspendedEmployees,
+      summary:{
+        totalEmployees: employees.length,
+        totalLeaveRequests: leaveRequests.length,
+        totalUndertimeRequests: undertimeRequests.length,
+        totalSMSSent: smsLog.length,
+        totalViolations: Object.values(absenceViolations).reduce((s,v)=>s+v.count,0),
       }
-    })());
+    };
+
+    const json=JSON.stringify(exportData,null,2);
+    const filename=`${company.replace(/\s+/g,'_')}_monthly_records_${fileDate}.json`;
+    downloadFile(filename,json,'application/json');
+
+    localStorage.setItem('rsr_last_monthly_export',fileDate);
+    logNotif(`📁 Monthly records exported: ${monthLabel}`,'',false);
+    showMsg('ok','📁 Monthly Export',`Permanent records for ${monthLabel} have been downloaded automatically.`,6000);
+  }catch(e){console.warn('Monthly export failed:',e);}
+}
+
+function scheduleMonthlyExport(){
+  const now=new Date();
+  // Run on the 1st of every month at 8:00 AM
+  const nextFirst=new Date(now.getFullYear(),now.getMonth()+1,1,8,0,0,0);
+  const msToNext=nextFirst-now;
+  setTimeout(function run(){
+    monthlyAutoExport();
+    // Schedule next month
+    setTimeout(run,30*24*60*60*1000);
+  },msToNext);
+  // Also check if we missed this month's export (e.g. kiosk was off on the 1st)
+  if(now.getDate()<=3){
+    const fileDate=`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}`;
+    const lastExport=localStorage.getItem('rsr_last_monthly_export');
+    if(lastExport!==fileDate){
+      // Missed — run now
+      setTimeout(monthlyAutoExport,5000);
+    }
+  }
+}
+
+
+function autoExportCSV(){
+  try{
+    // Build CSV for today
+    const t=todayKey();
+    const rows=[['Date','PIN','Name','Position','Dept','Home Site','Clocked Site','Allowance','OT Allowance','Time In','Late By','Lunch Out','Lunch In','PM Out','PM In','Time Out','Worked','OT','Status']];
+    employees.forEach(emp=>{
+      const rec=records[emp.code+'_'+t]||{punches:{},msMap:{},isLate:false,lateMs:0,hasAllowance:false,allowanceAmt:0,clockedSite:null};
+      const p=rec.punches,worked=calcWorked(rec),ot=worked?Math.max(0,worked-(emp.shift*3600000)):null;
+      rows.push([t,emp.code,emp.name,emp.position||'—',emp.dept,siteName(emp.homeSite),rec.clockedSite?siteName(rec.clockedSite):'—',
+        rec.hasAllowance?rec.allowanceAmt:0,rec.hasOTAllowance?rec.otAllowanceAmt:0,
+        p.timein||'',rec.isLate?msToHM(rec.lateMs):'On time',
+        (p.lunch_out==='(auto-deducted)'||p.lunch_out==='(auto-skipped)')?'auto':p.lunch_out||'',
+        (p.lunch_in==='(auto-deducted)'||p.lunch_in==='(auto-skipped)')?'auto':p.lunch_in||'',
+        p.pm_out||'',p.pm_in||'',p.timeout||'',
+        worked!==null?msToH(worked):(rec.punches&&rec.punches.timein&&!rec.punches.timeout?'~'+msToH(calcWorkedPartial(rec)||0)+'*':''),
+        ot&&ot>0?msToH(ot):'',
+        (rec.punches&&rec.punches.timein&&!rec.punches.timeout&&getStatus(rec)!=='out')?'Incomplete':getStatus(rec)
+      ]);
+    });
+    const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
+    downloadFile('attendance_'+t.replace(/\//g,'-')+'_auto.csv',csv,'text/csv');
+    localStorage.setItem('rsr_last_export',t);
+    logNotif('📊 Auto-exported attendance CSV for '+t,'',false);
+    showMsg('ok','📊 Auto Export','Today\'s attendance CSV has been downloaded automatically.',5000);
+  }catch(e){console.warn('Auto export failed:',e);}
+}
+
+// ── FIX 2: Export reminder at end of shift ──
+function checkExportReminder(){/* replaced by autoExportCSV */}
+
+// ── FIX 3: Simple Screen Management ──
+// Dim after 30 mins → black after dim → tap to wake anytime
+let wakeLock=null,dimTimer=null,blackTimer=null,screenBlack=false;
+const DIM_AFTER_MS=5*60*1000;   // dim after 5 mins
+const BLACK_AFTER_MS=60*1000;    // go black 60 secs after dim
+
+async function requestWakeLock(){
+  try{
+    if('wakeLock' in navigator){
+      wakeLock=await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release',()=>{wakeLock=null;});
+    }
+  }catch(e){console.warn('Wake lock:',e);}
+}
+document.addEventListener('visibilitychange',async()=>{
+  if(document.visibilityState==='visible'){
+    if(!wakeLock)await requestWakeLock();
+    // Camera stream can die while the screen is off; re-acquire it on wake
+    // so punch photos keep working. Re-init if the stream is missing or stale.
+    const v=document.getElementById('cam-video');
+    if(!camReady||!camStream||!camStream.active||(v&&!v.videoWidth)){
+      try{await initCamera();}catch(e){console.warn('camera re-init on wake failed:',e&&e.message);}
+    }
+  }
+});
+
+function dimScreen(){
+  if(screenBlack)return;
+  document.getElementById('screen-dim-overlay').classList.add('show');
+  blackTimer=setTimeout(goBlack,BLACK_AFTER_MS);
+}
+
+function goBlack(){
+  screenBlack=true;
+  document.getElementById('screen-off-overlay').classList.add('show');
+  document.getElementById('screen-dim-overlay').classList.remove('show');
+  if(wakeLock){wakeLock.release();wakeLock=null;}
+  // Show current time on black screen
+  const offClockTick=setInterval(()=>{
+    const el=document.getElementById('off-clock');
+    if(el)el.textContent=new Date().toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true});
+    if(!screenBlack)clearInterval(offClockTick);
+  },1000);
+}
+
+function wakeScreen(){
+  screenBlack=false;
+  document.getElementById('screen-off-overlay').classList.remove('show');
+  document.getElementById('screen-dim-overlay').classList.remove('show');
+  if(blackTimer){clearTimeout(blackTimer);blackTimer=null;}
+  requestWakeLock();
+  resetDimTimer();
+}
+
+function resetDimTimer(){
+  if(dimTimer)clearTimeout(dimTimer);
+  if(blackTimer){clearTimeout(blackTimer);blackTimer=null;}
+  document.getElementById('screen-dim-overlay').classList.remove('show');
+  dimTimer=setTimeout(dimScreen,DIM_AFTER_MS);
+}
+
+// Any activity resets the timer
+['click','keydown','touchstart','mousemove'].forEach(ev=>{
+  document.addEventListener(ev,()=>{if(screenBlack)wakeScreen();else resetDimTimer();},true);
+});
+
+// ── FIX 4: Midnight reset ──
+function scheduleMidnightReset(){
+  const now=new Date();
+  const midnight=new Date(now);midnight.setHours(24,0,5,0);
+  setTimeout(()=>{
+    summaryDone=false;
+    lateTimeoutRequests={};lateLunchRequests={};latePmOutRequests={};lateTimeInRequests={};
+    earlyLunchOutRequests={};earlyPmOutRequests={};
+    incompleteTimeInRequests={};
+    cleanupOldData();checkAllAbsences();scheduleMorningReport();scheduleMidnightReset();
+    logNotif('New day — daily state reset','',false);
+  },midnight-now);
+}
+
+// ── FIX 5: PIN lockout after 5 failed attempts ──
+let pinFailCount=0,pinLockedUntil=0,pinLockTimer=null;
+const PIN_MAX_ATTEMPTS=5;
+const PIN_LOCK_MS=5*60*1000;
+function isKioskLocked(){return Date.now()<pinLockedUntil;}
+function lockKiosk(){
+  pinLockedUntil=Date.now()+PIN_LOCK_MS;pinFailCount=0;pin='';updDots();
+  showKioskLockScreen();
+  if(pinLockTimer)clearInterval(pinLockTimer);
+  pinLockTimer=setInterval(()=>{
+    const rem=Math.ceil((pinLockedUntil-Date.now())/1000);
+    const el=document.getElementById('lock-countdown');if(el)el.textContent=rem+'s';
+    if(rem<=0){clearInterval(pinLockTimer);pinLockTimer=null;hideKioskLockScreen();}
+  },1000);
+  logNotif('Kiosk locked — 5 failed PIN attempts','late-n',false);
+}
+function showKioskLockScreen(){
+  let ld=document.getElementById('kiosk-lock-screen');
+  if(!ld){ld=document.createElement('div');ld.id='kiosk-lock-screen';
+    ld.style.cssText='position:fixed;inset:0;background:rgba(20,20,30,0.97);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px';
+    ld.innerHTML=`<div style="font-size:56px">⛔</div><div style="font-size:22px;font-weight:700;color:#fff">Kiosk Temporarily Locked</div><div style="font-size:14px;color:rgba(255,255,255,0.6);text-align:center;max-width:320px">Too many incorrect PIN attempts.<br>Please wait before trying again.</div><div style="font-size:40px;font-weight:700;color:#E8A830;margin-top:8px" id="lock-countdown">300s</div><div style="font-size:12px;color:rgba(255,255,255,0.3);margin-top:4px">Kiosk will unlock automatically</div>`;
+    document.body.appendChild(ld);}
+  ld.style.display='flex';
+}
+function hideKioskLockScreen(){
+  const ld=document.getElementById('kiosk-lock-screen');if(ld)ld.style.display='none';
+  pinFailCount=0;document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';
+}
+
+setInterval(updateClock,1000);updateClock();
+function updShiftPill(){const tm=shiftM+graceMins,gh=shiftH+Math.floor(tm/60),gm=tm%60;document.getElementById('shift-pill').textContent='Shift: '+fmt12(shiftH,shiftM)+' · Grace: until '+fmt12(gh,gm);}
+updShiftPill();
+
+function updDots(){for(let i=0;i<PIN_LEN;i++){const d=document.getElementById('d'+i);if(d)d.className='pin-dot'+(i<pin.length?' filled':'');}}
+function kp(n){
+  if(isKioskLocked()){showKioskLockScreen();return;}
+  if(pin.length>=PIN_LEN)return;pin+=n;updDots();
+  const hint=document.getElementById('pin-hint');
+  if(pin.length===PIN_LEN){
+    const emp=findEmp(pin);
+    if(emp){pinFailCount=0;curEmp=emp;hint.textContent='';hint.style.color='';showEmpPreview(emp);clearMsg();}
+    else{
+      pinFailCount++;pin='';updDots();
+      const rem=PIN_MAX_ATTEMPTS-pinFailCount;
+      if(pinFailCount>=PIN_MAX_ATTEMPTS){lockKiosk();}
+      else{hint.textContent=`PIN not found. ${rem} attempt${rem!==1?'s':''} remaining.`;hint.style.color='#A32D2D';document.getElementById('emp-preview').style.display='none';updBtns(null);curEmp=null;}
+    }
+  }else{hint.textContent='Enter your 6-digit PIN';hint.style.color='';document.getElementById('emp-preview').style.display='none';updBtns(null);curEmp=null;}
+}
+function kpDel(){pin=pin.slice(0,-1);updDots();clearMsg();document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';document.getElementById('emp-preview').style.display='none';document.getElementById('btn-undertime').disabled=true;updBtns(null);curEmp=null;}
+function kpClr(){pin='';updDots();clearMsg();document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';document.getElementById('emp-preview').style.display='none';document.getElementById('btn-undertime').disabled=true;document.getElementById('ot-allow-banner').style.display='none';updBtns(null);curEmp=null;}
+
+
+
+// ── MY TIME TAB ──
+let mtPin='',mtEmp=null;
+const PIN_LEN_MT=6;
+
+function getWeekDates(){
+  // Work week: Saturday to Friday
+  // On Saturday & Sunday → show PREVIOUS week (for salary viewing)
+  // On Monday–Friday → show CURRENT week
+  const today=new Date();
+  const day=today.getDay(); // 0=Sun,1=Mon,...,6=Sat
+  const isSalaryView=day===6||day===0; // Saturday or Sunday
+
+  // Days since last Saturday
+  const daysSinceSat=(day+1)%7; // Sat=0,Sun=1,...,Fri=6
+  let weekStart=new Date(today);weekStart.setDate(today.getDate()-daysSinceSat);weekStart.setHours(0,0,0,0);
+
+  // On Sat/Sun → go back one more week to show previous week
+  if(isSalaryView){weekStart.setDate(weekStart.getDate()-7);}
+
+  const dates=[];
+  for(let i=0;i<7;i++){
+    const d=new Date(weekStart);d.setDate(weekStart.getDate()+i);
+    dates.push(d);
+  }
+  return{dates,isSalaryView};
+}
+
+function dateToKey(d){
+  return d.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
+}
+
+function mtUpdDots(){
+  for(let i=0;i<PIN_LEN_MT;i++){
+    const d=document.getElementById('mt-d'+i);
+    if(d)d.className='pin-dot'+(i<mtPin.length?' filled':'');
+  }
+}
+
+function mtKp(n){
+  if(mtPin.length>=PIN_LEN_MT)return;
+  mtPin+=n;mtUpdDots();
+  document.getElementById('mt-err').textContent='';
+  if(mtPin.length===PIN_LEN_MT){
+    const emp=findEmp(mtPin);
+    if(emp){
+      mtEmp=emp;
+      renderMyTimeSheet(emp);
+    } else {
+      document.getElementById('mt-err').textContent='PIN not found. Please try again.';
+      setTimeout(()=>{mtPin='';mtUpdDots();document.getElementById('mt-err').textContent='';},1500);
+    }
+  }
+}
+
+function mtKpDel(){mtPin=mtPin.slice(0,-1);mtUpdDots();document.getElementById('mt-err').textContent='';}
+function mtKpClr(){mtPin='';mtUpdDots();document.getElementById('mt-err').textContent='';}
+
+function mtLogout(){
+  mtPin='';mtEmp=null;mtUpdDots();
+  document.getElementById('mytime-login').style.display='block';
+  document.getElementById('mytime-sheet').style.display='none';
+}
+
+function renderMyTimeSheet(emp){
+  document.getElementById('mytime-login').style.display='none';
+  document.getElementById('mytime-sheet').style.display='block';
+  document.getElementById('mt-empname').textContent=emp.name;
+  document.getElementById('mt-empdept').textContent=(emp.position&&emp.position!=='—'?emp.position+' · ':'')+emp.dept;
+
+  const {dates,isSalaryView}=getWeekDates();
+  const weekStart=dates[0];const weekEnd=dates[6]; // dates[6] is always Friday
+  const fmt=d=>d.toLocaleDateString('en-PH',{month:'short',day:'numeric'});
+  document.getElementById('mt-weekrange').textContent=fmt(weekStart)+' – '+fmt(weekEnd)+', '+weekEnd.getFullYear()+(isSalaryView?' · 💰 Salary Week':'');
+
+  const today=new Date();today.setHours(0,0,0,0);
+  let totalWorkedMs=0,totalOtMs=0,daysPresent=0;
+  const dayNames=['Saturday','Sunday','Monday','Tuesday','Wednesday','Thursday','Friday'];
+
+  const container=document.getElementById('mt-days');container.innerHTML='';
+
+  dates.forEach((d,i)=>{
+    const key=dateToKey(d);
+    const rec=records[emp.code+'_'+key];
+    const isToday=!isSalaryView&&d.getTime()===today.getTime();
+    const isFuture=!isSalaryView&&d>today;
+    const p=rec?rec.punches:{};
+    const hasTimein=p&&p.timein&&p.timein!=='';
+    const worked=rec?calcWorked(rec):null;
+    const partialWorked=rec?calcWorkedPartial(rec):null;
+    const ot=worked?Math.max(0,worked-(emp.shift*3600000)):0;
+    const isAbsent=!isFuture&&!hasTimein&&!onLeaveToday_date(emp.code,key);
+    const isOnLeave=onLeaveToday_date(emp.code,key);
+
+    if(hasTimein){daysPresent++;if(worked)totalWorkedMs+=worked;if(ot>0)totalOtMs+=ot;}
+
+    const card=document.createElement('div');
+    card.className='mt-day-card'+(isAbsent?' absent':'')+(isToday?' today':'');
+
+    let content='';
+    if(isFuture){
+      content=`<div style="font-size:12px;color:#aaa;text-align:center;padding:6px 0">—</div>`;
+    } else if(isOnLeave){
+      content=`<div style="font-size:13px;font-weight:600;color:#0D8C7A;text-align:center;padding:6px 0">🌴 On Leave</div>`;
+    } else if(isAbsent){
+      content=`<div class="mt-absent-label">❌ Absent</div>`;
+    } else {
+      const skip=v=>v==='(straight duty)'?'⚡':v==='(auto-deducted)'||v==='(auto-skipped)'?'auto':v||'—';
+      content=`
+        <div class="mt-punch-grid">
+          <div class="mt-punch-item"><div class="mt-punch-lbl">Time In</div><div class="mt-punch-val${!p.timein?' empty':''}">${p.timein||'—'}</div></div>
+          <div class="mt-punch-item"><div class="mt-punch-lbl">Lunch Out</div><div class="mt-punch-val${!p.lunch_out?' empty':''}">${skip(p.lunch_out)}</div></div>
+          <div class="mt-punch-item"><div class="mt-punch-lbl">Lunch In</div><div class="mt-punch-val${!p.lunch_in?' empty':''}">${skip(p.lunch_in)}</div></div>
+          <div class="mt-punch-item"><div class="mt-punch-lbl">PM Out</div><div class="mt-punch-val${!p.pm_out?' empty':''}">${p.pm_out||'—'}</div></div>
+          <div class="mt-punch-item"><div class="mt-punch-lbl">PM In</div><div class="mt-punch-val${!p.pm_in?' empty':''}">${p.pm_in||'—'}</div></div>
+          <div class="mt-punch-item"><div class="mt-punch-lbl">Time Out</div><div class="mt-punch-val${!p.timeout?' empty':''}">${p.timeout||'—'}</div></div>
+        </div>
+        <div style="display:flex;justify-content:space-between;margin-top:8px;align-items:center">
+          <div style="font-size:11px;color:#aaa">${rec&&rec.isLate?'<span style="color:#A32D2D;font-weight:600">⚠️ Late '+msToHM(rec.lateMs)+'</span>':''}</div>
+          <div class="mt-hours">${worked!==null?msToHM(worked):partialWorked!==null?'~'+msToHM(partialWorked)+'*':'—'}${ot>0?' · <span style="color:#185FA5">OT: '+msToHM(ot)+'</span>':''}</div>
+        </div>`;
+    }
+
+    card.innerHTML=`
+      <div class="mt-day-header">
+        <div class="mt-day-name">${dayNames[i]}${isToday?' <span style="background:#185FA5;color:#fff;font-size:9px;padding:2px 7px;border-radius:10px;vertical-align:middle">TODAY</span>':''}</div>
+        <div class="mt-day-date">${fmt(d)}</div>
+      </div>${content}`;
+    container.appendChild(card);
+  });
+
+  document.getElementById('mt-total-hours').textContent=msToHM(totalWorkedMs);
+  document.getElementById('mt-total-ot').textContent=msToHM(totalOtMs);
+  document.getElementById('mt-days-present').textContent=daysPresent+' / 7';
+}
+
+function onLeaveToday_date(code,dateStr){
+  return leaveRequests.some(r=>r.code===code&&r.status==='Approved'&&r.startDate<=dateStr&&r.endDate>=dateStr);
+}
+
+// ── ABSENCE & SUSPENSION SYSTEM ──
+function dateKeyOffset(offsetDays){
+  const d=new Date();d.setDate(d.getDate()+offsetDays);
+  return d.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
+}
+function isAbsentOnDate(empCode,dateStr){
+  // Absent = no timein punch AND no approved leave on that date
+  const rec=records[empCode+'_'+dateStr];
+  const hasTimein=rec&&rec.punches&&rec.punches.timein&&rec.punches.timein!=='(auto-skipped)';
+  const hasLeave=leaveRequests.some(r=>r.code===empCode&&r.status==='Approved'&&r.startDate<=dateStr&&r.endDate>=dateStr);
+  return !hasTimein&&!hasLeave;
+}
+function getConsecutiveAbsences(empCode){
+  let count=0;
+  // Check yesterday, day before, day before that (don't count today)
+  for(let i=1;i<=7;i++){
+    const d=dateKeyOffset(-i);
+    if(isAbsentOnDate(empCode,d))count++;
+    else break;
+  }
+  return count;
+}
+function checkAllAbsences(){
+  const today=todayKey();
+  employees.forEach(emp=>{
+    if(suspendedEmployees[emp.code])return; // already suspended
+    if(onLeaveToday(emp.code))return;
+    const consecutive=getConsecutiveAbsences(emp.code);
+    if(consecutive>=3){
+      suspendedEmployees[emp.code]={
+        reason:`Absent for ${consecutive} consecutive day(s) without filed leave`,
+        suspendedOn:today,tgMsgIds:{},notified:false
+      };
+      saveData();
+      if(!suspendedEmployees[emp.code].notified){
+        sendAbsenceSuspensionAlert(emp,consecutive);
+        suspendedEmployees[emp.code].notified=true;
+      }
+    }
+  });
+}
+async function sendAbsenceSuspensionAlert(emp,days){
+  logNotif(`⚠️ ${emp.name} suspended — ${days} consecutive absences`,'late-n',true);
+  if(!tgToken||tgToken.length<20)return;
+  const text=`🚨 <b>Employee Suspended</b>\n👤 ${emp.name} (${emp.dept})\n📋 Absent for <b>${days} consecutive days</b> without filed leave.\n📅 Suspended on: ${todayKey()}\n🏢 ${company}\n\nThis employee is now blocked from punching in.\nApprove reinstatement?`;
+  const buttons=[
+    {text:'✅ Reinstate',callback_data:`approve_reinstate_${emp.code}_${Date.now()}`},
+    {text:'❌ Keep Suspended',callback_data:`reject_reinstate_${emp.code}_${Date.now()}`}
+  ];
+  const msgIds={};
+  for(const id of mgrIds){
+    if(!id)continue;
+    const msgId=await tgSendWithButtons(id,text,buttons);
+    if(msgId)msgIds[id]=msgId;
+  }
+  suspendedEmployees[emp.code].tgMsgIds=msgIds;
+  saveData();
+}
+function reinstateEmployee(code){
+  delete suspendedEmployees[code];
+  saveData();renderRoster();updateStats();
+  logNotif(`✅ ${employees.find(e=>e.code===code)?.name||code} reinstated`,'',true);
+}
+
+
+// ── TIMEOUT ADJUSTMENT NOTICE ──
+function showTimeoutNotice(emp){
+  const adj=timeoutAdjustments[emp.code];
+  if(!adj||adj.acknowledged)return false;
+  document.getElementById('tan-date').textContent=adj.date;
+  document.getElementById('tan-from').textContent=adj.from;
+  document.getElementById('tan-to').textContent=adj.to;
+  document.getElementById('timeout-notice-modal').classList.add('show');
+  return true;
+}
+function acknowledgeTimeoutNotice(){
+  if(curEmp&&timeoutAdjustments[curEmp.code]){
+    timeoutAdjustments[curEmp.code].acknowledged=true;
+    saveData();
+  }
+  document.getElementById('timeout-notice-modal').classList.remove('show');
+}
+
+// ── LATE TIMEOUT WARNING MODAL ──
+let _lateTimeoutEmp=null;
+function openLateTimeoutModal(emp){
+  _lateTimeoutEmp=emp;
+  document.getElementById('ltm-dismissal').textContent=fmt12(dismissalH,dismissalM);
+  document.getElementById('ltm-actual').textContent=nowShort();
+  document.getElementById('ltm-emp').textContent=emp.name+' — '+(emp.position&&emp.position!=='—'?emp.position:emp.dept);
+  document.getElementById('late-timeout-modal').classList.add('show');
+}
+function closeLateTimeoutModal(){
+  document.getElementById('late-timeout-modal').classList.remove('show');
+  // On cancel → auto-record Time Out at dismissal time
+  if(_lateTimeoutEmp||curEmp){
+    const emp=_lateTimeoutEmp||curEmp;
+    const rec=getRec(emp.code);
+    const dismissal=new Date();dismissal.setHours(dismissalH,dismissalM,0,0);
+    rec.punches.timeout=dismissal.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
+    rec.msMap.timeout=dismissal.getTime();
+    rec.timeoutSnapped=true;
+    rec.timeoutSnapTo=rec.punches.timeout;
+    rec.timeoutSnapMs=dismissal.getTime();
+    saveData();updateStats();renderLog();
+    showMsg('ok',emp.name+' — Time Out','Recorded at dismissal time: '+fmt12(dismissalH,dismissalM),3500);
+    setTimeout(()=>kpClr(),3500);
+  }
+  _lateTimeoutEmp=null;
+}
+function confirmLateTimeout(){
+  closeLateTimeoutModal();
+  lateTimeoutConfirmed=true;
+  if(_lateTimeoutEmp||curEmp)punch('timeout');
+}
+
+// ── EARLY BREAK MODAL ──
+let ebPin='';
+function openEarlyBreakModal(type){
+  ebPin='';ebUpdDots();
+  document.getElementById('eb-err').textContent='';
+  document.getElementById('early-break-modal').dataset.punchType=type;
+  const rec=getRec(curEmp.code);
+  const workedSoFar=rec.msMap.timein?Date.now()-effectiveStart(rec)-calcBreak(rec):0;
+  const isLunch=type==='lunch_out';
+  const threshLbl=isLunch?fmt12(lunchOutEarlyH,lunchOutEarlyM):fmt12(pmOutEarlyH,pmOutEarlyM);
+  document.getElementById('eb-title').textContent='⚠️ Early '+(isLunch?'Lunch Out':'PM Break Out');
+  document.getElementById('eb-body').innerHTML=
+    '<strong>Going on '+(isLunch?'lunch':'PM break')+' before '+threshLbl+'</strong><br>'+
+    'You have only worked <strong>'+msToHM(Math.max(0,workedSoFar))+'</strong> so far.<br><br>'+
+    '⚠️ <strong>Only '+msToHM(Math.max(0,workedSoFar))+' will be counted</strong> as your worked time before this break.<br><br>'+
+    'Enter your PIN to confirm and accept the deduction.';
+  document.getElementById('early-break-modal').classList.add('show');
+}
+function closeEarlyBreakModal(){
+  document.getElementById('early-break-modal').classList.remove('show');
+  ebPin='';ebUpdDots();
+  document.getElementById('eb-err').textContent='';
+}
+function ebUpdDots(){for(let i=0;i<PIN_LEN;i++){const d=document.getElementById('eb-d'+i);if(d)d.className='pin-dot'+(i<ebPin.length?' filled':'');}}
+function ebKp(n){
+  if(ebPin.length>=PIN_LEN)return;
+  ebPin+=n;ebUpdDots();
+  document.getElementById('eb-err').textContent='';
+  if(ebPin.length===PIN_LEN){
+    if(ebPin===curEmp.code){
+      const confirmedType=document.getElementById('early-break-modal').dataset.punchType;
+      closeEarlyBreakModal();
+      earlyBreakConfirmed=true;
+      punch(confirmedType);
+    } else {
+      document.getElementById('eb-err').textContent='Incorrect PIN. Please try again.';
+      setTimeout(()=>{ebPin='';ebUpdDots();document.getElementById('eb-err').textContent='';},1200);
+    }
+  }
+}
+function ebKpDel(){ebPin=ebPin.slice(0,-1);ebUpdDots();document.getElementById('eb-err').textContent='';}
+function ebKpClr(){ebPin='';ebUpdDots();document.getElementById('eb-err').textContent='';}
+
+function showEmpPreview(emp){
+  const rec=getRec(emp.code);
+  document.getElementById('prev-name').textContent=emp.name;
+  document.getElementById('prev-dept').textContent=emp.dept+(emp.position&&emp.position!=='—'?' · '+emp.position:'');
+
+  const lastPhoto=rec.photos&&Object.values(rec.photos).filter(Boolean).pop();
+  const pp=document.getElementById('prev-photo');
+  if(pp){if(lastPhoto){pp.src=lastPhoto;pp.style.display='block';}else pp.style.display='none';}
+  const p=rec.punches;
+  const punchDefs=[
+    {key:'timein',lbl:'Time In'},
+    {key:'lunch_out',lbl:'Lunch Out'},
+    {key:'lunch_in',lbl:'Lunch In'},
+    {key:'pm_out',lbl:'PM Out'},
+    {key:'pm_in',lbl:'PM In'},
+    {key:'timeout',lbl:'Time Out'},
+  ];
+  const lateTag=rec.isLate?`<span class="pill pill-late" style="margin-left:6px;font-size:10px">Late ${msToHM(rec.lateMs)}</span>`:'';
+  if(!p.timein){
+    document.getElementById('prev-punches').innerHTML='<div style="grid-column:1/-1;color:#aaa;font-size:13px;padding:6px 0">No punches yet — press <strong>Time In</strong>.</div>';
+  } else {
+    document.getElementById('prev-punches').innerHTML=punchDefs.map(({key,lbl})=>{
+      const val=p[key];
+      const skip=val==='(auto-deducted)'||val==='(auto-skipped)';
+      return `<div class="punch-row">
+        <span class="punch-lbl">${lbl}</span>
+        <span class="punch-val${!val||skip?' empty':''}">${skip?'auto':val||'—'}</span>
+        ${key==='timein'?lateTag:''}
+      </div>`;
+    }).join('');
+  }
+  const bal=emp.balance||{VL:0,SL:0};
+  const amt=getAllowanceAmt(emp);
+  const allowChip=isAwayDeployment(emp)?`<span class="bal-chip" style="background:#FAEEDA"><span style="color:#633806">💰 ₱${amt.toLocaleString()}/day</span></span>`:'';
+  const otChip=rec.hasOTAllowance?`<span class="bal-chip" style="background:#EEEDFE"><span style="color:#534AB7">⭐ OT Allowance: ₱${rec.otAllowanceAmt.toLocaleString()}</span></span>`:'';
+  document.getElementById('prev-balance').innerHTML=`${allowChip}${otChip}`;
+  // OT allowance banner
+  const otBanner=document.getElementById('ot-allow-banner');
+  if(rec.hasOTAllowance){
+    const worked=calcWorked(rec),ot=worked?Math.max(0,worked-(emp.shift*3600000)):0;
+    otBanner.textContent='⭐ OT Allowance earned: ₱'+rec.otAllowanceAmt.toLocaleString()+' ('+msToHM(ot)+' OT)';
+    otBanner.style.display='block';
+  }else{otBanner.style.display='none';}
+  document.getElementById('emp-preview').style.display='block';
+  document.getElementById('btn-leave').disabled=false;
+  document.getElementById('btn-undertime').disabled=false;
+  updBtns(rec);
+}
+
+function updBtns(rec){
+  const next=rec?getNext(rec):null;
+  PUNCHES.forEach(p=>{const b=document.getElementById(BIDS[p]);if(!b)return;b.disabled=(next!==p);b.classList.remove('highlight-next');});
+  if(next){const nb=document.getElementById(BIDS[next]);if(nb)nb.classList.add('highlight-next');}
+  if(!rec){
+    document.getElementById('btn-leave').disabled=true;
+    document.getElementById('btn-undertime').disabled=true;
+  }
+}
+
+async function punch(type){
+  if(!curEmp){showMsg('err','No employee selected','Please enter your 6-digit PIN first.');return;}
+  const emp=curEmp,rec=getRec(emp.code),next=getNext(rec);
+  if(next!==type){
+    const wm=(WMSGS[next]&&WMSGS[next][type])||'Action not available now.';
+    showMsg('err','Wrong punch — '+PLABELS[type]+' not allowed',wm+' Please press: '+(next?PLABELS[next]:'—')+'.',5000);
+    const nb=document.getElementById(BIDS[next]);if(nb){nb.classList.remove('highlight-next');void nb.offsetWidth;nb.classList.add('highlight-next');}return;
+  }
+  // Earliest-time restrictions
+  const now=new Date();
+  // Show timeout adjustment notice on next timein
+  if(type==='timein'&&timeoutAdjustments[emp.code]&&!timeoutAdjustments[emp.code].acknowledged){
+    if(showTimeoutNotice(emp))return;
+  }
+  // Previous day incomplete (no Time Out) — record a flag for admin review, but DON'T block.
+  if(type==='timein'){
+    const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);
+    const yKey=yesterday.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
+    const yRec=records[emp.code+'_'+yKey];
+    if(yRec&&yRec.punches&&yRec.punches.timein&&!yRec.punches.timeout)rec.prevDayIncomplete=true;
+  }
+  // Block suspended employees from punching in
+  if(type==='timein'&&suspendedEmployees[emp.code]){
+    showMsg('err',emp.name+' — Account Suspended',
+      'Absent 3+ days without leave. Admin reinstatement required before clocking in.',6000);
+    return;
+  }
+  // Time In at/after shift end — flag as late for admin review, but DON'T block.
+  if(type==='timein'){
+    const shiftEnd=new Date(now);shiftEnd.setHours(endH,endM,0,0);
+    if(now>=shiftEnd)rec.lateTimeInFlag=true;
+  }
+  // Time Out dismissal logic
+  if(type==='timeout'){
+    const dismissal=new Date(now);dismissal.setHours(dismissalH,dismissalM,0,0);
+    const oneHrAfter=new Date(dismissal.getTime()+3600000);
+    if(now>dismissal&&now<=oneHrAfter){
+      // Within 1 hour after dismissal → auto-snap to dismissal time
+      rec.timeoutSnapped=true;
+      rec.timeoutSnapTo=dismissal.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
+      rec.timeoutSnapMs=dismissal.getTime();
+    } else if(now>oneHrAfter&&!lateTimeoutConfirmed){
+      // More than 1 hour after dismissal → show warning modal first
+      openLateTimeoutModal(emp);
+      return;
+    } else if(now>oneHrAfter&&lateTimeoutConfirmed){
+      // Employee confirmed — admin will set the official time via Telegram
+      lateTimeoutConfirmed=false;
+      rec.lateTimeOut=true;
+      sendLateTimeoutNotif(emp);
+    }
+  }
+  // ── Break punches never block. Record early/late as info; always proceed. ──
+  if(type==='lunch_out'){
+    const early=new Date(now);early.setHours(lunchOutEarlyH,lunchOutEarlyM,0,0);
+    const latest=new Date(now);latest.setHours(lunchOutLatestH,lunchOutLatestM,0,0);
+    if(now<early)rec.earlyLunchOut=true;
+    if(now>latest)rec.lateLunchOut=true;
+  }
+  if(type==='lunch_in'){
+    const earliest=new Date(now);earliest.setHours(lunchInEarliestH,lunchInEarliestM,0,0);
+    if(now<earliest)rec.earlyLunchIn=true;
+  }
+  if(type==='pm_in'){
+    const earliest=new Date(now);earliest.setHours(pmInEarliestH,pmInEarliestM,0,0);
+    if(now<earliest)rec.earlyPmIn=true;
+  }
+  if(type==='pm_out'){
+    const early=new Date(now);early.setHours(pmOutEarlyH,pmOutEarlyM,0,0);
+    const latest=new Date(now);latest.setHours(pmOutLatestH,pmOutLatestM,0,0);
+    if(now<early)rec.earlyPmOut=true;
+    if(now>latest)rec.latePmOut=true;
+  }
+  earlyBreakConfirmed=false;
+  const nowMs=Date.now();
+  const photoData=await capturePhoto();
+  let recordMs=nowMs,recordStr=nowStr();
+  if(type==='lunch_in'&&rec.msMap.lunch_out&&rec.msMap.lunch_out>0){
+    // Use whichever is LATER: forced 1hr or actual punch time (catches late returns)
+    const forcedMs=rec.msMap.lunch_out+(60*60*1000);
+    recordMs=Math.max(forcedMs,nowMs);
+    const fd=new Date(recordMs);
+    recordStr=fd.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
+    if(nowMs>forcedMs)rec.lunchLateReturn=true; // flag late lunch return
+  }
+  if(type==='pm_in'){
+    // Use whichever is LATER: forced 6PM or actual punch time (catches late returns)
+    const forced=new Date(nowMs);forced.setHours(pmInEarliestH,pmInEarliestM,0,0);
+    recordMs=Math.max(forced.getTime(),nowMs);
+    const fd=new Date(recordMs);
+    recordStr=fd.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
+    if(nowMs>forced.getTime())rec.pmLateReturn=true; // flag late PM return
+  }
+  if(type==='timeout'&&rec.timeoutSnapped&&rec.timeoutSnapMs){recordMs=rec.timeoutSnapMs;recordStr=rec.timeoutSnapTo;}
+  rec.punches[type]=recordStr;rec.msMap[type]=recordMs;
+  if(!rec.photos)rec.photos={};
+  if(photoData)rec.photos[type]=photoData;
+  // Flag early break outs
+  if(type==='lunch_out'){const t=new Date();const thr=new Date(t);thr.setHours(lunchOutEarlyH,lunchOutEarlyM,0,0);if(t<thr)rec.earlyLunchOut=true;}
+  if(type==='pm_out'){const t=new Date();const thr=new Date(t);thr.setHours(pmOutEarlyH,pmOutEarlyM,0,0);if(t<thr)rec.earlyPmOut=true;}
+
+  let isLate=false,lateMs=0,hasAllow=false,allowAmt=0;
+  if(type==='timein'){
+    const r=chkLate(nowMs);isLate=r.late;lateMs=r.lateMs;rec.isLate=isLate;rec.lateMs=lateMs;
+    rec.clockedSite=activeSite;
+    hasAllow=isAwayDeployment(emp);
+    allowAmt=getAllowanceAmt(emp);
+    rec.hasAllowance=hasAllow;rec.allowanceAmt=allowAmt;
+    // Auto-skip lunch if clocked in at or after forced lunch-in time (1:00 PM)
+    const lunchCutoff=new Date(nowMs);lunchCutoff.setHours(lunchInEarliestH,lunchInEarliestM,0,0);
+    const forcedLunchIn=new Date(nowMs);forcedLunchIn.setHours(lunchOutEarlyH+1,lunchOutEarlyM,0,0);
+    if(nowMs>=forcedLunchIn.getTime()){
+      // Auto-skip but record a 1-hour deduction at 12PM-1PM window
+      const lunchOutTime=new Date(nowMs);lunchOutTime.setHours(lunchOutEarlyH,lunchOutEarlyM,0,0);
+      const lunchInTime=new Date(lunchOutTime.getTime()+3600000);
+      rec.punches.lunch_out='(auto-deducted)';rec.msMap.lunch_out=lunchOutTime.getTime();
+      rec.punches.lunch_in='(auto-deducted)';rec.msMap.lunch_in=lunchInTime.getTime();
+      rec.lunchSkipped=true;
+    }
+    let sub='';
+    if(isLate)sub+='Late by '+msToHM(lateMs)+'. ';
+    if(rec.lunchSkipped)sub+='Lunch break auto-skipped (clocked in after 1:00 PM). ';
+    if(hasAllow)sub+='Away allowance: ₱'+allowAmt.toLocaleString()+'. ';
+    sub+='Photo sent to Telegram.';
+    showMsg(isLate?'warn':'ok',emp.name+' — Time In'+(isLate?' LATE':'')+(hasAllow?' | 💰 Allowance':'')+(rec.lunchSkipped?' | 🍽️ Lunch skipped':''),sub,4000);
+    if(isLate)sendLateArrivalAlert(emp,lateMs,rec.punches.timein);
+  }else if(type==='timeout'){
+    const worked=calcWorked(rec),brk=calcBreak(rec),ot=Math.max(0,worked-(emp.shift*3600000));
+    // OT allowance: based on time past PM Break In (e.g. 6PM), late employees need 1 extra hour
+    const timeoutDate=new Date(nowMs);
+    const otBase=new Date(timeoutDate);otBase.setHours(pmInEarliestH,pmInEarliestM,0,0);
+    const otFromPmIn=(nowMs-otBase.getTime())/3600000;
+    const requiredOtHrs=rec.isLate?otAllowanceMinHrs+1:otAllowanceMinHrs;
+    rec.hasOTAllowance=otFromPmIn>=requiredOtHrs&&otFromPmIn>0;
+    rec.otAllowanceAmt=rec.hasOTAllowance?otAllowanceAmt:0;
+    let sub='Worked: '+msToHM(worked);if(brk>0)sub+=' · Break: '+msToHM(brk);if(ot>0)sub+=' · OT: '+msToHM(ot);if(rec.hasAllowance)sub+=' · 💰 ₱'+rec.allowanceAmt.toLocaleString();
+    if(rec.hasOTAllowance)sub+=' · ⭐ OT Allowance: ₱'+rec.otAllowanceAmt.toLocaleString();
+    else if(ot>0&&rec.isLate)sub+=' · ⭐ No OT allowance (late — must be out by '+fmt12(pmInEarliestH+otAllowanceMinHrs+1,pmInEarliestM)+')';
+    if(rec.lateTimeOut)sub+=' · ⚠️ Late Time Out — pending admin confirmation';
+    if(rec.timeoutSnapped)sub+=' · ⏰ Recorded as '+rec.timeoutSnapTo+' (dismissal time)';
+    if(rec.timeoutRoundedTo)sub+=' · ⏰ Rounded to '+rec.timeoutRoundedTo+' (pending admin confirmation)';
+    // detect undertime
+    const fullMs=emp.shift*3600000;
+    if(worked<fullMs-60000){
+      detectUndertime(emp,rec);
+      const shortMs=fullMs-worked;const rate=emp.dailyRate||0;const deduct=(shortMs/3600000)*(rate/emp.shift);
+      sub+=' · ⚠️ Undertime: '+msToHM(shortMs)+' · Deduction: ₱'+deduct.toFixed(2);
+    }
+    showMsg('ok',emp.name+' — Time Out',sub,3000);
+    hasAllow=rec.hasAllowance;allowAmt=rec.allowanceAmt;
+  }else{showMsg('ok',emp.name+' — '+PLABELS[type],'Recorded at '+rec.punches[type]+'.',2000);hasAllow=rec.hasAllowance;allowAmt=rec.allowanceAmt;}
+
+  if(photoData){punchPhotos.unshift({empCode:emp.code,empName:emp.name,dept:emp.dept,punchType:type,time:rec.punches[type],date:todayKey(),photo:photoData,isLate,site:activeSite});if(punchPhotos.length>200)punchPhotos.pop();}
+  const isLive=tgToken&&tgToken.length>20;
+  showPhotoOverlay(photoData,emp.name,type,isLive);
+  await sendPunchNotif(emp,type,isLate,lateMs,photoData,hasAllow,allowAmt);
+  saveData();
+  updateStats();
+  setTimeout(()=>kpClr(),2800);
+}
+
+function showMsg(type,title,sub,dur){if(msgTimer)clearTimeout(msgTimer);document.getElementById('pm-title').className='msg-title '+type;document.getElementById('pm-sub').className='msg-sub '+type;document.getElementById('pm-title').textContent=title;document.getElementById('pm-sub').textContent=sub||'';document.getElementById('punch-msg').className='msg-box show '+type;if(dur)msgTimer=setTimeout(()=>clearMsg(),dur);}
+function clearMsg(){if(msgTimer)clearTimeout(msgTimer);document.getElementById('punch-msg').className='msg-box';}
+
+function openLeaveModal(){lmPin='';lmUpdDots();const lpe=document.getElementById('lm-pin-err');if(lpe)lpe.textContent='';
+  const todayMin=new Date().toISOString().split('T')[0];
+  const s=document.getElementById('lm-start');const e=document.getElementById('lm-end');
+  if(s)s.min=todayMin;if(e)e.min=todayMin;
+  updateLeaveMinDate();if(!curEmp)return;const today=new Date().toISOString().split('T')[0];document.getElementById('lm-start').value=today;document.getElementById('lm-end').value=today;document.getElementById('lm-reason').value='';document.getElementById('lm-err').textContent='';document.getElementById('lm-emp').textContent=curEmp.name+' · PIN: '+curEmp.code;updateLeaveBal();document.getElementById('leave-modal').classList.add('show');}
+function closeLeaveModal(){document.getElementById('leave-modal').classList.remove('show');}
+
+let lmPin='';
+function lmKp(n){
+  if(lmPin.length>=PIN_LEN)return;
+  lmPin+=n;lmUpdDots();
+  const lpe=document.getElementById('lm-pin-err');if(lpe)lpe.textContent='';
+}
+function lmKpDel(){lmPin=lmPin.slice(0,-1);lmUpdDots();}
+function lmKpClr(){lmPin='';lmUpdDots();}
+function lmUpdDots(){for(let i=0;i<PIN_LEN;i++){const d=document.getElementById('lm-pd'+i);if(d)d.className='pin-dot'+(i<lmPin.length?' filled':'');}}
+
+function updateLeaveBal(){
+  if(!curEmp)return;
+  const t=document.getElementById('lm-type').value;
+  const el=document.getElementById('lm-bal');
+  if(t==='Leave Without Pay'){
+    el.textContent='LWP — No pay deduction on 3-day absence rule. Balance: unlimited.';
+    el.style.color='#E8A830';
+  } else if(t==='Sick Leave'||t==='Vacation Leave'){
+    const k=lkey(t),b=(curEmp.balance||{})[k]||0;
+    el.textContent='Available: '+b+' day(s) · '+b*8+' hours paid';
+    el.style.color=b>0?'#085041':'#A32D2D';
+    if(b===0)el.textContent+=' — balance exhausted. File Leave Without Pay instead.';
+  } else {
+    el.textContent='No balance required.';
+    el.style.color='#888';
+  }
+}
+function updateLeaveMinDate(){
+  const type=document.getElementById('lm-type').value;
+  const today=new Date();
+  let minDate;
+  if(type==='Vacation Leave'){const d=new Date(today);d.setDate(d.getDate()+3);minDate=d.toISOString().split('T')[0];}
+  else{minDate=today.toISOString().split('T')[0];}
+  const s=document.getElementById('lm-start');const e=document.getElementById('lm-end');
+  if(s)s.min=minDate;if(e)e.min=minDate;
+}
+function updateAsstLeaveMinDate(){
+  const type=document.getElementById('asst-leave-type').value;
+  const today=new Date();
+  let minDate;
+  if(type==='Vacation Leave'){const d=new Date(today);d.setDate(d.getDate()+3);minDate=d.toISOString().split('T')[0];}
+  else{minDate=today.toISOString().split('T')[0];}
+  const sd=document.getElementById('asst-start-date');const ed=document.getElementById('asst-end-date');
+  if(sd)sd.min=minDate;if(ed)ed.min=minDate;
+}
+function submitLeave(){
+  if(!curEmp)return;
+  const type=document.getElementById('lm-type').value,start=document.getElementById('lm-start').value,end=document.getElementById('lm-end').value,reason=document.getElementById('lm-reason').value.trim();
+  const err=document.getElementById('lm-err');
+  if(!start||!end){err.textContent='Please select dates.';return;}
+  if(end<start){err.textContent='End date must be after start date.';return;}
+  const todayISO=new Date().toISOString().split('T')[0];
+  if(start<todayISO){err.textContent='Leave cannot be filed for past dates.';return;}
+  if(type==='Vacation Leave'){
+    const minVL=new Date();minVL.setDate(minVL.getDate()+3);
+    const minVLISO=minVL.toISOString().split('T')[0];
+    if(start<minVLISO){err.textContent='Vacation Leave must be filed at least 3 days in advance.';return;}
+  }
+  if(!reason){err.textContent='Please enter a reason.';return;}
+  const days=ddiff(start,end);
+  if(type==='Sick Leave'||type==='Vacation Leave'){
+    const k=lkey(type),bal=(curEmp.balance||{})[k]||0;
+    if(days>bal){err.textContent='Insufficient '+type+' balance ('+bal+' day(s) available). Please file Leave Without Pay instead.';return;}
+  }
+  const leaveId=Date.now();
+  leaveRequests.unshift({id:leaveId,code:curEmp.code,name:curEmp.name,dept:curEmp.dept,type,startDate:start,endDate:end,days,reason,status:'Pending',filed:new Date().toLocaleDateString('en-PH'),tgMsgIds:{}});
+  closeLeaveModal();showMsg('ok',curEmp.name+' — Leave submitted','Pending admin approval.',4000);
+  saveData();updateStats();setTimeout(()=>kpClr(),4000);
+  sendTgApprovalRequest('leave',leaveId);
+}
+
+function lookupLeave(){
+  const p=document.getElementById('lv-pin').value.trim(),emp=findEmp(p),panel=document.getElementById('lv-panel');
+  if(!emp){panel.style.display='none';alert('PIN not found.');return;}
+  document.getElementById('lp-name').textContent=emp.name;document.getElementById('lp-dept').textContent=emp.dept+' · Home: '+siteName(emp.homeSite);
+  const bal=emp.balance||{VL:0,SL:0};
+  document.getElementById('lp-balance').innerHTML=`<span class="bal-chip">VL <span>${bal.VL}d</span></span><span class="bal-chip">SL <span>${bal.SL}d</span></span>`;
+  const reqs=leaveRequests.filter(r=>r.code===emp.code),el=document.getElementById('lp-requests');
+  if(!reqs.length){el.innerHTML='<div class="empty-state">No leave requests yet.</div>';}
+  else{el.innerHTML='';reqs.forEach(r=>{const sc={Pending:'pill-pending',Approved:'pill-approved',Rejected:'pill-rejected'}[r.status]||'';const d=document.createElement('div');d.className='leave-card';d.innerHTML=`<div class="leave-card-header"><span style="font-weight:600;font-size:13px">${r.type}</span><span class="pill ${sc}">${r.status}</span></div><div class="leave-card-meta">${r.startDate} to ${r.endDate} · ${r.days} day(s) · Filed: ${r.filed}</div><div class="leave-card-reason">"${r.reason}"</div>`;el.appendChild(d);});}
+  panel.style.display='block';
+}
+
+function adminLogin(){return; // disabled in kiosk-only mode
+  //
+  const pw=document.getElementById('admin-pw').value;
+  if(pw===adminPassword){adminLoggedIn=true;document.getElementById('admin-lock').style.display='none';document.getElementById('admin-content').classList.add('show');document.getElementById('admin-pw').value='';showATabs();renderAdminPanel();startAdminTimer();}
+  else{document.getElementById('admin-err').textContent='Incorrect password.';setTimeout(()=>document.getElementById('admin-err').textContent='',2000);}
+}
+function adminLogout(){stopAdminTimer();adminLoggedIn=false;document.getElementById('admin-lock').style.display='block';document.getElementById('admin-content').classList.remove('show');hideATabs();const clk=document.getElementById('tab-btn-clock');if(clk)clk.style.display='';const myt=document.getElementById('tab-btn-mytime');if(myt)myt.style.display='';switchTab('clock',document.getElementById('tab-btn-clock'));}
+
+function loginAssistant(){return; // disabled in kiosk-only mode
+  //
+  const pw=document.getElementById('admin-pw').value;
+  if(pw===assistantPassword){
+    assistantLoggedIn=true;
+    document.getElementById('admin-lock').style.display='none';
+    document.getElementById('admin-content').classList.add('show');
+    document.getElementById('admin-pw').value='';
+    // Show only Log + File Leave tabs — hide Admin, Clock and My Time tabs
+    ASSTABS.forEach(t=>{const b=document.getElementById('tab-btn-'+t);if(b)b.classList.remove('hidden');});
+    const adminTabBtn=document.getElementById('tab-btn-admin');if(adminTabBtn)adminTabBtn.style.display='none';
+    const clkBtn=document.getElementById('tab-btn-clock');if(clkBtn)clkBtn.style.display='none';
+    const mytBtn=document.getElementById('tab-btn-mytime');if(mytBtn)mytBtn.style.display='none';
+    // Populate employee selects
+    const sdSel=document.getElementById('sd-emp-select');
+    if(sdSel){sdSel.innerHTML='<option value="">— Select employee —</option>';employees.forEach(e=>{const o=document.createElement('option');o.value=e.code;o.textContent=e.name;sdSel.appendChild(o);});}
+    const sel=document.getElementById('asst-emp-select');
+    sel.innerHTML='<option value="">— Select employee —</option>';
+    employees.forEach(e=>{const o=document.createElement('option');o.value=e.code;o.textContent=e.name;sel.appendChild(o);});
+    renderAsstLeaveList();
+    const todayMin=new Date().toISOString().split('T')[0];
+    const sd=document.getElementById('asst-start-date');const ed=document.getElementById('asst-end-date');
+    if(sd)sd.min=todayMin;if(ed)ed.min=todayMin;
+    const sdDate=document.getElementById('sd-date');if(sdDate)sdDate.min=todayMin;
+    updateAsstLeaveMinDate();
+    switchTab('asst-leave',document.getElementById('tab-btn-asst-leave'));
+    startAssistantTimer();showSessionBar('Assistant');
+  } else {
+    document.getElementById('admin-err').textContent='Incorrect password.';
+    setTimeout(()=>document.getElementById('admin-err').textContent='',2000);
+  }
+}
+function logoutAssistant(){
+  assistantLoggedIn=false;
+  stopAssistantTimer();
+  hideSessionBar();
+  ASSTABS.forEach(t=>{const b=document.getElementById('tab-btn-'+t);if(b)b.classList.add('hidden');});
+  const adminTabBtn=document.getElementById('tab-btn-admin');if(adminTabBtn)adminTabBtn.style.display='';
+  const clkBtn=document.getElementById('tab-btn-clock');if(clkBtn)clkBtn.style.display='';
+  const mytBtn=document.getElementById('tab-btn-mytime');if(mytBtn)mytBtn.style.display='';
+  document.getElementById('admin-lock').style.display='block';
+  document.getElementById('admin-content').classList.remove('show');
+  switchTab('clock',document.getElementById('tab-btn-clock'));
+}
+function submitAsstLeave(){resetAssistantTimer();
+  const code=document.getElementById('asst-emp-select').value;
+  const type=document.getElementById('asst-leave-type').value;
+  const start=document.getElementById('asst-start-date').value;
+  const end=document.getElementById('asst-end-date').value;
+  const reason=document.getElementById('asst-reason').value.trim();
+  const err=document.getElementById('asst-leave-err');
+  if(!code){err.textContent='Please select an employee.';return;}
+  if(!start||!end){err.textContent='Please select start and end dates.';return;}
+  if(start>end){err.textContent='End date must be after start date.';return;}
+  const todayISO=new Date().toISOString().split('T')[0];
+  if(start<todayISO){err.textContent='Leave cannot be filed for past dates.';return;}
+  if(type==='Vacation Leave'){
+    const minVL=new Date();minVL.setDate(minVL.getDate()+3);
+    const minVLISO=minVL.toISOString().split('T')[0];
+    if(start<minVLISO){err.textContent='Vacation Leave must be filed at least 3 days in advance.';return;}
+  }
+  if(!reason){err.textContent='Please provide a reason.';return;}
+  err.textContent='';
+  const emp=employees.find(e=>e.code===code);
+  const days=Math.round((new Date(end)-new Date(start))/(86400000))+1;
+  const leaveId=Date.now();
+  leaveRequests.unshift({
+    id:leaveId,code,name:emp.name,dept:emp.dept,type,
+    startDate:start,endDate:end,days,reason,
+    status:'Pending',
+    filed:new Date().toLocaleDateString('en-PH'),
+    filedBy:'Assistant',tgMsgIds:{}
+  });
+  document.getElementById('asst-leave-msg').textContent='✅ Leave filed for '+emp.name+' — pending admin approval.';
+  saveData();renderAsstLeaveList();
+  sendTgApprovalRequest('leave',leaveId);
+  document.getElementById('asst-emp-select').value='';
+  document.getElementById('asst-start-date').value='';
+  document.getElementById('asst-end-date').value='';
+  document.getElementById('asst-reason').value='';
+  setTimeout(()=>document.getElementById('asst-leave-msg').textContent='',4000);
+  logNotif(`Leave filed by assistant for ${emp.name} (${type}, ${start}→${end}) — pending approval`,'late-n',true);
+}
+function renderAsstLeaveList(){if(assistantLoggedIn)resetAssistantTimer();
+  const el=document.getElementById('asst-leave-list');if(!el)return;
+  const asstLeaves=leaveRequests.filter(r=>r.filedBy==='Assistant').slice(0,10);
+  if(!asstLeaves.length){el.innerHTML='<div class="empty-state">No leaves filed by assistant yet.</div>';return;}
+  el.innerHTML=asstLeaves.map(r=>{
+    const pillCls=r.status==='Approved'?'pill-in':r.status==='Rejected'?'pill-late':'pill-break';
+    return`<div class="allowance-row">
+      <div style="flex:1">
+        <div class="allow-name">${r.name}</div>
+        <div class="allow-meta">${r.type} · ${r.startDate}→${r.endDate} · ${r.days}d · "${r.reason}"</div>
+      </div>
+      <span class="pill ${pillCls}" style="font-size:10px">${r.status}</span>
+    </div>`;}).join('');
+}
+
+let leaveStatusFilter='all';
+function filterLeaveStatus(f){
+  leaveStatusFilter=f;
+  // Update active button style
+  ['all','Pending','Approved','Rejected'].forEach(s=>{
+    const btn=document.getElementById('lsf-'+s.toLowerCase());
+    if(btn)btn.style.background=f===s?'#1B2A4A':'';
+    if(btn)btn.style.color=f===s?'#fff':'';
+  });
+  renderLeaveStatus();
+}
+function renderLeaveStatus(){
+  if(assistantLoggedIn)resetAssistantTimer();
+  const el=document.getElementById('asst-status-list');if(!el)return;
+  let filtered=leaveRequests;
+  if(leaveStatusFilter!=='all')filtered=leaveRequests.filter(r=>r.status===leaveStatusFilter);
+  if(!filtered.length){el.innerHTML='<div class="empty-state">No leave requests found.</div>';return;}
+  el.innerHTML=filtered.slice(0,30).map(r=>{
+    const pillCls=r.status==='Approved'?'pill-in':r.status==='Rejected'?'pill-late':'pill-break';
+    const filedBy=r.filedBy?`<span style="font-size:9px;color:#aaa"> · Filed by: ${r.filedBy}</span>`:'';
+    return`<div class="allowance-row">
+      <div style="flex:1">
+        <div class="allow-name">${r.name}${filedBy}</div>
+        <div class="allow-meta">${r.type} · ${r.startDate} → ${r.endDate} · ${r.days} day(s)</div>
+        <div class="allow-meta" style="color:#888">"${r.reason}" · Filed: ${r.filed}</div>
+      </div>
+      <span class="pill ${pillCls}" style="font-size:10px;flex-shrink:0">${r.status}</span>
+    </div>`;
+  }).join('');
+}
+function changePassword(){const np=document.getElementById('new-pw').value.trim();if(!np)return;adminPassword=np;saveData();document.getElementById('new-pw').value='';document.getElementById('pw-msg').textContent='Password updated.';setTimeout(()=>document.getElementById('pw-msg').textContent='',2000);}
+function changeAsstPassword(){const np=document.getElementById('new-asst-pw').value.trim();if(!np)return;assistantPassword=np;saveData();document.getElementById('new-asst-pw').value='';document.getElementById('asst-pw-msg').textContent='Assistant password updated.';setTimeout(()=>document.getElementById('asst-pw-msg').textContent='',2000);}
+
+function renderAdminPanel(){
+  const pending=leaveRequests.filter(r=>r.status==='Pending'),pel=document.getElementById('admin-pending');
+  if(!pending.length){pel.innerHTML='<div class="empty-state">No pending requests.</div>';}
+  else{pel.innerHTML='';pending.forEach(r=>{const d=document.createElement('div');d.className='leave-card';d.innerHTML=`<div class="leave-card-header"><span style="font-weight:600">${r.name}</span><span class="pill pill-pending">Pending</span></div><div class="leave-card-meta">${r.type} · ${r.startDate} to ${r.endDate} · ${r.days} day(s)</div><div class="leave-card-reason">"${r.reason}"</div><div class="leave-card-btns"><button class="btn-approve" onclick="approveLeave(${r.id})">Approve</button><button class="btn-reject" onclick="rejectLeave(${r.id})">Reject</button></div>`;pel.appendChild(d);});}
+  const ael=document.getElementById('admin-all');
+  if(!leaveRequests.length){ael.innerHTML='<div class="empty-state">No leave requests yet.</div>';}
+  else{ael.innerHTML='';leaveRequests.forEach(r=>{const sc={Pending:'pill-pending',Approved:'pill-approved',Rejected:'pill-rejected'}[r.status]||'';const d=document.createElement('div');d.className='leave-card';d.innerHTML=`<div class="leave-card-header"><span style="font-weight:600">${r.name}</span><span class="pill ${sc}">${r.status}</span></div><div class="leave-card-meta">${r.type} · ${r.startDate} to ${r.endDate} · ${r.dept}</div><div class="leave-card-reason">"${r.reason}"</div>`;ael.appendChild(d);});}
+  const bel=document.getElementById('admin-balances');bel.innerHTML='';
+  employees.forEach(emp=>{const bal=emp.balance||{VL:2,SL:2};const d=document.createElement('div');d.className='bal-editor';d.innerHTML=`<div style="font-size:13px;font-weight:600;margin-bottom:8px">${emp.name} <span style="font-size:11px;color:#888;font-weight:400">(${siteName(emp.homeSite)} · PIN: ${emp.code})</span></div><div class="bal-editor-row"><label>VL</label><input type="number" min="0" max="30" value="${bal.VL}" id="b-${emp.code}-VL" /></div><div class="bal-editor-row"><label>SL</label><input type="number" min="0" max="30" value="${bal.SL}" id="b-${emp.code}-SL" /></div><`;bel.appendChild(d);});
+}
+function approveLeave(id){const r=leaveRequests.find(x=>x.id===id);if(!r)return;r.status='Approved';const e=findEmp(r.code);if(e){const k=lkey(r.type);e.balance[k]=Math.max(0,(e.balance[k]||0)-r.days);}renderAdminPanel();updateStats();}
+function rejectLeave(id){const r=leaveRequests.find(x=>x.id===id);if(!r)return;r.status='Rejected';renderAdminPanel();updateStats();}
+function saveBalances(){employees.forEach(emp=>{emp.balance={VL:vl,SL:sl};});document.getElementById('bal-msg').textContent='Balances saved.';setTimeout(()=>document.getElementById('bal-msg').textContent='',2000);}
+
+function renderAllowance(){
+  const t=todayKey();
+  document.getElementById('allow-date').textContent=t;
+  const awayEmps=employees.filter(e=>{const r=records[e.code+'_'+t];return r&&r.hasAllowance;});
+  const total=awayEmps.reduce((s,e)=>{const r=records[e.code+'_'+t];return s+(r?r.allowanceAmt:0);},0);
+  document.getElementById('a-away-count').textContent=awayEmps.length;
+  document.getElementById('a-total').textContent='₱'+total.toLocaleString();
+  document.getElementById('a-emp-count').textContent=employees.length;
+  const el=document.getElementById('allowance-records');el.innerHTML='';
+  if(!employees.length){el.innerHTML='<div class="empty-state">No employees yet.</div>';return;}
+  employees.forEach(emp=>{
+    const rec=records[emp.code+'_'+t];
+    const clocked=rec&&rec.punches.timein;
+    const away=rec&&rec.hasAllowance;
+    const amt=rec?rec.allowanceAmt:0;
+    const overrideKey=emp.code+'_'+t;
+    const overrideVal=allowanceOverrides[overrideKey];
+    const d=document.createElement('div');d.className='allowance-row';
+    const locationInfo=`<span class="pill ${away?'pill-away':'pill-home'}">${away?'Away @ '+siteName(activeSite):'Home @ '+siteName(emp.homeSite)}</span>`;
+    d.innerHTML=`<div style="flex:1">
+      <div class="allow-name">${emp.name}</div>
+      <div class="allow-meta">${emp.dept} · Home: ${siteName(emp.homeSite)} · ${locationInfo}</div>
+      ${clocked?`<div class="allow-meta" style="margin-top:3px">Clocked in: ${rec.punches.timein}</div>`:'<div class="allow-meta" style="color:#aaa">Not clocked in yet</div>'}
+      <div class="allow-override" style="margin-top:6px">
+        <span style="font-size:11px;color:#888">Override ₱:</span>
+        <input type="number" min="0" id="ov-${emp.code}" value="${overrideVal!==undefined?overrideVal:(away?amt:0)}" style="width:80px;font-size:13px;padding:5px 8px;border:1px solid #e8e8e3;border-radius:8px;background:#f9f9f7;color:#1a1a1a;text-align:center" />
+        <button onclick="saveOverride('${emp.code}')" style="font-size:11px;padding:5px 10px;border-radius:8px;cursor:pointer;border:1px solid #e8e8e3;background:#fff;color:#1a1a1a">Save</button>
+        ${overrideVal!==undefined?'<button onclick="clearOverride(\''+emp.code+'\')" style="font-size:11px;padding:5px 10px;border-radius:8px;cursor:pointer;border:1px solid #FCEBEB;background:#FCEBEB;color:#791F1F">Clear</button>':''}
+      </div>
+    </div>
+    <div style="text-align:right;min-width:70px">
+      <div class="allow-amount">${away||overrideVal?'₱'+(overrideVal!==undefined?overrideVal:amt).toLocaleString():'—'}</div>
+      <div style="font-size:10px;color:#aaa">per day</div>
+    </div>`;
+    el.appendChild(d);
+  });
+
+  // OT Allowance section
+  document.getElementById('ot-allow-date').textContent=t;
+  document.getElementById('ot-min-hrs-label').textContent=otAllowanceMinHrs;
+  const otEmps=employees.filter(e=>{const r=records[e.code+'_'+t];return r&&r.hasOTAllowance;});
+  const otTotal=otEmps.reduce((s,e)=>{const r=records[e.code+'_'+t];return s+(r?r.otAllowanceAmt:0);},0);
+  document.getElementById('a-ot-count').textContent=otEmps.length;
+  document.getElementById('a-ot-total').textContent='₱'+otTotal.toLocaleString();
+  const otEl=document.getElementById('ot-allowance-records');otEl.innerHTML='';
+  if(!otEmps.length){otEl.innerHTML='<div class="empty-state" style="padding:1rem">No OT allowances earned today yet.<br><span style="font-size:11px">On-time: out '+otAllowanceMinHrs+'h+ past '+fmt12(pmInEarliestH,pmInEarliestM)+'. Late: out '+(otAllowanceMinHrs+1)+'h+ past '+fmt12(pmInEarliestH,pmInEarliestM)+'.</span></div>';return;}
+  otEmps.forEach(emp=>{
+    const rec=records[emp.code+'_'+t];
+    const worked=calcWorked(rec),ot=worked?Math.max(0,worked-(emp.shift*3600000)):0;
+    const d=document.createElement('div');d.className='allowance-row';
+    d.innerHTML=`<div style="flex:1">
+      <div class="allow-name">${emp.name}</div>
+      <div class="allow-meta">${emp.dept} · OT: ${msToHM(ot)} · Timed out: ${rec.punches.timeout||'—'}</div>
+    </div>
+    <div style="text-align:right;min-width:70px">
+      <div class="allow-amount" style="color:#7F77DD">₱${rec.otAllowanceAmt.toLocaleString()}</div>
+      <div style="font-size:10px;color:#aaa">OT allowance</div>
+    </div>`;
+    otEl.appendChild(d);
+  });
+}
+
+function saveOverride(code){
+  const val=parseInt(document.getElementById('ov-'+code)?.value)||0;
+  allowanceOverrides[code+'_'+todayKey()]=val;
+  const rec=getRec(code);
+  rec.hasAllowance=val>0;rec.allowanceAmt=val;
+  renderAllowance();updateStats();
+}
+function clearOverride(code){
+  delete allowanceOverrides[code+'_'+todayKey()];
+  const emp=findEmp(code);const rec=getRec(code);
+  if(emp&&rec.punches.timein){rec.hasAllowance=isAwayDeployment(emp);rec.allowanceAmt=getAllowanceAmt(emp);}
+  renderAllowance();updateStats();
+}
+
+function exportAllowanceCSV(){
+  const t=todayKey();
+  const rows=[['Date','PIN','Name','Department','Home Site','Clocked Site','Status','Time In','Allowance (₱)','Override']];
+  employees.forEach(emp=>{
+    const rec=records[emp.code+'_'+t]||{punches:{},hasAllowance:false,allowanceAmt:0,clockedSite:null};
+    const ov=allowanceOverrides[emp.code+'_'+t];
+    rows.push([t,emp.code,emp.name,emp.dept,siteName(emp.homeSite),rec.clockedSite?siteName(rec.clockedSite):'—',rec.hasAllowance?'Away':'Home',rec.punches.timein||'',rec.hasAllowance?rec.allowanceAmt:0,ov!==undefined?'Yes':'No']);
+  });
+  const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
+  downloadFile('allowance_'+t.replace(/\//g,'-')+'.csv',csv,'text/csv');
+}
+
+function renderPhotos(){
+  const fe=document.getElementById('pf-emp').value,fp=document.getElementById('pf-punch').value;
+  const filtered=punchPhotos.filter(p=>(!fe||p.empCode===fe)&&(!fp||p.punchType===fp));
+  const grid=document.getElementById('photo-grid'),empty=document.getElementById('photo-empty');
+  document.getElementById('photo-count').textContent='('+punchPhotos.length+' total)';
+  grid.innerHTML='';empty.style.display=filtered.length?'none':'block';
+  filtered.forEach(p=>{const d=document.createElement('div');d.className='photo-card';d.innerHTML=`<img src="${p.photo}" loading="lazy" /><div class="photo-card-info"><div class="photo-card-name">${p.empName}</div><div class="photo-card-meta">${PLABELS[p.punchType]||p.punchType} · ${p.time}</div><div class="photo-card-meta">${p.site?siteName(p.site):''}</div>${p.isLate?'<div style="font-size:10px;color:#A32D2D;font-weight:600">⚠️ Late</div>':''}</div>`;grid.appendChild(d);});
+}
+function clearPhotos(){if(!confirm('Clear all punch photos?'))return;punchPhotos=[];renderPhotos();}
+function updatePhotoFilter(){
+  const sel=document.getElementById('pf-emp');
+  if(!sel)return;
+  const cur=sel.value;sel.innerHTML='<option value="">All employees</option>';employees.forEach(e=>{const o=document.createElement('option');o.value=e.code;o.textContent=e.name;sel.appendChild(o);});sel.value=cur;
+}
+
+function renderLog(){
+  const q=(document.getElementById('search-log').value||'').toLowerCase(),fs=document.getElementById('filter-status').value;
+  const rows=employees.map(emp=>{const rec=records[emp.code+'_'+todayKey()]||{punches:{},msMap:{},isLate:false,lateMs:0,photos:{},hasAllowance:false,allowanceAmt:0,clockedSite:null};return{emp,rec,status:getStatus(rec)};}).filter(({emp,status})=>(!q||(emp.name.toLowerCase().includes(q)||emp.code.includes(q)))&&(!fs||status===fs));
+  const tbody=document.getElementById('log-body');if(!tbody)return;tbody.innerHTML='';
+  const le=document.getElementById('log-empty');if(le)le.style.display=rows.length?'none':'block';
+  rows.forEach(({emp,rec,status})=>{
+    const p=rec.punches,worked=calcWorked(rec),partialWorked=calcWorkedPartial(rec),brk=calcBreak(rec),ot=worked?Math.max(0,worked-(emp.shift*3600000)):null;
+    const sm={working:'pill-in',late:'pill-late',break:'pill-break',out:'pill-out',absent:'pill-absent'};
+    const sl={working:'Working',late:'Late',break:'On break',out:'Timed out',absent:'Absent'};
+    const incomplete=isIncomplete(rec)&&status!=='out';
+    const isLWP=onLeaveToday_date&&onLeaveToday_date(emp.code,todayKey())&&leaveRequests.some(r=>r.code===emp.code&&r.status==='Approved'&&r.type==='Leave Without Pay'&&r.startDate<=todayKey()&&r.endDate>=todayKey());
+    const lc=rec.isLate?`<span style="color:#A32D2D;font-weight:600">${msToHM(rec.lateMs)}</span>`:'—';
+    const ps=rec.photos&&rec.photos.timein?`<img src="${rec.photos.timein}" class="photo-thumb" />`:'<div class="no-photo">No</div>';
+    const homePill=`<span class="pill pill-home" style="font-size:9px">${siteName(emp.homeSite)}</span>`;
+    const todayPill=rec.clockedSite?`<span class="pill ${rec.hasAllowance?'pill-away':'pill-home'}" style="font-size:9px">${siteName(rec.clockedSite)}</span>`:'—';
+    const allowCell=rec.hasAllowance?`<span style="color:#1D9E75;font-weight:600">₱${rec.allowanceAmt.toLocaleString()}</span>`:'—';
+    const otAllowCell=rec.hasOTAllowance?`<span style="color:#7F77DD;font-weight:600">₱${rec.otAllowanceAmt.toLocaleString()}</span>`:'—';
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td>${ps}</td><td>${emp.code}</td><td style="max-width:80px;overflow:hidden;text-overflow:ellipsis">${emp.name}</td><td>${homePill}</td><td>${todayPill}</td><td>${allowCell}</td><td>${otAllowCell}</td><td>${p.timein||'—'}</td><td>${lc}</td><td>${p.lunch_out==='(straight duty)'?'<span style="color:#0D8C7A;font-size:10px">⚡straight</span>':p.lunch_out==='(auto-deducted)'||p.lunch_out==='(auto-skipped)'?'<span style="color:#aaa;font-size:10px">auto</span>':p.lunch_out||'—'}${rec.lunchLateReturn?'<span style="color:#A32D2D;font-size:9px"> ⚠️late</span>':''}</td><td>${p.lunch_in==='(straight duty)'?'<span style="color:#0D8C7A;font-size:10px">⚡straight</span>':p.lunch_in==='(auto-deducted)'||p.lunch_in==='(auto-skipped)'?'<span style="color:#aaa;font-size:10px">auto</span>':p.lunch_in||'—'}</td><td>${p.pm_out==='(straight duty)'?'<span style="color:#0D8C7A;font-size:10px">⚡straight</span>':p.pm_out||'—'}</td><td>${p.pm_in==='(straight duty)'?'<span style="color:#0D8C7A;font-size:10px">⚡straight</span>':p.pm_in||'—'}${rec.pmLateReturn?'<span style="color:#A32D2D;font-size:9px"> ⚠️late</span>':''}</td><td>${p.timeout||'—'}</td><td>${worked!==null?msToH(worked)+'h':'—'}</td><td>${ot&&ot>0?msToH(ot)+'h':'—'}</td><td><span class="pill ${sm[status]}">${sl[status]}</span></td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+function exportCSV(){
+  const rows=[['Date','PIN','Name','Dept','Home Site','Clocked Site','Allowance','OT Allowance','Time In','Late By','Lunch Out','Lunch In','PM Out','PM In','Time Out','Worked','OT','Status']];
+  employees.forEach(emp=>{const rec=records[emp.code+'_'+todayKey()]||{punches:{},msMap:{},isLate:false,lateMs:0,hasAllowance:false,allowanceAmt:0,clockedSite:null};const p=rec.punches,worked=calcWorked(rec),partialWorked=calcWorkedPartial(rec),brk=calcBreak(rec),ot=worked?Math.max(0,worked-(emp.shift*3600000)):null;rows.push([todayKey(),emp.code,emp.name,emp.dept,siteName(emp.homeSite),rec.clockedSite?siteName(rec.clockedSite):'—',rec.hasAllowance?rec.allowanceAmt:0,rec.hasOTAllowance?rec.otAllowanceAmt:0,p.timein||'',rec.isLate?msToHM(rec.lateMs):'On time',(p.lunch_out==='(auto-skipped)'?'skipped':p.lunch_out||''),(p.lunch_in==='(auto-skipped)'?'skipped':p.lunch_in||''),p.pm_out||'',p.pm_in||'',p.timeout||'',worked!==null?msToH(worked):(rec.punches&&rec.punches.timein&&!rec.punches.timeout?'~'+msToH(calcWorkedPartial(rec)||0)+'*':''),ot&&ot>0?msToH(ot):'',(rec.punches&&rec.punches.timein&&!rec.punches.timeout&&getStatus(rec)!=='out')?'⚠️ INCOMPLETE — PAYROLL REVIEW REQUIRED':getStatus(rec)]);});
+  const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
+  downloadFile('attendance_'+todayKey().replace(/\//g,'-')+'.csv',csv,'text/csv');
+}
+
+function saveSiteSettings(){
+  activeSite=document.getElementById('s-active-site').value;
+  siteAName=document.getElementById('s-site-a-name').value.trim()||'Site A';
+  siteBName=document.getElementById('s-site-b-name').value.trim()||'Site B';
+  allowA=parseInt(document.getElementById('s-allow-a').value)||0;
+  allowB=parseInt(document.getElementById('s-allow-b').value)||0;
+  otAllowanceAmt=parseInt(document.getElementById('s-ot-allow').value)||0;
+  otAllowanceMinHrs=parseFloat(document.getElementById('s-ot-min-hrs').value)||3;
+  updateSiteBadge();saveData();
+  document.getElementById('site-settings-msg').textContent='Site settings saved.';
+  setTimeout(()=>document.getElementById('site-settings-msg').textContent='',2000);
+}
+
+function saveTgSettings(){
+  tgToken=document.getElementById('tg-token').value.trim();
+  tgGroup=document.getElementById('tg-group').value.trim();
+  tgPosGroup=document.getElementById('tg-pos-group').value.trim();
+  tgPhotoGroup=document.getElementById('tg-photo-group').value.trim();
+  tgBackupGroup=document.getElementById('tg-backup-group').value.trim();
+  mgrIds=document.getElementById('tg-managers').value.split('\n').map(s=>s.trim()).filter(Boolean);
+  const live=tgToken&&tgToken.length>20;
+  saveData();
+  document.getElementById('tg-msg').textContent=live?'✅ Telegram active! Approval polling started.':'Demo mode — add real bot token.';
+  const tgmsg=document.getElementById('tg-msg');if(tgmsg)tgmsg.style.color=live?'#085041':'#633806';
+  setTimeout(()=>document.getElementById('tg-msg').textContent='',3000);
+  if(live){startTgPolling();scheduleMorningReport();}else stopTgPolling();
+}
+
+function saveSettings(){
+  const t=document.getElementById('s-start').value,g=parseInt(document.getElementById('s-grace').value)||0,e=document.getElementById('s-end').value;
+  graceMins=Math.max(0,Math.min(60,g));const tp=t.split(':');shiftH=parseInt(tp[0]);shiftM=parseInt(tp[1]);
+  const ep=e.split(':');endH=parseInt(ep[0]);endM=parseInt(ep[1]);
+  company=document.getElementById('s-company').value.trim()||'RSR Engineering';
+  const li=document.getElementById('s-lunch-in-earliest').value;if(li){const lp=li.split(':');lunchInEarliestH=parseInt(lp[0]);lunchInEarliestM=parseInt(lp[1]);}
+  const pi=document.getElementById('s-pm-in-earliest').value;if(pi){const pp=pi.split(':');pmInEarliestH=parseInt(pp[0]);pmInEarliestM=parseInt(pp[1]);}
+  const lo=document.getElementById('s-lunch-out-early').value;if(lo){const lop=lo.split(':');lunchOutEarlyH=parseInt(lop[0]);lunchOutEarlyM=parseInt(lop[1]);}
+  const lol=document.getElementById('s-lunch-out-latest').value;if(lol){const lolp=lol.split(':');lunchOutLatestH=parseInt(lolp[0]);lunchOutLatestM=parseInt(lolp[1]);}
+  const po=document.getElementById('s-pm-out-early').value;if(po){const pop=po.split(':');pmOutEarlyH=parseInt(pop[0]);pmOutEarlyM=parseInt(pop[1]);}
+  const pol=document.getElementById('s-pm-out-latest').value;if(pol){const polp=pol.split(':');pmOutLatestH=parseInt(polp[0]);pmOutLatestM=parseInt(polp[1]);}
+  const dis=document.getElementById('s-dismissal').value;if(dis){const disp=dis.split(':');dismissalH=parseInt(disp[0]);dismissalM=parseInt(disp[1]);}
+
+  updShiftPill();saveData();document.getElementById('settings-msg').textContent='Settings saved.';
+  setTimeout(()=>document.getElementById('settings-msg').textContent='',2000);
+}
+
+function renderNotifLog(){
+  const el=document.getElementById('notif-log');
+  if(!notifLog.length){el.innerHTML='<div class="empty-state" style="padding:1rem">No notifications yet.</div>';return;}
+  el.innerHTML='';notifLog.forEach(n=>{const d=document.createElement('div');d.className='notif-item '+(n.cls||'');const badge=n.sent?'<span class="tg-sent">Telegram sent</span>':'<span class="tg-demo">Demo</span>';d.innerHTML=`<div>${n.text}${badge}</div><div class="notif-time">${n.date} · ${n.time}</div>`;el.appendChild(d);});
+}
+
+
+// ── TELEGRAM APPROVAL SYSTEM ──
+async function sendTgApprovalRequest(reqType,reqId){
+  if(!tgToken||tgToken.length<20)return;
+  const isLeave=reqType==='leave';
+  const req=isLeave?leaveRequests.find(r=>r.id===reqId):undertimeRequests.find(r=>r.id===reqId);
+  if(!req)return;
+  let text,buttons;
+  if(isLeave){
+    text=`📋 <b>Leave Request</b>
+👤 ${req.name} (${req.dept})
+📅 ${req.type}
+🗓 ${req.startDate} → ${req.endDate} · ${req.days} day(s)
+📝 "${req.reason}"
+🏢 ${company}`;
+    buttons=[
+      {text:'✅ Approve',callback_data:`approve_leave_${reqId}`},
+      {text:'❌ Reject',callback_data:`reject_leave_${reqId}`}
+    ];
+  } else {
+    const typeLbl=req.type==='half_day'?'Half Day':'Undertime';
+    text=`⏱ <b>${typeLbl} Request</b>
+👤 ${req.name} (${req.dept})
+📅 ${req.date} · Out: ${req.expectedOut}
+⏳ Short: ${Math.floor(req.shortMins/60)}h ${req.shortMins%60}m · Deduction: ₱${req.deduction.toFixed(2)}
+📝 "${req.reason}"
+🏢 ${company}`;
+    buttons=[
+      {text:'✅ Approve',callback_data:`approve_undertime_${reqId}`},
+      {text:'❌ Reject',callback_data:`reject_undertime_${reqId}`}
+    ];
+  }
+  if(!req.tgMsgIds)req.tgMsgIds={};
+  for(const id of mgrIds){
+    if(!id)continue;
+    const msgId=await tgSendWithButtons(id,text,buttons);
+    if(msgId)req.tgMsgIds[id]=msgId;
+  }
+  saveData();
+}
+
+
+// ── SAVE APPROVAL REQUEST TO SUPABASE ──
+async function saveApprovalToSupabase(emp, type, details, punchTime) {
+  try {
+    const today = todayKey();
+    // Check if same type already pending for this employee today
+    const existing = await sbClient.from('pending_approvals')
+      .select('id').eq('employee_code', emp.code)
+      .eq('type', type).eq('date', today).eq('status','Pending').single();
+    if (existing.data) return; // Already has a pending approval of this type today
+    await sbClient.from('pending_approvals').insert({
+      employee_code: emp.code,
+      employee_name: emp.name,
+      employee_dept: emp.dept || '—',
+      type: type,
+      details: details || '',
+      punch_time: punchTime || '',
+      date: today,
+      status: 'Pending'
+    });
+  } catch(e) { console.warn('saveApprovalToSupabase:', e); }
+}
+
+async function sendLateLunchApproval(emp,reqId){
+  if(!tgToken||tgToken.length<20){
+    // No Telegram — auto-deny
+    showMsg('err','No Telegram configured','Cannot request admin approval. Please see admin in person.',5000);
+    delete lateLunchRequests[emp.code];return;
+  }
+  const text=`🍽️ <b>Late Lunch Out Request</b>\n👤 ${emp.name} (${emp.dept})\n⏰ Current time: ${nowShort()}\n📋 Lunch Out window closed at ${fmt12(lunchOutLatestH,lunchOutLatestM)}\n🏢 ${company}\n\nAllow this employee to punch Lunch Out now?`;
+  const buttons=[
+    {text:'✅ Allow',callback_data:`approve_lunchlate_${reqId}`},
+    {text:'❌ Deny',callback_data:`reject_lunchlate_${reqId}`}
+  ];
+  const msgIds={};
+  for(const id of mgrIds){
+    if(!id)continue;
+    const msgId=await tgSendWithButtons(id,text,buttons);
+    if(msgId)msgIds[id]=msgId;
+  }
+  if(lateLunchRequests[emp.code])lateLunchRequests[emp.code].tgMsgIds=msgIds;
+  logNotif(`Late Lunch Out request: ${emp.name}`,'late-n',true);
+}
+
+
+async function sendEarlyPmOutApproval(emp,reqId){
+  if(!tgToken||tgToken.length<20){
+    showMsg('err','No Telegram configured','Cannot request admin approval. Please see admin in person.',5000);
+    delete latePmOutRequests[emp.code];return;
+  }
+  const text=`☕ <b>Early PM Break Out Request</b>\n👤 ${emp.name} (${emp.dept})\n⏰ Current time: ${nowShort()}\n📋 PM Break Out is only allowed from ${fmt12(pmOutEarlyH,pmOutEarlyM)}\n🏢 ${company}\n\nAllow this employee to punch PM Break Out now?`;
+  const buttons=[
+    {text:'✅ Allow',callback_data:`approve_pmout_${reqId}`},
+    {text:'❌ Deny',callback_data:`reject_pmout_${reqId}`}
+  ];
+  const msgIds={};
+  for(const id of mgrIds){
+    if(!id)continue;
+    const msgId=await tgSendWithButtons(id,text,buttons);
+    if(msgId)msgIds[id]=msgId;
+  }
+  if(latePmOutRequests[emp.code])latePmOutRequests[emp.code].tgMsgIds=msgIds;
+  logNotif(`Early PM Break Out request: ${emp.name}`,'late-n',true);
+}
+
+async function sendLateTimeInApproval(emp,reqId){
+  if(!tgToken||tgToken.length<20){
+    showMsg('err','No Telegram configured','Cannot request admin approval. Please see admin in person.',5000);
+    delete lateTimeInRequests[emp.code];return;
+  }
+  const text=`🔴 <b>Late Time In Request</b>\n👤 ${emp.name} (${emp.dept})\n⏰ Current time: ${nowShort()}\n📋 Shift ended at ${fmt12(endH,endM)}\n🏢 ${company}\n\nAllow this employee to clock in now?`;
+  const buttons=[
+    {text:'✅ Allow',callback_data:`approve_latetimein_${reqId}`},
+    {text:'❌ Deny',callback_data:`reject_latetimein_${reqId}`}
+  ];
+  const msgIds={};
+  for(const id of mgrIds){
+    if(!id)continue;
+    const msgId=await tgSendWithButtons(id,text,buttons);
+    if(msgId)msgIds[id]=msgId;
+  }
+  if(lateTimeInRequests[emp.code])lateTimeInRequests[emp.code].tgMsgIds=msgIds;
+  logNotif(`Late Time In request: ${emp.name}`,'late-n',true);
+}
+
+async function sendLatePmOutApproval(emp,reqId){
+  if(!tgToken||tgToken.length<20){
+    showMsg('err','No Telegram configured','Cannot request admin approval. Please see admin in person.',5000);
+    delete latePmOutRequests[emp.code];return;
+  }
+  const text=`☕ <b>Late PM Break Out Request</b>\n👤 ${emp.name} (${emp.dept})\n⏰ Current time: ${nowShort()}\n📋 PM Break Out window closed at ${fmt12(pmOutLatestH,pmOutLatestM)}\n🏢 ${company}\n\nAllow this employee to punch PM Break Out now?`;
+  const buttons=[
+    {text:'✅ Allow',callback_data:`approve_pmout_${reqId}`},
+    {text:'❌ Deny',callback_data:`reject_pmout_${reqId}`}
+  ];
+  const msgIds={};
+  for(const id of mgrIds){
+    if(!id)continue;
+    const msgId=await tgSendWithButtons(id,text,buttons);
+    if(msgId)msgIds[id]=msgId;
+  }
+  if(latePmOutRequests[emp.code])latePmOutRequests[emp.code].tgMsgIds=msgIds;
+  logNotif(`Late PM Break Out request: ${emp.name}`,'late-n',true);
+}
+
+async function sendLateTimeoutNotif(emp){
+  const rec2=getRec(emp.code);const worked2=calcWorked(rec2);
+  saveApprovalToSupabase(emp,'late_timeout','Time Out more than 1hr after dismissal — admin selecting official time',new Date().toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true}));
+  if(!tgToken||tgToken.length<20)return;
+  const rec=getRec(emp.code);
+  const worked=calcWorked(rec);
+  const pos=emp.position&&emp.position!=='—'?emp.position:emp.dept;
+  const actualNow=new Date();
+  const actualTime=actualNow.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true});
+  const reqId=Date.now();
+  lateTimeoutRequests[emp.code]={pending:true,reqId,empCode:emp.code,empName:emp.name,actualTime,tgMsgIds:{}};
+  // Build time options: dismissal time + every hour up to actual punch time
+  const dismissal=new Date(actualNow);dismissal.setHours(dismissalH,dismissalM,0,0);
+  const timeOptions=[];
+  let t=new Date(dismissal);
+  while(t<=actualNow){
+    timeOptions.push(new Date(t));
+    t=new Date(t.getTime()+3600000);
+  }
+  // Also add actual punch time if not already on the hour
+  if(actualNow.getMinutes()!==0)timeOptions.push(actualNow);
+  // Build inline keyboard rows (max 4 per row)
+  const btnRows=[];
+  let row=[];
+  timeOptions.forEach((opt,i)=>{
+    const label=opt.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true});
+    const val=opt.getTime();
+    row.push({text:label,callback_data:`settimeout_${emp.code}_${val}_${reqId}`});
+    if(row.length===4||i===timeOptions.length-1){btnRows.push([...row]);row=[];}
+  });
+  const text=`🔴 <b>Late Time Out — Choose Official Time</b>\n👤 ${emp.name}\n💼 ${pos}\n⏰ Actual punch: ${actualTime}\n⏱ Worked: ${worked!==null?msToHM(worked):'—'}\n📋 Dismissal: ${fmt12(dismissalH,dismissalM)}\n🏢 ${company}\n\nSelect the official Time Out for this employee:`;
+  const msgIds={};
+  for(const id of mgrIds){
+    if(!id)continue;
+    try{
+      const r=await fetch(`https://api.telegram.org/bot${tgToken}/sendMessage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:id,text,parse_mode:'HTML',reply_markup:{inline_keyboard:btnRows}})});
+      const d=await r.json();if(d.ok)msgIds[id]=d.result.message_id;
+    }catch(e){}
+  }
+  lateTimeoutRequests[emp.code].tgMsgIds=msgIds;
+
+  logNotif(`Late Time Out: ${emp.name} — admin selecting time`,'late-n',true);
+}
+
+
+async function sendEarlyBreakApproval(emp,breakType,reqId){
+  const label2=breakType==='lunch_out'?'Early Lunch Out':'Early PM Break Out';
+  const threshold2=breakType==='lunch_out'?'12:00 PM':'5:00 PM';
+  saveApprovalToSupabase(emp,'early_break_'+breakType,label2+' attempted before '+threshold2,nowShort());
+  if(!tgToken||tgToken.length<20){
+    showMsg('err','No Telegram','Cannot request admin approval. Please see admin.',5000);
+    if(breakType==='lunch_out')delete earlyLunchOutRequests[emp.code];
+    else delete earlyPmOutRequests[emp.code];
+    return;
+  }
+  const pos=emp.position&&emp.position!=='—'?emp.position:emp.dept;
+  const rec=getRec(emp.code);
+  const nowMsLocal=Date.now();
+  const label=breakType==='lunch_out'?'Early Lunch Out':'Early PM Break Out';
+  const threshold=breakType==='lunch_out'?fmt12(lunchOutEarlyH,lunchOutEarlyM):fmt12(pmOutEarlyH,pmOutEarlyM);
+  const text=`⚠️ <b>${label} Request</b>\n👤 ${emp.name}\n💼 ${pos}\n⏰ Current time: ${nowShort()}\n⏱ Worked so far: ${msToHM(Math.max(0,nowMsLocal-effectiveStart(rec)))}\n📋 ${label} window starts at ${threshold}\n🏢 ${company}\n\nAllow this employee to break now?`;
+  const buttons=[
+    {text:'✅ Allow',callback_data:`approve_earlybreak_${breakType}_${reqId}`},
+    {text:'❌ Deny',callback_data:`reject_earlybreak_${breakType}_${reqId}`}
+  ];
+  const store=breakType==='lunch_out'?earlyLunchOutRequests:earlyPmOutRequests;
+  const msgIds={};
+  for(const id of mgrIds){if(!id)continue;const msgId=await tgSendWithButtons(id,text,buttons);if(msgId)msgIds[id]=msgId;}
+  store[emp.code].tgMsgIds=msgIds;
+  logNotif(`${label} request: ${emp.name}`,'late-n',true);
+}
+
+
+
+
+// ── REFERENCE PHOTO CAPTURE ──
+// Photos stored in Android app internal storage when running as app
+// In browser mode: kept in memory only (not localStorage — too large for 100 employees)
+async function captureRefPhoto(prefix){
+  try{
+    const video=document.getElementById(prefix+'-ref-video');
+    const canvas=document.getElementById(prefix+'-ref-canvas');
+    const preview=document.getElementById(prefix+'-ref-preview');
+    const input=document.getElementById(prefix+'-ref-photo');
+    const note=document.getElementById(prefix+'-ref-note');
+    let stream=null;
+    try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false});}
+    catch(e){showMsg('err','Camera unavailable','Cannot access camera for reference photo.',3000);return;}
+    if(video){video.srcObject=stream;video.style.display='block';video.play();}
+    showMsg('warn','Hold still...','Capturing reference photo in 3 seconds...',3000);
+    setTimeout(()=>{
+      if(canvas&&video){
+        canvas.width=300;canvas.height=300;
+        const ctx=canvas.getContext('2d');
+        ctx.drawImage(video,0,0,300,300);
+        const dataUrl=canvas.toDataURL('image/jpeg',0.7);
+        if(input)input.value=dataUrl;
+        if(preview){preview.src=dataUrl;preview.style.display='block';}
+        if(video){video.style.display='none';stream.getTracks().forEach(t=>t.stop());}
+        // If Android bridge available — save to device storage
+        if(window.Android&&window.Android.saveRefPhoto){
+          const empCode=prefix==='new'?document.getElementById('new-code').value.trim():document.getElementById('edit-code')?.value||'';
+          if(empCode)window.Android.saveRefPhoto(empCode,dataUrl);
+          if(note)note.textContent='✅ Photo saved to device storage';
+        } else {
+          if(note)note.textContent='📱 Photo will be saved to device storage when running as Android app';
+        }
+        showMsg('ok','Reference photo captured!','Face will be used for identity verification.',3000);
+      }
+    },3000);
+  }catch(e){console.warn('Ref photo error:',e);}
+}
+
+function clearRefPhoto(prefix){
+  const preview=document.getElementById(prefix+'-ref-preview');
+  const input=document.getElementById(prefix+'-ref-photo');
+  const video=document.getElementById(prefix+'-ref-video');
+  if(preview){preview.src='';preview.style.display=prefix==='edit'?'block':'none';}
+  if(input)input.value='';
+  if(video)video.style.display='none';
+}
+
+// ── STRAIGHT DUTY ──
+async function getStraightDutyCountThisWeek(empCode){
+  // Count approved/pending straight duties for this employee this week (Sat-Fri)
+  const {dates}=getWeekDates();
+  const weekKeys=dates.map(d=>dateToKey(d));
+  return Object.values(straightDutyRequests).filter(r=>
+    r.empCode===empCode&&
+    weekKeys.includes(r.date)&&
+    r.status!=='Rejected'
+  ).length;
+}
+
+async function submitStraightDuty(breakType){
+  resetAssistantTimer();
+  const empCode=document.getElementById('sd-emp-select').value;
+  const date=document.getElementById('sd-date').value;
+  const reason=document.getElementById('sd-reason').value.trim();
+  const err=document.getElementById('sd-err');
+  const msg=document.getElementById('sd-msg');
+  if(!empCode){err.textContent='Please select an employee.';return;}
+  if(!date){err.textContent='Please select a date.';return;}
+  if(!reason){err.textContent='Please provide a reason.';return;}
+  err.textContent='';
+  const emp=employees.find(e=>e.code===empCode);
+  // Check 2 per week limit
+  const sdCount=await getStraightDutyCountThisWeek(empCode);
+  if(sdCount>=2){err.textContent=emp.name+' has already reached the maximum of 2 straight duties this week.';return;}
+  const breakLabel=breakType==='lunch'?'Lunch (12:00–1:00 PM)':'PM Break (5:00–6:00 PM)';
+  const reqId=Date.now();
+  straightDutyRequests[empCode+'_'+breakType+'_'+date]={
+    reqId,empCode,empName:emp.name,empDept:emp.dept,
+    breakType,breakLabel,date,reason,
+    status:'Pending',tgMsgIds:{},filedOn:todayKey()
+  };
+  msg.textContent='⏳ Request sent to admin for approval...';
+  saveData();renderStraightDutyList();
+  await sendStraightDutyApproval(emp,breakType,breakLabel,date,reason,reqId);
+  msg.textContent='✅ Straight duty request sent to admin via Telegram.';
+  setTimeout(()=>msg.textContent='',4000);
+  // Reset form
+  document.getElementById('sd-emp-select').value='';
+  document.getElementById('sd-date').value='';
+  document.getElementById('sd-reason').value='';
+}
+
+async function sendStraightDutyApproval(emp,breakType,breakLabel,date,reason,reqId){
+  saveApprovalToSupabase(emp,'straight_duty_'+breakType,'Straight Duty request: '+breakLabel+' — "'+reason+'"',date);
+  if(!tgToken||tgToken.length<20){
+    const msg=document.getElementById('sd-msg');
+    if(msg)msg.textContent='⚠️ No Telegram configured. Please set up Telegram in Settings.';
+    return;
+  }
+  const pos=emp.position&&emp.position!=='—'?emp.position:emp.dept;
+  const emoji=breakType==='lunch'?'🍽️':'☕';
+  const text=`${emoji} <b>Straight Duty Request</b>\n👤 ${emp.name}\n💼 ${pos}\n📅 Date: ${date}\n⏰ Break: ${breakLabel}\n📝 Reason: "${reason}"\n🏢 ${company}\n\nApprove straight duty? Break will NOT be deducted if approved.`;
+  const buttons=[
+    {text:'✅ Approve',callback_data:`approve_straightduty_${breakType}_${reqId}`},
+    {text:'❌ Reject',callback_data:`reject_straightduty_${breakType}_${reqId}`}
+  ];
+  const key=emp.code+'_'+breakType+'_'+date;
+  const msgIds={};
+  for(const id of mgrIds){
+    if(!id)continue;
+    const msgId=await tgSendWithButtons(id,text,buttons);
+    if(msgId)msgIds[id]=msgId;
+  }
+  if(straightDutyRequests[key])straightDutyRequests[key].tgMsgIds=msgIds;
+  saveData();
+}
+
+function renderStraightDutyList(){
+  const el=document.getElementById('sd-list');if(!el)return;
+  const all=Object.values(straightDutyRequests);
+  if(!all.length){el.innerHTML='<div class="empty-state">No straight duty requests yet.</div>';return;}
+  el.innerHTML=all.slice(-10).reverse().map(r=>{
+    const pillCls=r.status==='Approved'?'pill-in':r.status==='Rejected'?'pill-late':'pill-break';
+    const emoji=r.breakType==='lunch'?'🍽️':'☕';
+    return`<div class="allowance-row">
+      <div style="flex:1">
+        <div class="allow-name">${emoji} ${r.empName}</div>
+        <div class="allow-meta">${r.breakLabel} · ${r.date} · "${r.reason}"</div>
+      </div>
+      <span class="pill ${pillCls}" style="font-size:10px">${r.status}</span>
+    </div>`;
+  }).join('');
+}
+
+async function sendIncompleteApproval(emp,reqId,yKey,yRec){
+  saveApprovalToSupabase(emp,'incomplete','Employee had no Time Out yesterday — requesting Time In approval',nowShort());
+  if(!tgToken||tgToken.length<20){
+    showMsg('err','No Telegram configured','Cannot request admin approval. Please see admin in person.',5000);
+    delete incompleteTimeInRequests[emp.code];return;
+  }
+  const pos=emp.position&&emp.position!=='—'?emp.position:emp.dept;
+  const p=yRec.punches;
+  const partialWorked=calcWorkedPartial(yRec);
+  const skip=v=>(!v||v==='(auto-deducted)'||v==='(auto-skipped)')?null:v;
+  const punchLines=[
+    p.timein?`✅ Time In: ${p.timein}`:'❌ No Time In',
+    skip(p.lunch_out)?`🍽️ Lunch Out: ${p.lunch_out}`:'',
+    skip(p.lunch_in)?`🔄 Lunch In: ${p.lunch_in}`:'',
+    p.pm_out?`☕ PM Out: ${p.pm_out}`:'',
+    p.pm_in?`🔄 PM In: ${p.pm_in}`:'',
+    `❌ Time Out: Not recorded`,
+    partialWorked?`⏱ Partial hours: ${msToHM(partialWorked)}`:'',
+  ].filter(Boolean).join('\n');
+  const text=`⚠️ <b>Incomplete Record — Time In Request</b>\n👤 ${emp.name}\n💼 ${pos}\n📅 Yesterday (${yKey})\n\n${punchLines}\n\n🏢 ${company}\n\nAllow this employee to clock in today?`;
+  const buttons=[
+    {text:'✅ Allow Time In',callback_data:`approve_incomplete_${reqId}`},
+    {text:'❌ Deny',callback_data:`reject_incomplete_${reqId}`}
+  ];
+  const msgIds={};
+  for(const id of mgrIds){
+    if(!id)continue;
+    const msgId=await tgSendWithButtons(id,text,buttons);
+    if(msgId)msgIds[id]=msgId;
+  }
+  incompleteTimeInRequests[emp.code].tgMsgIds=msgIds;
+  logNotif(`Incomplete record approval request: ${emp.name}`,'late-n',true);
+}
+
+
+async function processTgCallbacks(){
+  if(!tgToken||tgToken.length<20)return;
+  try{
+    const url=`https://api.telegram.org/bot${tgToken}/getUpdates?offset=${tgLastUpdateId+1}&timeout=0&allowed_updates=["callback_query"]`;
+    const r=await fetch(url);if(!r.ok)return;
+    const d=await r.json();if(!d.ok||!d.result.length)return;
+    for(const upd of d.result){
+      tgLastUpdateId=upd.update_id;
+      const cb=upd.callback_query;if(!cb)continue;
+      const data=cb.data,fromId=String(cb.from.id);
+      // Only allow manager IDs to approve
+      if(!mgrIds.includes(fromId)){await tgAnswerCallback(cb.id,'⛔ Not authorized.');continue;}
+      // Handle settimeout callbacks (format: settimeout_EMPCODE_TIMEMS_REQID)
+      if(data.startsWith('settimeout_')){
+        const sp=data.split('_');
+        const empCode=sp[1],chosenMs=parseInt(sp[2]),reqId=parseInt(sp[3]);
+        const pending=lateTimeoutRequests[empCode];
+        if(!pending||pending.reqId!==reqId){await tgAnswerCallback(cb.id,'Request expired.');continue;}
+        if(!pending.pending){await tgAnswerCallback(cb.id,'Already set.');continue;}
+        const emp=employees.find(e=>e.code===empCode);
+        if(!emp){await tgAnswerCallback(cb.id,'Employee not found.');continue;}
+        const chosenDate=new Date(chosenMs);
+        const chosenStr=chosenDate.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
+        const chosenShort=chosenDate.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true});
+        // Update the record
+        const rec=records[emp.code+'_'+todayKey()];
+        if(rec){
+          const prevTime=pending.actualTime;
+          rec.punches.timeout=chosenStr;rec.msMap.timeout=chosenMs;rec.lateTimeOut=false;
+          // Store adjustment notice for employee to see on next clock in
+          if(chosenStr!==prevTime){
+            timeoutAdjustments[empCode]={from:prevTime,to:chosenShort,date:todayKey(),acknowledged:false};
+          }
+          saveData();
+        }
+        pending.pending=false;
+        delete lateTimeoutRequests[empCode];
+        await tgAnswerCallback(cb.id,'✅ Time Out set to '+chosenShort);
+        const done=`✅ <b>Time Out Set</b>\n👤 ${emp.name}\n⏰ Official Time Out: <b>${chosenShort}</b>\nSet by: ${cb.from.first_name}`;
+        for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+        if(tgGroup)await tgSendText(tgGroup,`✅ ${emp.name} — Time Out set to ${chosenShort} by admin.`);
+        logNotif(`Late Time Out set to ${chosenShort}: ${emp.name} (by ${cb.from.first_name})`,'',true);
+        continue;
+      }
+      const parts=data.split('_');
+      if(parts.length<3)continue;
+      const action=parts[0],reqType=parts[1],reqId=parseInt(parts[2]);
+      if(reqType==='leave'){
+        const req=leaveRequests.find(x=>x.id===reqId);
+        if(!req){await tgAnswerCallback(cb.id,'Request not found.');continue;}
+        if(req.status!=='Pending'){await tgAnswerCallback(cb.id,'Already '+req.status+'.');continue;}
+        if(action==='approve'){
+          req.status='Approved';
+          const e=findEmp(req.code);if(e){const k=lkey(req.type);e.balance[k]=Math.max(0,(e.balance[k]||0)-req.days);}
+          // If employee was suspended, reinstate them
+          if(suspendedEmployees[req.code])reinstateEmployee(req.code);
+          await tgAnswerCallback(cb.id,'✅ Leave approved!');
+          const done=`✅ <b>Leave APPROVED</b>
+👤 ${req.name} · ${req.type}
+🗓 ${req.startDate} → ${req.endDate}
+Approved by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(req.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+        } else {
+          req.status='Rejected';
+          await tgAnswerCallback(cb.id,'❌ Leave rejected.');
+          const done=`❌ <b>Leave REJECTED</b>
+👤 ${req.name} · ${req.type}
+🗓 ${req.startDate} → ${req.endDate}
+Rejected by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(req.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+        }
+        saveData();renderAdminPanel();updateStats();
+        logNotif(`Leave ${req.status}: ${req.name} (via Telegram)`,req.status==='Approved'?'':'late-n',true);
+      } else if(reqType==='undertime'){
+        const req=undertimeRequests.find(x=>x.id===reqId);
+        if(!req){await tgAnswerCallback(cb.id,'Request not found.');continue;}
+        if(!['Filed','Auto-detected','Filed with Time In'].includes(req.status)){await tgAnswerCallback(cb.id,'Already '+req.status+'.');continue;}
+        const typeLbl=req.type==='half_day'?'Half Day':'Undertime';
+        if(action==='approve'){
+          req.status='Approved';
+          await tgAnswerCallback(cb.id,'✅ '+typeLbl+' approved!');
+          const done=`✅ <b>${typeLbl} APPROVED</b>
+👤 ${req.name}
+📅 ${req.date} · Out: ${req.expectedOut}
+Deduction: ₱${req.deduction.toFixed(2)}
+Approved by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(req.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+        } else {
+          req.status='Rejected';req.deduction=0;
+          await tgAnswerCallback(cb.id,'❌ '+typeLbl+' rejected.');
+          const done=`❌ <b>${typeLbl} REJECTED</b>
+👤 ${req.name}
+📅 ${req.date}
+Rejected by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(req.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+        }
+        saveData();renderUndertimeTab();updateStats();
+        logNotif(`${typeLbl} ${req.status}: ${req.name} (via Telegram)`,req.status==='Approved'?'':'late-n',true);
+      } else if(reqType==='lunchlate'){
+        // Find the pending late lunch request
+        const pending=Object.values(lateLunchRequests).find(r=>r.reqId===reqId);
+        if(!pending){await tgAnswerCallback(cb.id,'Request expired or not found.');continue;}
+        if(!pending.pending){await tgAnswerCallback(cb.id,'Already actioned.');continue;}
+        if(action==='approve'){
+          pending.pending=false;pending.approved=true;
+          await tgAnswerCallback(cb.id,'✅ Late Lunch Out allowed!');
+          const done=`✅ <b>Late Lunch Out ALLOWED</b>\n👤 ${pending.empName}\n⏰ ${nowShort()}\nAllowed by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          // Show approval on kiosk and auto-trigger punch if employee is still on screen
+          showMsg('ok','Admin approved!',pending.empName+' — Lunch Out approved. Please punch now.',6000);
+          logNotif(`Late Lunch Out approved: ${pending.empName} (via Telegram)`,'',true);
+        } else {
+          pending.pending=false;pending.approved=false;
+          delete lateLunchRequests[pending.empCode];
+          await tgAnswerCallback(cb.id,'❌ Late Lunch Out denied.');
+          const done=`❌ <b>Late Lunch Out DENIED</b>\n👤 ${pending.empName}\nDenied by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          showMsg('err','Admin denied','Your late Lunch Out was not approved. Please see admin.',6000);
+          logNotif(`Late Lunch Out denied: ${pending.empName} (via Telegram)`,'late-n',true);
+        }
+      } else if(reqType==='pmout'){
+        const pending=Object.values(latePmOutRequests).find(r=>r.reqId===reqId);
+        if(!pending){await tgAnswerCallback(cb.id,'Request expired or not found.');continue;}
+        if(!pending.pending){await tgAnswerCallback(cb.id,'Already actioned.');continue;}
+        if(action==='approve'){
+          pending.pending=false;pending.approved=true;
+          await tgAnswerCallback(cb.id,'✅ Early PM Break Out allowed!');
+          const done=`✅ <b>Early PM Break Out ALLOWED</b>\n👤 ${pending.empName}\n⏰ ${nowShort()}\nAllowed by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          showMsg('ok','Admin approved!',pending.empName+' — PM Break Out approved. Please punch now.',6000);
+          logNotif(`Early PM Break Out approved: ${pending.empName} (via Telegram)`,'',true);
+        } else {
+          pending.pending=false;pending.approved=false;
+          delete latePmOutRequests[pending.empCode];
+          await tgAnswerCallback(cb.id,'❌ Early PM Break Out denied.');
+          const done=`❌ <b>Early PM Break Out DENIED</b>\n👤 ${pending.empName}\nDenied by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          showMsg('err','Admin denied','Your early PM Break Out was not approved. Please see admin.',6000);
+          logNotif(`Early PM Break Out denied: ${pending.empName} (via Telegram)`,'late-n',true);
+        }
+      } else if(reqType==='straightduty'){
+        // parts: action_straightduty_BREAKTYPE_REQID
+        const breakType2=parts[2];const reqId3=parseInt(parts[3]);
+        const sdKey=Object.keys(straightDutyRequests).find(k=>straightDutyRequests[k].reqId===reqId3);
+        const sdReq=sdKey?straightDutyRequests[sdKey]:null;
+        if(!sdReq){await tgAnswerCallback(cb.id,'Request not found.');continue;}
+        if(sdReq.status!=='Pending'){await tgAnswerCallback(cb.id,'Already actioned.');continue;}
+        const sdEmp=employees.find(e=>e.code===sdReq.empCode);
+        const emoji2=sdReq.breakType==='lunch'?'🍽️':'☕';
+        if(action==='approve'){
+          sdReq.status='Approved';
+          // Mark the record so break is not deducted
+          const rec=records[sdReq.empCode+'_'+sdReq.date];
+          if(rec){
+            if(sdReq.breakType==='lunch'){rec.straightDutyLunch=true;
+            // Auto-fill lunch punches so sequence doesn't block
+            if(!rec.punches.lunch_out){rec.punches.lunch_out='(straight duty)';rec.msMap.lunch_out=0;}
+            if(!rec.punches.lunch_in){rec.punches.lunch_in='(straight duty)';rec.msMap.lunch_in=0;}
+          } else {rec.straightDutyPm=true;
+            if(!rec.punches.pm_out){rec.punches.pm_out='(straight duty)';rec.msMap.pm_out=0;}
+            if(!rec.punches.pm_in){rec.punches.pm_in='(straight duty)';rec.msMap.pm_in=0;}
+          }
+            saveData();
+          }
+          await tgAnswerCallback(cb.id,emoji2+' Straight duty approved!');
+          const done=`✅ <b>Straight Duty APPROVED</b>\n👤 ${sdReq.empName}\n${emoji2} ${sdReq.breakLabel}\n📅 ${sdReq.date}\nApproved by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(sdReq.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          // Notify main group and position count group
+          const approveMsg=`⚡ <b>Straight Duty Approved</b>\n👤 ${sdReq.empName} · ${sdReq.empDept}\n${emoji2} ${sdReq.breakLabel}\n📅 ${sdReq.date}\n📝 "${sdReq.reason}"\n✅ Approved by: ${cb.from.first_name}\n🏢 ${company}`;
+          for(const mid3 of mgrIds)if(mid3)await tgSendText(mid3,approveMsg);
+          logNotif(`Straight duty approved: ${sdReq.empName} (${sdReq.breakLabel})`,'',true);
+        } else {
+          sdReq.status='Rejected';
+          await tgAnswerCallback(cb.id,'❌ Straight duty rejected.');
+          const done=`❌ <b>Straight Duty REJECTED</b>\n👤 ${sdReq.empName}\n${emoji2} ${sdReq.breakLabel}\n📅 ${sdReq.date}\nRejected by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(sdReq.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          // Notify main group about rejection too
+          const rejectMsg=`❌ <b>Straight Duty Rejected</b>\n👤 ${sdReq.empName} · ${sdReq.empDept}\n${emoji2} ${sdReq.breakLabel}\n📅 ${sdReq.date}\nRejected by: ${cb.from.first_name}\n🏢 ${company}`;
+          for(const mid4 of mgrIds)if(mid4)await tgSendText(mid4,rejectMsg);
+          logNotif(`Straight duty rejected: ${sdReq.empName} (${sdReq.breakLabel})`,'late-n',true);
+        }
+        saveData();renderStraightDutyList();
+      } else if(reqType==='incomplete'){
+        const pending=Object.values(incompleteTimeInRequests).find(r=>r.reqId===reqId);
+        if(!pending){await tgAnswerCallback(cb.id,'Request not found.');continue;}
+        if(!pending.pending){await tgAnswerCallback(cb.id,'Already actioned.');continue;}
+        const emp2=employees.find(e=>e.code===pending.empCode);
+        if(action==='approve'){
+          pending.pending=false;pending.approved=true;
+          await tgAnswerCallback(cb.id,'✅ Time In allowed!');
+          const done=`✅ <b>Time In ALLOWED</b>\n👤 ${pending.empName}\nNote: Incomplete record from yesterday\nAllowed by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          showMsg('ok','Admin approved!',pending.empName+' — Please punch Time In now.',6000);
+          logNotif(`Incomplete approval granted: ${pending.empName} (via Telegram)`,'',true);
+        } else {
+          pending.pending=false;pending.approved=false;
+          delete incompleteTimeInRequests[pending.empCode];
+          await tgAnswerCallback(cb.id,'❌ Time In denied.');
+          const done=`❌ <b>Time In DENIED</b>\n👤 ${pending.empName}\nDenied by: ${cb.from.first_name}\nEmployee must see admin in person.`;
+          for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          showMsg('err','Admin denied','Your Time In was not approved. Please see admin in person.',6000);
+          logNotif(`Incomplete approval denied: ${pending.empName} (via Telegram)`,'late-n',true);
+        }
+      } else if(reqType==='latetimein'){
+        const pending=Object.values(lateTimeInRequests).find(r=>r.reqId===reqId);
+        if(!pending){await tgAnswerCallback(cb.id,'Request expired or not found.');continue;}
+        if(!pending.pending){await tgAnswerCallback(cb.id,'Already actioned.');continue;}
+        if(action==='approve'){
+          pending.pending=false;pending.approved=true;
+          await tgAnswerCallback(cb.id,'✅ Late Time In allowed!');
+          const done=`✅ <b>Late Time In ALLOWED</b>\n👤 ${pending.empName}\n⏰ ${nowShort()}\nAllowed by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          showMsg('ok','Admin approved!',pending.empName+' — Time In approved. Please punch now.',6000);
+          logNotif(`Late Time In approved: ${pending.empName} (via Telegram)`,'',true);
+        } else {
+          pending.pending=false;pending.approved=false;
+          delete lateTimeInRequests[pending.empCode];
+          await tgAnswerCallback(cb.id,'❌ Late Time In denied.');
+          const done=`❌ <b>Late Time In DENIED</b>\n👤 ${pending.empName}\nDenied by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          showMsg('err','Admin denied','Your Time In was not approved. Please see admin.',6000);
+          logNotif(`Late Time In denied: ${pending.empName} (via Telegram)`,'late-n',true);
+        }
+      } else if(reqType==='timeouttlate'){
+        const pending=Object.values(lateTimeoutRequests).find(r=>r.reqId===reqId);
+        if(!pending){await tgAnswerCallback(cb.id,'Request expired or not found.');continue;}
+        if(!pending.pending){await tgAnswerCallback(cb.id,'Already actioned.');continue;}
+        if(action==='approve'){
+          pending.pending=false;pending.approved=true;
+          await tgAnswerCallback(cb.id,'✅ Late Time Out confirmed!');
+          const done=`✅ <b>Late Time Out CONFIRMED</b>\n👤 ${pending.empName}\n⏰ Actual time: ${pending.actualTime}\nConfirmed by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          logNotif(`Late Time Out confirmed: ${pending.empName} (via Telegram)`,'',true);
+        } else {
+          // Admin flags → revert Time Out to dismissal time
+          pending.pending=false;pending.approved=false;
+          const emp=employees.find(e=>e.code===pending.empCode);
+          if(emp){
+            const rec=records[emp.code+'_'+todayKey()];
+            if(rec){
+              const dismissal=new Date();dismissal.setHours(dismissalH,dismissalM,0,0);
+              rec.punches.timeout=dismissal.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
+              rec.msMap.timeout=dismissal.getTime();
+              rec.timeoutSnapped=true;rec.lateTimeOut=false;
+              saveData();
+            }
+          }
+          delete lateTimeoutRequests[pending.empCode];
+          await tgAnswerCallback(cb.id,'⚠️ Time Out reverted to dismissal time.');
+          const done=`⚠️ <b>Late Time Out FLAGGED</b>\n👤 ${pending.empName}\n⏰ Time Out reverted to dismissal time: ${fmt12(dismissalH,dismissalM)}\nFlagged by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          logNotif(`Late Time Out flagged — reverted to ${fmt12(dismissalH,dismissalM)}: ${pending.empName}`,'late-n',true);
+        }
+      } else if(reqType==='earlybreak'){
+        // parts: action_earlybreak_BREAKTYPE_REQID
+        const breakType=parts[2];const reqId2=parseInt(parts[3]);
+        const store=breakType==='lunch_out'?earlyLunchOutRequests:earlyPmOutRequests;
+        const pending=Object.values(store).find(r=>r.reqId===reqId2);
+        if(!pending){await tgAnswerCallback(cb.id,'Request not found.');continue;}
+        const emp2=employees.find(e=>e.code===pending.empCode);
+        const label2=breakType==='lunch_out'?'Early Lunch Out':'Early PM Break Out';
+        if(action==='approve'){
+          pending.pending=false;pending.approved=true;
+          await tgAnswerCallback(cb.id,'✅ '+label2+' allowed!');
+          const done=`✅ <b>${label2} ALLOWED</b>\n👤 ${pending.empName}\n⏰ ${nowShort()}\nAllowed by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          showMsg('ok','Admin approved!',pending.empName+' — '+label2+' approved. Please punch now.',6000);
+          logNotif(`${label2} approved: ${pending.empName}`,'',true);
+        } else {
+          pending.pending=false;pending.approved=false;
+          delete store[pending.empCode];
+          await tgAnswerCallback(cb.id,'❌ '+label2+' denied.');
+          const done=`❌ <b>${label2} DENIED</b>\n👤 ${pending.empName}\nDenied by: ${cb.from.first_name}`;
+          for(const [cid,mid] of Object.entries(pending.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          showMsg('err','Admin denied',pending.empName+' — '+label2+' was not approved.',5000);
+          logNotif(`${label2} denied: ${pending.empName}`,'late-n',true);
+        }
+      } else if(reqType==='reinstate'){
+        // callback_data: approve_reinstate_EMPCODE_REQID or reject_reinstate_EMPCODE_REQID
+        const empCode=parts[2];
+        const emp=employees.find(e=>e.code===empCode);
+        if(!emp){await tgAnswerCallback(cb.id,'Employee not found.');continue;}
+        if(action==='approve'){
+          delete suspendedEmployees[empCode];
+          saveData();renderRoster();updateStats();
+          await tgAnswerCallback(cb.id,'✅ Employee reinstated!');
+          const done=`✅ <b>Employee Reinstated</b>\n👤 ${emp.name}\nReinstated by: ${cb.from.first_name}\n📅 ${todayKey()}`;
+          for(const [cid,mid] of Object.entries(suspendedEmployees[empCode]?.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
+          showMsg('ok',emp.name+' reinstated','Employee can now punch in.',4000);
+          logNotif(`✅ ${emp.name} reinstated by ${cb.from.first_name} (via Telegram)`,'',true);
+        } else {
+          await tgAnswerCallback(cb.id,'Employee remains suspended.');
+          logNotif(`${emp.name} reinstatement denied by ${cb.from.first_name}`,'late-n',true);
+        }
+      }
+    }
+  }catch(e){console.warn('TG poll error',e);}
+}
+
+function startTgPolling(){
+  if(tgPolling)clearInterval(tgPolling);
+  if(!tgToken||tgToken.length<20)return;
+  tgPolling=setInterval(processTgCallbacks,5000);
+}
+function stopTgPolling(){if(tgPolling){clearInterval(tgPolling);tgPolling=null;}}
+
+// ── LOCAL STORAGE ──
+function saveData(){
+  try{
+    localStorage.setItem('rsr_suspended',JSON.stringify(suspendedEmployees));
+    localStorage.setItem('rsr_timeout_adj',JSON.stringify(timeoutAdjustments));
+    localStorage.setItem('rsr_employees',JSON.stringify(employees));
+    localStorage.setItem('rsr_undertime',JSON.stringify(undertimeRequests));
+    localStorage.setItem('rsr_settings',JSON.stringify({shiftH,shiftM,graceMins,endH,endM,company,lunchInEarliestH,lunchInEarliestM,pmInEarliestH,pmInEarliestM,lunchOutEarlyH,lunchOutEarlyM,lunchOutLatestH,lunchOutLatestM,pmOutEarlyH,pmOutEarlyM,pmOutLatestH,pmOutLatestM,dismissalH,dismissalM,activeSite,siteAName,siteBName,allowA,allowB,otAllowanceAmt,otAllowanceMinHrs,adminPassword,assistantPassword,tgToken,tgGroup,tgPosGroup,tgPhotoGroup,tgBackupGroup,mgrIds,semaphoreKey,semaphoreSender}));
+    localStorage.setItem('rsr_smslog',JSON.stringify(smsLog.slice(0,200)));
+    localStorage.setItem('rsr_straightduty',JSON.stringify(straightDutyRequests));
+    localStorage.setItem('rsr_violations',JSON.stringify(absenceViolations));
+    // Save all records (up to 10 days), strip photos to save space
+    const allRecs={};
+    Object.keys(records).forEach(k=>{const r={...records[k]};delete r.photos;allRecs[k]=r;});
+    localStorage.setItem('rsr_records',JSON.stringify(allRecs));
+  }catch(e){console.warn('LocalStorage save failed',e);}
+}
+
+function loadData(){
+  try{
+    const sus=localStorage.getItem('rsr_suspended');
+    if(sus){try{suspendedEmployees=JSON.parse(sus)||{};}catch(e){suspendedEmployees={};}}    
+    const tadj=localStorage.getItem('rsr_timeout_adj');
+    if(tadj){try{timeoutAdjustments=JSON.parse(tadj)||{};}catch(e){timeoutAdjustments={};}}    
+    const emp=localStorage.getItem('rsr_employees');
+    if(emp){const parsed=JSON.parse(emp);if(parsed&&parsed.length>0)employees=parsed;}
+    const ut=localStorage.getItem('rsr_undertime');
+    if(ut){const parsed=JSON.parse(ut);if(parsed&&parsed.length>0)undertimeRequests=parsed;}
+    // Load all saved records
+    const savedRecs=localStorage.getItem('rsr_records');
+    if(savedRecs){try{const parsed=JSON.parse(savedRecs);if(parsed)records=parsed;}catch(e){records={};}}
+    // Clean up records older than 10 days
+    const cutoff=new Date();cutoff.setDate(cutoff.getDate()-10);
+    Object.keys(records).forEach(k=>{
+      const parts=k.split('_');const dateStr=parts.slice(1).join('_');
+      const d=new Date(dateStr);if(!isNaN(d)&&d<cutoff)delete records[k];
+    });
+    const sl2=localStorage.getItem('rsr_smslog');if(sl2){try{smsLog=JSON.parse(sl2)||[];}catch(e){smsLog=[]}}
+    const sd2=localStorage.getItem('rsr_straightduty');if(sd2){try{straightDutyRequests=JSON.parse(sd2)||{};}catch(e){straightDutyRequests={}}}
+    const vl2=localStorage.getItem('rsr_violations');if(vl2){try{absenceViolations=JSON.parse(vl2)||{};}catch(e){absenceViolations={}}}
+    const settings=localStorage.getItem('rsr_settings');
+    if(settings){
+      const s=JSON.parse(settings);
+      shiftH=s.shiftH??8;shiftM=s.shiftM??0;graceMins=s.graceMins??10;
+      endH=s.endH??17;endM=s.endM??0;company=s.company||'RSR Engineering';
+      lunchInEarliestH=s.lunchInEarliestH??12;lunchInEarliestM=s.lunchInEarliestM??40;
+      pmInEarliestH=s.pmInEarliestH??17;pmInEarliestM=s.pmInEarliestM??40;
+      lunchOutEarlyH=s.lunchOutEarlyH??12;lunchOutEarlyM=s.lunchOutEarlyM??0;
+      lunchOutLatestH=s.lunchOutLatestH??12;lunchOutLatestM=s.lunchOutLatestM??30;
+      pmOutEarlyH=s.pmOutEarlyH??17;pmOutEarlyM=s.pmOutEarlyM??0;
+      pmOutLatestH=s.pmOutLatestH??17;pmOutLatestM=s.pmOutLatestM??30;
+      dismissalH=s.dismissalH??21;dismissalM=s.dismissalM??0;
+
+      activeSite=s.activeSite||'A';siteAName=s.siteAName||'Site A';siteBName=s.siteBName||'Site B';
+      allowA=s.allowA??300;allowB=s.allowB??300;
+      otAllowanceAmt=s.otAllowanceAmt??50;otAllowanceMinHrs=s.otAllowanceMinHrs??3;
+      if(s.adminPassword)adminPassword=s.adminPassword;
+      if(s.assistantPassword)assistantPassword=s.assistantPassword;
+      if(s.semaphoreKey){semaphoreKey=s.semaphoreKey;const sk=document.getElementById('semaphore-key');if(sk)sk.value=semaphoreKey;}
+      if(s.semaphoreSender){semaphoreSender=s.semaphoreSender;const ss=document.getElementById('semaphore-sender');if(ss)ss.value=semaphoreSender;}
+      if(s.tgToken)tgToken=s.tgToken;
+      if(s.tgGroup)tgGroup=s.tgGroup;
+      if(s.mgrIds)mgrIds=s.mgrIds;
+      // Restore UI fields
+      setTimeout(()=>{
+        const f=(id,v)=>{const el=document.getElementById(id);if(el)el.value=v;};
+        f('s-start',String(shiftH).padStart(2,'0')+':'+String(shiftM).padStart(2,'0'));
+        f('s-grace',graceMins);
+        f('s-end',String(endH).padStart(2,'0')+':'+String(endM).padStart(2,'0'));
+        f('s-company',company);
+        f('s-lunch-in-earliest',String(lunchInEarliestH).padStart(2,'0')+':'+String(lunchInEarliestM).padStart(2,'0'));
+        f('s-pm-in-earliest',String(pmInEarliestH).padStart(2,'0')+':'+String(pmInEarliestM).padStart(2,'0'));
+        f('s-lunch-out-early',String(lunchOutEarlyH).padStart(2,'0')+':'+String(lunchOutEarlyM).padStart(2,'0'));
+        f('s-lunch-out-latest',String(lunchOutLatestH).padStart(2,'0')+':'+String(lunchOutLatestM).padStart(2,'0'));
+        f('s-pm-out-early',String(pmOutEarlyH).padStart(2,'0')+':'+String(pmOutEarlyM).padStart(2,'0'));
+        f('s-pm-out-latest',String(pmOutLatestH).padStart(2,'0')+':'+String(pmOutLatestM).padStart(2,'0'));
+        f('s-dismissal',String(dismissalH).padStart(2,'0')+':'+String(dismissalM).padStart(2,'0'));
+        f('s-active-site',activeSite);
+        f('s-site-a-name',siteAName);
+        f('s-site-b-name',siteBName);
+        f('s-allow-a',allowA);
+        f('s-allow-b',allowB);
+        f('s-ot-allow',otAllowanceAmt);
+        f('s-ot-min-hrs',otAllowanceMinHrs);
+        if(tgToken)f('tg-token',tgToken);
+        if(tgGroup)f('tg-group',tgGroup);
+        if(s.tgPosGroup){tgPosGroup=s.tgPosGroup;f('tg-pos-group',tgPosGroup);}
+        if(s.tgPhotoGroup){tgPhotoGroup=s.tgPhotoGroup;f('tg-photo-group',tgPhotoGroup);}
+        if(s.tgBackupGroup){tgBackupGroup=s.tgBackupGroup;f('tg-backup-group',tgBackupGroup);}
+        if(mgrIds.length)f('tg-managers',mgrIds.join('\n'));
+        updShiftPill();updateSiteBadge();if(tgToken&&tgToken.length>20){startTgPolling();scheduleMorningReport();}
+      },100);
+    }
+  }catch(e){console.warn('LocalStorage load failed',e);}
+}
+
+
+// ── SEMAPHORE SMS ──
+function startAssistantTimer(){
+  stopAssistantTimer();
+  assistantSecs=ASST_TO;
+  assistantTimer=setInterval(()=>{
+    assistantSecs--;
+    const pct=(assistantSecs/ASST_TO)*100;
+    const urgent=assistantSecs<=10;
+    ['asst-timer-lbl','asst-timer-lbl2'].forEach(id=>{const e=document.getElementById(id);if(e)e.textContent=assistantSecs+'s';});
+    ['asst-timer-fill','asst-timer-fill2'].forEach(id=>{const e=document.getElementById(id);if(e){e.style.width=pct+'%';e.className='timer-fill'+(urgent?' urgent':'');}});
+    updSessionBar(assistantSecs,ASST_TO);
+    if(assistantSecs<=0){stopAssistantTimer();logoutAssistant();}
+  },1000);
+}
+function stopAssistantTimer(){if(assistantTimer){clearInterval(assistantTimer);assistantTimer=null;}}
+function resetAssistantTimer(){
+  if(!assistantLoggedIn)return;
+  assistantSecs=ASST_TO;
+  ['asst-timer-lbl','asst-timer-lbl2'].forEach(id=>{const e=document.getElementById(id);if(e)e.textContent=assistantSecs+'s';});
+  ['asst-timer-fill','asst-timer-fill2'].forEach(id=>{const e=document.getElementById(id);if(e){e.style.width='100%';e.className='timer-fill';}});
+}
+
+function saveSemaphoreSettings(){
+  semaphoreKey=document.getElementById('semaphore-key').value.trim();
+  semaphoreSender=document.getElementById('semaphore-sender').value.trim()||'RSR ENGRG';
+  saveData();
+  const msg=document.getElementById('sms-settings-msg');
+  if(msg){msg.textContent='SMS settings saved.';setTimeout(()=>msg.textContent='',2000);}
+}
+
+async function sendSMS(phone,message){
+  if(!semaphoreKey||!phone)return{success:false,error:'No API key or phone'};
+  try{
+    const params=new URLSearchParams({apikey:semaphoreKey,number:phone,message,sendername:semaphoreSender||'RSR ENGRG'});
+    const r=await fetch('https://api.semaphore.co/api/v4/messages',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:params});
+    const d=await r.json();
+    return{success:r.ok,data:d};
+  }catch(e){return{success:false,error:e.message};}
+}
+
+async function sendAbsenceSMS(emp,consecutiveDays){
+  if(!emp.phone)return;
+  const daysLeft=3-consecutiveDays;
+  const today=todayKey();
+  let msg='';
+  if(consecutiveDays===1){
+    msg=`Attendance Notice: Hi ${emp.name}, you were marked absent today ${today}. Please be advised that 3 consecutive absences without approved leave will result in AWOL status. You have 2 remaining days to report. Please contact your supervisor or file a leave through the kiosk. - ${company}`;
+  } else if(consecutiveDays===2){
+    msg=`Urgent Attendance Notice: Hi ${emp.name}, this is your 2nd consecutive absence (${today}). You have 1 remaining day before being marked AWOL. Please report immediately or file a leave of absence through the kiosk. - ${company}`;
+  } else if(consecutiveDays>=3){
+    msg=`AWOL Warning: Hi ${emp.name}, you have been absent for 3 or more consecutive days without approved leave as of ${today}. Your account has been flagged. Please contact management immediately. - ${company}`;
+  }
+  if(!msg)return;
+  const result=await sendSMS(emp.phone,msg);
+  const logEntry={empCode:emp.code,empName:emp.name,phone:emp.phone,network:emp.network,date:today,day:consecutiveDays,message:msg,status:result.success?'Sent ✅':'Failed ❌',timestamp:Date.now()};
+  smsLog.unshift(logEntry);
+  if(smsLog.length>200)smsLog.pop();
+  saveData();
+  renderSmsLog();
+  if(typeof syncSmsLogToSupabase==='function')syncSmsLogToSupabase(logEntry);
+  logNotif(`SMS sent to ${emp.name} (Day ${consecutiveDays})`,result.success?'':'late-n',true);
+}
+
+async function checkAndSendAbsenceSMS(){
+  // Run at end of day — check all employees for consecutive absences
+  for(const emp of employees){
+    if(onLeaveToday(emp.code))continue;
+    const rec=records[emp.code+'_'+todayKey()];
+    const hasTimein=rec&&rec.punches&&rec.punches.timein;
+    if(hasTimein)continue; // present today
+    const consecutive=getConsecutiveAbsences(emp.code)+1; // +1 for today
+    if(consecutive>=1&&consecutive<=3){
+      await sendAbsenceSMS(emp,consecutive);
+    }
+    // Record violation when hitting 3
+    if(consecutive===3){
+      if(!absenceViolations[emp.code])absenceViolations[emp.code]={count:0,history:[]};
+      absenceViolations[emp.code].count++;
+      absenceViolations[emp.code].history.unshift({date:todayKey(),consecutiveDays:3,violation:absenceViolations[emp.code].count});
+      saveData();
+      renderViolationList();
+    }
+  }
+}
+
+function renderSmsLog(){
+  const el=document.getElementById('sms-log-list');if(!el)return;
+  if(!smsLog.length){el.innerHTML='<div class="empty-state">No SMS sent yet.</div>';return;}
+  el.innerHTML=smsLog.slice(0,50).map(s=>`
+    <div class="allowance-row" style="flex-direction:column;gap:4px;align-items:flex-start">
+      <div style="display:flex;justify-content:space-between;width:100%">
+        <div class="allow-name">${s.empName} <span style="font-size:10px;color:#aaa">${s.phone} · ${s.network?.toUpperCase()}</span></div>
+        <span style="font-size:11px;font-weight:600;color:${s.status.includes('✅')?'#085041':'#A32D2D'}">${s.status}</span>
+      </div>
+      <div style="font-size:11px;color:#888">${s.date} · Day ${s.day} of 3 consecutive absence</div>
+      <div style="font-size:11px;color:#555;background:#f7f7f4;border-radius:6px;padding:6px 8px;width:100%;line-height:1.5">${s.message}</div>
+    </div>`).join('');
+}
+
+function renderViolationList(){
+  const el=document.getElementById('violation-list');if(!el)return;
+  const violated=employees.filter(e=>absenceViolations[e.code]?.count>0);
+  if(!violated.length){el.innerHTML='<div class="empty-state">No violation records yet.</div>';return;}
+  el.innerHTML=violated.map(emp=>{
+    const v=absenceViolations[emp.code];
+    const color=v.count>=3?'#A32D2D':v.count===2?'#E8A830':'#633806';
+    return`<div class="allowance-row" style="flex-direction:column;align-items:flex-start;gap:6px">
+      <div style="display:flex;justify-content:space-between;width:100%">
+        <div class="allow-name">${emp.name} <span style="font-size:11px;color:#888">· ${emp.dept}</span></div>
+        <span style="background:${color}20;color:${color};font-size:11px;font-weight:700;padding:3px 10px;border-radius:20px">🚨 ${v.count} violation${v.count!==1?'s':''}</span>
+      </div>
+      <div style="font-size:11px;color:#888;width:100%">
+        ${v.history.slice(0,5).map((h,i)=>`<div style="padding:2px 0;border-bottom:1px solid #f0f0f0">Violation #${v.count-i} — ${h.date} (${h.consecutiveDays} consecutive days)</div>`).join('')}
+      </div>
+    </div>`;}).join('');
+}
+
+
+// ── FIX 5: End of shift incomplete records summary to admin ──
+async function sendIncompleteRecordsSummary(){
+  if(!tgToken||tgToken.length<20)return;
+  const t=todayKey();
+  const incompleteEmps=employees.filter(emp=>{
+    const rec=records[emp.code+'_'+t];
+    return rec&&rec.punches&&rec.punches.timein&&!rec.punches.timeout;
+  });
+  if(!incompleteEmps.length)return; // No incomplete records — all good
+  const lines=incompleteEmps.map(emp=>{
+    const rec=records[emp.code+'_'+t];
+    const partialWorked=calcWorkedPartial(rec);
+    const p=rec.punches;
+    const lastPunch=p.pm_in||p.pm_out||p.lunch_in||p.lunch_out||p.timein||'—';
+    return `👤 ${emp.name} (${emp.dept})\n   Last punch: ${lastPunch} · Partial: ${partialWorked?msToHM(partialWorked):'—'}`;
+  }).join('\n\n');
+  const msg=`⚠️ <b>End of Shift — Incomplete Records</b>\n📅 ${t}\n🏢 ${company}\n\nThe following ${incompleteEmps.length} employee(s) have no Time Out recorded:\n\n${lines}\n\n📋 These employees will need your approval to clock in tomorrow.`;
+  for(const id of mgrIds){if(id)await tgSendText(id,msg);}
+  logNotif(`End of shift: ${incompleteEmps.length} incomplete record(s) — admins notified`,'late-n',true);
+}
+
+// ── CSV IMPORT / EXPORT ──
+function downloadTemplate(){
+  const header='PIN,Name,Department,HomeSite,ShiftHours\n';
+  const sample='0001,Juan dela Cruz,Operations,A,8\n0002,Maria Santos,Warehouse,B,8\n0003,Pedro Reyes,Admin,A,8\n';
+  const note='# HomeSite must be A or B. PIN must be exactly 6 digits.\n';
+  const csv=note+header+sample;
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  downloadFile('rsr_staff_template.csv',csv,'text/csv');
+}
+
+function exportStaffCSV(){
+  if(!employees.length){alert('No employees to export.');return;}
+  const rows=['PIN,Name,Department,HomeSite,ShiftHours,VL,SL'];
+  employees.forEach(e=>{
+    const b=e.balance||{VL:2,SL:2};
+    rows.push([e.code,e.name,e.dept,e.homeSite,e.shift,b.VL,b.SL].map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(','));
+  });
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([rows.join('\n')],{type:'text/csv'}));
+  downloadFile('rsr_staff_export.csv',csv,'text/csv');
+}
+
+function importStaffCSV(input){
+  const file=input.files[0];if(!file)return;
+  const msg=document.getElementById('import-msg');
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      const text=e.target.result;
+      const lines=text.split('\n').map(l=>l.trim()).filter(l=>l&&!l.startsWith('#'));
+      if(!lines.length){msg.textContent='File is empty.';msg.style.color='#A32D2D';return;}
+      // Detect header row
+      const firstLine=lines[0].toLowerCase();
+      const hasHeader=firstLine.includes('pin')||firstLine.includes('name');
+      const dataLines=hasHeader?lines.slice(1):lines;
+      if(!dataLines.length){msg.textContent='No data rows found.';msg.style.color='#A32D2D';return;}
+      const imported=[];const errors=[];
+      dataLines.forEach((line,idx)=>{
+        if(!line.trim())return;
+        // Parse CSV properly (handle quoted fields)
+        const cols=line.split(',').map(c=>c.trim().replace(/^"|"$/g,'').trim());
+        const [code,name,dept,homeSite,shiftStr,vlStr,slStr,elStr]=cols;
+        if(!code||!name){errors.push('Row '+(idx+2)+': missing PIN or name');return;}
+        const cleanCode=code.replace(/\D/g,'').padStart(6,'0').slice(0,6);
+        if(cleanCode.length!==6){errors.push('Row '+(idx+2)+': invalid PIN "'+code+'"');return;}
+        const site=(homeSite||'A').toUpperCase().trim();
+        const validSite=site==='A'||site==='B'?site:'A';
+        const shift=parseInt(shiftStr)||8;
+        const vl=parseInt(vlStr)||2,sl=parseInt(slStr)||2,el=parseInt(elStr)||3;
+        // Check duplicate PINs within import
+        if(imported.find(e=>e.code===cleanCode)){errors.push('Row '+(idx+2)+': duplicate PIN '+cleanCode);return;}
+        imported.push({code:cleanCode,name:name.trim(),dept:(dept||'—').trim(),homeSite:validSite,shift,balance:{VL:vl,SL:sl}});
+      });
+      if(!imported.length){msg.textContent='No valid employees found. Check your CSV format.';msg.style.color='#A32D2D';return;}
+      if(errors.length){
+        const proceed=confirm(imported.length+' employees ready to import.\n\nWarnings:\n'+errors.slice(0,5).join('\n')+(errors.length>5?'\n...and '+(errors.length-5)+' more':'')+'\n\nProceed with valid rows?');
+        if(!proceed){input.value='';return;}
+      } else {
+        if(!confirm('Import '+imported.length+' employees? This will REPLACE your current roster of '+employees.length+' employees.'))
+        {input.value='';return;}
+      }
+      employees=imported;
+      saveData();renderRoster();updateStats();updatePhotoFilter();
+      msg.textContent='✅ Imported '+imported.length+' employees successfully!'+(errors.length?' ('+errors.length+' rows skipped)':'');
+      msg.style.color='#085041';
+      input.value='';
+      setTimeout(()=>msg.textContent='',5000);
+    }catch(err){msg.textContent='Error reading file: '+err.message;msg.style.color='#A32D2D';}
+  };
+  reader.readAsText(file);
+}
+
+function addEmployee(){
+  const code=document.getElementById('new-code').value.trim(),name=document.getElementById('new-name').value.trim(),dept=document.getElementById('new-dept').value.trim(),position=document.getElementById('new-position').value.trim(),phone=document.getElementById('new-phone').value.trim(),network=document.getElementById('new-network').value,refPhoto=document.getElementById('new-ref-photo')?.value||'',homeSite=document.getElementById('new-home-site').value,shift=parseInt(document.getElementById('new-shift').value)||8,dailyRate=parseInt(document.getElementById('new-daily-rate').value)||500;
+  const msg=document.getElementById('add-msg');
+  if(!code||!name){if(msg){msg.textContent='PIN and name are required.';msg.style.color='#A32D2D';}return;}
+  if(code.length!==6||!/^\d{6}$/.test(code)){if(msg){msg.textContent='PIN must be exactly 6 digits.';msg.style.color='#A32D2D';}return;}
+  if(employees.find(e=>e.code===code)){if(msg){msg.textContent='PIN already exists.';msg.style.color='#A32D2D';}return;}
+  const newEmp={code,name,dept:dept||'—',position:position||'—',phone:phone||'',network:network||'smart',refPhoto:'pending',homeSite,shift,dailyRate,balance:{VL:2,SL:2}};
+  employees.push(newEmp);
+  if(window.Android&&window.Android.saveRefPhoto&&refPhoto)window.Android.saveRefPhoto(code,refPhoto);
+  if(typeof syncEmployeeToSupabase==='function')syncEmployeeToSupabase(newEmp);
+  saveData();
+  document.getElementById('new-code').value='';document.getElementById('new-name').value='';document.getElementById('new-dept').value='';document.getElementById('new-position').value='';document.getElementById('new-phone').value='';document.getElementById('new-shift').value='8';document.getElementById('new-daily-rate').value='500';clearRefPhoto('new');
+  if(msg){msg.textContent=name+' added — PIN: '+code+' · Home: '+siteName(homeSite);msg.style.color='#085041';setTimeout(()=>msg.textContent='',2500);}
+  renderRoster();updateStats();updatePhotoFilter();
+}
+function removeEmployee(code){if(!confirm('Remove this employee?'))return;employees=employees.filter(e=>e.code!==code);saveData();renderRoster();updateStats();updatePhotoFilter();}
+function getInit(name){return name.split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);}
+function renderRoster(){
+  const rc=document.getElementById('roster-count');if(rc)rc.textContent=employees.length;
+  const c=document.getElementById('emp-roster');if(!c)return;c.innerHTML='';
+  if(!employees.length){c.innerHTML='<div class="empty-state">No employees yet. Add one or import a CSV.</div>';return;}
+  employees.forEach(emp=>{
+    const d=document.createElement('div');d.className='emp-row';
+    d.style.cssText='flex-direction:column;align-items:flex-start;gap:6px';
+    d.innerHTML=`
+      <div style="display:flex;align-items:center;gap:8px;width:100%">
+        <div class="emp-avatar">${getInit(emp.name)}</div>
+        <div style="width:40px;height:40px;border-radius:8px;background:#f0f0f0;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0;overflow:hidden" id="rp-${emp.code}">👤</div>
+      <div>
+          <div class="emp-name">${emp.name}</div>
+          <div style="font-size:11px;color:#888;margin-top:1px">${emp.position&&emp.position!=='—'?emp.position:''} ${emp.phone?'· 📱'+emp.phone:''}</div>
+          ${absenceViolations[emp.code]?.count>0?`<div style="font-size:10px;color:#A32D2D;font-weight:600;margin-top:2px">🚨 ${absenceViolations[emp.code].count} absence violation${absenceViolations[emp.code].count!==1?'s':''}</div>`:''}
+        </div>
+      </div>
+      <div style="display:flex;gap:6px;padding-left:42px">
+        ${suspendedEmployees[emp.code]?`<span style="background:#FCEBEB;color:#A32D2D;font-size:10px;font-weight:600;padding:3px 8px;border-radius:6px">🚫 Suspended</span>`:''}
+        <button onclick="openEditModal('${emp.code}')" style="background:#E6F1FB;border:none;color:#185FA5;cursor:pointer;font-size:11px;font-weight:600;padding:5px 12px;border-radius:8px">Edit</button>
+        <button onclick="removeEmployee('${emp.code}')" style="background:#FCEBEB;border:none;color:#A32D2D;cursor:pointer;font-size:11px;font-weight:600;padding:5px 12px;border-radius:8px">Remove</button>
+        ${suspendedEmployees[emp.code]?`<button onclick="reinstateEmployee('${emp.code}')" style="background:#E1F5EE;border:none;color:#085041;cursor:pointer;font-size:11px;font-weight:600;padding:5px 12px;border-radius:8px">✅ Reinstate</button>`:''}
+      </div>`;
+    c.appendChild(d);
+  });
+}
+
+let editingCode=null;
+function openEditModal(code){
+  const emp=findEmp(code);if(!emp)return;
+  editingCode=code;
+  document.getElementById('edit-pin-display').textContent='PIN: '+emp.code+' — editing record';
+  document.getElementById('edit-name').value=emp.name;
+  document.getElementById('edit-dept').value=emp.dept==='—'?'':emp.dept;
+  document.getElementById('edit-position').value=emp.position==='—'?'':(emp.position||'');
+  const ep=document.getElementById('edit-phone');if(ep)ep.value=emp.phone||'';
+  const en=document.getElementById('edit-network');if(en)en.value=emp.network||'smart';
+  const erp=document.getElementById('edit-ref-photo');if(erp)erp.value='';
+  const erprev=document.getElementById('edit-ref-preview');
+  if(erprev){
+    // Try to load from Android storage
+    if(window.Android&&window.Android.getRefPhoto){
+      const stored=window.Android.getRefPhoto(emp.code);
+      if(stored){erprev.src=stored;if(erp)erp.value=stored;}
+      else{erprev.src='';erprev.style.background='#f0f0f0';}
+    } else {
+      erprev.src='';erprev.style.background='#f0f0f0';
+    }
+  }
+  document.getElementById('edit-home-site').value=emp.homeSite;
+  document.getElementById('edit-site-opt-a').textContent=siteAName;
+  document.getElementById('edit-site-opt-b').textContent=siteBName;
+  document.getElementById('edit-shift').value=emp.shift;
+  document.getElementById('edit-daily-rate').value=emp.dailyRate||500;
+  const bal=emp.balance||{VL:2,SL:2};
+  document.getElementById('edit-vl').value=bal.VL;
+  document.getElementById('edit-sl').value=bal.SL;
+  document.getElementById('edit-err').textContent='';
+  document.getElementById('edit-modal').classList.add('show');
+}
+function closeEditModal(){
+  document.getElementById('edit-modal').classList.remove('show');
+  editingCode=null;
+}
+function saveEditEmployee(){
+  if(!editingCode)return;
+  const name=document.getElementById('edit-name').value.trim();
+  const dept=document.getElementById('edit-dept').value.trim();
+  const position=document.getElementById('edit-position').value.trim();
+  const phone=document.getElementById('edit-phone')?.value.trim()||'';
+  const network=document.getElementById('edit-network')?.value||'smart';
+  const refPhoto=document.getElementById('edit-ref-photo')?.value||employees[idx].refPhoto||'';
+  const homeSite=document.getElementById('edit-home-site').value;
+  const shift=parseInt(document.getElementById('edit-shift').value)||8;
+  const dailyRate=parseInt(document.getElementById('edit-daily-rate').value)||0;
+  const vl=parseInt(document.getElementById('edit-vl').value)||0;
+  const sl=parseInt(document.getElementById('edit-sl').value)||0;
+  const err=document.getElementById('edit-err');
+  if(!name){err.textContent='Name is required.';return;}
+  const idx=employees.findIndex(e=>e.code===editingCode);
+  if(idx===-1){err.textContent='Employee not found.';return;}
+  employees[idx]={...employees[idx],name,dept:dept||'—',position:position||'—',phone,network,refPhoto:'pending',homeSite,shift,dailyRate,balance:{VL:vl,SL:sl}};
+  if(window.Android&&window.Android.saveRefPhoto&&refPhoto&&refPhoto!=='pending')window.Android.saveRefPhoto(employees[idx].code,refPhoto);
+  if(typeof syncEmployeeToSupabase==='function')syncEmployeeToSupabase(employees[idx]);
+  saveData();renderRoster();updateStats();updatePhotoFilter();
+  closeEditModal();
+  const msg=document.getElementById('add-msg');
+  if(msg){msg.textContent=name+' updated successfully.';msg.style.color='#085041';setTimeout(()=>msg.textContent='',3000);}
+}
+
+function updateStats(){
+  let working=0,late=0,onBreak=0,timedOut=0,away=0,loggedIn=0;
+  employees.forEach(emp=>{if(onLeaveToday(emp.code))return;const rec=records[emp.code+'_'+todayKey()];if(!rec||!rec.punches.timein)return;loggedIn++;const s=getStatus(rec);if(s==='working'||s==='late')working++;if(s==='late')late++;else if(s==='break')onBreak++;else if(s==='out')timedOut++;if(rec.hasAllowance)away++;});
+  const sp=document.getElementById('s-present');if(sp)sp.textContent=working;
+  const sb=document.getElementById('s-break');if(sb)sb.textContent=onBreak;
+  const st=document.getElementById('s-timedout');if(st)st.textContent=timedOut;
+  const so=document.getElementById('s-total');if(so)so.textContent=loggedIn;
+}
+
+function switchTab(t,el){
+  if(adminLoggedIn)resetAdminTimer();
+  if(assistantLoggedIn)resetAssistantTimer();
+  document.querySelectorAll('.tab').forEach(e=>e.classList.remove('active'));
+  document.querySelectorAll('.section').forEach(e=>e.classList.remove('active'));
+  el.classList.add('active');document.getElementById('tab-'+t).classList.add('active');
+  if(t==='log')renderLog();if(t==='staff')renderRoster();if(t==='photos')renderPhotos();
+  if(t==='admin'&&adminLoggedIn)renderAdminPanel();if(t==='settings')renderNotifLog();
+  if(t==='asst-leave'){renderAsstLeaveList();renderStraightDutyList();if(assistantLoggedIn)resetAssistantTimer();}
+  if(t==='asst-status'){renderLeaveStatus();if(assistantLoggedIn)resetAssistantTimer();}
+  if(t==='mytime'){mtPin='';mtUpdDots();if(mtEmp)renderMyTimeSheet(mtEmp);}
+  if(t==='smslog'){renderSmsLog();renderViolationList();}
+  if(t==='allowance')renderAllowance();if(t==='undertime')renderUndertimeTab();
+  if(adminLoggedIn)resetAdminTimer();
+}
+
+// ── UNDERTIME / HALF DAY ──
+let utCombinedMode=false; // true = Time In + undertime in one step
+
+function openUndertimeModal(){
+  if(!curEmp)return;
+  utCombinedMode=false;
+  const rec=getRec(curEmp.code);
+  if(!rec.punches.timein){
+    showMsg('err','Not clocked in yet','Please press Time In first, or use the "Time In + File Undertime" button.',3000);
+    return;
+  }
+  _openUTModal(curEmp,false);
+}
+
+function openTimeInUndertimeModal(){
+  if(!curEmp)return;
+  const rec=getRec(curEmp.code);
+  if(rec.punches.timein){
+    showMsg('err','Already clocked in','You are already clocked in. Use "File Undertime / Half Day" button instead.',3000);
+    return;
+  }
+  utCombinedMode=true;
+  _openUTModal(curEmp,true);
+}
+
+function _openUTModal(emp,combined){
+  const today=new Date().toISOString().split('T')[0];
+  document.getElementById('ut-date-input').value=today;
+  document.getElementById('ut-reason').value='';
+  document.getElementById('ut-err').textContent='';
+  document.getElementById('ut-emp-info').textContent=emp.name+' · PIN: '+emp.code+' · Daily rate: ₱'+(emp.dailyRate||0).toLocaleString();
+  document.getElementById('ut-type').value='half_day';
+  document.getElementById('ut-modal-title').textContent=combined?'Time In + File Half Day / Undertime':'File undertime / half day';
+  const utn=document.getElementById('ut-combined-notice');if(utn)utn.style.display=combined?'block':'none';
+  document.getElementById('ut-submit-btn').textContent=combined?'Time In & Submit':'Submit';
+  updateUTInfo();
+  document.getElementById('ut-modal').classList.add('show');
+}
+function closeUTModal(){document.getElementById('ut-modal').classList.remove('show');}
+
+function updateUTInfo(){
+  if(!curEmp)return;
+  const type=document.getElementById('ut-type').value;
+  const rate=curEmp.dailyRate||0;
+  const hrRate=rate/curEmp.shift;
+  if(type==='half_day'){
+    const halfHrs=curEmp.shift/2;
+    const shortHrs=halfHrs;
+    const deduct=shortHrs*hrRate;
+    document.getElementById('ut-type-info').textContent='Half day = '+halfHrs+'h worked. Hourly rate: ₱'+hrRate.toFixed(2)+'/hr';
+    document.getElementById('ut-deduction-preview').textContent='Salary deduction: ₱'+deduct.toFixed(2)+' ('+shortHrs+'h × ₱'+hrRate.toFixed(2)+')';
+    const shiftStart=new Date();shiftStart.setHours(shiftH,shiftM,0,0);
+    const halfOut=new Date(shiftStart.getTime()+(halfHrs*3600000));
+    document.getElementById('ut-expected-out').value=String(halfOut.getHours()).padStart(2,'0')+':'+String(halfOut.getMinutes()).padStart(2,'0');
+  } else {
+    document.getElementById('ut-type-info').textContent='Hourly rate: ₱'+hrRate.toFixed(2)+'/hr. Set expected time out below.';
+    document.getElementById('ut-deduction-preview').textContent='Deduction will be calculated when time out is set.';
+  }
+}
+
+document.addEventListener('change',e=>{
+  if(e.target.id==='ut-expected-out'||e.target.id==='ut-type')calcUTDeductPreview();
+});
+
+function calcUTDeductPreview(){
+  if(!curEmp)return;
+  const type=document.getElementById('ut-type').value;
+  const outVal=document.getElementById('ut-expected-out').value;
+  if(!outVal)return;
+  const rate=curEmp.dailyRate||0;
+  const hrRate=rate/curEmp.shift;
+  const [oh,om]=outVal.split(':').map(Number);
+  const shiftEnd=shiftH*60+shiftM+curEmp.shift*60;
+  const actualOut=oh*60+om;
+  const shortMins=Math.max(0,shiftEnd-actualOut);
+  if(type==='half_day'){
+    const halfMins=curEmp.shift*60/2;
+    const deduct=(halfMins/60)*hrRate;
+    document.getElementById('ut-deduction-preview').textContent='Half day deduction: ₱'+deduct.toFixed(2)+' ('+( curEmp.shift/2)+'h × ₱'+hrRate.toFixed(2)+'/hr)';
+    return;
+  }
+  if(shortMins<=0){document.getElementById('ut-deduction-preview').textContent='No undertime — time out is at or after end of shift.';return;}
+  const shortHrs=shortMins/60;
+  const deduct=shortHrs*hrRate;
+  document.getElementById('ut-deduction-preview').textContent=
+    'Short: '+Math.floor(shortMins/60)+'h '+( shortMins%60)+'m · Deduction: ₱'+deduct.toFixed(2)+' ('+shortHrs.toFixed(2)+'h × ₱'+hrRate.toFixed(2)+'/hr)';
+}
+
+async function submitUndertime(){
+  if(!curEmp)return;
+  const type=document.getElementById('ut-type').value;
+  const date=document.getElementById('ut-date-input').value;
+  const expectedOut=document.getElementById('ut-expected-out').value;
+  const reason=document.getElementById('ut-reason').value.trim();
+  const err=document.getElementById('ut-err');
+  if(!date){err.textContent='Please select a date.';return;}
+  if(!reason){err.textContent='Please enter a reason.';return;}
+  if(!expectedOut){err.textContent='Please set expected time out.';return;}
+  const rate=curEmp.dailyRate||0;
+  const hrRate=rate/curEmp.shift;
+  const [oh,om]=expectedOut.split(':').map(Number);
+  let shortMins=0,deduction=0;
+  if(type==='half_day'){
+    shortMins=curEmp.shift*60/2;
+    deduction=(shortMins/60)*hrRate;
+  } else {
+    const shiftEnd=shiftH*60+shiftM+curEmp.shift*60;
+    const actualOut=oh*60+om;
+    shortMins=Math.max(0,shiftEnd-actualOut);
+    deduction=(shortMins/60)*hrRate;
+  }
+  if(shortMins<=0){err.textContent='Expected time out is after end of shift — no undertime.';return;}
+
+  // If combined mode — punch Time In first
+  if(utCombinedMode){
+    closeUTModal();
+    await punch('timein');
+    // small delay to let punch message show, then record undertime
+    setTimeout(()=>{
+      undertimeRequests.unshift({
+        id:Date.now(),code:curEmp.code||'',name:curEmp?curEmp.name:'',dept:curEmp?curEmp.dept:'',
+        type,date,expectedOut,reason,shortMins,deduction,
+        status:'Filed with Time In',filed:new Date().toLocaleDateString('en-PH'),detectedAt:null
+      });
+      saveData();
+      showMsg('ok',(curEmp?curEmp.name:'Employee')+' — Time In + '+(type==='half_day'?'Half Day':'Undertime')+' filed',
+        'Expected out: '+expectedOut+' · Deduction: ₱'+deduction.toFixed(2),3500);
+      updateStats();
+      setTimeout(()=>kpClr(),3500);
+    },800);
     return;
   }
 
-  // Other same-origin assets: stale-while-revalidate (fast, but refreshes in background).
-  e.respondWith((async () => {
-    const cache = await caches.open(CACHE);
-    const cached = await cache.match(req);
-    const network = fetch(req).then((res) => {
-      if (res && res.status === 200) cache.put(req, res.clone());
-      return res;
-    }).catch(() => null);
-    return cached || (await network) || Response.error();
-  })());
-});
+  // Normal mode — just record undertime
+  const utId=Date.now();
+  undertimeRequests.unshift({
+    id:utId,code:curEmp.code,name:curEmp.name,dept:curEmp.dept,
+    type,date,expectedOut,reason,shortMins,deduction,
+    status:'Filed',filed:new Date().toLocaleDateString('en-PH'),detectedAt:null,tgMsgIds:{}
+  });
+  closeUTModal();
+  showMsg('ok',curEmp.name+' — '+(type==='half_day'?'Half Day':'Undertime')+' filed',
+    'Expected out: '+expectedOut+' · Deduction: ₱'+deduction.toFixed(2)+'. Recorded in undertime report.',3500);
+  saveData();updateStats();setTimeout(()=>kpClr(),3500);
+  sendTgApprovalRequest('undertime',utId);
+}
+
+function detectUndertime(emp,rec){
+  if(!rec.msMap.timein||!rec.msMap.timeout)return;
+  const worked=calcWorked(rec);
+  if(!worked)return;
+  const fullShiftMs=emp.shift*3600000;
+  const halfShiftMs=fullShiftMs/2;
+  const shortMs=fullShiftMs-worked;
+  if(shortMs<=0)return;
+  const rate=emp.dailyRate||0;
+  const hrRate=rate/emp.shift;
+  const deduction=(shortMs/3600000)*hrRate;
+  const isHalfDay=Math.abs(worked-halfShiftMs)<(15*60000);
+  const type=isHalfDay?'half_day':'undertime';
+  const already=undertimeRequests.find(r=>r.code===emp.code&&r.date===todayKey()&&r.detectedAt);
+  if(already){already.shortMins=Math.round(shortMs/60000);already.deduction=deduction;already.type=type;return;}
+  undertimeRequests.unshift({
+    id:Date.now()+1,code:emp.code,name:emp.name,dept:emp.dept,
+    type,date:todayKey(),expectedOut:rec.punches.timeout,reason:'Auto-detected on time out',
+    shortMins:Math.round(shortMs/60000),deduction,status:'Auto-detected',
+    filed:todayKey(),detectedAt:nowStr()
+  });
+}
+
+function approveUndertime(id){
+  const r=undertimeRequests.find(x=>x.id===id);if(!r)return;
+  r.status='Approved';saveData();renderUndertimeTab();
+}
+function rejectUndertime(id){
+  const r=undertimeRequests.find(x=>x.id===id);if(!r)return;
+  r.status='Rejected';r.deduction=0;saveData();renderUndertimeTab();
+}
+function renderUndertimeTab(){
+  const t=todayKey();
+  document.getElementById('ut-date').textContent=t;
+  const todayRecs=undertimeRequests.filter(r=>r.date===t);
+  const approvedRecs=todayRecs.filter(r=>r.status==='Approved');
+  const pendingRecs=undertimeRequests.filter(r=>['Filed','Auto-detected','Filed with Time In'].includes(r.status)&&r.date>=t);
+  const total=approvedRecs.reduce((s,r)=>s+r.deduction,0);
+  const hdCount=approvedRecs.filter(r=>r.type==='half_day').length;
+  const utCount=approvedRecs.filter(r=>r.type==='undertime').length;
+  document.getElementById('ut-count').textContent=utCount;
+  document.getElementById('hd-count').textContent=hdCount;
+  document.getElementById('ut-total-deduct').textContent='\u20b1'+total.toFixed(2);
+  const pendEl=document.getElementById('ut-pending');
+  if(!pendingRecs.length){pendEl.innerHTML='<div class="empty-state">No pending approval.</div>';}
+  else{
+    pendEl.innerHTML='';
+    pendingRecs.forEach(r=>{
+      const typeLbl=r.type==='half_day'?'Half Day':'Undertime';
+      const srcLbl=r.detectedAt?'Auto-detected':'Pre-filed';
+      const d=document.createElement('div');d.className='leave-card';
+      d.innerHTML='<div class="leave-card-header"><span style="font-weight:600">'+r.name+' <span style="font-size:11px;color:#888;font-weight:400">('+r.dept+')</span></span><span class="pill pill-pending">'+typeLbl+' \u2014 Pending</span></div>'
+        +'<div class="leave-card-meta">'+r.date+' \u00b7 Expected out: '+r.expectedOut+' \u00b7 Short: '+Math.floor(r.shortMins/60)+'h '+(r.shortMins%60)+'m</div>'
+        +'<div class="leave-card-meta" style="color:#E24B4A;font-weight:600">Deduction: \u20b1'+r.deduction.toFixed(2)+'</div>'
+        +'<div class="leave-card-meta">Source: '+srcLbl+' \u00b7 Filed: '+r.filed+'</div>'
+        +'<div class="leave-card-reason">\"'+r.reason+'\"</div>'
+        +'<div class="leave-card-btns"><button class="btn-approve" onclick="approveUndertime('+r.id+')">Approve</button><button class="btn-reject" onclick="rejectUndertime('+r.id+')">Reject</button></div>';
+      pendEl.appendChild(d);
+    });
+  }
+  const recEl=document.getElementById('ut-records');
+  if(!todayRecs.length){recEl.innerHTML='<div class="empty-state">No undertime records today.</div>';}
+  else{
+    recEl.innerHTML='';
+    todayRecs.forEach(r=>{
+      const stMap={'Approved':'background:#E1F5EE;color:#085041','Rejected':'background:#f0f0eb;color:#888','Filed':'background:#EEEDFE;color:#3C3489','Auto-detected':'background:#FAEEDA;color:#633806','Filed with Time In':'background:#EEEDFE;color:#3C3489'};
+      const stCls=stMap[r.status]||'background:#f0f0eb;color:#888';
+      const typeLbl=r.type==='half_day'?'Half Day':'Undertime';
+      const deductCell=r.status==='Rejected'?'<span style="color:#aaa;text-decoration:line-through">\u20b1'+r.deduction.toFixed(2)+'</span> Rejected':'\u20b1'+r.deduction.toFixed(2);
+      const d=document.createElement('div');d.className='leave-card';
+      d.innerHTML='<div class="leave-card-header"><span style="font-weight:600">'+r.name+' <span style="font-size:11px;color:#888;font-weight:400">('+r.dept+')</span></span><span class="pill" style="'+stCls+'">'+r.status+'</span></div>'
+        +'<div class="leave-card-meta">'+typeLbl+' \u00b7 Short: '+Math.floor(r.shortMins/60)+'h '+(r.shortMins%60)+'m \u00b7 Out: '+r.expectedOut+'</div>'
+        +'<div class="leave-card-meta" style="color:'+(r.status==='Approved'?'#E24B4A':'#aaa')+';font-weight:'+(r.status==='Approved'?'700':'400')+'">Deduction: '+deductCell+'</div>'
+        +'<div class="leave-card-reason">\"'+r.reason+'\"</div>';
+      recEl.appendChild(d);
+    });
+  }
+}
+
+function exportUndertimeCSV(){
+  const rows=[['Date','PIN','Name','Department','Type','Short By (mins)','Expected Out','Reason','Deduction (₱)','Status']];
+  undertimeRequests.forEach(r=>{
+    rows.push([r.date,r.code,r.name,r.dept,r.type==='half_day'?'Half Day':'Undertime',r.shortMins,r.expectedOut,r.reason,r.deduction.toFixed(2),r.status]);
+  });
+  const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  downloadFile('undertime_'+todayKey().replace(/\//g,'-')+'.csv',csv,'text/csv');
+}
+
+updateStats();renderRoster();updatePhotoFilter();updateSiteBadge();initCamera();loadData();requestWakeLock();resetDimTimer();scheduleMidnightReset();cleanupOldData();scheduleMonthlyExport();
+// Run absence check on load and schedule daily at midnight
+setTimeout(()=>{
+  checkAllAbsences();
+  // Schedule next check at midnight
+  const now=new Date(),midnight=new Date(now);
+  midnight.setHours(24,0,0,0);
+  setTimeout(function repeat(){checkAllAbsences();setTimeout(repeat,86400000);},midnight-now);
+},3000);
+</script>
+<!-- SCREEN OFF OVERLAY -->
+<div id="screen-off-overlay" onclick="wakeScreen()">
+  <div style="font-size:48px">🌙</div>
+  <div style="color:rgba(255,255,255,0.3);font-size:14px;font-weight:600;letter-spacing:0.1em">TAP TO WAKE</div>
+  <div style="color:rgba(255,255,255,0.15);font-size:12px;margin-top:4px" id="off-clock"></div>
+</div>
+<!-- SCREEN DIM OVERLAY -->
+<div id="screen-dim-overlay" onclick="wakeScreen()"></div>
+
+
+<script>
+// ── SUPABASE CONFIG ──
+const SUPABASE_URL = 'https://wpmcbjrisuyjvobvzaus.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
+const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ── TELEGRAM CONFIG FROM ADMIN (Supabase `settings` table) ──
+// The bot token + group IDs are encoded in the Admin page now, not here.
+// Pull them on startup; cache locally so punch notifications still work offline.
+async function loadTgFromCloud(showStatus){
+  const setMsg=(t,ok)=>{const el=document.getElementById('tg-msg');if(el){el.textContent=t;el.style.color=ok?'#085041':'#633806';if(showStatus)setTimeout(()=>{el.textContent='';},4000);}};
+  const keys=['tg_token','tg_group','tg_backup_group','tg_pos_group','tg_photo_group','mgr_ids'];
+  try{
+    const { data, error } = await sbClient.from('settings').select('key,value').in('key',keys);
+    if(error) throw error;
+    const map={}; (data||[]).forEach(r=>map[r.key]=r.value);
+    if(map.tg_token){
+      tgToken=(map.tg_token||'').trim();
+      tgGroup=(map.tg_group||'').trim();
+      tgBackupGroup=(map.tg_backup_group||'').trim();
+      tgPosGroup=(map.tg_pos_group||'').trim();
+      tgPhotoGroup=(map.tg_photo_group||'').trim();
+      mgrIds=(map.mgr_ids||'').split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
+      try{localStorage.setItem('rsr_tg',JSON.stringify({tgToken,tgGroup,tgBackupGroup,tgPosGroup,tgPhotoGroup,mgrIds}));}catch(e){}
+      setMsg('✅ Telegram loaded from Admin.',true);
+      return true;
+    }
+    setMsg('⚠ No Telegram settings found in Admin yet.',false);
+  }catch(e){
+    console.warn('loadTgFromCloud (will use cache):',e&&e.message);
+    setMsg('⚠ Offline — using last saved Telegram settings.',false);
+  }
+  // offline or not set → fall back to local cache
+  try{
+    const c=JSON.parse(localStorage.getItem('rsr_tg')||'null');
+    if(c&&c.tgToken){
+      tgToken=c.tgToken||'';tgGroup=c.tgGroup||'';tgBackupGroup=c.tgBackupGroup||'';
+      tgPosGroup=c.tgPosGroup||'';tgPhotoGroup=c.tgPhotoGroup||'';mgrIds=c.mgrIds||[];
+      return true;
+    }
+  }catch(e){}
+  return false;
+}
+loadTgFromCloud();
+
+// ── SYNC PUNCH RECORD TO SUPABASE ──
+// NOTE: syncRecordToSupabase + pushRecord are defined later (offline-queue version).
+async function _legacy_syncRecordToSupabase_unused(empCode, date) {
+  try {
+    const rec = records[empCode + '_' + date];
+    if (!rec) return;
+    const emp = employees.find(e => e.code === empCode);
+    if (!emp) return;
+    const p = rec.punches || {};
+    const workedMs = calcWorked(rec) || 0;
+    const otMs = workedMs ? Math.max(0, workedMs - (emp.shift * 3600000)) : 0;
+    const isIncomplete = !!(p.timein && !p.timeout);
+    const status = isIncomplete ? 'incomplete' : (p.timeout ? 'out' : (p.timein ? 'working' : 'absent'));
+    const payload = {
+      employee_code: empCode,
+      employee_name: emp.name,
+      date: date,
+      site: activeSite,
+      timein: p.timein || null,
+      lunch_out: p.lunch_out || null,
+      lunch_in: p.lunch_in || null,
+      pm_out: p.pm_out || null,
+      pm_in: p.pm_in || null,
+      timeout: p.timeout || null,
+      is_late: rec.isLate || false,
+      late_ms: rec.lateMs || 0,
+      worked_ms: workedMs,
+      ot_ms: otMs,
+      has_ot_allowance: rec.hasOTAllowance || false,
+      has_away_allowance: rec.hasAllowance || false,
+      is_incomplete: isIncomplete,
+      straight_duty_lunch: rec.straightDutyLunch || false,
+      straight_duty_pm: rec.straightDutyPm || false,
+      status: status
+    };
+    // Upsert (insert or update)
+    const { data: existing } = await sbClient.from('attendance_records').select('id').eq('employee_code', empCode).eq('date', date).single();
+    if (existing) {
+      await sbClient.from('attendance_records').update(payload).eq('id', existing.id);
+    } else {
+      await sbClient.from('attendance_records').insert(payload);
+    }
+  } catch(e) { console.warn('Supabase sync punch:', e); }
+}
+
+// ── SYNC LEAVE REQUEST TO SUPABASE ──
+async function syncLeaveToSupabase(leaveReq) {
+  try {
+    await sbClient.from('leave_requests').insert({
+      employee_code: leaveReq.code,
+      employee_name: leaveReq.name,
+      type: leaveReq.type,
+      start_date: leaveReq.startDate,
+      end_date: leaveReq.endDate,
+      days: leaveReq.days,
+      reason: leaveReq.reason || '',
+      status: leaveReq.status || 'Pending',
+      filed_by: leaveReq.filedBy || 'Employee',
+      filed_on: leaveReq.filed || todayKey()
+    });
+  } catch(e) { console.warn('Supabase sync leave:', e); }
+}
+
+// ── SYNC EMPLOYEE TO SUPABASE ──
+async function syncEmployeeToSupabase(emp) {
+  try {
+    const payload = {
+      code: emp.code,
+      name: emp.name,
+      dept: emp.dept || '—',
+      position: emp.position || '—',
+      phone: emp.phone || '',
+      network: emp.network || 'smart',
+      home_site: emp.homeSite || 'A',
+      shift: emp.shift || 8,
+      daily_rate: emp.dailyRate || 500,
+      pin: emp.pin || null,
+      vl_balance: emp.balance?.VL || 2,
+      sl_balance: emp.balance?.SL || 2,
+      is_suspended: emp.suspended || false
+    };
+    const { data: existing } = await sbClient.from('employees').select('id').eq('code', emp.code).single();
+    if (existing) {
+      await sbClient.from('employees').update(payload).eq('code', emp.code);
+    } else {
+      await sbClient.from('employees').insert(payload);
+    }
+  } catch(e) { console.warn('Supabase sync employee:', e); }
+}
+
+// ── SYNC VIOLATION TO SUPABASE ──
+async function syncViolationToSupabase(empCode) {
+  try {
+    const v = absenceViolations[empCode];
+    if (!v) return;
+    const emp = employees.find(e => e.code === empCode);
+    if (!emp) return;
+    const { data: existing } = await sbClient.from('violations').select('id').eq('employee_code', empCode).single();
+    if (existing) {
+      await sbClient.from('violations').update({ count: v.count, history: v.history, updated_at: new Date().toISOString() }).eq('employee_code', empCode);
+    } else {
+      await sbClient.from('violations').insert({ employee_code: empCode, employee_name: emp.name, count: v.count, history: v.history });
+    }
+  } catch(e) { console.warn('Supabase sync violation:', e); }
+}
+
+// ── SYNC SMS LOG TO SUPABASE ──
+async function syncSmsLogToSupabase(entry) {
+  try {
+    await sbClient.from('sms_log').insert({
+      employee_code: entry.empCode,
+      employee_name: entry.empName,
+      phone: entry.phone,
+      network: entry.network || 'smart',
+      date: entry.date,
+      day: entry.day,
+      message: entry.message,
+      status: entry.status || 'Sent'
+    });
+  } catch(e) { console.warn('Supabase sync sms:', e); }
+}
+
+// ── LOAD EMPLOYEES FROM SUPABASE ON START ──
+async function loadEmployeesFromSupabase() {
+  try {
+    const { data } = await sbClient.from('employees').select('*');
+    if (data && data.length > 0) {
+      // Merge with existing localStorage employees
+      data.forEach(se => {
+        const existing = employees.find(e => e.code === se.code);
+        if (!existing) {
+          employees.push({
+            code: se.code, name: se.name, dept: se.dept || '—',
+            position: se.position || '—', phone: se.phone || '',
+            network: se.network || 'smart', homeSite: se.home_site || 'A',
+            shift: se.shift || 8, dailyRate: se.daily_rate || 500,
+            pin: se.pin || '',
+            balance: { VL: se.vl_balance || 2, SL: se.sl_balance || 2 }
+          });
+        }
+      });
+      saveData();
+      renderRoster();
+    }
+  } catch(e) { console.warn('Load employees from Supabase:', e); }
+}
+
+// ── LOAD LEAVE REQUESTS FROM SUPABASE ──
+async function loadLeavesFromSupabase() {
+  try {
+    const { data } = await sbClient.from('leave_requests').select('*').order('created_at', { ascending: false }).limit(200);
+    if (data && data.length > 0) {
+      data.forEach(sl => {
+        const existing = leaveRequests.find(r => r.code === sl.employee_code && r.startDate === sl.start_date && r.type === sl.type);
+        if (!existing) {
+          leaveRequests.push({
+            id: sl.id, code: sl.employee_code, name: sl.employee_name,
+            type: sl.type, startDate: sl.start_date, endDate: sl.end_date,
+            days: sl.days, reason: sl.reason, status: sl.status,
+            filedBy: sl.filed_by, filed: sl.filed_on
+          });
+        }
+      });
+      saveData();
+    }
+  } catch(e) { console.warn('Load leaves from Supabase:', e); }
+}
+
+// ── LATE BREAK REQUESTS (shared with Coordinator/Admin for approval) ──
+// When an employee punches a break after the cutoff, write a request row so
+// the assistant or admin can approve it from their own device. Approved ones
+// are read back and lift the pending flag in the kiosk.
+async function writeLateBreakRequest(empCode, empName, date, breakType, punchTime) {
+  try {
+    await sbClient.from('late_break_requests')
+      .upsert({ employee_code: empCode, employee_name: empName, date: date,
+        break_type: breakType, punch_time: punchTime || null, status: 'Pending' },
+        { onConflict: 'employee_code,date,break_type' });
+  } catch(e) { console.warn('Write late break request:', e); }
+}
+async function loadApprovedLateBreaks() {
+  try {
+    const { data } = await sbClient.from('late_break_requests')
+      .select('*').neq('status', 'Pending').order('created_at', { ascending: false }).limit(300);
+    if (!data || !data.length) return;
+    data.forEach(lb => {
+      const store = lb.break_type === 'pm_out' ? latePmOutRequests : lateLunchRequests;
+      if (lb.status === 'Approved') {
+        store[lb.employee_code] = { pending: false, approved: true, empCode: lb.employee_code, empName: lb.employee_name };
+      } else if (lb.status === 'Rejected') {
+        // rejected: clear any pending so the kiosk re-asks (penalty stands)
+        if (store[lb.employee_code] && !store[lb.employee_code].approved) delete store[lb.employee_code];
+      }
+    });
+  } catch(e) { console.warn('Load approved late breaks:', e); }
+}
+
+// ── APPROVED STRAIGHT DUTIES (filed in Coordinator, approved in Admin) ──
+// Reads approved rows from straight_duty and applies the break skip to that
+// employee's record for that date, so the break is not deducted.
+async function loadApprovedStraightDuties() {
+  try {
+    const { data } = await sbClient.from('straight_duty')
+      .select('*').eq('status', 'Approved').order('created_at', { ascending: false }).limit(300);
+    if (!data || !data.length) return;
+    let changed = false;
+    data.forEach(sd => {
+      const code = sd.employee_code, date = sd.date;
+      if (!code || !date) return;
+      const key = code + '_' + date;
+      // ensure a record exists for that employee+date
+      if (!records[key]) {
+        const emp = employees.find(e => e.code === code);
+        records[key] = { punches: {}, isLate: false, lateMs: 0,
+          employeeName: emp ? emp.name : (sd.employee_name || code) };
+      }
+      const rec = records[key];
+      if (sd.break_type === 'lunch' && !rec.straightDutyLunch) { rec.straightDutyLunch = true; changed = true; }
+      if (sd.break_type === 'pm' && !rec.straightDutyPm) { rec.straightDutyPm = true; changed = true; }
+    });
+    if (changed) { saveData(); if (typeof renderRoster === 'function') renderRoster(); if (typeof updateStats === 'function') updateStats(); }
+  } catch(e) { console.warn('Load approved straight duties:', e); }
+}
+
+// ── INIT SUPABASE SYNC ──
+async function initSupabaseSync() {
+  await loadEmployeesFromSupabase();
+  await loadLeavesFromSupabase();
+  await loadApprovedStraightDuties();
+  await loadApprovedLateBreaks();
+  console.log('✅ Supabase sync initialized');
+  syncFlush(); // push anything queued from a previous offline session
+}
+
+// Start Supabase sync after page loads
+setTimeout(initSupabaseSync, 2000);
+// Re-check approved straight duties + late breaks periodically (so an approval
+// made during the day is applied without restarting the kiosk).
+setInterval(function(){ if (navigator.onLine) { loadApprovedStraightDuties(); loadApprovedLateBreaks(); } }, 60000);
+
+// ============================================================
+//  OFFLINE QUEUE + AUTO-SYNC
+//  Punches always live in localStorage `records` (saveData).
+//  Here we track which employee_code+date still need to reach
+//  Supabase, retry them, and show a status indicator.
+// ============================================================
+let syncPending = {};           // { 'CODE_MM/DD/YYYY': true } awaiting sync
+let syncing = false;
+try { syncPending = JSON.parse(localStorage.getItem('rsr_sync_pending') || '{}'); } catch(e) { syncPending = {}; }
+function savePending(){ try { localStorage.setItem('rsr_sync_pending', JSON.stringify(syncPending)); } catch(e){} }
+function queueRecord(empCode, date){ syncPending[empCode + '_' + date] = true; savePending(); updateSyncBadge(); }
+function pendingCount(){ return Object.keys(syncPending).length; }
+
+function updateSyncBadge(){
+  const el = document.getElementById('sync-badge');
+  if (!el) return;
+  const n = pendingCount();
+  const offline = !navigator.onLine;
+  if (n === 0 && !offline) { el.style.display='none'; return; }
+  el.style.display='flex';
+  if (offline) { el.style.background='#FCEBEB'; el.style.color='#A32D2D'; el.textContent = '⚠ Offline · ' + n + ' punch' + (n===1?'':'es') + ' waiting'; }
+  else if (n > 0) { el.style.background='#FFF3CD'; el.style.color='#633806'; el.textContent = '↻ Syncing ' + n + ' punch' + (n===1?'':'es') + '…'; }
+}
+
+// push every queued record to Supabase; clear ones that succeed
+async function syncFlush(){
+  if (syncing || !navigator.onLine) { updateSyncBadge(); return; }
+  syncing = true;
+  try {
+    const keys = Object.keys(syncPending);
+    for (const k of keys) {
+      const idx = k.lastIndexOf('_');
+      const empCode = k.slice(0, idx), date = k.slice(idx + 1);
+      const ok = await pushRecord(empCode, date);
+      if (ok) { delete syncPending[k]; savePending(); updateSyncBadge(); }
+      else { break; } // network likely down again; stop, retry later
+    }
+  } finally { syncing = false; updateSyncBadge(); }
+}
+
+// one record -> Supabase; returns true on success, false on failure
+async function pushRecord(empCode, date){
+  try {
+    const rec = records[empCode + '_' + date];
+    if (!rec) return true; // nothing to send; treat as done
+    const emp = employees.find(e => e.code === empCode);
+    if (!emp) return true;
+    const p = rec.punches || {};
+    const workedMs = calcWorked(rec) || 0;
+    const otMs = workedMs ? Math.max(0, workedMs - (emp.shift * 3600000)) : 0;
+    const isIncomplete = !!(p.timein && !p.timeout);
+    const status = isIncomplete ? 'incomplete' : (p.timeout ? 'out' : (p.timein ? 'working' : 'absent'));
+    const payload = {
+      employee_code: empCode, employee_name: emp.name, date: date, site: activeSite,
+      timein: p.timein || null, lunch_out: p.lunch_out || null, lunch_in: p.lunch_in || null,
+      pm_out: p.pm_out || null, pm_in: p.pm_in || null, timeout: p.timeout || null,
+      is_late: rec.isLate || false, late_ms: rec.lateMs || 0, worked_ms: workedMs, ot_ms: otMs,
+      has_ot_allowance: rec.hasOTAllowance || false, has_away_allowance: rec.hasAllowance || false,
+      is_incomplete: isIncomplete, straight_duty_lunch: rec.straightDutyLunch || false,
+      straight_duty_pm: rec.straightDutyPm || false, status: status
+    };
+    const { data: existing, error: selErr } = await sbClient.from('attendance_records')
+      .select('id').eq('employee_code', empCode).eq('date', date).maybeSingle();
+    if (selErr) throw selErr;
+    if (existing) {
+      const { error } = await sbClient.from('attendance_records').update(payload).eq('id', existing.id);
+      if (error) throw error;
+    } else {
+      const { error } = await sbClient.from('attendance_records').insert(payload);
+      if (error) throw error;
+    }
+    return true;
+  } catch(e) { console.warn('Sync failed (will retry):', e && e.message ? e.message : e); return false; }
+}
+
+// keep the old function name working: now it just queues + flushes
+async function syncRecordToSupabase(empCode, date){
+  queueRecord(empCode, date);
+  syncFlush();
+}
+
+// ── HOOK INTO EXISTING saveData TO SYNC ──
+const _origSaveData = saveData;
+saveData = function() {
+  _origSaveData();
+  const today = todayKey();
+  employees.forEach(emp => {
+    const rec = records[emp.code + '_' + today];
+    if (rec && rec.punches && rec.punches.timein) {
+      queueRecord(emp.code, today);  // always queue locally first (offline-safe)
+    }
+  });
+  syncFlush();  // try to push now; no-op if offline
+};
+
+// retry every 30s, and immediately when the browser regains connection
+setInterval(syncFlush, 30000);
+window.addEventListener('online', () => { updateSyncBadge(); syncFlush(); });
+window.addEventListener('offline', updateSyncBadge);
+setTimeout(updateSyncBadge, 2500);
+</script>
+
+<!-- ===== PWA: service worker registration + silent auto-update ===== -->
+<script>
+(function(){
+  if (!('serviceWorker' in navigator)) return;
+  var refreshing = false;
+  // When the new worker takes control, reload once to load the fresh page.
+  navigator.serviceWorker.addEventListener('controllerchange', function(){
+    if (refreshing) return;
+    refreshing = true;
+    window.location.reload();
+  });
+  // Don't interrupt someone mid-punch: only apply an update when the kiosk is idle.
+  function kioskBusy(){
+    try{
+      if (typeof curEmp !== 'undefined' && curEmp) return true;     // an employee is selected
+      if (document.querySelector('.modal-bg.show')) return true;    // a modal/overlay is open
+    }catch(e){}
+    return false;
+  }
+  function applyWhenIdle(reg){
+    (function tryApply(){
+      if (!reg.waiting) return;
+      if (kioskBusy()){ setTimeout(tryApply, 5000); return; }       // wait, then retry
+      reg.waiting.postMessage({type:'SKIP_WAITING'});               // activate -> controllerchange -> reload
+    })();
+  }
+  window.addEventListener('load', function(){
+    // updateViaCache:'none' forces a fresh sw.js fetch (Fully Kiosk caches aggressively)
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).then(function(reg){
+      function check(){ reg.update().catch(function(){}); }
+      check();
+      setInterval(check, 60*1000);                                  // check every minute
+      window.addEventListener('online', check);
+      document.addEventListener('visibilitychange', function(){
+        if (document.visibilityState === 'visible') check();        // check on screen wake
+      });
+      if (reg.waiting) applyWhenIdle(reg);                          // update already waiting
+      reg.addEventListener('updatefound', function(){
+        var nw = reg.installing;
+        if (!nw) return;
+        nw.addEventListener('statechange', function(){
+          if (nw.state === 'installed' && navigator.serviceWorker.controller){
+            applyWhenIdle(reg);                                     // auto-apply, no manual tap
+          }
+        });
+      });
+    }).catch(function(e){ console.warn('SW register failed', e); });
+  });
+})();
+</script>
+</body>
+</html>
