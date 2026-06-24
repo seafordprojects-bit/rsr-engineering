@@ -560,7 +560,7 @@ function Warehouse({ onBack }) {
   return html`
     <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
       <span><b>RSR</b><span class="tag">WAREHOUSE</span></span>
-      <button onClick=${onBack} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">\u2190 Dashboard</button>
+      <button onClick=${onBack} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">\u2190 Back</button>
     </div></div></header>
     <div class="wrap">
       <div style="display:flex;gap:6px;background:var(--card,#fff);border:1px solid var(--line);border-radius:12px;padding:5px;margin-bottom:12px">
@@ -935,7 +935,7 @@ function App() {
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">TOOL BORROWING</span></span>
-        <button onClick=${() => setAdminTab('toolsmenu')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Tools</button>
+        <button onClick=${() => setAdminTab('toolsmenu')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
       </div></div></header>
       <div class="wrap">
         <div class="card">
@@ -980,7 +980,7 @@ function App() {
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">VESSELS</span></span>
-        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
       </div></div></header>
       <div class="wrap">
         <div class="card">
@@ -1015,7 +1015,7 @@ function App() {
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">MATERIAL ISSUANCE</span></span>
-        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
       </div></div></header>
       <div class="wrap">
         ${iss && absentList.length ? html`
@@ -1058,7 +1058,7 @@ function App() {
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">TOOL REPAIR</span></span>
-        <button onClick=${() => setAdminTab('toolsmenu')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Tools</button>
+        <button onClick=${() => setAdminTab('toolsmenu')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
       </div></div></header>
       <div class="wrap">
         <div class="card">
@@ -1208,7 +1208,7 @@ function App() {
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">ATTENDANCE</span></span>
-        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
       </div></div></header>
       <div class="wrap">
         <div class="card">
@@ -1237,7 +1237,7 @@ function App() {
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">TOOLS</span></span>
-        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
       </div></div></header>
       <div class="wrap">
         <div class="grid">
@@ -1339,7 +1339,7 @@ function App() {
         <div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
           <span><b>RSR</b><span class="tag">PERSONNEL</span></span>
           <button onClick=${() => setAdminTab('dash')}
-            style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Dashboard</button>
+            style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
         </div></div>
       </header>
       <div class="wrap">
