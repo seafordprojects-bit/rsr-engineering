@@ -964,9 +964,9 @@ const PUNCHES=['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'];
 const PLABELS={timein:'Time In',lunch_out:'Lunch Out',lunch_in:'Lunch In',pm_out:'PM Break Out',pm_in:'PM Break In',timeout:'Time Out'};
 const BPAIRS=[['lunch_out','lunch_in'],['pm_out','pm_in']];
 const BIDS={timein:'btn-timein',lunch_out:'btn-lunch-out',lunch_in:'btn-lunch-in',pm_out:'btn-pm-out',pm_in:'btn-pm-in',timeout:'btn-timeout'};
-const ATABS=[];
+const ATABS=['settings','staff','log','photos','allowance','undertime','smslog'];
 // Note: leave filing is assistant-only — not in admin or employee tabs
-const ASSTABS=[];
+const ASSTABS=['asst-leave','asst-status'];
 const WMSGS={
   timein:{lunch_out:'Not clocked in yet.',lunch_in:'Not clocked in yet.',pm_out:'Not clocked in yet.',pm_in:'Not clocked in yet.',timeout:'Not clocked in yet.'},
   lunch_out:{timein:'Already clocked in.',lunch_in:'Not on lunch break yet.',pm_out:'Take lunch break first.',pm_in:'Take lunch break first.',timeout:'Take lunch break before timing out.'},
@@ -4245,6 +4245,27 @@ async function loadTgFromCloud(showStatus){
   return false;
 }
 loadTgFromCloud();
+
+// ── SHIFT TIMES FROM ADMIN (Supabase `settings`) — morning clock-in + evening clock-out ──
+// The dashboard sets `shift_start` and `dismissal` (HH:MM). The kiosk pulls them on startup
+// (after local settings load) and overrides its local values. Falls back to the last cached
+// values when offline, and leaves local values untouched if nothing is set in the cloud.
+async function loadShiftFromCloud(){
+  try{
+    const { data, error } = await sbClient.from('settings').select('key,value').in('key',['shift_start','dismissal']);
+    if(error) throw error;
+    const map={}; (data||[]).forEach(r=>map[r.key]=r.value);
+    let applied=false;
+    if(map.shift_start&&/^\d{1,2}:\d{2}$/.test(map.shift_start)){const p=map.shift_start.split(':');const h=+p[0],m=+p[1];if(h>=0&&h<24&&m>=0&&m<60){shiftH=h;shiftM=m;applied=true;}}
+    if(map.dismissal&&/^\d{1,2}:\d{2}$/.test(map.dismissal)){const p=map.dismissal.split(':');const h=+p[0],m=+p[1];if(h>=0&&h<24&&m>=0&&m<60){dismissalH=h;dismissalM=m;applied=true;}}
+    if(applied){try{localStorage.setItem('rsr_shift_override',JSON.stringify({shiftH,shiftM,dismissalH,dismissalM}));}catch(e){}try{updShiftPill();}catch(e){}}
+    return applied;
+  }catch(e){
+    try{const c=JSON.parse(localStorage.getItem('rsr_shift_override')||'null');if(c){if(typeof c.shiftH==='number'){shiftH=c.shiftH;shiftM=c.shiftM;}if(typeof c.dismissalH==='number'){dismissalH=c.dismissalH;dismissalM=c.dismissalM;}try{updShiftPill();}catch(e){}}}catch(e){}
+    return false;
+  }
+}
+loadShiftFromCloud();
 
 // ── ADMIN APPROVAL POLLING (incomplete Time In) ──
 // When the admin approves an incomplete-record Time In in the Admin page,
