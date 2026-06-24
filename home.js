@@ -152,7 +152,18 @@ function ymdToPH(ymd) { if (!ymd) return todayPH(); const [y, m, d] = ymd.split(
 async function getAttendance(dateStr) {
   const { data, error } = await supabase.from('attendance_records').select('*').eq('date', dateStr).order('employee_name');
   if (error) throw error;
-  return data || [];
+  // Deduplicate by employee for the day (the table can contain duplicate rows).
+  // Keep the most complete record per employee; tie-break by newest.
+  const score = r => ['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'].reduce((n,k) => n + (r[k] ? 1 : 0), 0);
+  const byEmp = {};
+  (data || []).forEach(r => {
+    const k = r.employee_code || r.employee_name;
+    const cur = byEmp[k];
+    if (!cur) { byEmp[k] = r; return; }
+    const newer = ((r.id || 0) > (cur.id || 0)) || ((r.created_at || '') > (cur.created_at || ''));
+    if (score(r) > score(cur) || (score(r) === score(cur) && newer)) byEmp[k] = r;
+  });
+  return Object.values(byEmp).sort((a, b) => (a.employee_name || '').localeCompare(b.employee_name || ''));
 }
 async function getLeaves() {
   const { data, error } = await supabase.from('leave_requests').select('*').order('created_at', { ascending: false }).limit(100);
