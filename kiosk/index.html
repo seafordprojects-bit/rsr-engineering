@@ -2042,12 +2042,23 @@ async function punch(type){
   if(type==='timein'&&timeoutAdjustments[emp.code]&&!timeoutAdjustments[emp.code].acknowledged){
     if(showTimeoutNotice(emp))return;
   }
-  // Previous day incomplete (no Time Out) — record a flag for admin review, but DON'T block.
+  // Block if previous day was incomplete (no Time Out) — needs admin approval
   if(type==='timein'){
     const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);
     const yKey=yesterday.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
     const yRec=records[emp.code+'_'+yKey];
-    if(yRec&&yRec.punches&&yRec.punches.timein&&!yRec.punches.timeout)rec.prevDayIncomplete=true;
+    const yIncomplete=yRec&&yRec.punches&&yRec.punches.timein&&!yRec.punches.timeout;
+    if(yIncomplete&&!incompleteTimeInRequests[emp.code]?.approved){
+      if(incompleteTimeInRequests[emp.code]?.pending){
+        showMsg('warn','Still waiting for admin','Your Time In request is pending — incomplete record from yesterday.',4000);return;
+      }
+      const reqId=Date.now();
+      incompleteTimeInRequests[emp.code]={pending:true,approved:false,reqId,empCode:emp.code,empName:emp.name,tgMsgIds:{}};
+      showMsg('warn','Admin approval required','You did not complete your punch yesterday. Sending request to admin...',0);
+      sendIncompleteApproval(emp,reqId,yKey,yRec);
+      return;
+    }
+    if(incompleteTimeInRequests[emp.code]?.approved)delete incompleteTimeInRequests[emp.code];
   }
   // Block suspended employees from punching in
   if(type==='timein'&&suspendedEmployees[emp.code]){
@@ -2055,10 +2066,20 @@ async function punch(type){
       'Absent 3+ days without leave. Admin reinstatement required before clocking in.',6000);
     return;
   }
-  // Time In at/after shift end — flag as late for admin review, but DON'T block.
+  // Time In at or after shift end requires admin approval
   if(type==='timein'){
     const shiftEnd=new Date(now);shiftEnd.setHours(endH,endM,0,0);
-    if(now>=shiftEnd)rec.lateTimeInFlag=true;
+    if(now>=shiftEnd&&!lateTimeInRequests[emp.code]?.approved){
+      if(lateTimeInRequests[emp.code]?.pending){
+        showMsg('warn','Still waiting for admin','Your late Time In request is pending approval. Please wait.',4000);return;
+      }
+      const reqId=Date.now();
+      lateTimeInRequests[emp.code]={pending:true,approved:false,reqId,empCode:emp.code,empName:emp.name};
+      showMsg('warn','Approval requested','Time In after '+fmt12(endH,endM)+' sent to admin for approval. Please wait...',0);
+      sendLateTimeInApproval(emp,reqId);
+      return;
+    }
+    if(lateTimeInRequests[emp.code]?.approved)delete lateTimeInRequests[emp.code];
   }
   // Time Out dismissal logic
   if(type==='timeout'){
@@ -2080,26 +2101,68 @@ async function punch(type){
       sendLateTimeoutNotif(emp);
     }
   }
-  // ── Break punches never block. Record early/late as info; always proceed. ──
   if(type==='lunch_out'){
-    const early=new Date(now);early.setHours(lunchOutEarlyH,lunchOutEarlyM,0,0);
+    // Must have worked at least 2 hours before Lunch Out
+    if(rec.msMap.timein){
+      const workedSoFar=(now.getTime()-effectiveStart(rec))/3600000;
+      if(workedSoFar<2){showMsg('err','Too early for Lunch Out','You must work at least 2 hours before going to lunch. Worked: '+msToHM(now.getTime()-effectiveStart(rec))+'.',4000);return;}
+    }
+    // Must punch between lunchOutEarly and lunchOutLatest
     const latest=new Date(now);latest.setHours(lunchOutLatestH,lunchOutLatestM,0,0);
-    if(now<early)rec.earlyLunchOut=true;
-    if(now>latest)rec.lateLunchOut=true;
+    if(now>latest&&!lateLunchRequests[emp.code]?.approved){
+      // Check if already waiting
+      if(lateLunchRequests[emp.code]?.pending){
+        showMsg('warn','Still waiting for admin','Your late Lunch Out request is pending approval. Please wait.',4000);return;
+      }
+      // Send approval request to admin via Telegram
+      const reqId=Date.now();
+      lateLunchRequests[emp.code]={pending:true,approved:false,reqId,empCode:emp.code,empName:emp.name};
+      writeLateBreakRequest(emp.code, emp.name, todayKey(), 'lunch_out', nowShort());
+      showMsg('warn','Approval requested','Late Lunch Out sent to admin for approval. Please wait...',0);
+      sendLateLunchApproval(emp,reqId);
+      return;
+    }
+    // Clear approved flag after use
+    if(lateLunchRequests[emp.code]?.approved)delete lateLunchRequests[emp.code];
   }
   if(type==='lunch_in'){
     const earliest=new Date(now);earliest.setHours(lunchInEarliestH,lunchInEarliestM,0,0);
-    if(now<earliest)rec.earlyLunchIn=true;
+    if(now<earliest){
+      const lbl=fmt12(lunchInEarliestH,lunchInEarliestM);
+      showMsg('err','Too early for Lunch In','You can only punch Lunch In at '+lbl+' or later.',4000);return;
+    }
   }
   if(type==='pm_in'){
     const earliest=new Date(now);earliest.setHours(pmInEarliestH,pmInEarliestM,0,0);
-    if(now<earliest)rec.earlyPmIn=true;
+    if(now<earliest){
+      const lbl=fmt12(pmInEarliestH,pmInEarliestM);
+      showMsg('err','Too early for PM Break In','You can only punch PM Break In at '+lbl+' or later.',4000);return;
+    }
   }
+  // Early break-out: PIN confirmation with deduction warning
+  if(type==='lunch_out'&&!earlyBreakConfirmed){
+    const threshold=new Date(now);threshold.setHours(lunchOutEarlyH,lunchOutEarlyM,0,0);
+    if(now<threshold){openEarlyBreakModal('lunch_out');return;}
+  }
+  if(type==='pm_out'&&!earlyBreakConfirmed){
+    const threshold=new Date(now);threshold.setHours(pmOutEarlyH,pmOutEarlyM,0,0);
+    if(now<threshold){openEarlyBreakModal('pm_out');return;}
+  }
+  // Late PM Break Out — Telegram admin approval required
   if(type==='pm_out'){
-    const early=new Date(now);early.setHours(pmOutEarlyH,pmOutEarlyM,0,0);
     const latest=new Date(now);latest.setHours(pmOutLatestH,pmOutLatestM,0,0);
-    if(now<early)rec.earlyPmOut=true;
-    if(now>latest)rec.latePmOut=true;
+    if(now>latest&&!latePmOutRequests[emp.code]?.approved){
+      if(latePmOutRequests[emp.code]?.pending){
+        showMsg('warn','Still waiting for admin','Your late PM Break Out request is pending approval. Please wait.',4000);return;
+      }
+      const reqId=Date.now();
+      latePmOutRequests[emp.code]={pending:true,approved:false,reqId,empCode:emp.code,empName:emp.name};
+      writeLateBreakRequest(emp.code, emp.name, todayKey(), 'pm_out', nowShort());
+      showMsg('warn','Approval requested','Late PM Break Out sent to admin for approval. Please wait...',0);
+      sendLatePmOutApproval(emp,reqId);
+      return;
+    }
+    if(latePmOutRequests[emp.code]?.approved)delete latePmOutRequests[emp.code];
   }
   earlyBreakConfirmed=false;
   const nowMs=Date.now();
@@ -4056,6 +4119,41 @@ async function loadTgFromCloud(showStatus){
   return false;
 }
 loadTgFromCloud();
+
+// ── ADMIN APPROVAL POLLING (incomplete Time In) ──
+// When the admin approves an incomplete-record Time In in the Admin page,
+// the kiosk picks it up here and lets the employee clock in.
+const handledApprovals=new Set();
+async function pollAdminApprovals(){
+  try{
+    const today=todayKey();
+    const { data } = await sbClient.from('pending_approvals')
+      .select('id,employee_code,type,status')
+      .eq('date',today).eq('type','incomplete')
+      .in('status',['Approved','Rejected']);
+    (data||[]).forEach(r=>{
+      const key=r.id+'_'+r.status;
+      if(handledApprovals.has(key))return;
+      handledApprovals.add(key);
+      const code=r.employee_code;
+      if(r.status==='Approved'){
+        incompleteTimeInRequests[code]={approved:true,pending:false};
+        if(curEmp&&curEmp.code===code){
+          const rec=getRec(code);
+          if(getNext(rec)==='timein'){
+            showMsg('ok','Approved by admin','You may clock in now…',3000);
+            setTimeout(()=>punch('timein'),700);
+          }
+        }
+      }else if(r.status==='Rejected'){
+        if(incompleteTimeInRequests[code])delete incompleteTimeInRequests[code];
+        if(curEmp&&curEmp.code===code)showMsg('err','Time In denied','Admin denied your Time In. Please see admin in person.',6000);
+      }
+    });
+  }catch(e){console.warn('pollAdminApprovals:',e&&e.message);}
+}
+pollAdminApprovals();
+setInterval(pollAdminApprovals,15000);
 
 // ── SYNC PUNCH RECORD TO SUPABASE ──
 // NOTE: syncRecordToSupabase + pushRecord are defined later (offline-queue version).
