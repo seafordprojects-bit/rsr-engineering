@@ -1097,7 +1097,7 @@ function App() {
   }
 
   // ---- admin: HR monitors (read-only) ----
-  const hrTitles = { leaves:'LEAVES', approvals:'APPROVALS', duty:'STRAIGHT DUTY', latebreaks:'LATE BREAKS', violations:'VIOLATIONS', sms:'SMS LOG' };
+  const hrTitles = { leaves:'LEAVES', approvals:'APPROVALS', duty:'STRAIGHT DUTY', latebreaks:'LATE PUNCHES', violations:'VIOLATIONS', sms:'SMS LOG' };
   if (hrTitles[adminTab]) {
     const statusPill = (s) => {
       const k = (s || '').toLowerCase();
@@ -1165,7 +1165,7 @@ function App() {
       });
       if (adminTab === 'latebreaks') return hrRows.map(r => {
         const decide = async (st) => { try { await decideLateBreakAdmin(r.id, st); flash(r.employee_name + ' ' + st.toLowerCase()); setHrRows(await getLateBreaks()); } catch (e) { flash('Error: ' + e.message); } };
-        const lbl = r.break_type === 'pm_out' ? 'PM Break (late)' : 'Lunch (late)';
+        const lbl = r.break_type === 'pm_out' ? 'PM Break (late)' : r.break_type === 'timein' ? 'Time In (late)' : 'Lunch (late)';
         return html`
         <div class="row" key=${r.id} style="align-items:flex-start">
           <div>
