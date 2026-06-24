@@ -4462,11 +4462,7 @@ window.addEventListener('offline', updateSyncBadge);
 setTimeout(updateSyncBadge, 2500);
 </script>
 
-<!-- ===== PWA: service worker registration + auto-update ===== -->
-<div id="pwa-update" style="display:none;position:fixed;left:12px;right:12px;bottom:12px;z-index:99999;background:#12B89E;color:#04201a;font-family:system-ui,sans-serif;font-weight:700;font-size:14px;padding:13px 16px;border-radius:12px;box-shadow:0 6px 24px rgba(0,0,0,.4);align-items:center;justify-content:space-between;gap:12px">
-  <span>A new kiosk version is ready.</span>
-  <button id="pwa-reload" style="background:#04201a;color:#bff3e6;border:none;border-radius:8px;padding:8px 14px;font-weight:700;font-size:13px;cursor:pointer">Update now</button>
-</div>
+<!-- ===== PWA: service worker registration + silent auto-update ===== -->
 <script>
 (function(){
   if (!('serviceWorker' in navigator)) return;
