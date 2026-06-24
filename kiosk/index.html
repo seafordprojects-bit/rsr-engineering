@@ -4456,12 +4456,20 @@ async function pushRecord(empCode, date){
       is_incomplete: isIncomplete, straight_duty_lunch: rec.straightDutyLunch || false,
       straight_duty_pm: rec.straightDutyPm || false, status: status
     };
-    const { data: existing, error: selErr } = await sbClient.from('attendance_records')
-      .select('id').eq('employee_code', empCode).eq('date', date).maybeSingle();
+    // Find existing rows for this employee+date. Handle the case where
+    // duplicates already exist: update the first, delete the extras (self-heal).
+    const { data: rows, error: selErr } = await sbClient.from('attendance_records')
+      .select('id').eq('employee_code', empCode).eq('date', date).order('id', { ascending: true });
     if (selErr) throw selErr;
-    if (existing) {
-      const { error } = await sbClient.from('attendance_records').update(payload).eq('id', existing.id);
+    if (rows && rows.length > 0) {
+      const keepId = rows[0].id;
+      const { error } = await sbClient.from('attendance_records').update(payload).eq('id', keepId);
       if (error) throw error;
+      if (rows.length > 1) {
+        // remove leftover duplicate rows for this employee+date
+        const extraIds = rows.slice(1).map(r => r.id);
+        await sbClient.from('attendance_records').delete().in('id', extraIds);
+      }
     } else {
       const { error } = await sbClient.from('attendance_records').insert(payload);
       if (error) throw error;
