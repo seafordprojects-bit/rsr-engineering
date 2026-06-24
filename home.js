@@ -180,6 +180,10 @@ async function getApprovals() {
   if (error) throw error;
   return data || [];
 }
+async function decideApproval(id, status) {
+  const { error } = await supabase.from('pending_approvals').update({ status }).eq('id', id);
+  if (error) throw error;
+}
 async function getLiqRequests() {
   const { data, error } = await supabase.from('purchase_request').select('*').order('created_at', { ascending: false }).limit(200);
   if (error) throw error;
@@ -1101,16 +1105,23 @@ function App() {
           ${statusPill(r.status)}
         </div>`;
       });
-      if (adminTab === 'approvals') return hrRows.map(r => html`
+      if (adminTab === 'approvals') return hrRows.map(r => {
+        const decide = async (st) => { try { await decideApproval(r.id, st); flash(r.employee_name + ' ' + st.toLowerCase()); setHrRows(await getApprovals()); } catch (e) { flash('Error: ' + e.message); } };
+        return html`
         <div class="row" key=${r.id} style="align-items:flex-start">
           <div>
             <div class="name">${r.employee_name || '—'} <span class="mono" style="color:var(--ink-dim);font-weight:400">${r.employee_dept ? '· ' + r.employee_dept : ''}</span></div>
             <div class="unit">${apprLabels[r.type] || r.type || '—'}</div>
             ${r.details ? html`<div class="unit">${r.details}</div>` : ''}
             <div class="unit">${r.punch_time || ''}${r.date ? ' · ' + r.date : ''}</div>
+            ${r.status === 'Pending' ? html`<div style="display:flex;gap:8px;margin-top:8px">
+              <button class="btn" style="padding:6px 14px;font-size:13px" onClick=${() => decide('Approved')}>✅ Approve</button>
+              <button class="btn ghost" style="padding:6px 14px;font-size:13px" onClick=${() => decide('Rejected')}>❌ Reject</button>
+            </div>` : ''}
           </div>
           ${statusPill(r.status)}
-        </div>`);
+        </div>`;
+      });
       if (adminTab === 'duty') return hrRows.map(r => {
         const decide = async (st) => { try { await decideStraightDuty(r.id, st); flash(r.employee_name + ' ' + st.toLowerCase()); setHrRows(await getStraightDuty()); } catch (e) { flash('Error: ' + e.message); } };
         return html`
@@ -1175,7 +1186,7 @@ function App() {
           <label>${hrTitles[adminTab][0] + hrTitles[adminTab].slice(1).toLowerCase()}${hrRows ? ` (${hrRows.length})` : ''}</label>
           ${body}
         </div>
-        ${adminTab === 'duty' || adminTab === 'latebreaks' || adminTab === 'leaves' ? '' : html`<p class="note" style="text-align:center">View only.${adminTab === 'approvals' ? ' Approvals are actioned via Telegram.' : ''}</p>`}
+        ${adminTab === 'duty' || adminTab === 'latebreaks' || adminTab === 'leaves' || adminTab === 'approvals' ? '' : html`<p class="note" style="text-align:center">View only.</p>`}
       </div>
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
