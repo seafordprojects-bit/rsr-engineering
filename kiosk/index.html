@@ -2155,6 +2155,7 @@ async function punch(type){
       }
       const reqId=Date.now();
       lateTimeInRequests[emp.code]={pending:true,approved:false,reqId,empCode:emp.code,empName:emp.name};
+      writeLateBreakRequest(emp.code, emp.name, todayKey(), 'timein', nowShort()); // also show in Admin → Late Punches
       showMsg('warn','Approval requested','Time In after '+fmt12(endH,endM)+' sent to admin for approval. Please wait...',0);
       sendLateTimeInApproval(emp,reqId);
       return;
@@ -4529,7 +4530,7 @@ async function loadApprovedLateBreaks() {
       .select('*').neq('status', 'Pending').order('created_at', { ascending: false }).limit(300);
     if (!data || !data.length) return;
     data.forEach(lb => {
-      const store = lb.break_type === 'pm_out' ? latePmOutRequests : lateLunchRequests;
+      const store = lb.break_type === 'pm_out' ? latePmOutRequests : lb.break_type === 'timein' ? lateTimeInRequests : lateLunchRequests;
       if (lb.status === 'Approved') {
         store[lb.employee_code] = { pending: false, approved: true, empCode: lb.employee_code, empName: lb.employee_name };
       } else if (lb.status === 'Rejected') {
