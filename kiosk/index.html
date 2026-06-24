@@ -683,6 +683,38 @@ textarea.field-input{resize:none;height:65px}
   </div>
 </div>
 
+<!-- UNDERTIME CONFIRM MODAL -->
+<div class="modal-bg" id="undertime-modal">
+  <div class="modal">
+    <div style="text-align:center;margin-bottom:12px">
+      <div style="font-size:40px">⏱️</div>
+      <h3 style="color:#D85A30;margin:6px 0">Undertime</h3>
+    </div>
+    <div style="background:#FFF3CD;border:1px solid #FAC775;border-radius:10px;padding:12px 14px;font-size:13px;color:#633806;margin-bottom:14px;line-height:1.7">
+      You are clocking out before your dismissal time (<span id="utm-dismissal"></span>).<br><br>
+      Your Time Out will be recorded as <strong id="utm-actual"></strong>.<br>
+      Short of full shift by <strong id="utm-short"></strong>.
+    </div>
+    <div id="utm-emp" style="font-size:13px;color:#888;text-align:center;margin-bottom:14px"></div>
+    <div style="font-size:13px;color:#888;margin-bottom:8px;text-align:center">Enter your PIN to confirm:</div>
+    <div style="display:flex;justify-content:center;gap:16px;margin-bottom:8px" id="ut-pin-dots">
+      <div class="pin-dot" id="ut-d0"></div><div class="pin-dot" id="ut-d1"></div>
+      <div class="pin-dot" id="ut-d2"></div><div class="pin-dot" id="ut-d3"></div>
+      <div class="pin-dot" id="ut-d4"></div><div class="pin-dot" id="ut-d5"></div>
+    </div>
+    <div class="keypad" style="margin-bottom:10px">
+      <button class="key" onclick="utKp('1')">1</button><button class="key" onclick="utKp('2')">2</button><button class="key" onclick="utKp('3')">3</button>
+      <button class="key" onclick="utKp('4')">4</button><button class="key" onclick="utKp('5')">5</button><button class="key" onclick="utKp('6')">6</button>
+      <button class="key" onclick="utKp('7')">7</button><button class="key" onclick="utKp('8')">8</button><button class="key" onclick="utKp('9')">9</button>
+      <button class="key del" onclick="utKpDel()">&#9003;</button>
+      <button class="key zero" onclick="utKp('0')">0</button>
+      <button class="key del" onclick="utKpClr()" style="font-size:12px">CLR</button>
+    </div>
+    <div id="ut-err" style="font-size:12px;color:#A32D2D;min-height:14px;margin-bottom:8px;text-align:center"></div>
+    <button onclick="closeUndertimeModal()" class="btn-sm" style="width:100%">Cancel</button>
+  </div>
+</div>
+
 <!-- EARLY BREAK CONFIRMATION MODAL -->
 <div class="modal-bg" id="early-break-modal">
   <div class="modal">
@@ -1926,6 +1958,38 @@ function confirmLateTimeout(){
   if(_lateTimeoutEmp||curEmp)punch('timeout');
 }
 
+// ── UNDERTIME CONFIRM MODAL ──
+let undertimeConfirmed=false,_undertimeEmp=null,utPin='';
+function openUndertimeConfirmModal(emp,recordedStr,shortMs){
+  _undertimeEmp=emp;utPin='';utUpdDots();
+  const ue=document.getElementById('ut-err');if(ue)ue.textContent='';
+  document.getElementById('utm-dismissal').textContent=fmt12(dismissalH,dismissalM);
+  document.getElementById('utm-actual').textContent=recordedStr;
+  document.getElementById('utm-short').textContent=msToHM(shortMs);
+  document.getElementById('utm-emp').textContent=emp.name+' — '+(emp.position&&emp.position!=='—'?emp.position:emp.dept);
+  document.getElementById('undertime-modal').classList.add('show');
+}
+function closeUndertimeModal(){document.getElementById('undertime-modal').classList.remove('show');utPin='';utUpdDots();}
+function utUpdDots(){for(let i=0;i<PIN_LEN;i++){const d=document.getElementById('ut-d'+i);if(d)d.className='pin-dot'+(i<utPin.length?' filled':'');}}
+function utKp(n){
+  if(utPin.length>=PIN_LEN)return;
+  utPin+=n;utUpdDots();
+  const ue=document.getElementById('ut-err');if(ue)ue.textContent='';
+  if(utPin.length===PIN_LEN){
+    const emp=_undertimeEmp||curEmp;
+    if(emp&&utPin===emp.code){
+      closeUndertimeModal();
+      undertimeConfirmed=true;
+      punch('timeout');
+    } else {
+      const e=document.getElementById('ut-err');if(e)e.textContent='Incorrect PIN. Please try again.';
+      setTimeout(()=>{utPin='';utUpdDots();const x=document.getElementById('ut-err');if(x)x.textContent='';},1200);
+    }
+  }
+}
+function utKpDel(){utPin=utPin.slice(0,-1);utUpdDots();const e=document.getElementById('ut-err');if(e)e.textContent='';}
+function utKpClr(){utPin='';utUpdDots();const e=document.getElementById('ut-err');if(e)e.textContent='';}
+
 // ── EARLY BREAK MODAL ──
 let ebPin='';
 function openEarlyBreakModal(type){
@@ -2081,8 +2145,21 @@ async function punch(type){
     }
     if(lateTimeInRequests[emp.code]?.approved)delete lateTimeInRequests[emp.code];
   }
-  // Time Out dismissal logic
+  // Time Out logic
   if(type==='timeout'){
+    // ── UNDERTIME (schedule-agnostic): logging out before completing shift hours? ──
+    // Works for ANY schedule (8–12, 1–5, 6–9, etc.) because it measures each
+    // employee's own worked time vs their shift hours — not one global clock.
+    const es=effectiveStart(rec);
+    const projWorked=(es!=null)?(now.getTime()-es-calcBreak(rec)):null;
+    const fullMs=emp.shift*3600000;
+    const shortMs=(projWorked!=null)?Math.max(0,fullMs-projWorked):0;
+    if(shortMs>60000&&!undertimeConfirmed){
+      openUndertimeConfirmModal(emp,nowShort(),shortMs);
+      return;
+    }
+    undertimeConfirmed=false; // consume the confirm flag and proceed to record
+    // ── Dismissal snap / late-timeout (only when NOT undertime) ──
     const dismissal=new Date(now);dismissal.setHours(dismissalH,dismissalM,0,0);
     const oneHrAfter=new Date(dismissal.getTime()+3600000);
     if(now>dismissal&&now<=oneHrAfter){
