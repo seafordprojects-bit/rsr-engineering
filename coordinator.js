@@ -671,7 +671,7 @@ function Approvals({ toast }) {
     getPendingDuties().then(setSd).catch(() => setSd([]));
   };
   useEffect(() => { reload(); }, []);
-  const brkLabel = (t) => t === 'pm_out' ? 'PM Break (late)' : 'Lunch (late)';
+  const brkLabel = (t) => t === 'pm_out' ? 'PM Break (late)' : t === 'timein' ? 'Time In (late)' : 'Lunch (late)';
   const doLate = async (r, status) => {
     try {
       await decideLateBreak(r.id, status);
@@ -702,7 +702,7 @@ function Approvals({ toast }) {
     </div>`;
   return html`
     <div class="card">
-      ${stepHead(1, 'Late breaks', 'Breaks punched after the cutoff, waiting for approval')}
+      ${stepHead(1, 'Late punches', 'Time In or breaks punched after the cutoff, waiting for approval')}
       ${lb == null ? html`<div class="empty">Loading…</div>`
         : lb.length === 0 ? html`<div class="empty">No late breaks waiting.</div>`
         : lb.map(r => card(r, 'late', doLate, brkLabel(r.break_type)))}
