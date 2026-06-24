@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Updating kiosk…</title>
+<style>
+  body{font-family:system-ui,-apple-system,sans-serif;text-align:center;padding:48px 20px;background:#0d1b12;color:#bff3e6}
+  h2{margin:0 0 10px}
+  #msg{color:#8fcabb;font-size:14px}
+  .spin{margin:24px auto;width:40px;height:40px;border:4px solid #1c3a2c;border-top-color:#12B89E;border-radius:50%;animation:s 1s linear infinite}
+  @keyframes s{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+  <h2>Updating kiosk…</h2>
+  <div class="spin"></div>
+  <p id="msg">Clearing the old version…</p>
+<script>
+(async function(){
+  var msg = document.getElementById('msg');
+  try {
+    if ('serviceWorker' in navigator) {
+      var regs = await navigator.serviceWorker.getRegistrations();
+      for (var i=0;i<regs.length;i++){ try{ await regs[i].unregister(); }catch(e){} }
+    }
+    if (window.caches) {
+      var keys = await caches.keys();
+      await Promise.all(keys.map(function(k){ return caches.delete(k); }));
+    }
+    msg.textContent = 'Done. Loading the latest version…';
+  } catch (e) {
+    msg.textContent = 'Reset note: ' + e + ' — loading anyway…';
+  }
+  // go to the kiosk fresh, with a cache-busting marker
+  setTimeout(function(){
+    location.replace('./index.html?fresh=' + Date.now());
+  }, 1400);
+})();
+</script>
+</body>
+</html>
