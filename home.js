@@ -863,23 +863,9 @@ function App() {
     })();
   }, [adminTab, authed]);
 
-  // floating back button (bottom-right) on every admin sub-screen
+  // floating back button removed — back navigation lives in the top-right header
   useEffect(() => {
-    let fab = document.getElementById('admin-back-fab');
-    const cleanup = () => { const f = document.getElementById('admin-back-fab'); if (f) f.remove(); };
-    if (!(authed && onAdminPage) || adminTab === 'dash') { cleanup(); return; }
-    const hrTabs = ['leaves','approvals','duty','latebreaks','violations','sms','people','salary'];
-    const toolTabs = ['borrowed','repair'];
-    const target = hrTabs.includes(adminTab) ? 'hrmenu' : (toolTabs.includes(adminTab) ? 'toolsmenu' : 'dash');
-    if (!fab) {
-      fab = document.createElement('button');
-      fab.id = 'admin-back-fab';
-      fab.style.cssText = 'position:fixed;right:16px;bottom:16px;z-index:9999;background:var(--hivis,#E8A830);color:#000;border:none;border-radius:24px;padding:13px 20px;font-size:14px;font-weight:800;box-shadow:0 4px 16px rgba(0,0,0,.4);cursor:pointer';
-      document.body.appendChild(fab);
-    }
-    fab.textContent = (target === 'dash') ? '← Dashboard' : '← Back';
-    fab.onclick = () => setAdminTab(target);
-    return cleanup;
+    const f = document.getElementById('admin-back-fab'); if (f) f.remove();
   }, [adminTab, authed, onAdminPage]);
 
   // auto-logout the admin after 2 minutes of no activity
@@ -1203,7 +1189,7 @@ function App() {
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">${hrTitles[adminTab]}</span></span>
-        <button onClick=${() => setAdminTab('hrmenu')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← HR Monitors</button>
+        <button onClick=${() => setAdminTab('hrmenu')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
       </div></div></header>
       <div class="wrap">
         <div class="card">
@@ -1269,7 +1255,7 @@ function App() {
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">HR MONITORS</span></span>
-        <button onClick=${() => setAdminTab('hrmenu')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← HR Monitors</button>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
       </div></div></header>
       <div class="wrap">
         <div class="grid">
@@ -1294,7 +1280,7 @@ function App() {
     return html`
       <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">SALARY</span></span>
-        <button onClick=${() => { setEmpSel(''); setAdminTab('hrmenu'); }} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← HR Monitors</button>
+        <button onClick=${() => { setEmpSel(''); setAdminTab('hrmenu'); }} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
       </div></div></header>
       <div class="wrap">
         ${!empSel ? html`
