@@ -615,7 +615,7 @@ textarea.field-input{resize:none;height:65px}
     <div class="card">
       <h4>Shift & timing</h4>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
-        <div><label class="field-label">Shift start</label><input type="time" id="s-start" value="08:00" class="field-input" /></div>
+        <div><label class="field-label">Morning clock-in (shift start)</label><input type="time" id="s-start" value="08:00" class="field-input" /></div>
         <div><label class="field-label">Grace period (mins)</label><input type="number" id="s-grace" value="10" min="0" max="60" class="field-input" /></div>
         <div><label class="field-label">End of shift</label><input type="time" id="s-end" value="17:00" class="field-input" /></div>
         <div><label class="field-label">Company name</label><input type="text" id="s-company" value="RSR Engineering" class="field-input" /></div>
@@ -625,7 +625,7 @@ textarea.field-input{resize:none;height:65px}
         <div><label class="field-label">Latest Lunch Out allowed</label><input type="time" id="s-lunch-out-latest" value="12:30" class="field-input" /></div>
         <div><label class="field-label">Early PM Break Out threshold</label><input type="time" id="s-pm-out-early" value="17:00" class="field-input" /></div>
         <div><label class="field-label">Latest PM Break Out allowed</label><input type="time" id="s-pm-out-latest" value="17:30" class="field-input" /></div>
-        <div><label class="field-label">Dismissal time (within 1hr → auto-snap, beyond 1hr → admin notified)</label><input type="time" id="s-dismissal" value="21:00" class="field-input" /></div>
+        <div><label class="field-label">Evening clock-out (dismissal — within 1hr auto-snaps, beyond 1hr admin notified)</label><input type="time" id="s-dismissal" value="21:00" class="field-input" /></div>
       </div>
       <button onclick="saveSettings()" class="btn-primary btn-green">Save settings</button>
       <div id="settings-msg" style="font-size:12px;margin-top:8px;min-height:14px;color:#085041"></div>
@@ -1029,6 +1029,9 @@ function findEmp(code){return employees.find(e=>e.pin&&e.pin===code);}
 function getStatus(rec){if(!rec.punches.timein)return'absent';if(rec.punches.timeout)return'out';for(const[bo,bi]of BPAIRS)if(rec.punches[bo]&&!rec.punches[bi])return'break';return rec.isLate?'late':'working';}
 function isIncomplete(rec){return !!(rec.punches.timein&&!rec.punches.timeout);}
 function getNext(rec){
+  // Once timed out, the day is complete — nothing more is required, even if a
+  // break punch was skipped (leave-at-5) or the record was auto-closed.
+  if(rec.punches.timeout)return null;
   // Build list of required punches — skip break punches if straight duty approved
   const required=['timein'];
   if(!rec.straightDutyLunch){required.push('lunch_out','lunch_in');}
@@ -1044,19 +1047,25 @@ function calcBreak(rec){
     if(rec.msMap.lunch_out&&rec.msMap.lunch_in&&rec.msMap.lunch_out>0&&rec.msMap.lunch_in>0)
       t+=(rec.msMap.lunch_in-rec.msMap.lunch_out);
   }
-  // PM break: skip deduction if straight duty approved
+  // PM break: charge the ACTUAL time out (pm_in - pm_out), same as lunch.
+  // pm_in floors to 6:00, so a normal break = exactly 1h; a late return (e.g. 6:30)
+  // deducts the overstay. Skip deduction if straight duty approved.
   if(!rec.straightDutyPm){
     if(rec.msMap.pm_out&&rec.msMap.pm_in&&rec.msMap.pm_out>0&&rec.msMap.pm_in>0)
-      t+=3600000;
+      t+=Math.max(0,rec.msMap.pm_in-rec.msMap.pm_out);
   }
   return t;
 }
 function effectiveStart(rec){
   if(!rec.msMap.timein)return null;
+  // Afternoon-only arrival → work time starts at 1:00 PM (lunch end), so 1–5 PM = 4 hours.
+  if(rec.afternoonStart){
+    const aft=new Date(rec.msMap.timein);aft.setHours(lunchOutEarlyH+1,lunchOutEarlyM,0,0);
+    return Math.max(aft.getTime(),rec.msMap.timein); // ≥1:00 PM; late afternoon arrivals count from actual
+  }
   const shiftStart=new Date(rec.msMap.timein);shiftStart.setHours(shiftH,shiftM,0,0);
   const graceEnd=new Date(shiftStart.getTime()+graceMins*60000);
-  // Early or within grace period → count from shift start (8:00 AM)
-  // Late (after grace) → count from actual punch time
+  // Early or within grace period → count from shift start (morning clock-in); late → actual punch.
   if(rec.msMap.timein<=graceEnd.getTime())return shiftStart.getTime();
   return rec.msMap.timein;
 }
@@ -2086,6 +2095,11 @@ function updBtns(rec){
   const next=rec?getNext(rec):null;
   PUNCHES.forEach(p=>{const b=document.getElementById(BIDS[p]);if(!b)return;b.disabled=(next!==p);b.classList.remove('highlight-next');});
   if(next){const nb=document.getElementById(BIDS[next]);if(nb)nb.classList.add('highlight-next');}
+  // PM-break decision point: when PM Out is the next step, ALSO allow Time Out so an
+  // employee leaving at 5 PM can clock out without taking the 5–6 PM break.
+  if(next==='pm_out'&&rec&&rec.punches&&!rec.punches.timeout){
+    const tb=document.getElementById(BIDS['timeout']);if(tb)tb.disabled=false;
+  }
   if(!rec){
     document.getElementById('btn-leave').disabled=true;
     document.getElementById('btn-undertime').disabled=true;
@@ -2095,7 +2109,9 @@ function updBtns(rec){
 async function punch(type){
   if(!curEmp){showMsg('err','No employee selected','Please enter your 6-digit PIN first.');return;}
   const emp=curEmp,rec=getRec(emp.code),next=getNext(rec);
-  if(next!==type){
+  // Allow Time Out at the PM-break decision point (employee leaving at 5 PM, skipping the 5–6 break).
+  const pmDecisionTimeout=(type==='timeout'&&next==='pm_out'&&rec.punches&&!rec.punches.timeout);
+  if(next!==type&&!pmDecisionTimeout){
     const wm=(WMSGS[next]&&WMSGS[next][type])||'Action not available now.';
     showMsg('err','Wrong punch — '+PLABELS[type]+' not allowed',wm+' Please press: '+(next?PLABELS[next]:'—')+'.',5000);
     const nb=document.getElementById(BIDS[next]);if(nb){nb.classList.remove('highlight-next');void nb.offsetWidth;nb.classList.add('highlight-next');}return;
@@ -2144,6 +2160,16 @@ async function punch(type){
       return;
     }
     if(lateTimeInRequests[emp.code]?.approved)delete lateTimeInRequests[emp.code];
+  }
+  // Block late-morning Time In: too late to make 2 hours before lunch, too early for the
+  // afternoon session. Must wait until the afternoon clock-in time (Lunch In earliest).
+  if(type==='timein'){
+    const morningCutoff=new Date(now);morningCutoff.setHours(lunchOutEarlyH-2,lunchOutEarlyM,0,0); // lunch (12:00) minus 2h = 10:00 AM
+    const afternoonOpen=new Date(now);afternoonOpen.setHours(lunchInEarliestH,lunchInEarliestM,0,0); // 12:40 PM
+    if(now>morningCutoff&&now<afternoonOpen){
+      showMsg('err','Cannot Time In yet','Not enough work hours before lunch. Please wait until '+fmt12(lunchInEarliestH,lunchInEarliestM)+' to clock in for the afternoon.',6000);
+      return;
+    }
   }
   // Time Out logic
   if(type==='timeout'){
@@ -2254,12 +2280,36 @@ async function punch(type){
     if(nowMs>forcedMs)rec.lunchLateReturn=true; // flag late lunch return
   }
   if(type==='pm_in'){
-    // Use whichever is LATER: forced 6PM or actual punch time (catches late returns)
-    const forced=new Date(nowMs);forced.setHours(pmInEarliestH,pmInEarliestM,0,0);
+    // Use whichever is LATER: forced 6:00 PM (evening open) or actual punch time (catches late returns)
+    const forced=new Date(nowMs);forced.setHours(pmOutEarlyH+1,pmOutEarlyM,0,0);
     recordMs=Math.max(forced.getTime(),nowMs);
     const fd=new Date(recordMs);
     recordStr=fd.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
     if(nowMs>forced.getTime())rec.pmLateReturn=true; // flag late PM return
+  }
+  // ── Snap punch times to session open / close boundaries ──
+  // OPENS: early punches round UP to the open time.
+  // CLOSES: punches inside the grace window round DOWN to the close time.
+  // Genuinely-late arrivals keep their actual time (and lose hours).
+  const _snapAt=(h,m)=>{const d=new Date(nowMs);d.setHours(h,m,0,0);return d.getTime();};
+  const _snapSet=(ms)=>{recordMs=ms;recordStr=new Date(ms).toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});};
+  if(type==='timein'){
+    const _shiftStart=_snapAt(shiftH,shiftM);                     // morning clock-in (shift start)
+    const _aftOpen=_snapAt(lunchInEarliestH,lunchInEarliestM);    // 12:40
+    const _aftStart=_snapAt(lunchOutEarlyH+1,lunchOutEarlyM);     // 1:00 afternoon open
+    if(nowMs<_shiftStart)_snapSet(_shiftStart);                   // early (before shift start) → shift start
+    else if(nowMs>=_aftOpen&&nowMs<_aftStart)_snapSet(_aftStart); // 12:40–12:59 → 1:00
+    // grace/late and afternoon-late keep their actual time
+  }
+  if(type==='lunch_out'){
+    const _lo=_snapAt(lunchOutEarlyH,lunchOutEarlyM);             // 12:00 morning close
+    const _ll=_snapAt(lunchOutLatestH,lunchOutLatestM);           // 12:30
+    if(nowMs>=_lo&&nowMs<=_ll)recordMs=_lo;                       // 12:00–12:30: credit 12:00, DISPLAY stays actual (e.g. 12:14)
+  }
+  if(type==='pm_out'){
+    const _po=_snapAt(pmOutEarlyH,pmOutEarlyM);                   // 5:00 afternoon close
+    const _pl=_snapAt(pmOutLatestH,pmOutLatestM);                 // 5:30
+    if(nowMs>=_po&&nowMs<=_pl)recordMs=_po;                       // 5:00–5:30: credit 5:00, DISPLAY stays actual (e.g. 5:20)
   }
   if(type==='timeout'&&rec.timeoutSnapped&&rec.timeoutSnapMs){recordMs=rec.timeoutSnapMs;recordStr=rec.timeoutSnapTo;}
   rec.punches[type]=recordStr;rec.msMap[type]=recordMs;
@@ -2276,23 +2326,22 @@ async function punch(type){
     hasAllow=isAwayDeployment(emp);
     allowAmt=getAllowanceAmt(emp);
     rec.hasAllowance=hasAllow;rec.allowanceAmt=allowAmt;
-    // Auto-skip lunch if clocked in at or after forced lunch-in time (1:00 PM)
-    const lunchCutoff=new Date(nowMs);lunchCutoff.setHours(lunchInEarliestH,lunchInEarliestM,0,0);
-    const forcedLunchIn=new Date(nowMs);forcedLunchIn.setHours(lunchOutEarlyH+1,lunchOutEarlyM,0,0);
-    if(nowMs>=forcedLunchIn.getTime()){
-      // Auto-skip but record a 1-hour deduction at 12PM-1PM window
-      const lunchOutTime=new Date(nowMs);lunchOutTime.setHours(lunchOutEarlyH,lunchOutEarlyM,0,0);
-      const lunchInTime=new Date(lunchOutTime.getTime()+3600000);
-      rec.punches.lunch_out='(auto-deducted)';rec.msMap.lunch_out=lunchOutTime.getTime();
-      rec.punches.lunch_in='(auto-deducted)';rec.msMap.lunch_in=lunchInTime.getTime();
+    // Afternoon-only arrival (clocked in at/after the afternoon open time, e.g. 12:40 PM):
+    // skip lunch with NO deduction, and credit the day from 1:00 PM (so 1–5 PM = 4 hours).
+    const afternoonOpen=new Date(nowMs);afternoonOpen.setHours(lunchInEarliestH,lunchInEarliestM,0,0);
+    if(nowMs>=afternoonOpen.getTime()){
+      rec.straightDutyLunch=true; // skip lunch punches AND no lunch deduction
+      rec.afternoonStart=true;    // work time credited from 1:00 PM
       rec.lunchSkipped=true;
+      isLate=false;lateMs=0;rec.isLate=false;rec.lateMs=0; // not a morning late arrival
     }
     let sub='';
     if(isLate)sub+='Late by '+msToHM(lateMs)+'. ';
-    if(rec.lunchSkipped)sub+='Lunch break auto-skipped (clocked in after 1:00 PM). ';
+    if(rec.afternoonStart)sub+='Afternoon session — counts from 1:00 PM, no lunch deduction. ';
+    else if(rec.lunchSkipped)sub+='Lunch break auto-skipped. ';
     if(hasAllow)sub+='Away allowance: ₱'+allowAmt.toLocaleString()+'. ';
     sub+='Photo sent to Telegram.';
-    showMsg(isLate?'warn':'ok',emp.name+' — Time In'+(isLate?' LATE':'')+(hasAllow?' | 💰 Allowance':'')+(rec.lunchSkipped?' | 🍽️ Lunch skipped':''),sub,4000);
+    showMsg(isLate?'warn':'ok',emp.name+' — Time In'+(isLate?' LATE':'')+(hasAllow?' | 💰 Allowance':'')+(rec.afternoonStart?' | 🕐 Afternoon':(rec.lunchSkipped?' | 🍽️ Lunch skipped':'')),sub,4000);
     if(isLate)sendLateArrivalAlert(emp,lateMs,rec.punches.timein);
   }else if(type==='timeout'){
     const worked=calcWorked(rec),brk=calcBreak(rec),ot=Math.max(0,worked-(emp.shift*3600000));
@@ -4231,6 +4280,47 @@ async function pollAdminApprovals(){
 }
 pollAdminApprovals();
 setInterval(pollAdminApprovals,15000);
+
+// ── AUTO-CLOSE abandoned breaks: punched a break-OUT but never returned ──
+// Lunch Out with no return  → close at Lunch Out time, checked from 2:30 PM.
+// PM Out with no return      → close at PM Out time,   checked from 7:30 PM.
+// (Forgetting a punch while still working stays "incomplete" — not auto-closed.)
+const autoClosedBreaks=new Set();
+function autoCloseAbandonedBreaks(){
+  const now=new Date();
+  const lunchTrigger=new Date(now);lunchTrigger.setHours(14,30,0,0); // 2:30 PM
+  const pmTrigger=new Date(now);pmTrigger.setHours(19,30,0,0);       // 7:30 PM
+  const pastLunch=now>=lunchTrigger, pastPm=now>=pmTrigger;
+  if(!pastLunch&&!pastPm)return;
+  const today=todayKey();
+  employees.forEach(emp=>{
+    const key=emp.code+'_'+today;
+    const rec=records[key];
+    if(!rec||!rec.punches||!rec.msMap||rec.punches.timeout)return;
+    if(autoClosedBreaks.has(key))return;
+    // Abandoned PM break: PM Out, no PM In → close at PM Out time (from 7:30 PM)
+    if(pastPm&&rec.punches.pm_out&&rec.msMap.pm_out>0&&!rec.punches.pm_in){
+      autoClosedBreaks.add(key);
+      rec.punches.timeout=rec.punches.pm_out;rec.msMap.timeout=rec.msMap.pm_out;
+      rec.autoTimeout=true;rec.autoTimeoutReason='No return from PM break — auto-closed at 7:30 PM';
+      try{saveData();queueRecord(emp.code,today);syncFlush();}catch(e){}
+      try{logNotif(emp.name+' — auto Time Out at PM Out time (no return from PM break)','late-n',true);}catch(e){}
+      return;
+    }
+    // Abandoned lunch: Lunch Out, no Lunch In, never reached PM → close at Lunch Out time (from 2:30 PM)
+    if(pastLunch&&rec.punches.lunch_out&&rec.msMap.lunch_out>0&&!rec.punches.lunch_in&&!rec.punches.pm_out
+       &&rec.punches.lunch_out!=='(auto-deducted)'&&rec.punches.lunch_out!=='(straight duty)'){
+      autoClosedBreaks.add(key);
+      rec.punches.timeout=rec.punches.lunch_out;rec.msMap.timeout=rec.msMap.lunch_out;
+      rec.autoTimeout=true;rec.autoTimeoutReason='No return from lunch — auto-closed at 2:30 PM';
+      try{saveData();queueRecord(emp.code,today);syncFlush();}catch(e){}
+      try{logNotif(emp.name+' — auto Time Out at Lunch Out time (no return from lunch)','late-n',true);}catch(e){}
+      return;
+    }
+  });
+}
+autoCloseAbandonedBreaks();
+setInterval(autoCloseAbandonedBreaks,60000); // check every minute
 
 // ── SYNC PUNCH RECORD TO SUPABASE ──
 // NOTE: syncRecordToSupabase + pushRecord are defined later (offline-queue version).
