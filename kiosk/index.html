@@ -4379,13 +4379,8 @@ async function _legacy_syncRecordToSupabase_unused(empCode, date) {
       straight_duty_pm: rec.straightDutyPm || false,
       status: status
     };
-    // Upsert (insert or update)
-    const { data: existing } = await sbClient.from('attendance_records').select('id').eq('employee_code', empCode).eq('date', date).single();
-    if (existing) {
-      await sbClient.from('attendance_records').update(payload).eq('id', existing.id);
-    } else {
-      await sbClient.from('attendance_records').insert(payload);
-    }
+    // Upsert keyed on the (employee_code, date) unique constraint — collision-proof
+    await sbClient.from('attendance_records').upsert(payload, { onConflict: 'employee_code,date' });
   } catch(e) { console.warn('Supabase sync punch:', e); }
 }
 
@@ -4645,24 +4640,12 @@ async function pushRecord(empCode, date){
       is_incomplete: isIncomplete, straight_duty_lunch: rec.straightDutyLunch || false,
       straight_duty_pm: rec.straightDutyPm || false, status: status
     };
-    // Find existing rows for this employee+date. Handle the case where
-    // duplicates already exist: update the first, delete the extras (self-heal).
-    const { data: rows, error: selErr } = await sbClient.from('attendance_records')
-      .select('id').eq('employee_code', empCode).eq('date', date).order('id', { ascending: true });
-    if (selErr) throw selErr;
-    if (rows && rows.length > 0) {
-      const keepId = rows[0].id;
-      const { error } = await sbClient.from('attendance_records').update(payload).eq('id', keepId);
-      if (error) throw error;
-      if (rows.length > 1) {
-        // remove leftover duplicate rows for this employee+date
-        const extraIds = rows.slice(1).map(r => r.id);
-        await sbClient.from('attendance_records').delete().in('id', extraIds);
-      }
-    } else {
-      const { error } = await sbClient.from('attendance_records').insert(payload);
-      if (error) throw error;
-    }
+    // Single atomic upsert keyed on the (employee_code, date) unique constraint
+    // (uniq_attendance_emp_date): updates that employee's row for the day, or
+    // inserts if none. No select-then-insert race, no duplicate-key errors.
+    const { error } = await sbClient.from('attendance_records')
+      .upsert(payload, { onConflict: 'employee_code,date' });
+    if (error) throw error;
     return true;
   } catch(e) { console.warn('Sync failed (will retry):', e && e.message ? e.message : e); return false; }
 }
