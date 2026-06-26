@@ -160,7 +160,9 @@ select.field-input{appearance:none}
         <div class="stat"><div class="stat-label">Total net payout</div><div class="stat-val net" id="s-net">₱0</div></div>
       </div>
       <div id="allow-panel"></div>
+      <input type="text" id="pr-search" oninput="filterPayroll()" placeholder="Search name or code\u2026" autocomplete="off" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:10px;font-size:14px;margin-bottom:10px;box-sizing:border-box">
       <div id="pr-list"></div>
+      <div id="pr-nomatch" style="display:none;color:#888;font-size:13px;padding:6px 2px 10px">No employee matches your search.</div>
       <button class="btn-primary" onclick="printAllSlips()">🖨️ Print all payslips</button>
       <button class="btn-primary btn-green" onclick="postDeductions()" id="post-btn">Post vale deductions</button>
       <div id="post-msg" class="msg"></div>
@@ -575,10 +577,17 @@ async function runPayroll(){
 
 function netOf(r){ return r.basic - r.lateUT + r.otPay + (Number(r.otAllowance)||0) + (Number(r.stayInAllowance)||0) - (Number(r.valeDeduct)||0) - (Number(r.otherDeduct)||0) - (Number(r.allowDeduct)||0); }
 
+function filterPayroll(){
+  const q=(document.getElementById('pr-search')?document.getElementById('pr-search').value:'').trim().toLowerCase();
+  const cards=document.querySelectorAll('#pr-list .pr-card');
+  let shown=0;
+  cards.forEach(c=>{ const hit=!q||(c.dataset.emp||'').includes(q); c.style.display=hit?'':'none'; if(hit)shown++; });
+  const nm=document.getElementById('pr-nomatch'); if(nm) nm.style.display=(q&&shown===0)?'block':'none';
+}
 function renderRun(){
   document.getElementById('s-head').textContent=computed.length;
   document.getElementById('pr-list').innerHTML=computed.map((r,i)=>`
-    <div class="pr-card">
+    <div class="pr-card" data-emp="${(r.name+' '+r.code+' '+(r.dept||'')).toLowerCase()}">
       <div class="pr-head">
         <div>
           <div class="pr-name">${r.name} ${r.suspended?'<span class="pill pill-susp">suspended</span>':''}</div>
@@ -632,6 +641,7 @@ function renderRun(){
   });
   recalcTotals();
   renderAllowPanel();
+  filterPayroll();
 }
 
 // Panel: each confirmed, unsettled allowance with a Yes/No deduct toggle (default No).
