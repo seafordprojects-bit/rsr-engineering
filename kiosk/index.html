@@ -695,22 +695,10 @@ textarea.field-input{resize:none;height:65px}
       This will be <strong>deducted from your pay</strong>.
     </div>
     <div id="utm-emp" style="font-size:13px;color:#888;text-align:center;margin-bottom:14px"></div>
-    <div style="font-size:13px;color:#888;margin-bottom:8px;text-align:center">Enter your PIN to confirm:</div>
-    <div style="display:flex;justify-content:center;gap:16px;margin-bottom:8px" id="ut-pin-dots">
-      <div class="pin-dot" id="ut-d0"></div><div class="pin-dot" id="ut-d1"></div>
-      <div class="pin-dot" id="ut-d2"></div><div class="pin-dot" id="ut-d3"></div>
-      <div class="pin-dot" id="ut-d4"></div><div class="pin-dot" id="ut-d5"></div>
+    <div style="display:flex;gap:8px">
+      <button onclick="closeUndertimeModal()" class="btn-sm" style="flex:1">Cancel</button>
+      <button onclick="confirmUndertime()" class="btn-primary" style="flex:1;margin-top:0;background:#D85A30">Confirm Time Out</button>
     </div>
-    <div class="keypad" style="margin-bottom:10px">
-      <button class="key" onclick="utKp('1')">1</button><button class="key" onclick="utKp('2')">2</button><button class="key" onclick="utKp('3')">3</button>
-      <button class="key" onclick="utKp('4')">4</button><button class="key" onclick="utKp('5')">5</button><button class="key" onclick="utKp('6')">6</button>
-      <button class="key" onclick="utKp('7')">7</button><button class="key" onclick="utKp('8')">8</button><button class="key" onclick="utKp('9')">9</button>
-      <button class="key del" onclick="utKpDel()">&#9003;</button>
-      <button class="key zero" onclick="utKp('0')">0</button>
-      <button class="key del" onclick="utKpClr()" style="font-size:12px">CLR</button>
-    </div>
-    <div id="ut-err" style="font-size:12px;color:#A32D2D;min-height:14px;margin-bottom:8px;text-align:center"></div>
-    <button onclick="closeUndertimeModal()" class="btn-sm" style="width:100%">Cancel</button>
   </div>
 </div>
 
@@ -2022,6 +2010,7 @@ function utKp(n){
 }
 function utKpDel(){utPin=utPin.slice(0,-1);utUpdDots();const e=document.getElementById('ut-err');if(e)e.textContent='';}
 function utKpClr(){utPin='';utUpdDots();const e=document.getElementById('ut-err');if(e)e.textContent='';}
+function confirmUndertime(){ closeUndertimeModal(); undertimeConfirmed=true; punch('timeout'); }
 
 // ── EARLY BREAK MODAL ──
 let ebPin='';
