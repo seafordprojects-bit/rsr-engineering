@@ -1069,19 +1069,38 @@ function effectiveStart(rec){
   if(rec.msMap.timein<=graceEnd.getTime())return shiftStart.getTime();
   return rec.msMap.timein;
 }
-function calcWorked(rec){
-  if(!rec.msMap.timein||!rec.msMap.timeout)return null;
-  return(rec.msMap.timeout-effectiveStart(rec))-calcBreak(rec);
+// Three independent sessions, each = its close minus its open:
+//   Morning   = Time In  -> Lunch Out
+//   Afternoon = Lunch In (or Time In if afternoon arrival) -> PM Break Out
+//   Evening   = PM Break In -> Time Out
+// A session counts only if BOTH its punches exist; a broken session = 0 + flag.
+function calcSessions(rec){
+  const M=rec.msMap||{};
+  const aftStart=!!rec.afternoonStart;
+  const base = M.timein||M.lunch_out||M.lunch_in||M.pm_out||M.pm_in||M.timeout||Date.now();
+  const atH=(h,m)=>{const d=new Date(base);d.setHours(h,m,0,0);return d.getTime();};
+  const g=(v)=>(typeof v==='number'&&v>0)?v:null;
+  let mOpen=null;
+  if(!aftStart && g(M.timein)!=null){ const ss=atH(shiftH,shiftM); mOpen = M.timein<=ss+graceMins*60000 ? ss : M.timein; }
+  const mClose = !aftStart ? g(M.lunch_out) : null;
+  let aOpen=null;
+  if(aftStart && g(M.timein)!=null){ aOpen=Math.max(atH(lunchOutEarlyH+1,lunchOutEarlyM), M.timein); }
+  else if(!aftStart) aOpen = g(M.lunch_in);
+  const aClose = g(M.pm_out);
+  const eOpen = g(M.pm_in), eClose = g(M.timeout);
+  const morning   = (mOpen!=null && mClose!=null) ? Math.max(0,mClose-mOpen) : 0;
+  const afternoon = (aOpen!=null && aClose!=null) ? Math.max(0,aClose-aOpen) : 0;
+  const evening   = (eOpen!=null && eClose!=null) ? Math.max(0,eClose-eOpen) : 0;
+  const worked = morning+afternoon+evening;
+  const eveThr=atH(pmOutEarlyH+1,pmOutEarlyM);
+  const evePunched=(eOpen!=null)||(eClose!=null&&eClose>=eveThr);
+  const mFlag=(!aftStart)&&mOpen!=null&&mClose==null&&(aClose!=null||eOpen!=null||eClose!=null);
+  const aFlag=(aClose!=null&&aOpen==null)||(aOpen!=null&&aClose==null&&evePunched);
+  const eFlag=(eClose!=null&&eClose>=eveThr&&eOpen==null);
+  return {morning,afternoon,evening,worked,mFlag,aFlag,eFlag,anyFlag:(mFlag||aFlag||eFlag)};
 }
-function calcWorkedPartial(rec){
-  if(rec.msMap.timein&&rec.msMap.timeout)return calcWorked(rec);
-  if(!rec.msMap.timein)return null;
-  const allMs=Object.values(rec.msMap).filter(v=>v&&typeof v==='number');
-  if(allMs.length===0)return null;
-  const lastMs=Math.max(...allMs);
-  const worked=(lastMs-effectiveStart(rec))-calcBreak(rec);
-  return Math.max(0,worked);
-}
+function calcWorked(rec){ return calcSessions(rec).worked; }
+function calcWorkedPartial(rec){ return calcSessions(rec).worked; }
 function chkLate(ms){const now=new Date(ms),s=new Date(now);s.setHours(shiftH,shiftM,0,0);const g=new Date(s.getTime()+graceMins*60000);return now>g?{late:true,lateMs:now-s}:{late:false,lateMs:0};}
 function onLeaveToday(code){const t=todayKey();return leaveRequests.some(r=>r.code===code&&r.status==='Approved'&&r.startDate<=t&&r.endDate>=t);}
 function onLWPToday(code){const t=todayKey();return leaveRequests.some(r=>r.code===code&&r.status==='Approved'&&r.type==='Leave Without Pay'&&r.startDate<=t&&r.endDate>=t);}
@@ -2095,6 +2114,17 @@ function updBtns(rec){
   const next=rec?getNext(rec):null;
   PUNCHES.forEach(p=>{const b=document.getElementById(BIDS[p]);if(!b)return;b.disabled=(next!==p);b.classList.remove('highlight-next');});
   if(next){const nb=document.getElementById(BIDS[next]);if(nb)nb.classList.add('highlight-next');}
+  // Forward-skip: also enable later skippable session buttons, so a missed punch
+  // (e.g. forgot Lunch In) doesn't trap the employee on the wrong button.
+  if(rec&&next&&!rec.punches.timeout){
+    const _r=['timein'];
+    if(!rec.straightDutyLunch)_r.push('lunch_out','lunch_in');
+    if(!rec.straightDutyPm)_r.push('pm_out','pm_in');
+    _r.push('timeout');
+    const _S={lunch_out:1,lunch_in:1,pm_out:1,pm_in:1};
+    const iN=_r.indexOf(next);
+    if(iN>=0&&_S[next]) for(let j=iN+1;j<_r.length;j++){ const b=document.getElementById(BIDS[_r[j]]); if(b)b.disabled=false; if(!_S[_r[j]])break; }
+  }
   // PM-break decision point: when PM Out is the next step, ALSO allow Time Out so an
   // employee leaving at 5 PM can clock out without taking the 5–6 PM break.
   if(next==='pm_out'&&rec&&rec.punches&&!rec.punches.timeout){
@@ -2111,10 +2141,27 @@ async function punch(type){
   const emp=curEmp,rec=getRec(emp.code),next=getNext(rec);
   // Allow Time Out at the PM-break decision point (employee leaving at 5 PM, skipping the 5–6 break).
   const pmDecisionTimeout=(type==='timeout'&&next==='pm_out'&&rec.punches&&!rec.punches.timeout);
+  // Forward-skip: if an earlier session punch was missed, let the employee jump ahead
+  // (e.g. forgot Lunch In -> press PM Break In). The skipped session won't be counted.
+  const _req2=['timein'];
+  if(!rec.straightDutyLunch)_req2.push('lunch_out','lunch_in');
+  if(!rec.straightDutyPm)_req2.push('pm_out','pm_in');
+  _req2.push('timeout');
+  const _SKIP={lunch_out:1,lunch_in:1,pm_out:1,pm_in:1};
+  let _doSkip=false,_skipped=[];
   if(next!==type&&!pmDecisionTimeout){
+    const iN=_req2.indexOf(next), iT=_req2.indexOf(type);
+    if(iN>=0&&iT>iN){ const span=_req2.slice(iN,iT); if(span.every(p=>_SKIP[p])){ _doSkip=true; _skipped=span; } }
+  }
+  if(next!==type&&!pmDecisionTimeout&&!_doSkip){
     const wm=(WMSGS[next]&&WMSGS[next][type])||'Action not available now.';
     showMsg('err','Wrong punch — '+PLABELS[type]+' not allowed',wm+' Please press: '+(next?PLABELS[next]:'—')+'.',5000);
     const nb=document.getElementById(BIDS[next]);if(nb){nb.classList.remove('highlight-next');void nb.offsetWidth;nb.classList.add('highlight-next');}return;
+  }
+  if(_doSkip){
+    _skipped.forEach(p=>{ rec.punches[p]='(skipped)'; rec.msMap[p]=null; });
+    const skLbl=_skipped.map(p=>PLABELS[p]||p).join(', ');
+    showMsg('warn', emp.name+' — '+skLbl+' not punched', 'You did not punch '+skLbl+'. That session will NOT be counted toward your hours. Please inform Admin.', 7000);
   }
   // Earliest-time restrictions
   const now=new Date();
