@@ -691,9 +691,8 @@ textarea.field-input{resize:none;height:65px}
       <h3 style="color:#D85A30;margin:6px 0">Undertime</h3>
     </div>
     <div style="background:#FFF3CD;border:1px solid #FAC775;border-radius:10px;padding:12px 14px;font-size:13px;color:#633806;margin-bottom:14px;line-height:1.7">
-      You are clocking out before your dismissal time (<span id="utm-dismissal"></span>).<br><br>
-      Your Time Out will be recorded as <strong id="utm-actual"></strong>.<br>
-      Short of full shift by <strong id="utm-short"></strong>.
+      You are timing out early — short by <strong id="utm-short"></strong>.<br><br>
+      This will be <strong>deducted from your pay</strong>.
     </div>
     <div id="utm-emp" style="font-size:13px;color:#888;text-align:center;margin-bottom:14px"></div>
     <div style="font-size:13px;color:#888;margin-bottom:8px;text-align:center">Enter your PIN to confirm:</div>
@@ -1076,27 +1075,35 @@ function effectiveStart(rec){
 // A session counts only if BOTH its punches exist; a broken session = 0 + flag.
 function calcSessions(rec){
   const M=rec.msMap||{};
-  const aftStart=!!rec.afternoonStart;
+  const aftStart=!!rec.afternoonStart, sdL=!!rec.straightDutyLunch, sdP=!!rec.straightDutyPm;
   const base = M.timein||M.lunch_out||M.lunch_in||M.pm_out||M.pm_in||M.timeout||Date.now();
   const atH=(h,m)=>{const d=new Date(base);d.setHours(h,m,0,0);return d.getTime();};
-  const g=(v)=>(typeof v==='number'&&v>0)?v:null;
-  let mOpen=null;
-  if(!aftStart && g(M.timein)!=null){ const ss=atH(shiftH,shiftM); mOpen = M.timein<=ss+graceMins*60000 ? ss : M.timein; }
-  const mClose = !aftStart ? g(M.lunch_out) : null;
-  let aOpen=null;
-  if(aftStart && g(M.timein)!=null){ aOpen=Math.max(atH(lunchOutEarlyH+1,lunchOutEarlyM), M.timein); }
-  else if(!aftStart) aOpen = g(M.lunch_in);
-  const aClose = g(M.pm_out);
-  const eOpen = g(M.pm_in), eClose = g(M.timeout);
+  const g=v=>(typeof v==='number'&&v>0)?v:null;
+  const TI=g(M.timein),LO=g(M.lunch_out),LI=g(M.lunch_in),PO=g(M.pm_out),PI=g(M.pm_in),TO=g(M.timeout);
+  let mOpen = (!aftStart && TI!=null) ? (TI<=atH(shiftH,shiftM)+graceMins*60000 ? atH(shiftH,shiftM) : TI) : null;
+  let aOpen = aftStart ? (TI!=null ? Math.max(atH(lunchOutEarlyH+1,lunchOutEarlyM),TI) : null) : LI;
+  let eOpen = PI;
+  let mClose = sdL ? null : LO;
+  let aClose = sdP ? null : PO;
+  let eClose = TO;
+  if(sdL && !aftStart){ mClose = sdP ? null : PO; aOpen=null; aClose=null; }
+  // Time Out closes the latest still-open session (covers leave-at-5, early leave, half day, straight duty)
+  if(TO!=null){
+    if(eOpen!=null){ eClose=TO; }
+    else if(aOpen!=null && aClose==null){ aClose=TO; }
+    else if(mOpen!=null && mClose==null && aOpen==null){ mClose=TO; }
+  }
   const morning   = (mOpen!=null && mClose!=null) ? Math.max(0,mClose-mOpen) : 0;
   const afternoon = (aOpen!=null && aClose!=null) ? Math.max(0,aClose-aOpen) : 0;
   const evening   = (eOpen!=null && eClose!=null) ? Math.max(0,eClose-eOpen) : 0;
   const worked = morning+afternoon+evening;
+  // A flag means a punch was forgotten (work happened before AND after the gap) — NOT a normal early leave.
   const eveThr=atH(pmOutEarlyH+1,pmOutEarlyM);
-  const evePunched=(eOpen!=null)||(eClose!=null&&eClose>=eveThr);
-  const mFlag=(!aftStart)&&mOpen!=null&&mClose==null&&(aClose!=null||eOpen!=null||eClose!=null);
-  const aFlag=(aClose!=null&&aOpen==null)||(aOpen!=null&&aClose==null&&evePunched);
-  const eFlag=(eClose!=null&&eClose>=eveThr&&eOpen==null);
+  const toEve=TO!=null && TO>=eveThr;
+  const mFlag = !aftStart && !sdL && TI!=null && LO==null && (LI!=null||PO!=null||PI!=null||toEve);
+  const aFlag = (!sdL && LO!=null && LI==null && (PO!=null||PI!=null||toEve))
+             || (!sdP && (aftStart?TI:LI)!=null && PO==null && (PI!=null||toEve));
+  const eFlag = !sdP && PO!=null && PI==null && toEve;
   return {morning,afternoon,evening,worked,mFlag,aFlag,eFlag,anyFlag:(mFlag||aFlag||eFlag)};
 }
 function calcWorked(rec){ return calcSessions(rec).worked; }
@@ -1991,8 +1998,6 @@ let undertimeConfirmed=false,_undertimeEmp=null,utPin='';
 function openUndertimeConfirmModal(emp,recordedStr,shortMs){
   _undertimeEmp=emp;utPin='';utUpdDots();
   const ue=document.getElementById('ut-err');if(ue)ue.textContent='';
-  document.getElementById('utm-dismissal').textContent=fmt12(dismissalH,dismissalM);
-  document.getElementById('utm-actual').textContent=recordedStr;
   document.getElementById('utm-short').textContent=msToHM(shortMs);
   document.getElementById('utm-emp').textContent=emp.name+' — '+(emp.position&&emp.position!=='—'?emp.position:emp.dept);
   document.getElementById('undertime-modal').classList.add('show');
@@ -2224,10 +2229,12 @@ async function punch(type){
     // ── UNDERTIME (schedule-agnostic): logging out before completing shift hours? ──
     // Works for ANY schedule (8–12, 1–5, 6–9, etc.) because it measures each
     // employee's own worked time vs their shift hours — not one global clock.
-    const es=effectiveStart(rec);
-    const projWorked=(es!=null)?(now.getTime()-es-calcBreak(rec)):null;
+    // Project worked time IF they clock out right now, using the same 3-session model
+    // so the "short by" amount shown matches exactly what gets recorded/deducted.
+    const _probe={afternoonStart:rec.afternoonStart,straightDutyLunch:rec.straightDutyLunch,straightDutyPm:rec.straightDutyPm,msMap:Object.assign({},rec.msMap,{timeout:now.getTime()})};
+    const projWorked=calcSessions(_probe).worked;
     const fullMs=emp.shift*3600000;
-    const shortMs=(projWorked!=null)?Math.max(0,fullMs-projWorked):0;
+    const shortMs=Math.max(0,fullMs-projWorked);
     if(shortMs>60000&&!undertimeConfirmed){
       openUndertimeConfirmModal(emp,nowShort(),shortMs);
       return;
@@ -4229,7 +4236,7 @@ function exportUndertimeCSV(){
   downloadFile('undertime_'+todayKey().replace(/\//g,'-')+'.csv',csv,'text/csv');
 }
 
-updateStats();renderRoster();updatePhotoFilter();updateSiteBadge();initCamera();loadData();requestWakeLock();resetDimTimer();scheduleMidnightReset();cleanupOldData();scheduleMonthlyExport();
+loadData();updateStats();renderRoster();updatePhotoFilter();updateSiteBadge();initCamera();requestWakeLock();resetDimTimer();scheduleMidnightReset();cleanupOldData();scheduleMonthlyExport();
 // Run absence check on load and schedule daily at midnight
 setTimeout(()=>{
   checkAllAbsences();
