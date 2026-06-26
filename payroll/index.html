@@ -312,23 +312,30 @@ function prSessions(rec){
   const atH=(h,m)=>new Date(y,mo-1,d,h,m,0,0).getTime();
   const g=v=>(typeof v==='number'&&v>0)?v:null;
   const aftStart = M.timein!=null && M.timein>=atH(PR_AFT_H,PR_AFT_M);
-  let mOpen=null;
-  if(!aftStart && g(M.timein)!=null){ const ss=atH(PR_SHIFT_H,PR_SHIFT_M); mOpen=M.timein<=ss+PR_GRACE*60000?ss:M.timein; }
-  const mClose=!aftStart?g(M.lunch_out):null;
-  let aOpen=null;
-  if(aftStart && g(M.timein)!=null){ aOpen=Math.max(atH(PR_LUNCHEND_H,0), M.timein); }
-  else if(!aftStart) aOpen=g(M.lunch_in);
-  const aClose=g(M.pm_out);
-  const eOpen=g(M.pm_in), eClose=g(M.timeout);
-  const morning=(mOpen!=null&&mClose!=null)?Math.max(0,mClose-mOpen):0;
-  const afternoon=(aOpen!=null&&aClose!=null)?Math.max(0,aClose-aOpen):0;
-  const evening=(eOpen!=null&&eClose!=null)?Math.max(0,eClose-eOpen):0;
-  const worked=morning+afternoon+evening;
+  const sdL=!!rec.straight_duty_lunch, sdP=!!rec.straight_duty_pm;
+  const TI=g(M.timein),LO=g(M.lunch_out),LI=g(M.lunch_in),PO=g(M.pm_out),PI=g(M.pm_in),TO=g(M.timeout);
+  let mOpen = (!aftStart && TI!=null) ? (TI<=atH(PR_SHIFT_H,PR_SHIFT_M)+PR_GRACE*60000 ? atH(PR_SHIFT_H,PR_SHIFT_M) : TI) : null;
+  let aOpen = aftStart ? (TI!=null ? Math.max(atH(PR_LUNCHEND_H,0),TI) : null) : LI;
+  let eOpen = PI;
+  let mClose = sdL ? null : LO;
+  let aClose = sdP ? null : PO;
+  let eClose = TO;
+  if(sdL && !aftStart){ mClose = sdP ? null : PO; aOpen=null; aClose=null; }
+  if(TO!=null){
+    if(eOpen!=null){ eClose=TO; }
+    else if(aOpen!=null && aClose==null){ aClose=TO; }
+    else if(mOpen!=null && mClose==null && aOpen==null){ mClose=TO; }
+  }
+  const morning   = (mOpen!=null && mClose!=null) ? Math.max(0,mClose-mOpen) : 0;
+  const afternoon = (aOpen!=null && aClose!=null) ? Math.max(0,aClose-aOpen) : 0;
+  const evening   = (eOpen!=null && eClose!=null) ? Math.max(0,eClose-eOpen) : 0;
+  const worked = morning+afternoon+evening;
   const eveThr=atH(PR_EVE_H,0);
-  const evePunched=(eOpen!=null)||(eClose!=null&&eClose>=eveThr);
-  const mFlag=(!aftStart)&&mOpen!=null&&mClose==null&&(aClose!=null||eOpen!=null||eClose!=null);
-  const aFlag=(aClose!=null&&aOpen==null)||(aOpen!=null&&aClose==null&&evePunched);
-  const eFlag=(eClose!=null&&eClose>=eveThr&&eOpen==null);
+  const toEve=TO!=null && TO>=eveThr;
+  const mFlag = !aftStart && !sdL && TI!=null && LO==null && (LI!=null||PO!=null||PI!=null||toEve);
+  const aFlag = (!sdL && LO!=null && LI==null && (PO!=null||PI!=null||toEve))
+             || (!sdP && (aftStart?TI:LI)!=null && PO==null && (PI!=null||toEve));
+  const eFlag = !sdP && PO!=null && PI==null && toEve;
   return {morning,afternoon,evening,worked,mFlag,aFlag,eFlag,anyFlag:(mFlag||aFlag||eFlag)};
 }
 // Recompute worked_ms / ot_ms / flags for one day record after its times change.
@@ -715,8 +722,10 @@ function showSlip(i){
   document.getElementById('slip-bg').classList.add('show');
 }
 // ── EDIT TIMES ──
-function editTimes(i){
-  const c=computed[i];
+let _editIdx=-1;
+function editTimes(i){ _editIdx=i; renderEditArea(); document.getElementById('edit-bg').classList.add('show'); }
+function renderEditArea(){
+  const i=_editIdx; const c=computed[i];
   const fields=[['timein','Time In'],['lunch_out','Lunch Out'],['lunch_in','Lunch In'],['pm_out','PM Out'],['pm_in','PM In'],['timeout','Time Out']];
   const days=(c.days||[]).slice().sort((a,b)=>toISO(a.date).localeCompare(toISO(b.date)));
   const body=days.map(rec=>{
@@ -731,12 +740,33 @@ function editTimes(i){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${inputs}</div>
     </div>`;
   }).join('');
+  const addUI=`<div style="border:1px dashed #cbd5e1;border-radius:10px;padding:10px;margin-bottom:10px;background:#f8fafc">
+      <div style="font-size:12px;color:#475569;margin-bottom:6px;font-weight:600">Add a missing day</div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <input type="date" id="add-day-date" min="${curFrom}" max="${curTo}" value="${curTo}" style="flex:1;padding:7px;border:1px solid #ddd;border-radius:7px;font-size:13px">
+        <button class="btn-sm" style="margin-top:0" onclick="addEditDay()">+ Add day</button>
+      </div>
+      <div id="add-day-err" style="font-size:11px;color:#c0392b;margin-top:6px"></div>
+    </div>`;
   document.getElementById('edit-area').innerHTML=
     `<h3>Edit times — ${c.name}</h3>
-     <div style="font-size:11px;color:#888;margin-bottom:10px">Fix or complete each day's punches. Clear a field to blank it. Saving recomputes hours and pay using the same 8 AM shift / 12:40 afternoon rules as the kiosk.</div>
-     ${body || '<div style="color:#888">No editable days.</div>'}`;
+     <div style="font-size:11px;color:#888;margin-bottom:10px">Fix or complete each day's punches. Clear a field to blank it. Use "Add a missing day" to key in a day the kiosk never captured (e.g. a missing morning). Saving recomputes hours and pay using the same 8 AM shift / 12:40 afternoon rules as the kiosk.</div>
+     ${addUI}
+     ${body || '<div style="color:#888">No days yet — add one above.</div>'}`;
   const sv=document.getElementById('edit-save'); sv.onclick=()=>saveTimes(i);
-  document.getElementById('edit-bg').classList.add('show');
+}
+function addEditDay(){
+  const c=computed[_editIdx]; if(!c) return;
+  const el=document.getElementById('add-day-date'), errEl=document.getElementById('add-day-err');
+  if(errEl) errEl.textContent='';
+  const iso=el&&el.value;
+  if(!iso){ if(errEl)errEl.textContent='Pick a date.'; return; }
+  if(iso<curFrom||iso>curTo){ if(errEl)errEl.textContent='Date is outside this pay week ('+fmtDate(curFrom)+' \u2013 '+fmtDate(curTo)+').'; return; }
+  if((c.days||[]).some(r=>toISO(r.date)===iso)){ if(errEl)errEl.textContent='That day is already listed below \u2014 edit it there.'; return; }
+  const [y,m,d]=iso.split('-');
+  c.days=c.days||[];
+  c.days.push({ id:'NEW-'+Date.now(), _new:true, employee_code:c.code, employee_name:c.name, date:m+'/'+d+'/'+y, site:(c.days[0]&&c.days[0].site)||'Site A', timein:null,lunch_out:null,lunch_in:null,pm_out:null,pm_in:null,timeout:null, straight_duty_lunch:false, straight_duty_pm:false });
+  renderEditArea();
 }
 async function saveTimes(i){
   const c=computed[i]; const emp=employees.find(e=>e.code===c.code); const shiftHrs=emp?emp.shift:8;
@@ -751,14 +781,21 @@ async function saveTimes(i){
   const sv=document.getElementById('edit-save'); sv.disabled=true; sv.textContent='Saving…';
   try{
     for(const rec of days){
-      const { error } = await sb.from('attendance_records').update({
+      const payload={
         timein:rec.timein, lunch_out:rec.lunch_out, lunch_in:rec.lunch_in,
         pm_out:rec.pm_out, pm_in:rec.pm_in, timeout:rec.timeout,
         worked_ms:rec.worked_ms, ot_ms:rec.ot_ms, is_incomplete:rec.is_incomplete,
         status:rec.status, is_late:rec.is_late, late_ms:rec.late_ms,
         straight_duty_lunch:rec.straight_duty_lunch, straight_duty_pm:rec.straight_duty_pm
-      }).eq('id', rec.id);
-      if(error) throw error;
+      };
+      if(rec._new){
+        const full=Object.assign({employee_code:c.code, employee_name:c.name, date:rec.date, site:rec.site||'Site A'}, payload);
+        const { error } = await sb.from('attendance_records').upsert(full,{onConflict:'employee_code,date'});
+        if(error) throw error;
+      } else {
+        const { error } = await sb.from('attendance_records').update(payload).eq('id', rec.id);
+        if(error) throw error;
+      }
     }
     document.getElementById('edit-bg').classList.remove('show');
     msg('run-msg','ok','Times saved — recomputing payroll…');
