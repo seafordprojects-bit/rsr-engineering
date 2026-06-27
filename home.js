@@ -22,7 +22,7 @@ async function countRows(table, build) {
 }
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate').order('name').limit(2000);
+    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate, home_site').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
@@ -679,6 +679,7 @@ function App() {
   const [empPin, setEmpPin] = useState('');
   const [empSick, setEmpSick] = useState('');
   const [empVac, setEmpVac] = useState('');
+  const [empSite, setEmpSite] = useState('A');
   const [coordPin, setCoordPin] = useState('');
   const [sitePin, setSitePin] = useState('');
   const [tgTokenV, setTgTokenV] = useState('');
@@ -746,7 +747,7 @@ function App() {
   const pickEmp = async (id) => {
     setEmpSel(id);
     const e = emps.find(x => x.id === id) || {};
-    setEmpPin(e.pin || ''); setEmpSick(e.sl_balance ?? ''); setEmpVac(e.vl_balance ?? '');
+    setEmpPin(e.pin || ''); setEmpSick(e.sl_balance ?? ''); setEmpVac(e.vl_balance ?? ''); setEmpSite(e.home_site || 'A');
     setRate(e.daily_rate ?? ''); setIncRate(''); setIncDate(''); setIncNote('');
     try { setSalHist(await getSalaryHistory(id)); } catch (_) { setSalHist([]); }
   };
@@ -772,6 +773,7 @@ function App() {
         pin: empPin.trim() || null,
         sl_balance: empSick === '' ? 0 : Number(empSick),
         vl_balance: empVac === '' ? 0 : Number(empVac),
+        home_site: empSite || 'A',
       });
       flash('Saved'); loadEmps();
     } catch (e) { flash('Error: ' + e.message); }
@@ -1457,6 +1459,7 @@ function App() {
               <div class="unit">Leave — Sick ${e.sl_balance ?? 0} · Vacation ${e.vl_balance ?? 0}</div>
               <div class="unit">Daily rate — ${e.daily_rate ? '₱' + Number(e.daily_rate).toLocaleString('en-PH') : 'not set'}</div>
               <div class="unit">Passcode — ${e.pin ? 'set ✓' : 'not set ⚠'}</div>
+              <div class="unit">Home site (location) — ${e.home_site === 'B' ? 'Site B' : 'Site A'}</div>
             </div>`;
           })()}
           ${empSel && html`
@@ -1467,6 +1470,13 @@ function App() {
               <${Field} label="Sick leave (days)"><input type="number" min="0" step="0.5" value=${empSick} onInput=${e => setEmpSick(e.target.value)} placeholder="0" /><//>
               <${Field} label="Vacation leave (days)"><input type="number" min="0" step="0.5" value=${empVac} onInput=${e => setEmpVac(e.target.value)} placeholder="0" /><//>
             </div>
+            <${Field} label="Home site (location)">
+              <select value=${empSite} onChange=${e => setEmpSite(e.target.value)}>
+                <option value="A">Site A</option>
+                <option value="B">Site B</option>
+              </select>
+            <//>
+            <p class="note" style="margin:6px 0 12px">This is the worker’s base. The kiosk pays the away / stay-in allowance only when they clock in at a site other than this one.</p>
             <button class="btn" onClick=${saveEmp}>Save</button>`}
         </div>
 
