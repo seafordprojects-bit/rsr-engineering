@@ -363,12 +363,14 @@ function prSessions(rec){
     else if(aOpen!=null && aClose==null){ aClose=TO; }
     else if(mOpen!=null && mClose==null && aOpen==null){ mClose=TO; }
   }
-  const morning   = (mOpen!=null && mClose!=null) ? Math.max(0,mClose-mOpen) : 0;
-  const afternoon = (aOpen!=null && aClose!=null) ? Math.max(0,aClose-aOpen) : 0;
-  const evening   = (eOpen!=null && eClose!=null) ? Math.max(0,eClose-eOpen) : 0;
+  // A close earlier than its open means the punch crossed midnight (e.g. Time Out 00:00 / 1 AM) — add a day.
+  const _span=(o,c)=>(o!=null && c!=null) ? Math.max(0,(c>=o?c:c+86400000)-o) : 0;
+  const morning   = _span(mOpen,mClose);
+  const afternoon = _span(aOpen,aClose);
+  const evening   = _span(eOpen,eClose);
   const worked = morning+afternoon+evening;
   const eveThr=atH(PR_EVE_H,0);
-  const toEve=TO!=null && TO>=eveThr;
+  const toEve=TO!=null && (TO>=eveThr || TO<atH(PR_SHIFT_H,PR_SHIFT_M)); // a Time Out past midnight also counts as worked-into-evening
   const mFlag = !aftStart && !sdL && TI!=null && LO==null && (LI!=null||PO!=null||PI!=null||toEve);
   const aFlag = (!sdL && LO!=null && LI==null && (PO!=null||PI!=null||toEve))
              || (!sdP && (aftStart?TI:LI)!=null && PO==null && (PI!=null||toEve));
