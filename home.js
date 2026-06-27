@@ -1348,11 +1348,22 @@ function App() {
                 <div class="unit">${e.position || 'No position'}${e.phone ? ' · ' + e.phone : ''}</div>
                 <div class="unit">Rate: ${peso(e.daily_rate)}/day · Sick: ${e.sl_balance ?? 0} · Vacation: ${e.vl_balance ?? 0}</div>
                 <div class="unit">Passcode: <span class="mono" style="font-weight:700;letter-spacing:1px">${e.pin || '— not set —'}</span></div>
+                <div class="unit" style="margin-top:6px;display:flex;align-items:center;gap:8px">
+                  <span>Home site:</span>
+                  <select value=${e.home_site || 'A'} onChange=${async ev => {
+                    const site = ev.target.value;
+                    try { await updateEmployee(e.id, { home_site: site }); flash(`${e.name} → Site ${site}`); loadEmps(); }
+                    catch (err) { flash('Failed: ' + err.message); }
+                  }}>
+                    <option value="A">Site A</option>
+                    <option value="B">Site B</option>
+                  </select>
+                </div>
               </div>
               <span class="badge" style=${e.pin ? '' : 'background:var(--hivis);color:#000'}>${e.pin ? 'PIN ✓' : 'no PIN'}</span>
             </div>`) : html`<div class="empty">No personnel yet. Your assistant adds them in the Coordinator.</div>`}
         </div>
-        <p class="note" style="text-align:center">View only. To set passcode, leave or salary, use the dashboard's <b>settings</b>.</p>
+        <p class="note" style="text-align:center">Home site is editable here. To set passcode, leave or salary, use the dashboard's <b>settings</b>.</p>
       </div>
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
