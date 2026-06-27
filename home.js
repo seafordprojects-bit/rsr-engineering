@@ -909,12 +909,6 @@ function App() {
   if (!authed) return html`<${Lock} onUnlock=${() => setAuthed(true)} toast=${flash} />
     ${toast && html`<div class="toast">${toast}</div>`}`;
 
-  const soon = [
-    { ico:'📝', title:'Leave Approval' },
-    { ico:'📊', title:'Project Status' },
-    { ico:'💰', title:'Cash Advance / Payroll' },
-  ];
-
   // ---- admin: tool borrowing monitor (out now + inventory per site) ----
   if (adminTab === 'borrowed') {
     const dt = (s) => s ? new Date(s).toLocaleDateString() : '—';
@@ -1510,6 +1504,7 @@ function App() {
             </div>`}
         </div>`}`}
 
+      ${!showSet && html`
       ${att && html`
         <div class="sectlabel">Attendance today</div>
         <div class="card" style="cursor:pointer" onClick=${() => setAdminTab('attendance')}>
@@ -1521,6 +1516,15 @@ function App() {
               </div>`)}
           </div>
         </div>`}
+
+      <div class="sectlabel">Operations</div>
+      <div class="grid">
+        ${[
+          { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse', href:'../warehouse/' },
+          { ico:'🛒', num:m.poInbox, unit:'to purchase', title:'Purchasing', href:'../purchasing/' },
+          { ico:'💵', num:null, unit:'weekly', title:'Payroll', href:'../payroll/' },
+        ].map(t => html`<${Tile} ...${t} />`)}
+      </div>
 
       <div class="sectlabel">Field & tools</div>
       <div class="grid">
@@ -1537,12 +1541,7 @@ function App() {
         ${[
           { ico:'🧑‍💼', title:'HR Monitors', unit:'leaves, salary, etc.', onClick:() => setAdminTab('hrmenu') },
         ].map(t => html`<${Tile} ...${t} />`)}
-      </div>
-
-      <div class="sectlabel">On the roadmap</div>
-      <div class="grid">
-        ${soon.map(t => html`<${Tile} ...${t} />`)}
-      </div>
+      </div>`}
 
       <p class="note" style="text-align:center;margin-top:6px">RSR Engineering Services · Cebu</p>
     </div>
