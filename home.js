@@ -1522,15 +1522,6 @@ function App() {
           </div>
         </div>`}
 
-      <div class="sectlabel">Operations</div>
-      <div class="grid">
-        ${[
-          { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse', href:'../warehouse/' },
-          { ico:'🛒', num:m.poInbox, unit:'to purchase', title:'Purchasing', href:'../purchasing/' },
-          { ico:'💵', num:null, unit:'weekly', title:'Payroll', href:'../payroll/' },
-        ].map(t => html`<${Tile} ...${t} />`)}
-      </div>
-
       <div class="sectlabel">Field & tools</div>
       <div class="grid">
         ${[
