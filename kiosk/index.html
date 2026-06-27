@@ -2124,6 +2124,16 @@ function updBtns(rec){
   if(next==='pm_out'&&rec&&rec.punches&&!rec.punches.timeout){
     const tb=document.getElementById(BIDS['timeout']);if(tb)tb.disabled=false;
   }
+  // Hard cutoff: Lunch Out closes when Lunch In opens (12:40); PM Break Out closes when PM Break In opens (5:40).
+  // After the cutoff the OUT button is unavailable; the matching IN button stays enabled (forward-skip),
+  // and pressing it triggers the "session not recorded" notice.
+  if(rec&&!rec.punches.timeout){
+    const _n=new Date();
+    const _loCut=new Date(_n);_loCut.setHours(lunchInEarliestH,lunchInEarliestM,0,0);
+    const _poCut=new Date(_n);_poCut.setHours(pmInEarliestH,pmInEarliestM,0,0);
+    if(_n>=_loCut&&!rec.punches.lunch_out){const b=document.getElementById(BIDS['lunch_out']);if(b){b.disabled=true;b.classList.remove('highlight-next');}const li=document.getElementById(BIDS['lunch_in']);if(li&&!li.disabled)li.classList.add('highlight-next');}
+    if(_n>=_poCut&&!rec.punches.pm_out){const b=document.getElementById(BIDS['pm_out']);if(b){b.disabled=true;b.classList.remove('highlight-next');}const pi=document.getElementById(BIDS['pm_in']);if(pi&&!pi.disabled)pi.classList.add('highlight-next');}
+  }
   if(!rec){
     document.getElementById('btn-leave').disabled=true;
     document.getElementById('btn-undertime').disabled=true;
@@ -2155,7 +2165,10 @@ async function punch(type){
   if(_doSkip){
     _skipped.forEach(p=>{ rec.punches[p]='(skipped)'; rec.msMap[p]=null; });
     const skLbl=_skipped.map(p=>PLABELS[p]||p).join(', ');
-    showMsg('warn', emp.name+' — '+skLbl+' not punched', 'You did not punch '+skLbl+'. That session will NOT be counted toward your hours. Please inform Admin.', 7000);
+    let _extra='';
+    if(_skipped.includes('lunch_out')) _extra+=' Your MORNING time will NOT be recorded because you did not punch Lunch Out.';
+    if(_skipped.includes('pm_out')) _extra+=' Your AFTERNOON time will NOT be recorded because you did not punch PM Break Out.';
+    showMsg('warn', emp.name+' — '+skLbl+' not punched', 'You did not punch '+skLbl+'.'+_extra+' That session will NOT be counted toward your hours. Please inform Admin.', 7000);
   }
   // Earliest-time restrictions
   const now=new Date();
@@ -2255,22 +2268,13 @@ async function punch(type){
       if(workedSoFar<2){showMsg('err','Too early for Lunch Out','You must work at least 2 hours before going to lunch. Worked: '+msToHM(now.getTime()-effectiveStart(rec))+'.',4000);return;}
     }
     // Must punch between lunchOutEarly and lunchOutLatest
-    const latest=new Date(now);latest.setHours(lunchOutLatestH,lunchOutLatestM,0,0);
-    if(now>latest&&!lateLunchRequests[emp.code]?.approved){
-      // Check if already waiting
-      if(lateLunchRequests[emp.code]?.pending){
-        showMsg('warn','Still waiting for admin','Your late Lunch Out request is pending approval. Please wait.',4000);return;
-      }
-      // Send approval request to admin via Telegram
-      const reqId=Date.now();
-      lateLunchRequests[emp.code]={pending:true,approved:false,reqId,empCode:emp.code,empName:emp.name};
-      writeLateBreakRequest(emp.code, emp.name, todayKey(), 'lunch_out', nowShort());
-      showMsg('warn','Approval requested','Late Lunch Out sent to admin for approval. Please wait...',0);
-      sendLateLunchApproval(emp,reqId);
+    // Lunch Out closes at 12:40 (when Lunch In opens). Past that it is unavailable — direct them to Lunch In.
+    const loCut=new Date(now);loCut.setHours(lunchInEarliestH,lunchInEarliestM,0,0);
+    if(now>=loCut){
+      showMsg('warn','Lunch Out closed','Lunch Out is no longer available after '+fmt12(lunchInEarliestH,lunchInEarliestM)+'. Press Lunch In instead — your MORNING time will not be recorded.',5000);
+      const lb=document.getElementById(BIDS['lunch_in']);if(lb){lb.disabled=false;lb.classList.add('highlight-next');}
       return;
     }
-    // Clear approved flag after use
-    if(lateLunchRequests[emp.code]?.approved)delete lateLunchRequests[emp.code];
   }
   if(type==='lunch_in'){
     const earliest=new Date(now);earliest.setHours(lunchInEarliestH,lunchInEarliestM,0,0);
@@ -2297,19 +2301,13 @@ async function punch(type){
   }
   // Late PM Break Out — Telegram admin approval required
   if(type==='pm_out'){
-    const latest=new Date(now);latest.setHours(pmOutLatestH,pmOutLatestM,0,0);
-    if(now>latest&&!latePmOutRequests[emp.code]?.approved){
-      if(latePmOutRequests[emp.code]?.pending){
-        showMsg('warn','Still waiting for admin','Your late PM Break Out request is pending approval. Please wait.',4000);return;
-      }
-      const reqId=Date.now();
-      latePmOutRequests[emp.code]={pending:true,approved:false,reqId,empCode:emp.code,empName:emp.name};
-      writeLateBreakRequest(emp.code, emp.name, todayKey(), 'pm_out', nowShort());
-      showMsg('warn','Approval requested','Late PM Break Out sent to admin for approval. Please wait...',0);
-      sendLatePmOutApproval(emp,reqId);
+    // PM Break Out closes at 5:40 (when PM Break In opens). Past that it is unavailable — direct them to PM Break In.
+    const poCut=new Date(now);poCut.setHours(pmInEarliestH,pmInEarliestM,0,0);
+    if(now>=poCut){
+      showMsg('warn','PM Break Out closed','PM Break Out is no longer available after '+fmt12(pmInEarliestH,pmInEarliestM)+'. Press PM Break In instead — your AFTERNOON time will not be recorded.',5000);
+      const pb=document.getElementById(BIDS['pm_in']);if(pb){pb.disabled=false;pb.classList.add('highlight-next');}
       return;
     }
-    if(latePmOutRequests[emp.code]?.approved)delete latePmOutRequests[emp.code];
   }
   earlyBreakConfirmed=false;
   const nowMs=Date.now();
