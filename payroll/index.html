@@ -636,10 +636,11 @@ async function runPayroll(){
         otMs+=ot;
         totalWorkedMs+=worked;
         shortfallMs+=Math.max(0, shiftMs-Math.min(reg,shiftMs)); // late/undertime gap
-        // OT allowance only when the day actually has >= the minimum OT hours
-        // (default 3h). Safety net in case a flag is set incorrectly.
+        // OT allowance: auto-earned when the day's overtime reaches the minimum (default 3h OT
+        // past the shift = 11h worked on an 8h shift). Computed straight from the times, so it
+        // recomputes automatically whenever the day is edited.
         const otMinHrs = Number(cfg.otAllowMinHrs)||3;
-        if(r.has_ot_allowance && (ot/3600000) >= otMinHrs) otAllowDays++;
+        if((ot/3600000) >= otMinHrs - 0.001) otAllowDays++;
         if(r.has_away_allowance) awayAllowDays++;
       });
       const allowAmt=Number(cfg.allowance)||50;
