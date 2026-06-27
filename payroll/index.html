@@ -326,6 +326,9 @@ function parseClock(str){ if(str==null) return null; str=String(str).trim();
   m=str.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/); if(m) return {h:+m[1], m:+m[2]}; return null; }
 function toInputVal(str){ const c=parseClock(str); if(!c) return ''; return String(c.h).padStart(2,'0')+':'+String(c.m).padStart(2,'0'); }
 function fromInputVal(v){ if(!v) return null; const p=v.split(':'); let H=+p[0], M=+p[1]; const ap=H>=12?'PM':'AM'; let h=H%12; if(h===0)h=12; return String(h).padStart(2,'0')+':'+String(M).padStart(2,'0')+' '+ap; }
+// --- military (24h) entry for the editor ---
+function milFmt(el){ let d=el.value.replace(/\D/g,'').slice(0,4); if(d.length<=2){ el.value=d; } else { el.value=d.slice(0,d.length-2)+':'+d.slice(d.length-2); } }
+function milTo24(v){ if(!v) return ''; const m=String(v).trim().match(/^(\d{1,2}):?(\d{2})$/); if(!m) return ''; let H=+m[1], M=+m[2]; if(H>23||M>59) return ''; return String(H).padStart(2,'0')+':'+String(M).padStart(2,'0'); }
 function clockToMs(iso, str){ const c=parseClock(str); if(!c) return null; const [y,mo,d]=iso.split('-').map(Number); return new Date(y,mo-1,d,c.h,c.m,0,0).getTime(); }
 // Three independent sessions (Morning/Afternoon/Evening), each = its close minus its
 // open; a session counts only if BOTH punches exist, else 0 + a review flag.
@@ -831,7 +834,7 @@ function renderEditArea(){
     const inputs=fields.map(([k,lbl])=>`
       <div style="display:flex;flex-direction:column;gap:2px">
         <label style="font-size:10px;color:#888">${lbl}</label>
-        <input type="time" id="et_${rec.id}_${k}" value="${toInputVal(rec[k])}" style="padding:7px;border:1px solid #ddd;border-radius:7px;font-size:13px">
+        <input type="text" inputmode="numeric" maxlength="5" id="et_${rec.id}_${k}" value="${toInputVal(rec[k])}" oninput="milFmt(this)" placeholder="HH:MM" style="padding:7px;border:1px solid #ddd;border-radius:7px;font-size:13px;letter-spacing:1px">
       </div>`).join('');
     const inc = rec.is_incomplete || (rec.timein && !rec.timeout);
     return `<div style="border:1px solid #eee;border-radius:10px;padding:10px;margin-bottom:10px">
@@ -849,7 +852,7 @@ function renderEditArea(){
     </div>`;
   document.getElementById('edit-area').innerHTML=
     `<h3>Edit times — ${c.name}</h3>
-     <div style="font-size:11px;color:#888;margin-bottom:10px">Fix or complete each day's punches. Clear a field to blank it. Use "Add a missing day" to key in a day the kiosk never captured (e.g. a missing morning). Saving recomputes hours and pay using the same 8 AM shift / 12:40 afternoon rules as the kiosk.</div>
+     <div style="font-size:11px;color:#888;margin-bottom:10px">Fix or complete each day's punches. Clear a field to blank it. Use "Add a missing day" to key in a day the kiosk never captured (e.g. a missing morning). Times are 24-hour / military (e.g. 0800, 1300, 1700, 2100). Saving recomputes hours and pay using the same 8 AM shift / 12:40 afternoon rules as the kiosk.</div>
      ${addUI}
      ${body || '<div style="color:#888">No days yet — add one above.</div>'}`;
   const sv=document.getElementById('edit-save'); sv.onclick=()=>saveTimes(i);
@@ -873,7 +876,7 @@ async function saveTimes(i){
   days.forEach(rec=>{
     ['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'].forEach(k=>{
       const el=document.getElementById('et_'+rec.id+'_'+k);
-      if(el) rec[k]= el.value ? fromInputVal(el.value) : null;
+      if(el){ const mv=milTo24(el.value); rec[k]= mv ? fromInputVal(mv) : null; }
     });
     recomputeDay(rec, shiftHrs);
   });
