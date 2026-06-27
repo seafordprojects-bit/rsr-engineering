@@ -130,6 +130,7 @@ select.field-input{appearance:none}
 
   <div class="tabs">
     <button class="tab active" id="t-run" onclick="tab('run',this)">Run Payroll</button>
+    <button class="tab" id="t-today" onclick="tab('today',this)">Today</button>
     <button class="tab" id="t-adv" onclick="tab('adv',this)">Cash Advances</button>
     <button class="tab" id="t-set" onclick="tab('set',this)">Settings</button>
   </div>
@@ -166,6 +167,22 @@ select.field-input{appearance:none}
       <button class="btn-primary" onclick="printAllSlips()">🖨️ Print all payslips</button>
       <button class="btn-primary btn-green" onclick="postDeductions()" id="post-btn">Post vale deductions</button>
       <div id="post-msg" class="msg"></div>
+    </div>
+  </div>
+
+  <!-- TODAY (live attendance) -->
+  <div id="sec-today" class="section">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px">
+        <h4 style="margin:0">Today \u2014 <span id="today-date"></span></h4>
+        <button class="btn-sm" style="margin-top:0" onclick="loadToday()">\u21bb Refresh</button>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;font-size:12px;color:#888;margin-bottom:10px">
+        <span id="today-count">\u2014</span>
+        <span style="margin-left:auto;display:flex;align-items:center;gap:5px"><span style="width:7px;height:7px;border-radius:50%;background:#27ae60;display:inline-block"></span><span id="today-updated">live</span></span>
+      </div>
+      <input type="text" id="today-search" oninput="renderToday()" placeholder="Search name or code\u2026" autocomplete="off" style="width:100%;padding:9px 11px;border:1px solid #ddd;border-radius:10px;font-size:14px;margin-bottom:10px;box-sizing:border-box">
+      <div id="today-list"></div>
     </div>
   </div>
 
@@ -299,6 +316,10 @@ const peso = n => '₱'+(Math.round((n||0)*100)/100).toLocaleString('en-PH',{min
 const pesoShort = n => '₱'+Math.round(n||0).toLocaleString('en-PH');
 // ── TIME EDIT HELPERS (mirror the kiosk's worked-time math) ──
 const PR_SHIFT_H=8, PR_SHIFT_M=0, PR_GRACE=10, PR_LUNCHEND_H=13, PR_AFT_H=12, PR_AFT_M=40, PR_EVE_H=18;
+const PR_LO_H=12, PR_LO_M=0, PR_LO_LH=12, PR_LO_LM=30;   // morning close window 12:00–12:30 → credit 12:00
+const PR_PO_H=17, PR_PO_M=0, PR_PO_LH=17, PR_PO_LM=30;   // PM close window 5:00–5:30 → credit 5:00
+const PR_LO_CUT_H=12, PR_LO_CUT_M=40;   // Lunch Out closes at 12:40 — past this the morning is blank
+const PR_PO_CUT_H=17, PR_PO_CUT_M=40;   // PM Break Out closes at 5:40 — past this the afternoon is blank
 function parseClock(str){ if(str==null) return null; str=String(str).trim();
   let m=str.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])$/);
   if(m){ let h=(+m[1])%12; if(/[Pp]/.test(m[3]))h+=12; return {h, m:+m[2]}; }
@@ -317,10 +338,20 @@ function prSessions(rec){
   const sdL=!!rec.straight_duty_lunch, sdP=!!rec.straight_duty_pm;
   const TI=g(M.timein),LO=g(M.lunch_out),LI=g(M.lunch_in),PO=g(M.pm_out),PI=g(M.pm_in),TO=g(M.timeout);
   let mOpen = (!aftStart && TI!=null) ? (TI<=atH(PR_SHIFT_H,PR_SHIFT_M)+PR_GRACE*60000 ? atH(PR_SHIFT_H,PR_SHIFT_M) : TI) : null;
-  let aOpen = aftStart ? (TI!=null ? Math.max(atH(PR_LUNCHEND_H,0),TI) : null) : LI;
-  let eOpen = PI;
-  let mClose = sdL ? null : LO;
-  let aClose = sdP ? null : PO;
+  // Credit at standard session boundaries (same rules as the kiosk):
+  //  · afternoon opens no earlier than 1:00 PM (an early return waits until 1:00)
+  //  · evening opens no earlier than 6:00 PM
+  //  · morning close credited at 12:00 when punched 12:00–12:30; PM close at 5:00 when 5:00–5:30
+  const _win=(ms,h1,m1,h2,m2)=>(ms!=null && ms>=atH(h1,m1) && ms<=atH(h2,m2));
+  let aOpen = aftStart ? (TI!=null ? Math.max(atH(PR_LUNCHEND_H,0),TI) : null)
+                       : (LI!=null ? Math.max(atH(PR_LUNCHEND_H,0),LI) : null);
+  let eOpen = PI!=null ? Math.max(atH(PR_EVE_H,0),PI) : null;
+  // Lunch Out must exist and be no later than 12:40, else the MORNING is not recorded (blank).
+  let mClose = (sdL || LO==null || LO>atH(PR_LO_CUT_H,PR_LO_CUT_M)) ? null
+             : (_win(LO,PR_LO_H,PR_LO_M,PR_LO_LH,PR_LO_LM) ? atH(PR_LO_H,PR_LO_M) : LO);
+  // PM Break Out must exist and be no later than 5:40, else the AFTERNOON is not recorded (blank).
+  let aClose = (sdP || PO==null || PO>atH(PR_PO_CUT_H,PR_PO_CUT_M)) ? null
+             : (_win(PO,PR_PO_H,PR_PO_M,PR_PO_LH,PR_PO_LM) ? atH(PR_PO_H,PR_PO_M) : PO);
   let eClose = TO;
   if(sdL && !aftStart){ mClose = sdP ? null : PO; aOpen=null; aClose=null; }
   if(TO!=null){
@@ -394,12 +425,70 @@ function unlock(){
   }
 }
 
+// \u2500\u2500 TODAY (live attendance) \u2500\u2500
+let todayRows=[], todayTimer=null, todayActive=false;
+function fmtClock(str){ const c=parseClock(str); if(!c) return '\u2014'; const ap=c.h<12?'AM':'PM'; let h=c.h%12; if(h===0)h=12; return h+':'+String(c.m).padStart(2,'0')+' '+ap; }
+function todayStatus(r){
+  if(!r||!r.timein) return {lbl:'Not in yet', bg:'#eef0f2', fg:'#7a8085'};
+  if(r.timeout) return {lbl:'Timed out', bg:'#eef0f2', fg:'#7a8085'};
+  if(r.pm_out && !r.pm_in) return {lbl:'On PM break', bg:'#FFF3CD', fg:'#7a5a00'};
+  if(r.lunch_out && !r.lunch_in) return {lbl:'On lunch', bg:'#FFF3CD', fg:'#7a5a00'};
+  return {lbl:'Working', bg:'#E3F6E9', fg:'#1c7a3e'};
+}
+function startToday(){
+  todayActive=true; loadToday();
+  if(todayTimer) clearInterval(todayTimer);
+  todayTimer=setInterval(()=>{ if(todayActive) loadToday(); }, 25000);
+}
+function stopToday(){ todayActive=false; if(todayTimer){ clearInterval(todayTimer); todayTimer=null; } }
+async function loadToday(){
+  try{
+    if(!employees.length) await loadEmployees();
+    const todayISO=isoOf(new Date());
+    document.getElementById('today-date').textContent=fmtDate(todayISO);
+    const { data } = await sb.from('attendance_records').select('*').order('created_at',{ascending:false}).limit(800);
+    const recs=(data||[]).filter(r=>toISO(r.date)===todayISO);
+    const byCode={}; recs.forEach(r=>{ if(!byCode[r.employee_code]) byCode[r.employee_code]=r; });
+    todayRows=employees.map(e=>({ e, r:byCode[e.code]||null }));
+    todayRows.sort((a,b)=>{
+      const ai=a.r&&a.r.timein, bi=b.r&&b.r.timein;
+      if(ai&&!bi) return -1; if(!ai&&bi) return 1;
+      if(ai&&bi){ const ca=parseClock(a.r.timein),cb=parseClock(b.r.timein); return ((ca?ca.h*60+ca.m:0))-((cb?cb.h*60+cb.m:0)); }
+      return a.e.name.localeCompare(b.e.name);
+    });
+    const inCount=todayRows.filter(x=>x.r&&x.r.timein).length;
+    document.getElementById('today-count').textContent=inCount+' of '+todayRows.length+' clocked in';
+    document.getElementById('today-updated').textContent='updated '+new Date().toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit'});
+    renderToday();
+  }catch(err){ const u=document.getElementById('today-updated'); if(u) u.textContent='offline \u2014 retrying'; }
+}
+function renderToday(){
+  const q=(document.getElementById('today-search')?document.getElementById('today-search').value:'').trim().toLowerCase();
+  const rows=todayRows.filter(x=>!q || (x.e.name+' '+x.e.code+' '+(x.e.dept||'')).toLowerCase().includes(q));
+  const el=document.getElementById('today-list');
+  if(!rows.length){ el.innerHTML='<div style="color:#888;font-size:13px;padding:6px 2px">No employee matches.</div>'; return; }
+  el.innerHTML=rows.map(({e,r})=>{
+    const st=todayStatus(r);
+    const lateBadge=(r&&r.is_late)?' <span style="font-size:10px;font-weight:700;color:#D85A30">LATE</span>':'';
+    const line = r ? ('In '+fmtClock(r.timein)+' \u00b7 Lunch '+fmtClock(r.lunch_out)+'\u2013'+fmtClock(r.lunch_in)+' \u00b7 PM '+fmtClock(r.pm_out)+'\u2013'+fmtClock(r.pm_in)+' \u00b7 Out '+fmtClock(r.timeout)) : 'No punch yet today';
+    return `<div class="pr-card" style="padding:10px 12px">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+        <div style="font-weight:700;font-size:14px">${e.name}${lateBadge}</div>
+        <span style="font-size:11px;font-weight:700;padding:3px 9px;border-radius:20px;background:${st.bg};color:${st.fg};white-space:nowrap">${st.lbl}</span>
+      </div>
+      <div style="font-size:11px;color:#666;margin-top:4px">${e.code} \u00b7 ${e.dept||'\u2014'}</div>
+      <div style="font-size:12px;color:#333;margin-top:5px;font-variant-numeric:tabular-nums">${line}</div>
+    </div>`;
+  }).join('');
+}
+
 function tab(name,btn){
   document.querySelectorAll('.section').forEach(s=>s.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
   document.getElementById('sec-'+name).classList.add('active');
   btn.classList.add('active');
   if(name==='adv') renderAdvances();
+  if(name==='today') startToday(); else stopToday();
 }
 
 // ── INIT ──
