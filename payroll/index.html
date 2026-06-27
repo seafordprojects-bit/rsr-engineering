@@ -329,6 +329,7 @@ function fromInputVal(v){ if(!v) return null; const p=v.split(':'); let H=+p[0],
 // --- military (24h) entry for the editor ---
 function milFmt(el){ let d=el.value.replace(/\D/g,'').slice(0,4); if(d.length<=2){ el.value=d; } else { el.value=d.slice(0,d.length-2)+':'+d.slice(d.length-2); } }
 function milTo24(v){ if(!v) return ''; const m=String(v).trim().match(/^(\d{1,2}):?(\d{2})$/); if(!m) return ''; let H=+m[1], M=+m[2]; if(H>23||M>59) return ''; return String(H).padStart(2,'0')+':'+String(M).padStart(2,'0'); }
+function milKey(ev, el){ if(ev.key==='Enter'||ev.keyCode===13){ ev.preventDefault(); el.value=milTo24(el.value); el.blur(); } }
 function clockToMs(iso, str){ const c=parseClock(str); if(!c) return null; const [y,mo,d]=iso.split('-').map(Number); return new Date(y,mo-1,d,c.h,c.m,0,0).getTime(); }
 // Three independent sessions (Morning/Afternoon/Evening), each = its close minus its
 // open; a session counts only if BOTH punches exist, else 0 + a review flag.
@@ -415,6 +416,7 @@ function toISO(s){
   const d=new Date(s); return isNaN(d)?s:isoOf(d);
 }
 function fmtDate(iso){const d=new Date(iso+'T00:00:00');return d.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});}
+function dowOf(iso){const d=new Date(iso+'T00:00:00');return d.toLocaleDateString('en-PH',{weekday:'long'});}
 
 // ── LOCK ──
 function unlock(){
@@ -834,11 +836,11 @@ function renderEditArea(){
     const inputs=fields.map(([k,lbl])=>`
       <div style="display:flex;flex-direction:column;gap:2px">
         <label style="font-size:10px;color:#888">${lbl}</label>
-        <input type="text" inputmode="numeric" maxlength="5" id="et_${rec.id}_${k}" value="${toInputVal(rec[k])}" oninput="milFmt(this)" placeholder="HH:MM" style="padding:7px;border:1px solid #ddd;border-radius:7px;font-size:13px;letter-spacing:1px">
+        <input type="text" inputmode="numeric" maxlength="5" id="et_${rec.id}_${k}" value="${toInputVal(rec[k])}" oninput="milFmt(this)" onkeydown="milKey(event,this)" placeholder="HH:MM" style="padding:7px;border:1px solid #ddd;border-radius:7px;font-size:13px;letter-spacing:1px">
       </div>`).join('');
     const inc = rec.is_incomplete || (rec.timein && !rec.timeout);
     return `<div style="border:1px solid #eee;border-radius:10px;padding:10px;margin-bottom:10px">
-      <div style="font-weight:600;font-size:13px;margin-bottom:8px">${fmtDate(toISO(rec.date))} ${inc?'<span style=\'color:#E8A330;font-size:11px\'>▲ incomplete</span>':''}</div>
+      <div style="font-weight:600;font-size:13px;margin-bottom:8px">${fmtDate(toISO(rec.date))} <span style="color:#94a3b8;font-weight:500">· ${dowOf(toISO(rec.date))}</span> ${inc?'<span style=\'color:#E8A330;font-size:11px\'>▲ incomplete</span>':''}</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${inputs}</div>
     </div>`;
   }).join('');
