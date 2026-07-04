@@ -103,7 +103,9 @@ select.field-input{appearance:none}
   #print-area,#print-area *{visibility:visible}
   #print-area{position:absolute;left:0;top:0;width:100%;padding:0}
   .modal,.modal-bg{position:static;background:none;max-width:none;max-height:none;overflow:visible;border-radius:0;padding:0;display:block}
-  .mini{min-height:70mm;margin:0 1mm 3mm 0}
+  /* 4 rows per A4 page (2 columns = 8 payslips/page): fixed height fills a
+     quarter of the usable page so the browser breaks after every 4th row. */
+  .mini{height:65mm;overflow:hidden;line-height:1.4;margin:0 1mm 2mm 0}
 }
 .spin{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:#378ADD;border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
 @keyframes sp{to{transform:rotate(360deg)}}
