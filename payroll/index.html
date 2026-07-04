@@ -87,23 +87,23 @@ select.field-input{appearance:none}
 .slip-net{display:flex;justify-content:space-between;background:#1B2A4A;color:#fff;padding:10px 12px;border-radius:10px;font-weight:700;margin-top:6px}
 /* compact tiled payslips for batch printing */
 .slip-grid{font-size:0}
-.mini{display:inline-block;width:49%;vertical-align:top;box-sizing:border-box;border:1px solid #333;border-radius:6px;padding:7px 9px;margin:0 0.5% 1% 0;font-size:9px;line-height:1.36;color:#111;break-inside:avoid;page-break-inside:avoid}
-.mini-co{font-size:8px;font-weight:700;text-align:center;letter-spacing:.05em;text-transform:uppercase;margin-bottom:1px}
-.mini-top{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid #333;padding-bottom:3px;margin-bottom:3px}
-.mini-name{font-weight:800;font-size:10px;text-transform:uppercase}
-.mini-code{font-size:8px;color:#555}
-.mini-sub{font-size:8px;color:#555;margin-bottom:4px}
+.mini{display:inline-block;width:49%;vertical-align:top;box-sizing:border-box;border:1px solid #333;border-radius:6px;padding:10px 12px;margin:0 0.5% 1% 0;font-size:13px;line-height:1.5;color:#111;break-inside:avoid;page-break-inside:avoid}
+.mini-co{font-size:11px;font-weight:700;text-align:center;letter-spacing:.05em;text-transform:uppercase;margin-bottom:2px}
+.mini-top{display:flex;justify-content:space-between;align-items:baseline;border-bottom:1px solid #333;padding-bottom:4px;margin-bottom:4px}
+.mini-name{font-weight:800;font-size:15px;text-transform:uppercase}
+.mini-code{font-size:11px;color:#555}
+.mini-sub{font-size:11px;color:#555;margin-bottom:6px}
 .mini-l{display:flex;justify-content:space-between}
 .mini-l .v{font-variant-numeric:tabular-nums}
-.mini-net{display:flex;justify-content:space-between;font-weight:800;font-size:10px;border-top:1px solid #333;margin-top:4px;padding-top:3px}
-.mini-sign{font-size:7px;color:#555;margin-top:9px;border-top:1px solid #999;padding-top:2px;width:72%}
+.mini-net{display:flex;justify-content:space-between;font-weight:800;font-size:15px;border-top:1px solid #333;margin-top:6px;padding-top:5px}
+.mini-sign{font-size:10px;color:#555;margin-top:14px;border-top:1px solid #999;padding-top:3px;width:72%}
 @page{size:A4 portrait;margin:8mm}
 @media print{
   body *{visibility:hidden}
   #print-area,#print-area *{visibility:visible}
   #print-area{position:absolute;left:0;top:0;width:100%;padding:0}
   .modal,.modal-bg{position:static;background:none;max-width:none;max-height:none;overflow:visible;border-radius:0;padding:0;display:block}
-  .mini{height:52mm;margin:0 1mm 3mm 0}
+  .mini{min-height:70mm;margin:0 1mm 3mm 0}
 }
 .spin{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:#378ADD;border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -598,20 +598,17 @@ async function runPayroll(){
   try{
     if(!employees.length) await loadEmployees();
     await loadAdvances();
-    // Fetch attendance. Try a date-range query; if the column is text we still
-    // catch everything by also filtering client-side on normalised ISO dates.
+    // Fetch attendance. The kiosk stores `date` as TEXT in mixed formats
+    // (ISO '2026-06-29' and MM/DD/YYYY '06/29/2026'). A Supabase gte/lte range
+    // filter compares those as plain strings and silently drops the non-ISO
+    // rows — which is what was hiding most clocked-in workers (e.g. 2 of 16).
+    // So pull recent rows and filter client-side on a NORMALISED ISO date,
+    // exactly like the Today tab, so the two screens can never disagree.
     let recs=[];
     try{
-      const {data}=await sb.from('attendance_records').select('*').gte('date',from).lte('date',to);
-      recs=data||[];
-    }catch(e){ recs=[]; }
-    if(!recs.length){
-      // fallback: pull recent and filter client-side (handles MM/DD/YYYY text columns)
       const {data}=await sb.from('attendance_records').select('*').order('created_at',{ascending:false}).limit(5000);
-      recs=(data||[]).filter(r=>{const i=toISO(r.date);return i>=from && i<=to;});
-    } else {
-      recs=recs.filter(r=>{const i=toISO(r.date);return i>=from && i<=to;});
-    }
+      recs=(data||[]).filter(r=>{ const i=toISO(r.date); return i>=from && i<=to; });
+    }catch(e){ recs=[]; }
 
     // group by employee_code
     const byEmp={};
@@ -921,7 +918,7 @@ function slipMini(r){
     ${L('Daily pay ('+r.daysPresent+'d)',r.basic)}
     ${r.otPay>0?L('OT ('+r.otHrs.toFixed(1)+'h × '+cfg.otMult+')',r.otPay):''}
     ${(Number(r.holPay)||0)>0?L('Holiday pay',r.holPay):''}
-    <div class="mini-l" style="font-size:8px;color:#888"><span>${basicHrs.toFixed(0)}h basic + ${r.otHrs.toFixed(0)}h OT</span><span></span></div>
+    <div class="mini-l" style="font-size:11px;color:#888"><span>${basicHrs.toFixed(0)}h basic + ${r.otHrs.toFixed(0)}h OT</span><span></span></div>
     ${L('Late/UT',r.lateUT,true)}
     ${L('OT allow.',Number(r.otAllowance)||0)}
     ${(Number(r.stayInAllowance)||0)>0?L('Stay-in',Number(r.stayInAllowance)||0):''}
