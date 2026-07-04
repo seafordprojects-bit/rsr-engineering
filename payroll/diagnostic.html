@@ -1,0 +1,130 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RSR Payroll Diagnostic</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+body{font-family:-apple-system,sans-serif;background:#f4f4ef;margin:0;padding:16px;color:#1a1a1a}
+h2{margin:0 0 4px}
+.sub{color:#777;font-size:13px;margin-bottom:14px}
+.card{background:#fff;border-radius:12px;padding:14px 16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.06)}
+.ok{color:#0a7d4f;font-weight:700}
+.bad{color:#a32d2d;font-weight:700}
+.warn{color:#8a5a00;font-weight:700}
+table{border-collapse:collapse;width:100%;font-size:13px}
+td,th{padding:4px 6px;border-bottom:1px solid #eee;text-align:left}
+th{color:#666;font-weight:600}
+code{background:#f0f0ea;padding:1px 5px;border-radius:5px;font-size:12px}
+button{background:#378ADD;color:#fff;border:0;border-radius:10px;padding:12px 18px;font-size:15px;font-weight:700;width:100%;margin-bottom:14px}
+#out{white-space:normal}
+.mono{font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<h2>🔬 Payroll Diagnostic</h2>
+<div class="sub">Reads the same Supabase project as the payroll (wpmcbjrisuyjvobvzaus) and tests every stage. Take a screenshot of the whole result.</div>
+<button onclick="run()">Run diagnostic</button>
+<div id="out"></div>
+
+<script>
+const SUPABASE_URL = 'https://wpmcbjrisuyjvobvzaus.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+function toISO(s){
+  if(!s) return '';
+  s=String(s).trim();
+  if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+  const m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m) return m[3]+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0');
+  return s;
+}
+function parseClock(str){ if(str==null) return null; str=String(str).trim();
+  let m=str.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])$/);
+  if(m){ let h=(+m[1])%12; if(/[Pp]/.test(m[3]))h+=12; return {h, m:+m[2]}; }
+  m=str.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/); if(m) return {h:+m[1], m:+m[2]}; return null; }
+const norm=c=>String(c||'').toUpperCase().replace(/\s+/g,'');
+const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+
+async function run(){
+  const out=document.getElementById('out');
+  out.innerHTML='<div class="card">Running…</div>';
+  let html='';
+
+  // ── STAGE 1: connection + attendance fetch ──
+  let att=[], attErr=null;
+  try{
+    let res=await sb.from('attendance_records').select('*').limit(5000);
+    if(res.error) attErr=res.error.message; else att=res.data||[];
+  }catch(e){ attErr=e.message||String(e); }
+  if(attErr){
+    html+='<div class="card"><span class="bad">✗ STAGE 1 FAILED — cannot read attendance_records</span><br>Error: <code>'+esc(attErr)+'</code><br>This is the root cause: the payroll gets nothing at all.</div>';
+    out.innerHTML=html; return;
+  }
+  html+='<div class="card"><span class="ok">✓ STAGE 1</span> — connected; fetched <b>'+att.length+'</b> attendance rows total.</div>';
+
+  // ── STAGE 2: rows per date (normalised) for Jun 25 – Jul 4 ──
+  const byDate={};
+  att.forEach(r=>{ const i=toISO(r.date); (byDate[i]=byDate[i]||[]).push(r); });
+  const days=['2026-06-25','2026-06-26','2026-06-27','2026-06-28','2026-06-29','2026-06-30','2026-07-01','2026-07-02','2026-07-03','2026-07-04'];
+  html+='<div class="card"><b>STAGE 2 — rows per date (after date normalisation)</b><table><tr><th>date</th><th>rows</th><th>with timein</th><th>timein parses OK</th></tr>';
+  days.forEach(d=>{
+    const rows=byDate[d]||[];
+    const withTi=rows.filter(r=>r.timein).length;
+    const parseOk=rows.filter(r=>r.timein && parseClock(r.timein)).length;
+    const cls=rows.length? (parseOk===withTi && withTi>0 ?'ok':'warn') : 'bad';
+    html+='<tr><td>'+d+'</td><td class="mono '+cls+'">'+rows.length+'</td><td class="mono">'+withTi+'</td><td class="mono">'+parseOk+'</td></tr>';
+  });
+  html+='</table>If a date you encoded shows 0 rows here, the rows were saved with a date the normaliser cannot read — check the exact text in that row\'s date cell.</div>';
+
+  // ── STAGE 3: unparseable time samples ──
+  const badTimes=[];
+  att.forEach(r=>{ ['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'].forEach(k=>{
+    if(r[k] && !parseClock(r[k]) && badTimes.length<12) badTimes.push({code:r.employee_code,date:r.date,col:k,val:r[k]});
+  });});
+  if(badTimes.length){
+    html+='<div class="card"><span class="warn">⚠ STAGE 3 — time values the payroll cannot parse ('+badTimes.length+' shown)</span><table><tr><th>code</th><th>date</th><th>column</th><th>value</th></tr>';
+    badTimes.forEach(b=>{ html+='<tr><td>'+esc(b.code)+'</td><td>'+esc(b.date)+'</td><td>'+esc(b.col)+'</td><td><code>'+esc(b.val)+'</code></td></tr>'; });
+    html+='</table>Fix these cells to formats like <code>08:00 AM</code> or <code>08:00</code>.</div>';
+  } else {
+    html+='<div class="card"><span class="ok">✓ STAGE 3</span> — every punch time in the table parses.</div>';
+  }
+
+  // ── STAGE 4: employees table + matching ──
+  let emps=[], empErr=null;
+  try{
+    const res=await sb.from('employees').select('*');
+    if(res.error) empErr=res.error.message; else emps=res.data||[];
+  }catch(e){ empErr=e.message||String(e); }
+  if(empErr){
+    html+='<div class="card"><span class="bad">✗ STAGE 4 FAILED — cannot read employees table</span><br>Error: <code>'+esc(empErr)+'</code><br>Old payroll builds show NOTHING when this fails.</div>';
+  } else {
+    const empSet={}; emps.forEach(e=>{empSet[norm(e.code)]=1;});
+    const codesInAtt={}; att.forEach(r=>{ if(toISO(r.date)>='2026-06-27' && toISO(r.date)<='2026-07-03') codesInAtt[norm(r.employee_code)]=r.employee_name||r.employee_code; });
+    const missing=Object.keys(codesInAtt).filter(k=>!empSet[k]);
+    html+='<div class="card"><b>STAGE 4 — employees table</b>: <b>'+emps.length+'</b> rows. Codes punching Jun 27–Jul 3: <b>'+Object.keys(codesInAtt).length+'</b>. ';
+    if(missing.length){
+      html+='<span class="warn">⚠ '+missing.length+' punched code(s) have NO employee record:</span><br>'+missing.map(k=>'<code>'+esc(codesInAtt[k])+' ('+esc(k)+')</code>').join(' ');
+      html+='<br>Old builds silently hide these people. The v2026-07-04 build shows them with a red pill.';
+    } else {
+      html+='<span class="ok">✓ every punching code matches an employee record.</span>';
+    }
+    html+='</div>';
+  }
+
+  // ── STAGE 5: simulate the payroll run for Jun 27 – Jul 3 ──
+  const from='2026-06-27', to='2026-07-03';
+  const inRange=att.filter(r=>{const i=toISO(r.date);return i>=from&&i<=to;});
+  const withTi=inRange.filter(r=>r.timein);
+  const uniq={}; withTi.forEach(r=>{uniq[norm(r.employee_code)]=1;});
+  html+='<div class="card"><b>STAGE 5 — simulated run '+from+' → '+to+'</b><br>'+
+    'Rows in range: <b>'+inRange.length+'</b> · with timein: <b>'+withTi.length+'</b> · unique workers: <b class="'+(Object.keys(uniq).length>2?'ok':'bad')+'">'+Object.keys(uniq).length+'</b><br>'+
+    'The v2026-07-04 payroll must show exactly <b>'+Object.keys(uniq).length+'</b> people for this range. If your payroll shows fewer, the page is running an OLD cached build — the header must say <code>v2026-07-04</code>.</div>';
+
+  out.innerHTML=html;
+}
+</script>
+</body>
+</html>
