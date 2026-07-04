@@ -127,7 +127,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub">Weekly Payroll</div>
+    <div class="app-sub">Weekly Payroll · v2026-07-04</div>
   </div>
 
   <div class="tabs">
@@ -606,19 +606,35 @@ async function runPayroll(){
     // rows — which is what was hiding most clocked-in workers (e.g. 2 of 16).
     // So pull recent rows and filter client-side on a NORMALISED ISO date,
     // exactly like the Today tab, so the two screens can never disagree.
-    let recs=[];
+    let recs=[], fetchedN=0;
     try{
-      const {data}=await sb.from('attendance_records').select('*').order('created_at',{ascending:false}).limit(5000);
-      recs=(data||[]).filter(r=>{ const i=toISO(r.date); return i>=from && i<=to; });
-    }catch(e){ recs=[]; }
+      let res=await sb.from('attendance_records').select('*').order('created_at',{ascending:false}).limit(5000);
+      if(res.error){ res=await sb.from('attendance_records').select('*').limit(5000); } // table may lack created_at
+      if(res.error) throw res.error;
+      fetchedN=(res.data||[]).length;
+      recs=(res.data||[]).filter(r=>{ const i=toISO(r.date); return i>=from && i<=to; });
+    }catch(e){ msg('run-msg','err','Could not load attendance: '+(e.message||e)); recs=[]; }
 
-    // group by employee_code
+    // group by NORMALISED employee_code ('rsr 0009' == 'RSR 0009' == 'RSR0009')
+    const normCode=c=>String(c||'').toUpperCase().replace(/\s+/g,'');
     const byEmp={};
-    recs.forEach(r=>{ (byEmp[r.employee_code]=byEmp[r.employee_code]||[]).push(r); });
+    recs.forEach(r=>{ const k=normCode(r.employee_code); (byEmp[k]=byEmp[k]||[]).push(r); });
+
+    // roster = employees table PLUS anyone found in attendance but missing from
+    // that table (shown with rate 0 + warning, instead of silently dropped —
+    // the list must always match who actually punched).
+    const roster=employees.map(e=>({...e, _k:normCode(e.code), unknown:false}));
+    const known={}; roster.forEach(e=>{known[e._k]=1;});
+    Object.keys(byEmp).forEach(k=>{
+      if(known[k]) return;
+      const r0=byEmp[k][0];
+      roster.push({ id:null, code:r0.employee_code, name:(r0.employee_name||r0.employee_code||'Unknown'),
+        dept:'', position:'', homeSite:r0.site||'A', shift:8, dailyRate:0, suspended:false, _k:k, unknown:true });
+    });
 
     computed=[];
-    employees.forEach(emp=>{
-      let rs=(byEmp[emp.code]||[]).filter(r=>r.timein); // only days actually worked
+    roster.forEach(emp=>{
+      let rs=(byEmp[emp._k]||[]).filter(r=>r.timein); // only days actually worked
       // de-duplicate by date — if the same day appears twice, keep one (avoids double pay)
       const seen={}; rs=rs.filter(r=>{ const k=toISO(r.date); if(seen[k]) return false; seen[k]=1; return true; });
       if(!rs.length) return; // skip employees with no attendance this week
@@ -652,7 +668,7 @@ async function runPayroll(){
       const defaultVale = bal>0 ? Math.min(cfg.weeklyVale, bal) : 0;
       const al = allowancesFor(emp.id);
       computed.push({
-        days: rs, dayFlags,
+        days: rs, dayFlags, unknown:!!emp.unknown,
         code:emp.code, name:emp.name, dept:emp.dept, homeSite:emp.homeSite,
         suspended:emp.suspended, dailyRate:emp.dailyRate, shift:emp.shift, hourly,
         daysPresent, otHrs:otMs/3600000, totalHrs:totalWorkedMs/3600000, basic, lateUT, otPay,
@@ -662,8 +678,13 @@ async function runPayroll(){
       });
     });
 
-    if(!computed.length){ msg('run-msg','err','No attendance found for that week.'); document.getElementById('run-results').style.display='none'; }
-    else { clearMsg('run-msg'); renderRun(); document.getElementById('run-results').style.display='block'; }
+    const unknownN=computed.filter(r=>r.unknown).length;
+    if(!computed.length){ msg('run-msg','err','No attendance found for that week. (Fetched '+fetchedN+' rows total; '+recs.length+' within '+from+' → '+to+'.)'); document.getElementById('run-results').style.display='none'; }
+    else {
+      if(unknownN>0) msg('run-msg','err','⚠ '+unknownN+' worker(s) punched but have no employee record (rate ₱0) — add them in Settings/employees, then reload.');
+      else clearMsg('run-msg');
+      renderRun(); document.getElementById('run-results').style.display='block';
+    }
   }catch(err){
     msg('run-msg','err','Error: '+err.message);
   }finally{
@@ -686,7 +707,7 @@ function renderRun(){
     <div class="pr-card" data-emp="${(r.name+' '+r.code+' '+(r.dept||'')).toLowerCase()}">
       <div class="pr-head">
         <div>
-          <div class="pr-name">${r.name} ${r.suspended?'<span class="pill pill-susp">suspended</span>':''}</div>
+          <div class="pr-name">${r.name} ${r.suspended?'<span class="pill pill-susp">suspended</span>':''} ${r.unknown?'<span class="pill pill-susp">no employee record · rate ₱0</span>':''}</div>
           <div class="pr-meta">${r.code} · ${r.dept||'—'} · ${r.daysPresent} day(s)</div>
         </div>
         <div class="pr-net">
