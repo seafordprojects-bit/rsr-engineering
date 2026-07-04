@@ -127,7 +127,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub">Weekly Payroll · v2026-07-04d</div>
+    <div class="app-sub">Weekly Payroll · v2026-07-04e</div>
   </div>
 
   <div class="tabs">
@@ -147,8 +147,8 @@ select.field-input{appearance:none}
         <button class="quick-btn" id="q-custom" onclick="markCustom()">Custom</button>
       </div>
       <div class="toolbar">
-        <div class="fld"><label class="field-label">From</label><input type="date" id="from" class="field-input" onchange="markCustom()"></div>
-        <div class="fld"><label class="field-label">To</label><input type="date" id="to" class="field-input" onchange="markCustom()"></div>
+        <div class="fld"><label class="field-label">From</label><input type="date" id="from" class="field-input" autocomplete="off" onchange="markCustom()"></div>
+        <div class="fld"><label class="field-label">To</label><input type="date" id="to" class="field-input" autocomplete="off" onchange="markCustom()"></div>
       </div>
       <button class="btn-primary" onclick="runPayroll()" id="run-btn">Load &amp; compute</button>
     </div>
@@ -518,6 +518,9 @@ async function init(){
   document.getElementById('ot-disp').textContent=cfg.otMult;
   document.getElementById('adv-date').value=isoOf(new Date());
   setWeek(0);
+  // browsers can restore previously-typed dates AFTER load, silently overriding
+  // the default week — re-assert it a moment later unless the user chose Custom
+  setTimeout(()=>{ if(!document.getElementById('q-custom').classList.contains('active')) setWeek(0); },400);
   await loadEmployees();
   await loadAdvances();
   await loadDeductAllowances();
