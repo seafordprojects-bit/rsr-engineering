@@ -127,7 +127,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub">Weekly Payroll · v2026-07-04b</div>
+    <div class="app-sub">Weekly Payroll · v2026-07-04d</div>
   </div>
 
   <div class="tabs">
@@ -154,6 +154,8 @@ select.field-input{appearance:none}
     </div>
 
     <div id="run-msg" class="msg"></div>
+    <div id="live-banner" style="display:none;background:#FFF3CD;color:#633806;border-radius:10px;padding:10px 12px;font-size:13px;font-weight:600;margin-bottom:10px;text-align:center;cursor:pointer" onclick="runPayroll()">🔄 New punches arrived — tap to reload with latest data</div>
+    <div id="live-stamp" style="display:none;color:#8a8a80;font-size:11px;text-align:right;margin:-4px 2px 8px"></div>
 
     <div id="run-results" style="display:none">
       <div class="stats-grid">
@@ -581,12 +583,15 @@ function outstanding(code){
 
 // ── WEEK SELECTION (Mon–Sun) ──
 function setWeek(offset){
-  const now=new Date();
-  const dow=(now.getDay()+6)%7; // 0=Mon
-  const mon=new Date(now); mon.setDate(now.getDate()-dow+offset*7); mon.setHours(0,0,0,0);
-  const sun=new Date(mon); sun.setDate(mon.getDate()+6);
-  document.getElementById('from').value=isoOf(mon);
-  document.getElementById('to').value=isoOf(sun);
+  // Pay week runs SATURDAY → FRIDAY. Reference from *yesterday* so that on
+  // payday Saturday, "This week" is the week that just ended (e.g. on Sat
+  // Jul 4 it loads Jun 27 → Jul 3), and mid-week it is the ongoing week.
+  const ref=new Date(); ref.setDate(ref.getDate()-1); ref.setHours(0,0,0,0);
+  const sinceSat=(ref.getDay()+1)%7; // Sat=0, Sun=1, … Fri=6
+  const sat=new Date(ref); sat.setDate(ref.getDate()-sinceSat+offset*7);
+  const fri=new Date(sat); fri.setDate(sat.getDate()+6);
+  document.getElementById('from').value=isoOf(sat);
+  document.getElementById('to').value=isoOf(fri);
   document.querySelectorAll('.quick-btn').forEach(b=>b.classList.remove('active'));
   document.getElementById(offset===0?'q-this':'q-last').classList.add('active');
 }
@@ -686,6 +691,11 @@ async function runPayroll(){
     });
 
     const unknownN=computed.filter(r=>r.unknown).length;
+    // live watcher: remember what this run was built from, so background polling
+    // can detect new punches arriving in Supabase and refresh in real time
+    _live.sig=_liveSig(recs); _live.dirty=false; _liveStart();
+    const _lb=document.getElementById('live-banner'); if(_lb)_lb.style.display='none';
+    const _ls=document.getElementById('live-stamp'); if(_ls){_ls.style.display='block';_ls.textContent='● Live — updated '+new Date().toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit'});}
     if(!computed.length){ msg('run-msg','err','No attendance found for that week. (Fetched '+fetchedN+' rows total; '+recs.length+' within '+from+' → '+to+'.)'); document.getElementById('run-results').style.display='none'; }
     else {
       if(unknownN>0) msg('run-msg','err','⚠ '+unknownN+' worker(s) punched but have no employee record (rate ₱0) — add them in Settings/employees, then reload.');
@@ -966,6 +976,41 @@ function printAllSlips(){
     '<div class="slip-grid">'+computed.map(slipMini).join('')+'</div>';
   document.getElementById('slip-bg').classList.add('show');
 }
+
+// ── LIVE AUTO-REFRESH ──
+// Polls attendance every 30s while a pay week is loaded. When new punches land
+// in Supabase: reload automatically — UNLESS the admin has typed manual amounts
+// (cash advance, deductions, allowance decisions), in which case show a tap-to-
+// reload banner instead so their in-progress edits are never wiped.
+const _live={sig:null,timer:null,dirty:false,checking:false};
+function _liveSig(recs){
+  let n=0,s=0;
+  recs.forEach(r=>{ n++; const t=(r.timein||'')+(r.lunch_out||'')+(r.lunch_in||'')+(r.pm_out||'')+(r.pm_in||'')+(r.timeout||''); for(let i=0;i<t.length;i++) s=(s+t.charCodeAt(i)*(i+1))%1e9; });
+  return n+':'+s;
+}
+async function _liveCheck(){
+  if(_live.checking||!curFrom||!curTo||document.visibilityState!=='visible') return;
+  _live.checking=true;
+  try{
+    let res=await sb.from('attendance_records').select('date,timein,lunch_out,lunch_in,pm_out,pm_in,timeout').limit(5000);
+    if(res.error) return;
+    const recs=(res.data||[]).filter(r=>{ const i=toISO(r.date); return i>=curFrom && i<=curTo; });
+    const sig=_liveSig(recs);
+    if(_live.sig!==null && sig!==_live.sig){
+      _live.sig=sig; // remember so the banner doesn't retrigger every poll
+      if(_live.dirty){ const b=document.getElementById('live-banner'); if(b)b.style.display='block'; }
+      else runPayroll(); // no manual edits at risk — refresh silently
+    }
+  }catch(e){ /* offline etc. — try again next tick */ }
+  finally{ _live.checking=false; }
+}
+function _liveStart(){ if(!_live.timer) _live.timer=setInterval(_liveCheck,30000); }
+// any manual typing/choices inside the results marks the run "dirty"
+(function(){
+  const rr=document.getElementById('run-results');
+  if(rr){ rr.addEventListener('input',()=>{_live.dirty=true;}); rr.addEventListener('click',e=>{ if(e.target && e.target.tagName==='BUTTON') _live.dirty=true; }); }
+})();
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden)_liveCheck(); });
 
 // ── POST VALE DEDUCTIONS ──
 function postDeductions(){
