@@ -185,6 +185,11 @@ textarea.field-input{resize:none;height:65px}
 .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;align-items:flex-end;justify-content:center}
 .modal-bg.show{display:flex}
 .modal{background:#fff;border-radius:20px 20px 0 0;padding:1.5rem;width:100%;max-width:480px}
+.modal-bg.center{align-items:center;padding:16px}
+#bisaya-modal{z-index:150}
+.bisaya-modal{border-radius:20px;max-width:440px;padding:1.9rem 1.6rem;text-align:center}
+.bisaya-text{font-size:21px;line-height:1.5;color:#1a1a1a;font-weight:500;white-space:pre-line}
+.bisaya-ok{width:100%;margin-top:20px;font-size:19px;padding:16px;font-weight:700}
 .modal h3{font-size:15px;font-weight:600;margin-bottom:14px}
 .allowance-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #f0f0eb}
 .allowance-row:last-child{border-bottom:none}
@@ -229,7 +234,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-05a</span>
+        <span id="version-stamp">v2026-07-05b</span>
       </div>
     </div>
   </div>
@@ -666,6 +671,14 @@ textarea.field-input{resize:none;height:65px}
   </div>
 </div>
 
+<!-- BISAYA WORKER NOTICE (missed punch / dead zone / cross-midnight) -->
+<div class="modal-bg center" id="bisaya-modal">
+  <div class="modal bisaya-modal">
+    <div class="bisaya-text" id="bisaya-text"></div>
+    <button class="btn-primary bisaya-ok" onclick="closeBisayaModal()">OK</button>
+  </div>
+</div>
+
 <!-- LATE TIMEOUT WARNING MODAL -->
 <div class="modal-bg" id="late-timeout-modal">
   <div class="modal">
@@ -959,6 +972,29 @@ function isAutoMark(v){ return v==='(auto-deducted)'||v==='(auto-skipped)'; }
 function isMissingMark(v){ return v==='(missing)'||v==='(skipped)'; }
 function isPunchMarker(v){ return isAutoMark(v)||isMissingMark(v); }
 function punchMarkLabel(v){ return isMissingMark(v)?'missing':'auto'; }
+// Cross-midnight OT close: a Time Out before this hour attaches to yesterday's open shift.
+const NIGHT_CLOSE_CUTOFF_H=4;   // covers 00:00–03:59
+// ── Bisaya worker notices (missed punch / dead zone / cross-midnight) ──
+const BIS_DOW=['Dominggo','Lunes','Martes','Miyerkules','Huwebes','Biyernes','Sabado'];
+const BIS_MON=['Enero','Pebrero','Marso','Abril','Mayo','Hunyo','Hulyo','Agosto','Septyembre','Oktubre','Nobyembre','Disyembre'];
+// Format a Date or a record dateKey (MM/DD/YYYY) as Bisaya "Hulyo 4, 2026 — Sabado".
+function bisayaDate(d){
+  if(!(d instanceof Date)){ const s=String(d||''); const m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); d=m?new Date(+m[3],+m[1]-1,+m[2]):new Date(s); }
+  if(isNaN(d)) return '';
+  return BIS_MON[d.getMonth()]+' '+d.getDate()+', '+d.getFullYear()+' — '+BIS_DOW[d.getDay()];
+}
+function showBisayaModal(text){ const el=document.getElementById('bisaya-text'); if(el)el.textContent=text; document.getElementById('bisaya-modal').classList.add('show'); }
+function closeBisayaModal(){ document.getElementById('bisaya-modal').classList.remove('show'); kpClr(); }
+// Which session each missed break punch belongs to, for the Bisaya text.
+const BIS_MISS_SESSION={ lunch_out:'BUNTAG', lunch_in:'HAPON', pm_out:'HAPON', pm_in:'GABII/OT' };
+function _joinUg(a){ return a.length<=1?(a[0]||''):a.length===2?(a[0]+' ug '+a[1]):(a.slice(0,-1).join(', ')+' ug '+a[a.length-1]); }
+// Build the missed-punch Bisaya text. keys = subset of ['lunch_out','lunch_in','pm_out','pm_in'].
+function bisayaMissedText(keys, petsa){
+  const names=keys.map(k=>PLABELS[k]);
+  const tail=' Palihug adto sa Admin ug isulti nga naa kay wala na-punch sa '+petsa+' aron ma-rekord ang imong oras.';
+  if(keys.length===1) return '⚠ Wala ka ni-punch og '+names[0]+'. Dili maihap ang imong '+BIS_MISS_SESSION[keys[0]]+' nga oras.'+tail;
+  return '⚠ Wala ka ni-punch og '+_joinUg(names)+'. Dili maihap ang apektado nga mga oras.'+tail;
+}
 const ATABS=['settings','staff','log','photos','allowance','undertime','smslog'];
 // Note: leave filing is assistant-only — not in admin or employee tabs
 const ASSTABS=['asst-leave','asst-status'];
@@ -2150,7 +2186,18 @@ function updBtns(rec){
 
 async function punch(type){
   if(!curEmp){showMsg('err','No employee selected','Please enter your 6-digit PIN first.');return;}
-  const emp=curEmp,rec=getRec(emp.code),next=getNext(rec);
+  const emp=curEmp; let rec=getRec(emp.code), next=getNext(rec);
+  // Cross-midnight OT close: an early-morning Time Out with no Time In today, while
+  // YESTERDAY's shift is still open, belongs to yesterday — attach it there, don't refuse it.
+  let _crossMidnight=false, _crossKey=null, _missedKeys=null;
+  if(type==='timeout' && !rec.punches.timein && new Date().getHours() < NIGHT_CLOSE_CUTOFF_H){
+    const _y=new Date(); _y.setDate(_y.getDate()-1);
+    const _yk=_y.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
+    const _yr=records[emp.code+'_'+_yk];
+    if(_yr && _yr.punches && _yr.punches.timein && !_yr.punches.timeout){
+      rec=_yr; next=getNext(rec); _crossMidnight=true; _crossKey=_yk;
+    }
+  }
   // Allow Time Out at the PM-break decision point (employee leaving at 5 PM, skipping the 5–6 break).
   const pmDecisionTimeout=(type==='timeout'&&next==='pm_out'&&rec.punches&&!rec.punches.timeout);
   // Forward-skip: if an earlier session punch was missed, let the employee jump ahead
@@ -2172,14 +2219,15 @@ async function punch(type){
   }
   if(_doSkip){
     _skipped.forEach(p=>{ rec.punches[p]='(missing)'; rec.msMap[p]=null; });
-    const skLbl=_skipped.map(p=>PLABELS[p]||p).join(', ');
-    let _extra='';
-    if(_skipped.includes('lunch_out')) _extra+=' Your MORNING will NOT be counted until Admin reviews the missing Lunch Out.';
-    if(_skipped.includes('pm_out')) _extra+=' Your AFTERNOON will NOT be counted until Admin reviews the missing PM Break Out.';
-    showMsg('warn', emp.name+' — '+skLbl+' not punched', 'You did not punch '+skLbl+'.'+_extra+' That session will NOT be counted until Admin reviews the missing punch. Please inform Admin.', 7000);
+    _missedKeys=_skipped.slice();   // show the Bisaya missed-punch modal when this punch records
   }
   // Earliest-time restrictions
   const now=new Date();
+  // ── DEAD ZONE: Time In is closed 1:00 AM–7:00 AM. Record nothing; tell the worker in Bisaya. ──
+  if(type==='timein'){ const _h=now.getHours(); if(_h>=1 && _h<7){
+    showBisayaModal('⚠ Sirado pa ang Time In karon. Magsugod ang Time In sa 7:00 AM. Kung naa kay emergency nga trabaho, adto sa Admin aron ma-rekord ang imong oras.');
+    return;
+  } }
   // Show timeout adjustment notice on next timein
   if(type==='timein'&&timeoutAdjustments[emp.code]&&!timeoutAdjustments[emp.code].acknowledged){
     if(showTimeoutNotice(emp))return;
@@ -2196,7 +2244,7 @@ async function punch(type){
       }
       const reqId=Date.now();
       incompleteTimeInRequests[emp.code]={pending:true,approved:false,reqId,empCode:emp.code,empName:emp.name,tgMsgIds:{}};
-      showMsg('warn','Admin approval required','You did not complete your punch yesterday. Sending request to admin...',0);
+      showBisayaModal('⚠ Wala ka ni-punch og Time Out kagahapon '+bisayaDate(yKey)+'. Dili maihap ang imong GABII/OT nga oras. Palihug adto sa Admin karon aron ma-rekord.');
       sendIncompleteApproval(emp,reqId,yKey,yRec);
       return;
     }
@@ -2236,6 +2284,7 @@ async function punch(type){
   }
   // Time Out logic
   if(type==='timeout'){
+    if(_crossMidnight) rec.lateTimeOut=true;   // recorded + flagged; skip same-day undertime/dismissal snap
     // ── UNDERTIME (schedule-agnostic): logging out before completing shift hours? ──
     // Works for ANY schedule (8–12, 1–5, 6–9, etc.) because it measures each
     // employee's own worked time vs their shift hours — not one global clock.
@@ -2245,7 +2294,7 @@ async function punch(type){
     const projWorked=calcSessions(_probe).worked;
     const fullMs=emp.shift*3600000;
     const shortMs=Math.max(0,fullMs-projWorked);
-    if(shortMs>60000&&!undertimeConfirmed){
+    if(shortMs>60000&&!undertimeConfirmed&&!_crossMidnight){
       openUndertimeConfirmModal(emp,nowShort(),shortMs);
       return;
     }
@@ -2425,6 +2474,12 @@ async function punch(type){
   await sendPunchNotif(emp,type,isLate,lateMs,photoData,hasAllow,allowAmt);
   saveData();
   updateStats();
+  if(_crossMidnight){ queueRecord(emp.code, _crossKey); syncFlush(); }
+  if(_missedKeys && _missedKeys.length){
+    showBisayaModal(bisayaMissedText(_missedKeys, bisayaDate(_crossMidnight?_crossKey:todayKey())));
+  } else if(_crossMidnight){
+    showBisayaModal('✅ Na-rekord na ang imong Time Out para sa imong shift sa '+bisayaDate(_crossKey)+'. Naapil na ang imong overtime. Salamat sa imong trabaho!');
+  }
   setTimeout(()=>kpClr(),2800);
 }
 
