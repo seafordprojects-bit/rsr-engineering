@@ -234,7 +234,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-05b</span>
+        <span id="version-stamp">v2026-07-05c</span>
       </div>
     </div>
   </div>
@@ -697,21 +697,13 @@ textarea.field-input{resize:none;height:65px}
   </div>
 </div>
 
-<!-- UNDERTIME CONFIRM MODAL -->
-<div class="modal-bg" id="undertime-modal">
-  <div class="modal">
-    <div style="text-align:center;margin-bottom:12px">
-      <div style="font-size:40px">⏱️</div>
-      <h3 style="color:#D85A30;margin:6px 0">Undertime</h3>
-    </div>
-    <div style="background:#FFF3CD;border:1px solid #FAC775;border-radius:10px;padding:12px 14px;font-size:13px;color:#633806;margin-bottom:14px;line-height:1.7">
-      You are timing out early — short by <strong id="utm-short"></strong>.<br><br>
-      This will be <strong>deducted from your pay</strong>.
-    </div>
-    <div id="utm-emp" style="font-size:13px;color:#888;text-align:center;margin-bottom:14px"></div>
-    <div style="display:flex;gap:8px">
-      <button onclick="closeUndertimeModal()" class="btn-sm" style="flex:1">Cancel</button>
-      <button onclick="confirmUndertime()" class="btn-primary" style="flex:1;margin-top:0;background:#D85A30">Confirm Time Out</button>
+<!-- UNDERTIME CONFIRM MODAL (Bisaya self-confirm — worker decides alone; no PIN, no admin) -->
+<div class="modal-bg center" id="undertime-modal">
+  <div class="modal bisaya-modal">
+    <div class="bisaya-text" id="utm-bisaya-text"></div>
+    <div style="display:flex;gap:10px;margin-top:20px">
+      <button onclick="closeUndertimeModal()" class="btn-sm" style="flex:1;margin-top:0;font-size:18px;padding:14px;font-weight:700">Balik</button>
+      <button onclick="confirmUndertime()" class="btn-primary" style="flex:1;margin-top:0;font-size:18px;padding:14px;font-weight:700">Oo, Time Out na</button>
     </div>
   </div>
 </div>
@@ -985,6 +977,13 @@ function bisayaDate(d){
 }
 function showBisayaModal(text){ const el=document.getElementById('bisaya-text'); if(el)el.textContent=text; document.getElementById('bisaya-modal').classList.add('show'); }
 function closeBisayaModal(){ document.getElementById('bisaya-modal').classList.remove('show'); kpClr(); }
+// Duration as Bisaya "X oras Y minuto" (drops a zero hour or zero minute part).
+function bisayaHM(ms){
+  const totalMin=Math.round((ms>0?ms:0)/60000), h=Math.floor(totalMin/60), m=totalMin%60;
+  if(h&&m) return h+' oras '+m+' minuto';
+  if(h) return h+' oras';
+  return m+' minuto';
+}
 // Which session each missed break punch belongs to, for the Bisaya text.
 const BIS_MISS_SESSION={ lunch_out:'BUNTAG', lunch_in:'HAPON', pm_out:'HAPON', pm_in:'GABII/OT' };
 function _joinUg(a){ return a.length<=1?(a[0]||''):a.length===2?(a[0]+' ug '+a[1]):(a.slice(0,-1).join(', ')+' ug '+a[a.length-1]); }
@@ -2025,35 +2024,15 @@ function confirmLateTimeout(){
   if(_lateTimeoutEmp||curEmp)punch('timeout');
 }
 
-// ── UNDERTIME CONFIRM MODAL ──
-let undertimeConfirmed=false,_undertimeEmp=null,utPin='';
+// ── UNDERTIME CONFIRM MODAL (Bisaya self-confirm; worker taps to decide — no PIN, no admin) ──
+let undertimeConfirmed=false,_undertimeEmp=null;
 function openUndertimeConfirmModal(emp,recordedStr,shortMs){
-  _undertimeEmp=emp;utPin='';utUpdDots();
-  const ue=document.getElementById('ut-err');if(ue)ue.textContent='';
-  document.getElementById('utm-short').textContent=msToHM(shortMs);
-  document.getElementById('utm-emp').textContent=emp.name+' — '+(emp.position&&emp.position!=='—'?emp.position:emp.dept);
+  _undertimeEmp=emp;
+  const el=document.getElementById('utm-bisaya-text');
+  if(el)el.textContent='⚠ Sayo pa ang imong Time Out. Kulang pa ang imong oras karon nga adlaw — '+bisayaHM(shortMs)+' ang kulang ug adunay undertime nga makuha sa imong sweldo. Sigurado ka nga mo-Time Out na?';
   document.getElementById('undertime-modal').classList.add('show');
 }
-function closeUndertimeModal(){document.getElementById('undertime-modal').classList.remove('show');utPin='';utUpdDots();}
-function utUpdDots(){for(let i=0;i<PIN_LEN;i++){const d=document.getElementById('ut-d'+i);if(d)d.className='pin-dot'+(i<utPin.length?' filled':'');}}
-function utKp(n){
-  if(utPin.length>=PIN_LEN)return;
-  utPin+=n;utUpdDots();
-  const ue=document.getElementById('ut-err');if(ue)ue.textContent='';
-  if(utPin.length===PIN_LEN){
-    const emp=_undertimeEmp||curEmp;
-    if(emp&&utPin===emp.code){
-      closeUndertimeModal();
-      undertimeConfirmed=true;
-      punch('timeout');
-    } else {
-      const e=document.getElementById('ut-err');if(e)e.textContent='Incorrect PIN. Please try again.';
-      setTimeout(()=>{utPin='';utUpdDots();const x=document.getElementById('ut-err');if(x)x.textContent='';},1200);
-    }
-  }
-}
-function utKpDel(){utPin=utPin.slice(0,-1);utUpdDots();const e=document.getElementById('ut-err');if(e)e.textContent='';}
-function utKpClr(){utPin='';utUpdDots();const e=document.getElementById('ut-err');if(e)e.textContent='';}
+function closeUndertimeModal(){ document.getElementById('undertime-modal').classList.remove('show'); }
 function confirmUndertime(){ closeUndertimeModal(); undertimeConfirmed=true; punch('timeout'); }
 
 // ── EARLY BREAK MODAL ──
@@ -2440,7 +2419,9 @@ async function punch(type){
     else if(rec.lunchSkipped)sub+='Lunch break auto-skipped. ';
     if(hasAllow)sub+='Away allowance: ₱'+allowAmt.toLocaleString()+'. ';
     sub+='Photo sent to Telegram.';
-    showMsg(isLate?'warn':'ok',emp.name+' — Time In'+(isLate?' LATE':'')+(hasAllow?' | 💰 Allowance':'')+(rec.afternoonStart?' | 🕐 Afternoon':(rec.lunchSkipped?' | 🍽️ Lunch skipped':'')),sub,4000);
+    // Late arrival gets a single-OK Bisaya modal at the end of punch() (shown above the photo
+    // overlay), replacing the English late toast. On-time/afternoon arrivals keep the toast.
+    if(!isLate)showMsg('ok',emp.name+' — Time In'+(hasAllow?' | 💰 Allowance':'')+(rec.afternoonStart?' | 🕐 Afternoon':(rec.lunchSkipped?' | 🍽️ Lunch skipped':'')),sub,4000);
     if(isLate)sendLateArrivalAlert(emp,lateMs,rec.punches.timein);
   }else if(type==='timeout'){
     const worked=calcWorked(rec),brk=calcBreak(rec),ot=Math.max(0,worked-(emp.shift*3600000));
@@ -2479,6 +2460,8 @@ async function punch(type){
     showBisayaModal(bisayaMissedText(_missedKeys, bisayaDate(_crossMidnight?_crossKey:todayKey())));
   } else if(_crossMidnight){
     showBisayaModal('✅ Na-rekord na ang imong Time Out para sa imong shift sa '+bisayaDate(_crossKey)+'. Naapil na ang imong overtime. Salamat sa imong trabaho!');
+  } else if(type==='timein' && isLate){
+    showBisayaModal('⚠ Na-late ka og '+bisayaHM(lateMs)+' karon. Ang imong sweldo karon nga adlaw maihap gikan sa imong pag-abot. Palihug og sayo og abot ugma. Salamat!');
   }
   setTimeout(()=>kpClr(),2800);
 }
