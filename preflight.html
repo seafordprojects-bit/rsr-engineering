@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RSR Pre-Deploy Preflight</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<style>
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f4ef;color:#1a1a1a;margin:0 auto;padding:16px;max-width:820px}
+h2{font-size:18px;margin:0 0 2px}
+.sub{color:#888;font-size:13px;margin:2px 0 12px}
+.card{background:#fff;border:1px solid #e5e5df;border-radius:12px;padding:12px 14px;margin-bottom:10px;box-shadow:0 1px 4px rgba(0,0,0,.05);font-size:13px;line-height:1.6}
+.ok{color:#0a7d4f;font-weight:600}
+.bad{color:#a32d2d;font-weight:600}
+.warn{color:#8a5a00;font-weight:600}
+table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px}
+td,th{text-align:left;padding:4px 6px;border-bottom:1px solid #f0f0eb}
+th{color:#888;font-weight:600}
+code{background:#f0f0eb;padding:1px 5px;border-radius:4px}
+.mono{font-variant-numeric:tabular-nums}
+button{background:#378ADD;color:#fff;border:none;border-radius:10px;padding:10px 16px;font-size:14px;font-weight:600;cursor:pointer}
+#out{margin-top:12px}
+</style>
+</head>
+<body>
+<h2>🛫 Pre-Deploy Preflight</h2>
+<div class="sub">Run this on the DEPLOYED site after a deploy — it verifies build stamps, Supabase, the upsert path, and data quality. Screenshot the results.</div>
+<button onclick="run()">Run preflight</button>
+<div id="out"></div>
+<script>
+// Same Supabase project as the kiosk and payroll (wpmcbjrisuyjvobvzaus).
+const SUPABASE_URL = 'https://wpmcbjrisuyjvobvzaus.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// Expected version stamp per deployed page (this file sits at the repo root, so the
+// pages are same-origin siblings under payroll/ and kiosk/). Bump these each deploy.
+const EXPECT = { 'payroll/index.html':'v2026-07-05a', 'kiosk/index.html':'v2026-07-05a' };
+
+// Stored punch-slot values that are NOT real clock times (known, not data errors).
+const MARKERS = ['(skipped)','(missing)','(auto-deducted)','(auto-skipped)','(straight duty)'];
+
+// ── helpers (mirror payroll/diagnostic.html) ──
+function toISO(s){
+  if(!s) return '';
+  s=String(s).trim();
+  if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+  const m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m) return m[3]+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0');
+  return s;
+}
+function parseClock(str){ if(str==null) return null; str=String(str).trim();
+  let m=str.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])$/);
+  if(m){ let h=(+m[1])%12; if(/[Pp]/.test(m[3]))h+=12; return {h, m:+m[2]}; }
+  m=str.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/); if(m) return {h:+m[1], m:+m[2]}; return null; }
+const norm=c=>String(c||'').toUpperCase().replace(/\s+/g,'');
+const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+
+async function run(){
+  const out=document.getElementById('out');
+  out.innerHTML='<div class="card">Running…</div>';
+  let html='';
+
+  // 1 ── Deployed version stamps
+  html+='<div class="card"><b>1. Deployed version stamps</b><br>';
+  for(const path in EXPECT){
+    const stamp=EXPECT[path];
+    try{
+      const res=await fetch(path+'?cb='+new Date().getTime(),{cache:'no-store'});
+      const txt=await res.text();
+      html+= txt.indexOf(stamp)>=0
+        ? '<span class="ok">✓ '+esc(path)+' serves <code>'+esc(stamp)+'</code></span><br>'
+        : '<span class="bad">✗ '+esc(path)+' does NOT contain <code>'+esc(stamp)+'</code> — stale cache or not deployed yet</span><br>';
+    }catch(e){ html+='<span class="bad">✗ '+esc(path)+' fetch failed: '+esc(e.message||e)+'</span><br>'; }
+  }
+  html+='</div>';
+
+  // 2 ── attendance_records reachable (also loads rows for checks 4 & 5)
+  let att=[], attErr=null;
+  try{ const res=await sb.from('attendance_records').select('*').limit(5000); if(res.error) attErr=res.error.message; else att=res.data||[]; }
+  catch(e){ attErr=e.message||String(e); }
+  html+='<div class="card"><b>2. Supabase attendance_records reachable</b><br>'+
+    (attErr ? '<span class="bad">✗ '+esc(attErr)+'</span>' : '<span class="ok">✓ reachable — '+att.length+' rows loaded</span>')+'</div>';
+
+  // 3 ── (employee_code,date) upsert probe on the harmless TEST999 row
+  html+='<div class="card"><b>3. Upsert path (uniq_attendance_emp_date)</b><br>';
+  try{
+    const { error } = await sb.from('attendance_records').upsert(
+      { employee_code:'TEST999', date:'06/25/2026', employee_name:'Sync Test', site:'Site A' },
+      { onConflict:'employee_code,date' });
+    html+= error
+      ? '<span class="bad">✗ upsert failed: '+esc(error.message)+'</span>'
+      : '<span class="ok">✓ onConflict upsert works (probed TEST999 / 06/25/2026 "Sync Test")</span>';
+  }catch(e){ html+='<span class="bad">✗ '+esc(e.message||e)+'</span>'; }
+  html+='</div>';
+
+  // 4 ── Punch values that do not parse as a time (markers excluded)
+  html+='<div class="card"><b>4. Unparseable punch values</b><br>';
+  if(attErr){ html+='<span class="warn">⚠ skipped — attendance not loaded</span>'; }
+  else{
+    const bad=[];
+    att.forEach(r=>{ ['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'].forEach(k=>{
+      const v=r[k];
+      if(v==null||v==='') return;
+      if(MARKERS.indexOf(v)>=0) return;
+      if(parseClock(v)) return;
+      bad.push({code:r.employee_code, date:r.date, col:k, val:v});
+    }); });
+    if(!bad.length) html+='<span class="ok">✓ every punch value parses as a time or a known marker</span>';
+    else{
+      html+='<span class="bad">✗ '+bad.length+' value(s) do not parse:</span>'+
+        '<table><tr><th>Code</th><th>Date</th><th>Column</th><th>Value</th></tr>'+
+        bad.slice(0,100).map(b=>'<tr><td>'+esc(b.code)+'</td><td>'+esc(b.date)+'</td><td>'+esc(b.col)+'</td><td><code>'+esc(b.val)+'</code></td></tr>').join('')+
+        '</table>';
+      if(bad.length>100) html+='<div class="sub">…and '+(bad.length-100)+' more.</div>';
+    }
+  }
+  html+='</div>';
+
+  // 5 ── Anyone who punched in the last 7 days with no employees-table record
+  html+='<div class="card"><b>5. Recent punchers with no employee record</b><br>';
+  let emps=[], empErr=null;
+  try{ const res=await sb.from('employees').select('*'); if(res.error) empErr=res.error.message; else emps=res.data||[]; }
+  catch(e){ empErr=e.message||String(e); }
+  if(attErr||empErr){ html+='<span class="warn">⚠ skipped — '+esc(attErr||empErr)+'</span>'; }
+  else{
+    const empSet={}; emps.forEach(e=>{ empSet[norm(e.code)]=1; });
+    const cutoff=new Date(new Date().getTime()-7*86400000);
+    const cutISO=cutoff.getFullYear()+'-'+String(cutoff.getMonth()+1).padStart(2,'0')+'-'+String(cutoff.getDate()).padStart(2,'0');
+    const orphans={};
+    att.forEach(r=>{
+      if(toISO(r.date)<cutISO) return;
+      const k=norm(r.employee_code);
+      if(k==='TEST999'||empSet[k]) return;
+      if(!orphans[k]) orphans[k]={code:r.employee_code, name:r.employee_name||'—', days:{}};
+      orphans[k].days[toISO(r.date)]=1;
+    });
+    const list=Object.keys(orphans).map(k=>orphans[k]);
+    if(!list.length) html+='<span class="ok">✓ every puncher in the last 7 days has an employees record</span>';
+    else{
+      html+='<span class="bad">✗ '+list.length+' orphan(s) — add them in the kiosk roster, then reload payroll:</span>'+
+        '<table><tr><th>Code</th><th>Name</th><th>Days punched</th></tr>'+
+        list.map(o=>'<tr><td>'+esc(o.code)+'</td><td>'+esc(o.name)+'</td><td class="mono">'+Object.keys(o.days).length+'</td></tr>').join('')+
+        '</table>';
+    }
+  }
+  html+='</div>';
+
+  out.innerHTML=html;
+}
+</script>
+</body>
+</html>

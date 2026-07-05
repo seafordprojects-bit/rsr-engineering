@@ -229,11 +229,12 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
+        <span id="version-stamp">v2026-07-05a</span>
       </div>
     </div>
   </div>
 
-  <div id="sync-badge" style="display:none;align-items:center;justify-content:center;gap:8px;font-size:12px;font-weight:700;padding:7px 14px;border-radius:10px;margin-bottom:10px;text-align:center"></div>
+  <div id="sync-badge" onclick="syncFlush()" title="Tap to sync now" style="display:none;align-items:center;justify-content:center;gap:8px;font-size:12px;font-weight:700;padding:7px 14px;border-radius:10px;margin-bottom:10px;text-align:center;cursor:pointer"></div>
 
   <div class="tabs" id="tab-bar">
     <button class="tab active" id="tab-btn-clock" onclick="switchTab('clock',this)">Clock</button>
@@ -951,6 +952,13 @@ const PUNCHES=['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'];
 const PLABELS={timein:'Time In',lunch_out:'Lunch Out',lunch_in:'Lunch In',pm_out:'PM Break Out',pm_in:'PM Break In',timeout:'Time Out'};
 const BPAIRS=[['lunch_out','lunch_in'],['pm_out','pm_in']];
 const BIDS={timein:'btn-timein',lunch_out:'btn-lunch-out',lunch_in:'btn-lunch-in',pm_out:'btn-pm-out',pm_in:'btn-pm-in',timeout:'btn-timeout'};
+// Punch-slot values that are NOT a real clock time (rendered as a word, never parsed as a time).
+// '(missing)' = employee skipped a break-out punch (new). '(skipped)' = legacy local data.
+// '(auto-deducted)'/'(auto-skipped)' = legacy auto-fill markers.
+function isAutoMark(v){ return v==='(auto-deducted)'||v==='(auto-skipped)'; }
+function isMissingMark(v){ return v==='(missing)'||v==='(skipped)'; }
+function isPunchMarker(v){ return isAutoMark(v)||isMissingMark(v); }
+function punchMarkLabel(v){ return isMissingMark(v)?'missing':'auto'; }
 const ATABS=['settings','staff','log','photos','allowance','undertime','smslog'];
 // Note: leave filing is assistant-only — not in admin or employee tabs
 const ASSTABS=['asst-leave','asst-status'];
@@ -1573,8 +1581,8 @@ function autoExportCSV(){
       rows.push([t,emp.code,emp.name,emp.position||'—',emp.dept,siteName(emp.homeSite),rec.clockedSite?siteName(rec.clockedSite):'—',
         rec.hasAllowance?rec.allowanceAmt:0,rec.hasOTAllowance?rec.otAllowanceAmt:0,
         p.timein||'',rec.isLate?msToHM(rec.lateMs):'On time',
-        (p.lunch_out==='(auto-deducted)'||p.lunch_out==='(auto-skipped)')?'auto':p.lunch_out||'',
-        (p.lunch_in==='(auto-deducted)'||p.lunch_in==='(auto-skipped)')?'auto':p.lunch_in||'',
+        isPunchMarker(p.lunch_out)?punchMarkLabel(p.lunch_out):p.lunch_out||'',
+        isPunchMarker(p.lunch_in)?punchMarkLabel(p.lunch_in):p.lunch_in||'',
         p.pm_out||'',p.pm_in||'',p.timeout||'',
         worked!==null?msToH(worked):(rec.punches&&rec.punches.timein&&!rec.punches.timeout?'~'+msToH(calcWorkedPartial(rec)||0)+'*':''),
         ot&&ot>0?msToH(ot):'',
@@ -1832,7 +1840,7 @@ function renderMyTimeSheet(emp){
     } else if(isAbsent){
       content=`<div class="mt-absent-label">❌ Absent</div>`;
     } else {
-      const skip=v=>v==='(straight duty)'?'⚡':v==='(auto-deducted)'||v==='(auto-skipped)'?'auto':v||'—';
+      const skip=v=>v==='(straight duty)'?'⚡':isPunchMarker(v)?punchMarkLabel(v):v||'—';
       content=`
         <div class="mt-punch-grid">
           <div class="mt-punch-item"><div class="mt-punch-lbl">Time In</div><div class="mt-punch-val${!p.timein?' empty':''}">${p.timein||'—'}</div></div>
@@ -2078,10 +2086,10 @@ function showEmpPreview(emp){
   } else {
     document.getElementById('prev-punches').innerHTML=punchDefs.map(({key,lbl})=>{
       const val=p[key];
-      const skip=val==='(auto-deducted)'||val==='(auto-skipped)';
+      const skip=isPunchMarker(val);
       return `<div class="punch-row">
         <span class="punch-lbl">${lbl}</span>
-        <span class="punch-val${!val||skip?' empty':''}">${skip?'auto':val||'—'}</span>
+        <span class="punch-val${!val||skip?' empty':''}">${skip?punchMarkLabel(val):val||'—'}</span>
         ${key==='timein'?lateTag:''}
       </div>`;
     }).join('');
@@ -2163,12 +2171,12 @@ async function punch(type){
     const nb=document.getElementById(BIDS[next]);if(nb){nb.classList.remove('highlight-next');void nb.offsetWidth;nb.classList.add('highlight-next');}return;
   }
   if(_doSkip){
-    _skipped.forEach(p=>{ rec.punches[p]='(skipped)'; rec.msMap[p]=null; });
+    _skipped.forEach(p=>{ rec.punches[p]='(missing)'; rec.msMap[p]=null; });
     const skLbl=_skipped.map(p=>PLABELS[p]||p).join(', ');
     let _extra='';
-    if(_skipped.includes('lunch_out')) _extra+=' Your MORNING time will NOT be recorded because you did not punch Lunch Out.';
-    if(_skipped.includes('pm_out')) _extra+=' Your AFTERNOON time will NOT be recorded because you did not punch PM Break Out.';
-    showMsg('warn', emp.name+' — '+skLbl+' not punched', 'You did not punch '+skLbl+'.'+_extra+' That session will NOT be counted toward your hours. Please inform Admin.', 7000);
+    if(_skipped.includes('lunch_out')) _extra+=' Your MORNING will NOT be counted until Admin reviews the missing Lunch Out.';
+    if(_skipped.includes('pm_out')) _extra+=' Your AFTERNOON will NOT be counted until Admin reviews the missing PM Break Out.';
+    showMsg('warn', emp.name+' — '+skLbl+' not punched', 'You did not punch '+skLbl+'.'+_extra+' That session will NOT be counted until Admin reviews the missing punch. Please inform Admin.', 7000);
   }
   // Earliest-time restrictions
   const now=new Date();
@@ -2787,14 +2795,14 @@ function renderLog(){
     const allowCell=rec.hasAllowance?`<span style="color:#1D9E75;font-weight:600">₱${rec.allowanceAmt.toLocaleString()}</span>`:'—';
     const otAllowCell=rec.hasOTAllowance?`<span style="color:#7F77DD;font-weight:600">₱${rec.otAllowanceAmt.toLocaleString()}</span>`:'—';
     const tr=document.createElement('tr');
-    tr.innerHTML=`<td>${ps}</td><td>${emp.code}</td><td style="max-width:80px;overflow:hidden;text-overflow:ellipsis">${emp.name}</td><td>${homePill}</td><td>${todayPill}</td><td>${allowCell}</td><td>${otAllowCell}</td><td>${p.timein||'—'}</td><td>${lc}</td><td>${p.lunch_out==='(straight duty)'?'<span style="color:#0D8C7A;font-size:10px">⚡straight</span>':p.lunch_out==='(auto-deducted)'||p.lunch_out==='(auto-skipped)'?'<span style="color:#aaa;font-size:10px">auto</span>':p.lunch_out||'—'}${rec.lunchLateReturn?'<span style="color:#A32D2D;font-size:9px"> ⚠️late</span>':''}</td><td>${p.lunch_in==='(straight duty)'?'<span style="color:#0D8C7A;font-size:10px">⚡straight</span>':p.lunch_in==='(auto-deducted)'||p.lunch_in==='(auto-skipped)'?'<span style="color:#aaa;font-size:10px">auto</span>':p.lunch_in||'—'}</td><td>${p.pm_out==='(straight duty)'?'<span style="color:#0D8C7A;font-size:10px">⚡straight</span>':p.pm_out||'—'}</td><td>${p.pm_in==='(straight duty)'?'<span style="color:#0D8C7A;font-size:10px">⚡straight</span>':p.pm_in||'—'}${rec.pmLateReturn?'<span style="color:#A32D2D;font-size:9px"> ⚠️late</span>':''}</td><td>${p.timeout||'—'}</td><td>${worked!==null?msToH(worked)+'h':'—'}</td><td>${ot&&ot>0?msToH(ot)+'h':'—'}</td><td><span class="pill ${sm[status]}">${sl[status]}</span></td>`;
+    tr.innerHTML=`<td>${ps}</td><td>${emp.code}</td><td style="max-width:80px;overflow:hidden;text-overflow:ellipsis">${emp.name}</td><td>${homePill}</td><td>${todayPill}</td><td>${allowCell}</td><td>${otAllowCell}</td><td>${p.timein||'—'}</td><td>${lc}</td><td>${p.lunch_out==='(straight duty)'?'<span style="color:#0D8C7A;font-size:10px">⚡straight</span>':isPunchMarker(p.lunch_out)?'<span style="color:#aaa;font-size:10px">'+punchMarkLabel(p.lunch_out)+'</span>':p.lunch_out||'—'}${rec.lunchLateReturn?'<span style="color:#A32D2D;font-size:9px"> ⚠️late</span>':''}</td><td>${p.lunch_in==='(straight duty)'?'<span style="color:#0D8C7A;font-size:10px">⚡straight</span>':isPunchMarker(p.lunch_in)?'<span style="color:#aaa;font-size:10px">'+punchMarkLabel(p.lunch_in)+'</span>':p.lunch_in||'—'}</td><td>${p.pm_out==='(straight duty)'?'<span style="color:#0D8C7A;font-size:10px">⚡straight</span>':p.pm_out||'—'}</td><td>${p.pm_in==='(straight duty)'?'<span style="color:#0D8C7A;font-size:10px">⚡straight</span>':p.pm_in||'—'}${rec.pmLateReturn?'<span style="color:#A32D2D;font-size:9px"> ⚠️late</span>':''}</td><td>${p.timeout||'—'}</td><td>${worked!==null?msToH(worked)+'h':'—'}</td><td>${ot&&ot>0?msToH(ot)+'h':'—'}</td><td><span class="pill ${sm[status]}">${sl[status]}</span></td>`;
     tbody.appendChild(tr);
   });
 }
 
 function exportCSV(){
   const rows=[['Date','PIN','Name','Dept','Home Site','Clocked Site','Allowance','OT Allowance','Time In','Late By','Lunch Out','Lunch In','PM Out','PM In','Time Out','Worked','OT','Status']];
-  employees.forEach(emp=>{const rec=records[emp.code+'_'+todayKey()]||{punches:{},msMap:{},isLate:false,lateMs:0,hasAllowance:false,allowanceAmt:0,clockedSite:null};const p=rec.punches,worked=calcWorked(rec),partialWorked=calcWorkedPartial(rec),brk=calcBreak(rec),ot=worked?Math.max(0,worked-(emp.shift*3600000)):null;rows.push([todayKey(),emp.code,emp.name,emp.dept,siteName(emp.homeSite),rec.clockedSite?siteName(rec.clockedSite):'—',rec.hasAllowance?rec.allowanceAmt:0,rec.hasOTAllowance?rec.otAllowanceAmt:0,p.timein||'',rec.isLate?msToHM(rec.lateMs):'On time',(p.lunch_out==='(auto-skipped)'?'skipped':p.lunch_out||''),(p.lunch_in==='(auto-skipped)'?'skipped':p.lunch_in||''),p.pm_out||'',p.pm_in||'',p.timeout||'',worked!==null?msToH(worked):(rec.punches&&rec.punches.timein&&!rec.punches.timeout?'~'+msToH(calcWorkedPartial(rec)||0)+'*':''),ot&&ot>0?msToH(ot):'',(rec.punches&&rec.punches.timein&&!rec.punches.timeout&&getStatus(rec)!=='out')?'⚠️ INCOMPLETE — PAYROLL REVIEW REQUIRED':getStatus(rec)]);});
+  employees.forEach(emp=>{const rec=records[emp.code+'_'+todayKey()]||{punches:{},msMap:{},isLate:false,lateMs:0,hasAllowance:false,allowanceAmt:0,clockedSite:null};const p=rec.punches,worked=calcWorked(rec),partialWorked=calcWorkedPartial(rec),brk=calcBreak(rec),ot=worked?Math.max(0,worked-(emp.shift*3600000)):null;rows.push([todayKey(),emp.code,emp.name,emp.dept,siteName(emp.homeSite),rec.clockedSite?siteName(rec.clockedSite):'—',rec.hasAllowance?rec.allowanceAmt:0,rec.hasOTAllowance?rec.otAllowanceAmt:0,p.timein||'',rec.isLate?msToHM(rec.lateMs):'On time',(isPunchMarker(p.lunch_out)?punchMarkLabel(p.lunch_out):p.lunch_out||''),(isPunchMarker(p.lunch_in)?punchMarkLabel(p.lunch_in):p.lunch_in||''),p.pm_out||'',p.pm_in||'',p.timeout||'',worked!==null?msToH(worked):(rec.punches&&rec.punches.timein&&!rec.punches.timeout?'~'+msToH(calcWorkedPartial(rec)||0)+'*':''),ot&&ot>0?msToH(ot):'',(rec.punches&&rec.punches.timein&&!rec.punches.timeout&&getStatus(rec)!=='out')?'⚠️ INCOMPLETE — PAYROLL REVIEW REQUIRED':getStatus(rec)]);});
   const csv=rows.map(r=>r.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\n');
   downloadFile('attendance_'+todayKey().replace(/\//g,'-')+'.csv',csv,'text/csv');
 }
@@ -3214,7 +3222,7 @@ async function sendIncompleteApproval(emp,reqId,yKey,yRec){
   const pos=emp.position&&emp.position!=='—'?emp.position:emp.dept;
   const p=yRec.punches;
   const partialWorked=calcWorkedPartial(yRec);
-  const skip=v=>(!v||v==='(auto-deducted)'||v==='(auto-skipped)')?null:v;
+  const skip=v=>(!v||isPunchMarker(v))?null:v;
   const punchLines=[
     p.timein?`✅ Time In: ${p.timein}`:'❌ No Time In',
     skip(p.lunch_out)?`🍽️ Lunch Out: ${p.lunch_out}`:'',
@@ -4372,7 +4380,7 @@ function autoCloseAbandonedBreaks(){
     }
     // Abandoned lunch: Lunch Out, no Lunch In, never reached PM → close at Lunch Out time (from 2:30 PM)
     if(pastLunch&&rec.punches.lunch_out&&rec.msMap.lunch_out>0&&!rec.punches.lunch_in&&!rec.punches.pm_out
-       &&rec.punches.lunch_out!=='(auto-deducted)'&&rec.punches.lunch_out!=='(straight duty)'){
+       &&rec.punches.lunch_out!=='(auto-deducted)'&&rec.punches.lunch_out!=='(straight duty)'&&!isMissingMark(rec.punches.lunch_out)){
       autoClosedBreaks.add(key);
       rec.punches.timeout=rec.punches.lunch_out;rec.msMap.timeout=rec.msMap.lunch_out;
       rec.autoTimeout=true;rec.autoTimeoutReason='No return from lunch — auto-closed at 2:30 PM';
@@ -4716,6 +4724,12 @@ setInterval(syncFlush, 30000);
 window.addEventListener('online', () => { updateSyncBadge(); syncFlush(); });
 window.addEventListener('offline', updateSyncBadge);
 setTimeout(updateSyncBadge, 2500);
+// Sync hardening (additive): flush shortly after startup so punches stranded from a
+// previous offline session upload immediately (independent of initSupabaseSync, whose
+// flush is gated behind awaited network loads), and again whenever the tab becomes
+// visible (background tabs throttle the 30s timer). syncFlush is guarded by `syncing`.
+setTimeout(syncFlush, 2500);
+document.addEventListener('visibilitychange', function(){ if(document.visibilityState==='visible') syncFlush(); });
 </script>
 
 <!-- ===== PWA: service worker registration + silent auto-update ===== -->

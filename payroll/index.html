@@ -127,7 +127,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub">Weekly Payroll · v2026-07-04e</div>
+    <div class="app-sub">Weekly Payroll · v2026-07-05a</div>
   </div>
 
   <div class="tabs">
@@ -160,6 +160,7 @@ select.field-input{appearance:none}
     <div id="run-results" style="display:none">
       <div class="stats-grid">
         <div class="stat"><div class="stat-label">Headcount</div><div class="stat-val" id="s-head">0</div></div>
+        <div class="stat" id="s-miss-tile" onclick="filterFlagged()" title="Show only flagged days" style="cursor:pointer"><div class="stat-label">Missing punches</div><div class="stat-val" id="s-miss">0</div></div>
         <div class="stat"><div class="stat-label">OT pay</div><div class="stat-val ot" id="s-ot">₱0</div></div>
         <div class="stat"><div class="stat-label">Vales deducted</div><div class="stat-val vale" id="s-vale">₱0</div></div>
         <div class="stat"><div class="stat-label">Total net payout</div><div class="stat-val net" id="s-net">₱0</div></div>
@@ -341,10 +342,11 @@ function prSessions(rec){
   const iso=toISO(rec.date); const [y,mo,d]=iso.split('-').map(Number);
   const M={}; ['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'].forEach(k=>{ M[k]=clockToMs(iso, rec[k]); });
   const atH=(h,m)=>new Date(y,mo-1,d,h,m,0,0).getTime();
-  // The kiosk writes the literal '(auto-deducted)' into lunch_out/lunch_in when
-  // it auto-deducts lunch. That's not a parseable time — without this, the whole
-  // MORNING would be dropped. Treat it as the standard 12:00 out / 1:00 in.
-  if(/auto/i.test(String(rec.lunch_out||'')) || /auto/i.test(String(rec.lunch_in||''))){
+  // Legacy '(auto-deducted)' rows: the kiosk's old auto-fill wrote this literal into
+  // lunch_out/lunch_in. Keep crediting the standard 12:00 out / 1:00 in so pay is
+  // unchanged, but remember it so the day can be flagged "legacy auto-filled — verify".
+  const legacyAuto = /auto/i.test(String(rec.lunch_out||'')) || /auto/i.test(String(rec.lunch_in||''));
+  if(legacyAuto){
     M.lunch_out=atH(PR_LO_H,PR_LO_M);         // 12:00 PM
     M.lunch_in =atH(PR_LUNCHEND_H,0);         // 1:00 PM
   }
@@ -382,11 +384,23 @@ function prSessions(rec){
   const worked = morning+afternoon+evening;
   const eveThr=atH(PR_EVE_H,0);
   const toEve=TO!=null && (TO>=eveThr || TO<atH(PR_SHIFT_H,PR_SHIFT_M)); // a Time Out past midnight also counts as worked-into-evening
-  const mFlag = !aftStart && !sdL && TI!=null && LO==null && (LI!=null||PO!=null||PI!=null||toEve);
-  const aFlag = (!sdL && LO!=null && LI==null && (PO!=null||PI!=null||toEve))
-             || (!sdP && (aftStart?TI:LI)!=null && PO==null && (PI!=null||toEve));
-  const eFlag = !sdP && PO!=null && PI==null && toEve;
-  return {morning,afternoon,evening,worked,mFlag,aFlag,eFlag,anyFlag:(mFlag||aFlag||eFlag)};
+  // A session counts only if BOTH its punches exist; a broken one pays 0 and is flagged by
+  // the SPECIFIC missing punch so the payroller can fix it via Edit times.
+  const missLunchOut = !aftStart && !sdL && TI!=null && LO==null && (LI!=null||PO!=null||PI!=null||toEve);
+  const missLunchIn  = !sdL && LO!=null && LI==null && (PO!=null||PI!=null||toEve);
+  const missPmOut    = !sdP && (aftStart?TI:LI)!=null && PO==null && (PI!=null||toEve);
+  const missPmIn     = !sdP && PO!=null && PI==null && toEve;
+  const missTimeout  = PI!=null && TO==null;               // started evening/OT but never clocked out
+  const mFlag = missLunchOut;
+  const aFlag = missLunchIn || missPmOut;
+  const eFlag = missPmIn || missTimeout;
+  const missing=[];
+  if(missLunchOut) missing.push('Lunch Out');
+  if(missLunchIn)  missing.push('Lunch In');
+  if(missPmOut)    missing.push('PM Break Out');
+  if(missPmIn)     missing.push('PM Break In');
+  if(missTimeout)  missing.push('Time Out');
+  return {morning,afternoon,evening,worked,mFlag,aFlag,eFlag,missing,legacyAuto,anyFlag:(mFlag||aFlag||eFlag)};
 }
 // Recompute worked_ms / ot_ms / flags for one day record after its times change.
 function recomputeDay(rec, shiftHrs){
@@ -657,12 +671,14 @@ async function runPayroll(){
       const hourly=emp.shift>0 ? emp.dailyRate/emp.shift : 0;
       let daysPresent=0, regularMs=0, otMs=0, shortfallMs=0, otAllowDays=0, awayAllowDays=0, totalWorkedMs=0;
       const dayFlags=[];
+      const legacyFlags=[];
       rs.forEach(r=>{
         daysPresent++;
         const S=prSessions(r);
         const worked=S.worked;
         const ot=Math.max(0, worked-shiftMs);
-        if(S.anyFlag) dayFlags.push({date:r.date, txt:[S.mFlag&&'AM',S.aFlag&&'PM',S.eFlag&&'EVE'].filter(Boolean).join('+')});
+        if(S.anyFlag) dayFlags.push({date:r.date, txt:S.missing.join(', ')});
+        if(S.legacyAuto) legacyFlags.push({date:r.date});
         const reg=Math.max(0, worked-ot);            // regular portion
         regularMs+=Math.min(reg,shiftMs);
         otMs+=ot;
@@ -683,7 +699,7 @@ async function runPayroll(){
       const defaultVale = bal>0 ? Math.min(cfg.weeklyVale, bal) : 0;
       const al = allowancesFor(emp.id);
       computed.push({
-        days: rs, dayFlags, unknown:!!emp.unknown,
+        days: rs, dayFlags, legacyFlags, unknown:!!emp.unknown,
         code:emp.code, name:emp.name, dept:emp.dept, homeSite:emp.homeSite,
         suspended:emp.suspended, dailyRate:emp.dailyRate, shift:emp.shift, hourly,
         daysPresent, otHrs:otMs/3600000, totalHrs:totalWorkedMs/3600000, basic, lateUT, otPay,
@@ -720,6 +736,15 @@ function filterPayroll(){
   let shown=0;
   cards.forEach(c=>{ const hit=!q||(c.dataset.emp||'').includes(q); c.style.display=hit?'':'none'; if(hit)shown++; });
   const nm=document.getElementById('pr-nomatch'); if(nm) nm.style.display=(q&&shown===0)?'block':'none';
+}
+let _flagFilter=false;
+// Tapping the "Missing punches" tile toggles showing only flagged (₱0) cards.
+function filterFlagged(){
+  _flagFilter=!_flagFilter;
+  if(!_flagFilter){ filterPayroll(); return; }
+  const cards=document.querySelectorAll('#pr-list .pr-card');
+  cards.forEach((c,i)=>{ const f=computed[i]&&computed[i].dayFlags&&computed[i].dayFlags.length>0; c.style.display=f?'':'none'; });
+  const nm=document.getElementById('pr-nomatch'); if(nm) nm.style.display='none';
 }
 function renderRun(){
   document.getElementById('s-head').textContent=computed.length;
@@ -769,11 +794,19 @@ function renderRun(){
     const be=document.createElement('button'); be.className='btn-sm'; be.style.cssText='flex:1'; be.textContent='✎ Edit times'; be.onclick=()=>editTimes(i);
     const b=document.createElement('button'); b.className='btn-sm'; b.style.cssText='flex:1'; b.textContent='View payslip'; b.onclick=()=>showSlip(i);
     row.appendChild(be); row.appendChild(b); card.appendChild(row);
+    // Legacy auto-filled lunch: still paid, but surface it for verification (amber).
+    if(r.legacyFlags && r.legacyFlags.length){
+      const lw=document.createElement('div');
+      lw.style.cssText='margin:0 0 10px;padding:8px 10px;border-radius:8px;background:#3a2a00;border:1px solid #7a5a00;color:#ffcf66;font-size:12px;line-height:1.45';
+      lw.innerHTML='\u26A0 <b>Legacy auto-filled \u2014 verify (still paid):</b> '+r.legacyFlags.map(f=>fmtDate(f.date)).join(', ')+'. Lunch was auto-filled by an old kiosk build \u2014 confirm via \u270E Edit times.';
+      card.insertBefore(lw, card.firstChild);
+    }
+    // Missing punch: that session pays 0. Loud red box pinned to the TOP of the card.
     if(r.dayFlags && r.dayFlags.length){
       const w=document.createElement('div');
-      w.style.cssText='margin-top:8px;padding:7px 9px;border-radius:8px;background:#3a2a00;border:1px solid #7a5a00;color:#ffcf66;font-size:12px;line-height:1.45';
-      w.innerHTML='\u26A0 <b>Review:</b> uncounted session(s) \u2014 '+r.dayFlags.map(f=>fmtDate(f.date)+' ('+f.txt+')').join(', ')+'. Use \u270E Edit times to correct.';
-      card.appendChild(w);
+      w.style.cssText='margin:0 0 10px;padding:9px 11px;border-radius:8px;background:#5c1a1a;border:1px solid #E24B4A;color:#ffd9d6;font-size:12.5px;font-weight:600;line-height:1.5';
+      w.innerHTML='\u26A0 <b>MISSING PUNCH \u2014 session pays \u20B10 until fixed:</b> '+r.dayFlags.map(f=>fmtDate(f.date)+' \u2014 missing '+f.txt).join('; ')+'. Use \u270E Edit times to correct.';
+      card.insertBefore(w, card.firstChild);
     }
   });
   recalcTotals();
@@ -834,6 +867,11 @@ function recalcTotals(){
   document.getElementById('s-net').textContent=pesoShort(net);
   document.getElementById('s-ot').textContent=pesoShort(ot);
   document.getElementById('s-vale').textContent=pesoShort(vale);
+  // Unresolved missing-punch flags = broken days that pay 0 until fixed via Edit times.
+  let missN=0; computed.forEach(r=>{ missN+=(r.dayFlags?r.dayFlags.length:0); });
+  const mEl=document.getElementById('s-miss'); if(mEl){ mEl.textContent=missN; mEl.style.color=missN>0?'#ffd9d6':''; }
+  const mTile=document.getElementById('s-miss-tile');
+  if(mTile){ mTile.style.background=missN>0?'#5c1a1a':''; mTile.style.borderColor=missN>0?'#E24B4A':''; }
 }
 
 // ── PAYSLIP ──
