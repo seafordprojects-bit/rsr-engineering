@@ -127,7 +127,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub">Weekly Payroll · v2026-07-05a</div>
+    <div class="app-sub">Weekly Payroll · v2026-07-05b</div>
   </div>
 
   <div class="tabs">
@@ -312,6 +312,7 @@ async function saveCfg(){
 
 let employees=[];          // from Supabase
 let advances=[];           // cash_advances ledger
+let leaves=[];             // approved leave_requests
 let computed=[];           // current payroll run rows
 let curFrom=null, curTo=null;
 let confirmCb=null;
@@ -565,6 +566,38 @@ async function loadAdvances(){
     console.warn('cash_advances load:',err.message);
   }
 }
+// Approved leave from the kiosk. Fetch broad + match client-side (mixed-format landmine).
+async function loadLeaves(){
+  try{
+    const {data,error}=await sb.from('leave_requests').select('*').eq('status','Approved');
+    if(error) throw error;
+    leaves=data||[];
+  }catch(err){
+    leaves=[];
+    console.warn('leave_requests load:',err.message);
+  }
+}
+// Leave pay rule: Vacation/Sick = paid at daily rate; LWP/Emergency/Other = excused, unpaid.
+const LEAVE_PAID=new Set(['Vacation Leave','Sick Leave']);
+// Approved-leave summary for one employee over [from,to] (ISO), excluding dates already worked
+// (attendance always wins). Returns paid/unpaid day counts + the ISO dates for each.
+function leaveInfoFor(code, from, to, workedISO){
+  const nc=String(code||'').toUpperCase().replace(/\s+/g,'');
+  const paid=new Set(), unpaid=new Set();
+  leaves.forEach(l=>{
+    if(String(l.employee_code||'').toUpperCase().replace(/\s+/g,'')!==nc) return;
+    const s=toISO(l.start_date), e=toISO(l.end_date||l.start_date);
+    if(!s) return;
+    const lo=(s<from?from:s), hi=(e>to?to:e);
+    for(let d=new Date(lo+'T00:00:00'), end=new Date(hi+'T00:00:00'); d<=end; d.setDate(d.getDate()+1)){
+      const iso=isoOf(d);
+      if(iso<from||iso>to||workedISO.has(iso)) continue;   // out of week, or actually worked
+      if(LEAVE_PAID.has(l.type)) paid.add(iso); else unpaid.add(iso);
+    }
+  });
+  unpaid.forEach(iso=>{ if(paid.has(iso)) unpaid.delete(iso); }); // a paid date wins over unpaid
+  return { paidDates:[...paid].sort(), unpaidDates:[...unpaid].sort(), paidDays:paid.size, unpaidDays:unpaid.size };
+}
 
 // Deductible allowances from Liquidation: confirmed, deductible=Yes, not settled.
 let deductAllowances=[];
@@ -629,6 +662,7 @@ async function runPayroll(){
   try{
     if(!employees.length) await loadEmployees();
     await loadAdvances();
+    await loadLeaves();
     // Fetch attendance. The kiosk stores `date` as TEXT in mixed formats
     // (ISO '2026-06-29' and MM/DD/YYYY '06/29/2026'). A Supabase gte/lte range
     // filter compares those as plain strings and silently drops the non-ISO
@@ -666,7 +700,10 @@ async function runPayroll(){
       let rs=(byEmp[emp._k]||[]).filter(r=>r.timein); // only days actually worked
       // de-duplicate by date — if the same day appears twice, keep one (avoids double pay)
       const seen={}; rs=rs.filter(r=>{ const k=toISO(r.date); if(seen[k]) return false; seen[k]=1; return true; });
-      if(!rs.length) return; // skip employees with no attendance this week
+      // Approved leave for this week (excludes any date actually worked — attendance wins).
+      const workedISO=new Set(rs.map(r=>toISO(r.date)));
+      const leave=leaveInfoFor(emp.code, from, to, workedISO);
+      if(!rs.length && !leave.paidDays && !leave.unpaidDays) return; // no work AND no leave → skip
       const shiftMs=emp.shift*3600000;
       const hourly=emp.shift>0 ? emp.dailyRate/emp.shift : 0;
       let daysPresent=0, regularMs=0, otMs=0, shortfallMs=0, otAllowDays=0, awayAllowDays=0, totalWorkedMs=0;
@@ -693,6 +730,7 @@ async function runPayroll(){
       });
       const allowAmt=Number(cfg.allowance)||50;
       const basic = emp.dailyRate*daysPresent;
+      const leavePay = leave.paidDays * emp.dailyRate;   // VL/SL paid at daily rate
       const lateUT = (shortfallMs/3600000)*hourly;
       const otPay = (otMs/3600000)*hourly*cfg.otMult;
       const bal = outstanding(emp.code);
@@ -700,6 +738,8 @@ async function runPayroll(){
       const al = allowancesFor(emp.id);
       computed.push({
         days: rs, dayFlags, legacyFlags, unknown:!!emp.unknown,
+        leavePay, leavePaidDays:leave.paidDays, leaveUnpaidDays:leave.unpaidDays,
+        leavePaidDates:leave.paidDates, leaveUnpaidDates:leave.unpaidDates,
         code:emp.code, name:emp.name, dept:emp.dept, homeSite:emp.homeSite,
         suspended:emp.suspended, dailyRate:emp.dailyRate, shift:emp.shift, hourly,
         daysPresent, otHrs:otMs/3600000, totalHrs:totalWorkedMs/3600000, basic, lateUT, otPay,
@@ -728,7 +768,7 @@ async function runPayroll(){
   }
 }
 
-function netOf(r){ return r.basic - r.lateUT + r.otPay + (Number(r.otAllowance)||0) + (Number(r.stayInAllowance)||0) - (Number(r.valeDeduct)||0) - (Number(r.otherDeduct)||0) - (Number(r.allowDeduct)||0); }
+function netOf(r){ return r.basic - r.lateUT + r.otPay + (Number(r.otAllowance)||0) + (Number(r.stayInAllowance)||0) + (Number(r.leavePay)||0) - (Number(r.valeDeduct)||0) - (Number(r.otherDeduct)||0) - (Number(r.allowDeduct)||0); }
 
 function filterPayroll(){
   const q=(document.getElementById('pr-search')?document.getElementById('pr-search').value:'').trim().toLowerCase();
@@ -763,6 +803,8 @@ function renderRun(){
       <div class="pr-lines">
         <div class="k">Daily pay (${r.daysPresent} day${r.daysPresent===1?'':'s'})</div><div class="v">${peso(r.basic)}</div>
         <div class="k" style="font-size:11px;color:#888">Total hours: ${r.totalHrs.toFixed(2)}h</div><div class="v"></div>
+        ${(Number(r.leavePay)||0)>0?`<div class="k">Leave pay (${r.leavePaidDays} VL/SL day${r.leavePaidDays===1?'':'s'})</div><div class="v plus">+${peso(r.leavePay)}</div><div class="k" style="font-size:11px;color:#888">${r.leavePaidDates.map(d=>fmtDate(d)).join(', ')}</div><div class="v"></div>`:''}
+        ${(Number(r.leaveUnpaidDays)||0)>0?`<div class="k" style="color:#888">Excused unpaid leave</div><div class="v" style="color:#888">${r.leaveUnpaidDays} day${r.leaveUnpaidDays===1?'':'s'}</div>`:''}
         <div class="k">Less late / undertime</div><div class="v minus">${r.lateUT>0?'−'+peso(r.lateUT):peso(0)}</div>
         <div class="k">OT pay (${r.otHrs.toFixed(2)}h × ${cfg.otMult})</div><div class="v plus">${r.otPay>0?'+'+peso(r.otPay):peso(0)}</div>
         ${(Number(r.allowDeduct)||0)>0?`<div class="k">Less allowance${r.allowDates&&r.allowDates.length?' ('+r.allowDates.join(', ')+')':''}</div><div class="v minus">−${peso(r.allowDeduct)}</div>`:''}
@@ -886,6 +928,8 @@ function slipHTML(r){
       ${slipRow('Daily pay ('+r.daysPresent+' day'+(r.daysPresent===1?'':'s')+')', peso(r.basic))}
       ${r.otPay>0?slipRow('Add OT ('+r.otHrs.toFixed(2)+'h × '+cfg.otMult+')', peso(r.otPay)):''}
       ${(Number(r.holPay)||0)>0?slipRow('Add holiday pay', peso(r.holPay)):''}
+      ${(Number(r.leavePay)||0)>0?slipRow('Add leave pay ('+r.leavePaidDays+' VL/SL day'+(r.leavePaidDays===1?'':'s')+')', peso(r.leavePay)):''}
+      ${(Number(r.leaveUnpaidDays)||0)>0?slipRow('Excused unpaid leave', r.leaveUnpaidDays+' day'+(r.leaveUnpaidDays===1?'':'s')):''}
       <div style="font-size:10px;color:#888;padding:3px 0">Total hours worked: ${basicHrs.toFixed(0)}h basic + ${r.otHrs.toFixed(0)}h overtime</div>
       ${slipRow('Less late / undertime', r.lateUT>0?'('+peso(r.lateUT)+')':peso(0))}
       ${slipRow('Add OT allowance', peso(Number(r.otAllowance)||0))}
@@ -999,6 +1043,8 @@ function slipMini(r){
     ${L('Daily pay ('+r.daysPresent+'d)',r.basic)}
     ${r.otPay>0?L('OT ('+r.otHrs.toFixed(1)+'h × '+cfg.otMult+')',r.otPay):''}
     ${(Number(r.holPay)||0)>0?L('Holiday pay',r.holPay):''}
+    ${(Number(r.leavePay)||0)>0?L('Leave pay ('+r.leavePaidDays+'d VL/SL)',r.leavePay):''}
+    ${(Number(r.leaveUnpaidDays)||0)>0?`<div class="mini-l" style="font-size:11px;color:#888"><span>Excused unpaid</span><span>${r.leaveUnpaidDays}d</span></div>`:''}
     <div class="mini-l" style="font-size:11px;color:#888"><span>${basicHrs.toFixed(0)}h basic + ${r.otHrs.toFixed(0)}h OT</span><span></span></div>
     ${L('Late/UT',r.lateUT,true)}
     ${L('OT allow.',Number(r.otAllowance)||0)}
