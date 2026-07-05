@@ -234,7 +234,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-05c</span>
+        <span id="version-stamp">v2026-07-05d</span>
       </div>
     </div>
   </div>
@@ -2257,7 +2257,7 @@ async function punch(type){
     const morningCutoff=new Date(now);morningCutoff.setHours(lunchOutEarlyH-2,lunchOutEarlyM,0,0); // lunch (12:00) minus 2h = 10:00 AM
     const afternoonOpen=new Date(now);afternoonOpen.setHours(lunchInEarliestH,lunchInEarliestM,0,0); // 12:40 PM
     if(now>morningCutoff&&now<afternoonOpen){
-      showMsg('err','Cannot Time In yet','Not enough work hours before lunch. Please wait until '+fmt12(lunchInEarliestH,lunchInEarliestM)+' to clock in for the afternoon.',6000);
+      showBisayaModal('⚠ Dili na pwede mo-Time In karon — lapas na sa 10:00 AM. Balik ug punch og Time In sa 12:40 PM para sa hapon nga shift. Ang imong sweldo magsugod sa hapon.');
       return;
     }
   }
