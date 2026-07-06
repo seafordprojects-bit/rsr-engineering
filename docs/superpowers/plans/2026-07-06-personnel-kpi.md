@@ -21,6 +21,8 @@
 - **Zero peso amounts, zero bonus/provisional formulas** on any screen or record. Phase 2 is a separate spec. (spec D7, §10)
 - **Owner applies SQL and commits/deploys.** Do not auto-commit pay-affecting changes without explicit approval; propose → confirm → implement → validate → show. (CLAUDE.md workflow)
 - Monitoring module carries **no version stamp** and is **not** in `preflight.html`'s `EXPECT`. Do not add stamps to monitoring pages.
+- **Actual hours = payroll-effective `worked_ms`, never roll-call 2h blocks.** Per-job actual hours are `attendance_records.worked_ms` (the post-edit value payroll persists, payroll/index.html:1016) distributed across a worker's jobs that day in proportion to roll-call checkpoint blocks; the per-job hours for a worker-day sum to that day's paid hours. The KPI reads `worked_ms` — it must NOT re-implement payroll's `prSessions` logic. Join key: `job_checkpoint.employee_code` = `employees.id`; `attendance_records.employee_code` = `employees.code`; bridge via `employees`. `attendance_records.date` is mixed-format TEXT — normalize to ISO inside the SQL. Paid-hours with no roll-call tag that day = unallocated (surface via `reconcile.html`, never in a job denominator); tagged with zero paid hours = 0 actual. (spec D5/D9/D10)
+- **Close-week ordering guard:** before an immutable close, warn using `v_week_payroll_health` (unresolved = payroll's `is_incomplete` OR zero-hour present-day anomaly for that Sat–Fri week) and require an explicit admin acknowledgment that payroll is finalized for the named week; record `finalized_ack_by`, `finalized_ack_at`, `unresolved_at_close` on the `efficiency_week` rows. A real payroll-finalized marker is backlog (pair with the week-helper convergence). (user mandate)
 - **Live-Supabase verification is read-unrestricted but write-restricted (user mandate):** automated verification may write ONLY to the new `job_progress` table, using clearly TEST-marked rows (e.g. `reported_by:"TEST-…"`, a sentinel `work_date`) that are deleted immediately after. **ZERO writes to any pre-existing table** (`jobs`, `job_checkpoint`, `employees`, …) — reference existing rows by reading their id, never by inserting/updating them. `efficiency_week`/`efficiency_week_audit` are append-only (undeletable via PostgREST), so do NOT insert TEST rows there during automated checks; their Close/immutability/calibration behaviour is verified by local validation + reviewer inspection + an owner-run manual acceptance.
 
 ## Access-control scope note
@@ -155,16 +157,22 @@ git commit -m "feat(kpi): shared Sat-Fri pay-week helper (verbatim transcription
 **Interfaces:**
 - Produces (read by later tasks via PostgREST):
   - table `job_progress(job_id uuid, work_date date, units_cumulative numeric, reported_by text)`, unique `(job_id, work_date)`.
-  - table `efficiency_week(...)` immutable, unique `(employee_code, week_start, close_version)`.
+  - table `efficiency_week(...)` immutable, unique `(employee_code, week_start, close_version)`; `employee_code` holds `employees.id` (uuid). Includes `finalized_ack_by`, `finalized_ack_at`, `unresolved_at_close`.
   - table `efficiency_week_audit(week_start date, action text, version int, actor text, note text, at timestamptz)` append-only.
   - `jobs.calibrated boolean`, `jobs.calibrated_by text`, `jobs.calibrated_at timestamptz`.
-  - views `v_job_efficiency`, `v_vessel_efficiency`, `v_worker_week_job`, `v_worker_week_efficiency`.
+  - views `v_attendance_day`, `v_job_worker_day`, `v_job_efficiency`, `v_vessel_efficiency`, `v_worker_week_job`, `v_worker_week_efficiency`, `v_week_payroll_health`.
+  - **Worker key:** every view emits the worker as `employee_id`/`employee_code` = `employees.id` (uuid), matching `job_checkpoint.employee_code`; attendance (keyed by `employees.code`) is bridged inside `v_attendance_day`.
 
 - [ ] **Step 1: Write `monitoring/sql/personnel-kpi.sql`** (idempotent; `--` comments only)
 
 ```sql
 -- personnel-kpi.sql  --  Personnel efficiency (phase 1). Idempotent: safe to re-run.
 -- Run in the Supabase SQL editor for project wpmcbjrisuyjvobvzaus.
+--
+-- ACTUAL HOURS come from payroll-effective worked_ms (attendance_records), NOT the
+-- roll-call 2h blocks. Roll-call only supplies the WHICH-JOB split. See v_attendance_day
+-- and v_job_worker_day. worked_ms is what payroll persists after punch edits
+-- (payroll/index.html:1016), so KPI actual hours equal paid hours exactly.
 
 -- ============================================================ TABLES
 create table if not exists job_progress (
@@ -179,7 +187,7 @@ create table if not exists job_progress (
 
 create table if not exists efficiency_week (
   id                        uuid primary key default gen_random_uuid(),
-  employee_code             text not null,
+  employee_code             text not null,     -- employees.id (uuid), the KPI worker key
   week_start                date not null,     -- Saturday
   week_end                  date not null,     -- Friday
   earned_hours              numeric not null,
@@ -191,8 +199,15 @@ create table if not exists efficiency_week (
   close_version             integer not null default 1,
   closed_by                 text,
   closed_at                 timestamptz not null default now(),
+  finalized_ack_by          text,              -- admin who affirmed payroll finalized for the week
+  finalized_ack_at          timestamptz,
+  unresolved_at_close       integer,           -- payroll-health unresolved count at close time
   unique (employee_code, week_start, close_version)
 );
+-- Add the finalize-ack columns on re-run if an older efficiency_week already exists.
+alter table efficiency_week add column if not exists finalized_ack_by    text;
+alter table efficiency_week add column if not exists finalized_ack_at    timestamptz;
+alter table efficiency_week add column if not exists unresolved_at_close integer;
 
 create table if not exists efficiency_week_audit (
   id         uuid primary key default gen_random_uuid(),
@@ -241,15 +256,53 @@ create trigger trg_effaudit_immutable before update or delete on efficiency_week
   for each row execute function block_mutation();
 
 -- ============================================================ VIEWS
--- Per job: earned-to-date (capped at estimate), actual (all tagged hours incl OT), efficiency.
+-- Payroll-effective hours per worker (employees.id) per ISO day. Reads the SAME worked_ms
+-- payroll persists after edits, so KPI actual == paid. attendance_records.date is TEXT in
+-- mixed formats (YYYY-MM-DD and MM/DD/YYYY) -> normalized to a real date here, once.
+-- attendance is keyed by employees.code; roll-call by employees.id -> bridge via employees.
+create or replace view v_attendance_day as
+select e.id   as employee_id,
+       e.code as employee_code,
+       e.name as employee_name,
+       (case
+          when a.date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'   then substr(a.date,1,10)::date
+          when a.date ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' then to_date(a.date,'MM/DD/YYYY')
+          else null
+        end)                                   as work_date,
+       (coalesce(a.worked_ms,0)/3600000.0)::numeric as paid_hours,
+       coalesce(a.is_incomplete,false)         as is_incomplete,
+       a.status                                as status
+from attendance_records a
+join employees e on e.code = a.employee_code;
+
+-- Attribute each worker-day's paid hours across the jobs they were roll-call-tagged to
+-- that day, in proportion to checkpoint blocks (spec D9). Sum over a worker-day == paid_hours.
+-- Tagged but no attendance row -> paid_hours 0 -> actual_hours 0 (spec edge case).
+create or replace view v_job_worker_day as
+with crew as (
+  select job_id, employee_code as employee_id, (work_date::date) as work_date, count(*) as blocks
+  from job_checkpoint
+  group by job_id, employee_code, (work_date::date)
+),
+daytot as (
+  select employee_id, work_date, sum(blocks) as total_blocks
+  from crew group by employee_id, work_date
+)
+select c.job_id, c.employee_id, c.work_date, c.blocks,
+       round(coalesce(p.paid_hours,0) * c.blocks / nullif(dt.total_blocks,0), 3) as actual_hours
+from crew c
+join daytot dt        on dt.employee_id = c.employee_id and dt.work_date = c.work_date
+left join v_attendance_day p on p.employee_id = c.employee_id and p.work_date = c.work_date;
+
+-- Per job: earned-to-date (capped at estimate) vs attributed payroll-effective actual hours.
 create or replace view v_job_efficiency as
 with prog as (
   select distinct on (job_id) job_id, units_cumulative
   from job_progress order by job_id, work_date desc
 ),
 act as (
-  select job_id, sum(hours)::numeric as actual_hours
-  from job_checkpoint group by job_id
+  select job_id, sum(actual_hours)::numeric as actual_hours
+  from v_job_worker_day group by job_id
 )
 select j.id as job_id, j.job_no, j.vessel, j.site, j.status,
        j.quantity, j.unit, j.rate_used, j.correction_factor, j.calibrated,
@@ -258,7 +311,7 @@ select j.id as job_id, j.job_no, j.vessel, j.site, j.status,
        (coalesce(p.units_cumulative,0) > j.quantity)                 as overrun,
        round(least(coalesce(p.units_cumulative,0), j.quantity)
              * j.rate_used * j.correction_factor, 2)                 as earned_hours,
-       coalesce(a.actual_hours,0)                                    as actual_hours,
+       round(coalesce(a.actual_hours,0),2)                           as actual_hours,
        case when coalesce(a.actual_hours,0) > 0
             then round(least(coalesce(p.units_cumulative,0), j.quantity)
                        * j.rate_used * j.correction_factor / a.actual_hours, 3)
@@ -279,8 +332,9 @@ select vessel,
 from v_job_efficiency
 group by vessel;
 
--- Per worker, per job, per DAY: split the day's earned delta by hours logged (spec D9).
--- Week bucket: Saturday on/before work_date. Postgres dow: Sun=0..Sat=6, so
+-- Per worker, per job, per DAY: split the day's earned delta among the day's crew in
+-- proportion to their ATTRIBUTED paid hours (spec D9) -> everyone lands at the job-day's
+-- efficiency. Week bucket: Saturday on/before work_date. Postgres dow Sun=0..Sat=6, so
 -- (dow+1)%7 gives Sat=0..Fri=6, identical to shared/payweek.mjs.
 create or replace view v_worker_week_job as
 with deltas as (
@@ -293,27 +347,22 @@ with deltas as (
   from job_progress jp
   join jobs j on j.id = jp.job_id
 ),
-crew as (
-  select job_id, (work_date::date) as work_date, employee_code, sum(hours)::numeric as emp_hours
-  from job_checkpoint
-  group by job_id, (work_date::date), employee_code
-),
-crewtot as (
-  select job_id, work_date, sum(emp_hours) as crew_hours
-  from crew group by job_id, work_date
+jobday as (
+  select job_id, work_date, sum(actual_hours) as crew_actual
+  from v_job_worker_day group by job_id, work_date
 )
-select c.employee_code,
-       (c.work_date - ((extract(dow from c.work_date)::int + 1) % 7))::date       as week_start,
-       (c.work_date - ((extract(dow from c.work_date)::int + 1) % 7) + 6)::date   as week_end,
-       c.job_id, j.job_no, j.vessel, j.calibrated,
-       c.emp_hours                                                                as actual_hours,
-       case when ct.crew_hours > 0
-            then round(coalesce(d.earned_delta,0) * c.emp_hours / ct.crew_hours, 3)
-            else 0 end                                                            as earned_hours
-from crew c
-join crewtot ct on ct.job_id = c.job_id and ct.work_date = c.work_date
-join jobs j     on j.id = c.job_id
-left join deltas d on d.job_id = c.job_id and d.work_date = c.work_date;
+select jwd.employee_id                                                        as employee_code,
+       (jwd.work_date - ((extract(dow from jwd.work_date)::int + 1) % 7))::date     as week_start,
+       (jwd.work_date - ((extract(dow from jwd.work_date)::int + 1) % 7) + 6)::date as week_end,
+       jwd.job_id, j.job_no, j.vessel, j.calibrated,
+       jwd.actual_hours,
+       case when jd.crew_actual > 0
+            then round(coalesce(d.earned_delta,0) * jwd.actual_hours / jd.crew_actual, 3)
+            else 0 end                                                        as earned_hours
+from v_job_worker_day jwd
+join jobday jd  on jd.job_id = jwd.job_id and jd.work_date = jwd.work_date
+join jobs j     on j.id = jwd.job_id
+left join deltas d on d.job_id = jwd.job_id and d.work_date = jwd.work_date;
 
 -- Per worker, per week: aggregate + breakdown. Source snapshotted by "Close week".
 create or replace view v_worker_week_efficiency as
@@ -330,6 +379,16 @@ select employee_code, week_start, week_end,
        ) order by job_no)                                            as breakdown
 from v_worker_week_job
 group by employee_code, week_start, week_end;
+
+-- Payroll-readiness per Sat-Fri week for the Close-week ordering guard: unresolved rows =
+-- payroll's own is_incomplete (missing OUT under Policy A) OR a zero-hour present-day anomaly.
+create or replace view v_week_payroll_health as
+select (work_date - ((extract(dow from work_date)::int + 1) % 7))::date as week_start,
+       count(*) filter (where is_incomplete or (paid_hours = 0 and status is distinct from 'absent'))
+                                                                          as unresolved
+from v_attendance_day
+where work_date is not null
+group by (work_date - ((extract(dow from work_date)::int + 1) % 7))::date;
 ```
 
 - [ ] **Step 2: Owner applies the SQL** in the Supabase SQL editor (project `wpmcbjrisuyjvobvzaus`). It is idempotent — re-running is safe.
@@ -342,7 +401,7 @@ Run (bash):
 ```bash
 KEY="<anon key from monitoring/config.js>"
 BASE="https://wpmcbjrisuyjvobvzaus.supabase.co/rest/v1"
-for obj in job_progress efficiency_week efficiency_week_audit v_job_efficiency v_vessel_efficiency v_worker_week_efficiency; do
+for obj in job_progress efficiency_week efficiency_week_audit v_attendance_day v_job_worker_day v_job_efficiency v_vessel_efficiency v_worker_week_job v_worker_week_efficiency v_week_payroll_health; do
   code=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/$obj?select=*&limit=1" -H "apikey: $KEY" -H "Authorization: Bearer $KEY")
   echo "$obj -> $code"
 done
@@ -606,6 +665,8 @@ git commit -m "feat(kpi): Roll-call captures cumulative units-done per job"
       const [wrows,setWrows]=useState(null);
       const [closed,setClosed]=useState(false);
       const [warnJobs,setWarnJobs]=useState([]);
+      const [health,setHealth]=useState(null);   // {unresolved} payroll-readiness for the week
+      const [ack,setAck]=useState(false);         // admin affirms payroll finalized for the week
       const [actor,setActor]=useState(localStorage.getItem("rsr_prepared_by")||"");
       const [busy,setBusy]=useState(false);
       const [msg,setMsg]=useState(null);
@@ -631,19 +692,21 @@ git commit -m "feat(kpi): Roll-call captures cumulative units-done per job"
       }
 
       async function loadWeek(){
-        setWrows(null); setMsg(null);
+        setWrows(null); setMsg(null); setAck(false); setHealth(null);
         const st=await isClosed(week); setClosed(st.closed);
         if(st.closed){
           const {data}=await sb.from("efficiency_week").select("*")
             .eq("week_start",week).eq("close_version",st.version).order("employee_code");
           setWrows(data||[]); setWarnJobs([]); return;
         }
-        // live (not yet closed): read the view + compute close-warnings
-        const wk=defaultPayWeek(0); const end=addFri(week);
+        // live (not yet closed): read the view + accrual-lag warnings + payroll-readiness
+        const end=addFri(week);
         const {data,error}=await sb.from("v_worker_week_efficiency").select("*").eq("week_start",week);
         if(error){ setMsg({type:"err",text:error.message}); setWrows([]); return; }
         setWrows(data||[]);
         setWarnJobs(await computeWarnings(week,end));
+        const hz=await sb.from("v_week_payroll_health").select("unresolved").eq("week_start",week).maybeSingle();
+        setHealth({unresolved:(hz.data&&hz.data.unresolved)||0});
       }
       function addFri(sat){ const d=new Date(sat+"T00:00:00"); d.setDate(d.getDate()+6);
         return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
@@ -659,25 +722,29 @@ git commit -m "feat(kpi): Roll-call captures cumulative units-done per job"
 
       async function closeWeek(){
         if(!actor.trim()){ setMsg({type:"err",text:"Enter your name (recorded on the close)."}); return; }
+        if(!ack){ setMsg({type:"err",text:"Tick the box affirming payroll is finalized for this week before closing."}); return; }
         if(!confirm(`Close ${week} → ${addFri(week)}? This writes an immutable record.`)) return;
         setBusy(true);
         const st=await isClosed(week);
         if(st.closed){ setBusy(false); setMsg({type:"err",text:"Already closed."}); return; }
+        const unresolved=(health&&health.unresolved)||0;
         const maxv=await sb.from("efficiency_week").select("close_version").eq("week_start",week)
           .order("close_version",{ascending:false}).limit(1);
         const version=((maxv.data&&maxv.data[0]&&maxv.data[0].close_version)||0)+1;
+        const nowIso=new Date().toISOString();
         const src=await sb.from("v_worker_week_efficiency").select("*").eq("week_start",week);
         const payload=(src.data||[]).map(r=>({
           employee_code:r.employee_code, week_start:r.week_start, week_end:r.week_end,
           earned_hours:r.earned_hours, actual_hours:r.actual_hours, efficiency:r.efficiency,
           calibrated_earned_hours:r.calibrated_earned_hours, uncalibrated_earned_hours:r.uncalibrated_earned_hours,
           breakdown:r.breakdown, close_version:version, closed_by:actor.trim(),
+          finalized_ack_by:actor.trim(), finalized_ack_at:nowIso, unresolved_at_close:unresolved,
         }));
         if(payload.length){
           const ins=await sb.from("efficiency_week").insert(payload);
           if(ins.error){ setBusy(false); setMsg({type:"err",text:ins.error.message}); return; }
         }
-        await sb.from("efficiency_week_audit").insert({week_start:week,action:"close",version,actor:actor.trim()});
+        await sb.from("efficiency_week_audit").insert({week_start:week,action:"close",version,actor:actor.trim(),note:`payroll finalized ack; unresolved=${unresolved}`});
         setBusy(false); setMsg({type:"ok",text:`Closed ${payload.length} worker record(s).`}); loadWeek();
       }
 
@@ -745,9 +812,15 @@ git commit -m "feat(kpi): Roll-call captures cumulative units-done per job"
             <label style="margin-top:10px">Your name (recorded on close/reopen)</label>
             <input value=${actor} onInput=${e=>saveActor(e.target.value)} placeholder="admin name" />
             ${!closed && warnJobs.length>0 && html`<div class="warnbox">${warnJobs.length} job(s) have hours this week but no progress reading in the window — enter a Friday units-done reading before closing, or their earned hours land next week.</div>`}
+            ${!closed && health && health.unresolved>0 && html`<div class="warnbox">⚠ ${health.unresolved} attendance row(s) this week are unresolved in payroll (missing punch / zero-hour). Closing now freezes wrong hours — finalize payroll first.</div>`}
+            ${!closed && html`
+              <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-weight:600;color:var(--ink)">
+                <input type="checkbox" style="width:auto;margin-top:3px" checked=${ack} onChange=${e=>setAck(e.target.checked)} />
+                <span>I confirm payroll for ${week} → ${addFri(week)} is finalized${health?` (${health.unresolved} unresolved)`:""}.</span>
+              </label>`}
             ${closed
               ? html`<button class="ghost" disabled=${busy} onClick=${reopenWeek}>Reopen week (admin, logged)</button>`
-              : html`<button class="primary" disabled=${busy} onClick=${closeWeek}>Close week (admin)</button>`}
+              : html`<button class="primary" disabled=${busy||!ack} onClick=${closeWeek}>Close week (admin)</button>`}
           </div>
           ${wrows===null? html`<div class="loading">Loading&hellip;</div>`
             : wrows.length===0? html`<div class="empty">No worker activity in this week.</div>`
@@ -896,6 +969,24 @@ git commit -m "feat(kpi): efficiency page (by job/vessel/worker) with admin clos
       const bad=(jp.data||[]).filter(r=>{ const w=weekContaining(String(r.work_date).slice(0,10)); return !(w.start<=String(r.work_date).slice(0,10)&&String(r.work_date).slice(0,10)<=w.end); });
       check("Week bucketing consistent", bad.length===0, bad.length+" mismatched of "+((jp.data||[]).length));
     }catch(e){ check("KPI data integrity", false, String(e)); }
+
+    // 4 -- attendance-sourced actual hours (payroll-effective) integrity
+    try{
+      // 4a: attendance dates all normalizable (YYYY-MM-DD or MM/DD/YYYY) -> v_attendance_day.work_date not null
+      const ar=await sb.from("attendance_records").select("date").limit(500);
+      const unparsable=(ar.data||[]).filter(r=>{ const s=String(r.date||""); return !/^\d{4}-\d{2}-\d{2}/.test(s) && !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s); });
+      check("Attendance dates all normalizable", unparsable.length===0,
+        unparsable.length+" unrecognized of "+((ar.data||[]).length)+" sampled");
+
+      // 4b: conservation — per worker-day, attributed job hours == payroll paid hours (within rounding)
+      const jwd=await sb.from("v_job_worker_day").select("employee_id,work_date,actual_hours");
+      const pd=await sb.from("v_attendance_day").select("employee_id,work_date,paid_hours");
+      const paid={}; (pd.data||[]).forEach(r=>{ paid[r.employee_id+"|"+r.work_date]=Number(r.paid_hours); });
+      const attr={}; (jwd.data||[]).forEach(r=>{ const k=r.employee_id+"|"+r.work_date; attr[k]=(attr[k]||0)+Number(r.actual_hours); });
+      const viol=Object.keys(attr).filter(k=> paid[k]!=null && Math.abs(attr[k]-paid[k])>0.02 );
+      check("Attributed job hours reconcile to payroll paid hours", viol.length===0,
+        viol.length+" worker-days off by >0.02h of "+Object.keys(attr).length+" attributed");
+    }catch(e){ check("Actual-hours integrity", false, String(e)); }
 
     out.innerHTML=rows.join("");
   </script>

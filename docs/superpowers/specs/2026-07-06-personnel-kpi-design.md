@@ -43,7 +43,7 @@ gate, and read-only display surfaces. It does not replace existing pages.
 | D2 | Credit is **team/job-based**. Everyone on a job-day shares that job-day's efficiency. Individual differentiation comes from a worker's **mix of jobs** over the period, not from splitting output within a job. (Foreman-allocated shares are a possible later refinement — **not** in v1.) |
 | D3 | Earned hours recognized via **milestone/unit check-ins**: cumulative units-done-to-date reported per job; earned-to-date = `LEAST(units_cumulative, quantity) × rate_used × correction_factor`. |
 | D4 | Progress captured **daily on Roll-call**, one cumulative field per active job. Weekly earned = (week's last cumulative − prior week's last cumulative) × rate × factor. Missed days self-correct on the next entry. **Credited units capped at estimated quantity**; overruns **flag the job for estimate review** and pay **no** incentive on overrun units until admin approves. |
-| D5 | Actual-hours denominator = **all tagged hours, regular and OT equally** (tariff man-hours measure physical output, not pay cost). A cost view (hours × actual rates incl. OT premium vs tariff value) may be added later at the job/vessel roll-up — **out of** the worker productivity score. |
+| D5 | Actual-hours denominator = **payroll-effective `worked_ms`** (post-edit, from `attendance_records`; regular + OT equally), **attributed to jobs by roll-call block share** — NOT the roll-call 2h blocks themselves and NOT raw punches. The KPI reads the `worked_ms` payroll persists (payroll/index.html:1016); it must not re-implement payroll's `prSessions`. Per-worker-day: sum of attributed job hours = that day's paid hours. A cost view (hours × actual rates incl. OT premium) may be added later — out of the worker productivity score. |
 | D6 | **Calibration pay-gate**: efficiency displays for all jobs always. The phase-2 pay engine includes only jobs where `calibrated = true`, set **per job by admin** after real Butler values are entered — **never auto-set**. Uncalibrated jobs show an amber **"factors not calibrated — incentive pending"** badge (mirrors payroll amber/red flag convention). Changing a job's estimate inputs after calibration **resets `calibrated` to false** pending re-approval. |
 | D7 | Phase-1 output contract: per worker, per **Sat–Fri** pay week (same anchor as payroll), a **stored, immutable** efficiency record with its full input breakdown (earned by job, actual by job, calibrated-gate split). **No peso amounts, no provisional formula on any screen.** Phase-2 spec is written only after several live pay weeks exist and Butler factors are calibrated, so thresholds derive from observed distributions, not guesses. |
 | D8 | Architecture = **hybrid**. Efficiency math lives in **Postgres views** (ISO date normalization done once, inside the view SQL), read via PostgREST like tables. **"Close week"** is an explicit **admin button** (Sat–Fri, same anchor as payroll) that inserts **immutable** rows into `efficiency_week`. Closed weeks are **never recomputed** even if tariff rates or Butler factors change later. **Re-opening** a closed week requires an explicit admin action and is **logged**. View/table SQL is delivered as **one idempotent `.sql` file** (`CREATE OR REPLACE` / `IF NOT EXISTS`) runnable in the Supabase SQL editor. |
@@ -68,7 +68,7 @@ job_progress
 ```
 efficiency_week                            -- immutable weekly snapshot per worker
   id            uuid pk default gen_random_uuid()
-  employee_code text not null
+  employee_code text not null              -- employees.id (uuid), the KPI worker key
   week_start    date not null              -- Saturday
   week_end      date not null              -- Friday
   earned_hours  numeric not null
@@ -77,9 +77,13 @@ efficiency_week                            -- immutable weekly snapshot per work
   calibrated_earned_hours   numeric not null   -- earned from calibrated jobs only
   uncalibrated_earned_hours numeric not null
   breakdown     jsonb not null             -- [{job_id, job_no, vessel, earned, actual, calibrated}]
+  close_version integer not null default 1
   closed_by     text
   closed_at     timestamptz default now()
-  unique (employee_code, week_start)
+  finalized_ack_by    text                 -- admin who affirmed payroll finalized (D5 ordering guard)
+  finalized_ack_at    timestamptz
+  unresolved_at_close integer              -- payroll-health unresolved count at close
+  unique (employee_code, week_start, close_version)
 ```
 
 ```
@@ -106,12 +110,20 @@ the SQL file (idempotent `CREATE OR REPLACE FUNCTION` + `DROP/CREATE TRIGGER`).
 
 ## 5. Views (one idempotent `.sql`, ISO-normalized inside)
 
+### 5.0 `v_attendance_day` and `v_job_worker_day` — the actual-hours source (D5)
+- `v_attendance_day`: per worker (`employees.id`) per ISO day, `paid_hours = worked_ms/3.6e6`,
+  plus `is_incomplete`, `status`. Bridges keys: `attendance_records.employee_code = employees.code`;
+  the KPI worker key is `employees.id`. **`attendance_records.date` is mixed-format TEXT → normalized
+  to a real date inside this view** (the landmine now applies here).
+- `v_job_worker_day`: per (job, worker, day), `actual_hours = paid_hours × blocks_on_job / total_blocks`
+  (blocks from `job_checkpoint`). Sum over a worker-day = `paid_hours`. Tagged-but-no-attendance → 0.
+
 ### 5.1 `v_job_efficiency` — per job
 - `units_cumulative` = latest `job_progress.units_cumulative` for the job (max work_date).
 - `credited_units` = `LEAST(units_cumulative, quantity)`.
 - `overrun` = `units_cumulative > quantity` (boolean flag → estimate review, D4).
 - `earned_to_date` = `credited_units × rate_used × correction_factor`.
-- `actual_to_date` = `Σ job_checkpoint.hours` for the job (regular + OT, D5).
+- `actual_to_date` = `Σ v_job_worker_day.actual_hours` for the job (payroll-effective, incl. OT — D5).
 - `efficiency` = `earned_to_date / NULLIF(actual_to_date,0)`.
 - carries `calibrated`, `status`, `vessel`, `job_no`, `site`.
 
@@ -119,29 +131,36 @@ the SQL file (idempotent `CREATE OR REPLACE FUNCTION` + `DROP/CREATE TRIGGER`).
 - Group `v_job_efficiency` by `vessel`: `Σ earned_to_date`, `Σ actual_to_date`,
   `efficiency`, job count, `Σ earned where calibrated` (calibrated share).
 
-### 5.3 `v_worker_week_efficiency` — per worker, per Sat–Fri week (live, any week)
+### 5.3 `v_worker_week_job` / `v_worker_week_efficiency` — per worker, per Sat–Fri week (live, any week)
 Computed as:
 1. **Per (job, day) earned delta**: order `job_progress` by `work_date` within each job;
    `delta = (LEAST(cum_today,qty) − LEAST(cum_prev,qty)) × rate_used × correction_factor`,
    floored at 0. First reading's `cum_prev = 0`.
-2. **Crew hours per (job, day)**: `Σ job_checkpoint.hours` grouped by (job, work_date, employee).
-3. **Split** (D9): each worker's earned for that job-day = `delta × (worker_hours / crew_hours)`.
-   Orphan case (`delta>0` but `crew_hours=0`) → earned attributed to **no worker**, flagged (§7).
+2. **Attributed actual per (job, day, worker)**: from `v_job_worker_day` (D5 — payroll-effective).
+3. **Split** (D9): each worker's earned for that job-day = `delta × (worker_actual / crew_actual)`,
+   where actual = attributed payroll-effective hours. Orphan case (`delta>0` but `crew_actual=0`)
+   → earned attributed to **no worker**, flagged (§7).
 4. **Aggregate to the Sat–Fri week** (`work_date` in `[week_start, week_end]`):
-   `earned_hours = Σ splits`, `actual_hours = Σ worker tagged hours`,
+   `earned_hours = Σ splits`, `actual_hours = Σ attributed worker hours`,
    `efficiency = earned/NULLIF(actual,0)`, plus calibrated/uncalibrated earned split and a
-   `breakdown` array. The week window is produced by the shared Sat–Fri helper (§6).
+   `breakdown` array. Week bucket via `(dow+1)%7` in SQL, identical to the shared JS helper (§6).
 
-All views normalize any text/mixed dates to ISO **inside** the SQL. Actual hours source
-(`job_checkpoint.work_date`) is clean `YYYY-MM-DD`, so normalization is defensive, not corrective.
+### 5.4 `v_week_payroll_health` — Close-week ordering guard (D5 / §7)
+- Per Sat–Fri week: `unresolved` = count of `v_attendance_day` rows that are `is_incomplete`
+  OR a zero-hour present-day anomaly. Consumed by Close-week to warn + gate the admin ack.
+
+All views normalize mixed-format text dates to ISO **inside** the SQL — `attendance_records.date`
+specifically (the KPI now reads it), plus defensive casts on `job_checkpoint.work_date`.
 
 ## 6. Week boundary — shared, never re-derived
 
 Pay week = **Saturday → Friday**, matching `payroll/index.html:636-643`
 (`sinceSat=(getDay()+1)%7`; reference-from-yesterday so payday-Saturday shows the week that
-just ended). The KPI **reuses this exact helper** — exported from a shared location so kiosk,
-payroll, and KPI cannot drift (CLAUDE.md landmine). The Schedule page's Mon–Sun `mondayOf`
-is a look-ahead concern and is **not** used here.
+just ended). `shared/payweek.mjs` is a **verbatim transcription** of that logic; `payroll/index.html`
+stays **byte-identical** this workstream (no bridge, no import added), and `monitoring/diagnostic.html`
+carries a **concrete drift-guard** (behavioural fixture + a source-pin on payroll's exact lines) so the
+two cannot silently diverge. Payroll convergence onto the shared file is backlog. The Schedule page's
+Mon–Sun `mondayOf` is a look-ahead concern and is **not** used here.
 
 ## 7. Boundary effects & guards (inherent to milestone reporting)
 
@@ -153,8 +172,15 @@ is a look-ahead concern and is **not** used here.
   `v_job_efficiency` (earned present, not attributable to any worker).
 - **Zero-earned crew day**: crew tagged, no progress that day → their hours count in actual, earned
   lands when units are reported. Self-corrects over the week (D4).
-- **Conservation invariant** (verification, §9): for each (job, week),
-  `Σ worker earned splits + orphan earned = job weekly earned delta`.
+- **Payroll-ordering guard (D5)**: because actual hours = post-edit `worked_ms`, closing a week before
+  its payroll is finalized would freeze wrong hours. Close-week reads `v_week_payroll_health`, **warns**
+  on unresolved rows, and **requires an admin ack** ("payroll for this week is finalized") recorded on
+  the `efficiency_week` rows (`finalized_ack_by/at`, `unresolved_at_close`). No auto-detectable finalized
+  flag exists; a real marker is backlog.
+- **Unallocated (D10)**: paid hours on a day with no roll-call tag are not in any job denominator —
+  surfaced via `reconcile.html`, never silently dropped.
+- **Conservation invariants** (verification, §9): per (job, week), `Σ worker earned splits + orphan
+  earned = job weekly earned delta`; and per (worker, day), `Σ attributed job hours = payroll paid hours`.
 
 ## 8. Surfaces (phase 1 — no pesos)
 
