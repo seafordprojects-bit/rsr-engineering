@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Efficiency</title>
+<style>
+  :root{--ink:#1c2230;--muted:#6b7280;--line:#e3e6ec;--paper:#fff;--bg:#f4f5f7;
+    --steel:#2f5d8a;--steel-d:#234a70;--ok:#1f7a4d;--okbg:#e8f5ee;--over:#b4231f;--overbg:#fbe8e7;
+    --warn:#b4540a;--warnbg:#fbf3e8;--radius:14px;--mono:ui-monospace,Menlo,Consolas,monospace;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 -apple-system,"Segoe UI",Roboto,sans-serif;padding:0 0 48px}
+  .wrap{max-width:640px;margin:0 auto;padding:14px}
+  header.top{display:flex;align-items:baseline;justify-content:space-between;padding:10px 2px 12px}
+  header.top h1{font-size:19px;margin:0}.sub{color:var(--muted);font-size:12.5px}
+  a.back{color:var(--steel);text-decoration:none;font-size:13px}
+  .tabs{display:flex;gap:8px;margin-bottom:14px}
+  .tab{flex:1;text-align:center;padding:10px;border:1px solid var(--line);border-radius:11px;background:var(--paper);font-weight:700;font-size:13.5px;color:var(--ink)}
+  .tab.on{background:var(--steel);color:#fff;border-color:var(--steel)}
+  .row{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:12px 13px;margin-bottom:9px}
+  .rn{font-weight:600;font-size:14px}.jno{font-family:var(--mono);font-size:12.5px;color:var(--steel-d);font-weight:700}
+  .fig{display:flex;flex-wrap:wrap;gap:4px 16px;font-size:12.5px;color:var(--muted);margin-top:4px}.fig b{color:var(--ink);font-family:var(--mono)}
+  .eff{font-family:var(--mono);font-weight:700}
+  .badge{font-size:10.5px;font-weight:700;border-radius:18px;padding:2px 8px;letter-spacing:.3px;margin-left:6px}
+  .badge.amber{background:var(--warnbg);color:var(--warn);border:1px solid #f0d9bf}
+  .badge.over{background:var(--overbg);color:var(--over);border:1px solid #f0bdba}
+  .badge.ok{background:var(--okbg);color:var(--ok);border:1px solid #bfe3cf}
+  .bar{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;margin-bottom:13px}
+  .bar label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:5px}
+  .bar input,.bar select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:#fcfcfd}
+  button.primary{width:100%;margin-top:10px;padding:12px;border:0;border-radius:11px;background:var(--steel);color:#fff;font-weight:700}
+  button.ghost{margin-top:8px;width:100%;padding:10px;border:1px solid var(--line);background:#fcfcfd;color:var(--muted);border-radius:11px;font-weight:600}
+  button.mini{border:1px solid var(--line);background:#fcfcfd;border-radius:8px;font-size:12px;font-weight:700;padding:6px 10px;color:var(--ink)}
+  .warnbox{background:var(--warnbg);border:1px solid #f0d9bf;color:var(--warn);font-size:12.5px;border-radius:10px;padding:9px 12px;margin:8px 0}
+  .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:20px 0;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
+  .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
+  .msg{margin:0 0 12px;font-size:13px;padding:9px 11px;border-radius:9px}
+  .msg.ok{background:var(--okbg);color:var(--ok);border:1px solid #bfe3cf}.msg.err{background:var(--overbg);color:var(--over);border:1px solid #f0bdba}
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2",
+    "preact": "https://esm.sh/preact@10.19.3",
+    "preact/hooks": "https://esm.sh/preact@10.19.3/hooks",
+    "htm": "https://esm.sh/htm@3.1.1"
+  }
+}
+</script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div><h1>Efficiency</h1><div class="sub">Earned vs actual man-hours</div></div>
+      <a class="back" href="index.html">&larr; Menu</a>
+    </header>
+    <div id="app"><div class="loading">Loading&hellip;</div></div>
+  </div>
+  <script type="module">
+    import { h, render } from "preact";
+    import { useState, useEffect } from "preact/hooks";
+    import htm from "htm";
+    import { sb, loadEmployees, fmtNum, defaultPayWeek } from "./config.js";
+    const html = htm.bind(h);
+    const pct = (e) => e==null ? "—" : fmtNum(e*100,0)+"%";
+
+    function App(){
+      const [tab,setTab]=useState("job");
+      const [emps,setEmps]=useState([]);
+      const [jobs,setJobs]=useState(null);
+      const [vessels,setVessels]=useState(null);
+      const [week,setWeek]=useState(defaultPayWeek(0).start);
+      const [wrows,setWrows]=useState(null);
+      const [closed,setClosed]=useState(false);
+      const [warnJobs,setWarnJobs]=useState([]);
+      const [health,setHealth]=useState(null);   // {unresolved} payroll-readiness for the week
+      const [ack,setAck]=useState(false);         // admin affirms payroll finalized for the week
+      const [actor,setActor]=useState(localStorage.getItem("rsr_prepared_by")||"");
+      const [busy,setBusy]=useState(false);
+      const [msg,setMsg]=useState(null);
+
+      useEffect(()=>{ loadEmployees().then(setEmps); loadJobs(); },[]);
+      useEffect(()=>{ if(tab==="worker") loadWeek(); },[tab,week]);
+
+      const nameOf=(code)=>{ const e=emps.find(x=>x.id===code); return e? e.name : code; };
+      function saveActor(v){ setActor(v); localStorage.setItem("rsr_prepared_by",v); }
+
+      async function loadJobs(){
+        const j=await sb.from("v_job_efficiency").select("*").order("job_no");
+        const v=await sb.from("v_vessel_efficiency").select("*").order("vessel");
+        if(j.error) setMsg({type:"err",text:j.error.message});
+        setJobs(j.data||[]); setVessels(v.data||[]);
+      }
+
+      // is this week already closed? latest audit action for the week === 'close'
+      async function isClosed(wk){
+        const {data}=await sb.from("efficiency_week_audit").select("action,version,at")
+          .eq("week_start",wk).order("at",{ascending:false}).limit(1);
+        return { closed:(data&&data[0]&&data[0].action==="close"), version:(data&&data[0]?data[0].version:0) };
+      }
+
+      async function loadWeek(){
+        setWrows(null); setMsg(null); setAck(false); setHealth(null);
+        const st=await isClosed(week); setClosed(st.closed);
+        if(st.closed){
+          const {data}=await sb.from("efficiency_week").select("*")
+            .eq("week_start",week).eq("close_version",st.version).order("employee_code");
+          setWrows(data||[]); setWarnJobs([]); return;
+        }
+        // live (not yet closed): read the view + accrual-lag warnings + payroll-readiness
+        const end=addFri(week);
+        const {data,error}=await sb.from("v_worker_week_efficiency").select("*").eq("week_start",week);
+        if(error){ setMsg({type:"err",text:error.message}); setWrows([]); return; }
+        setWrows(data||[]);
+        setWarnJobs(await computeWarnings(week,end));
+        const hz=await sb.from("v_week_payroll_health").select("unresolved").eq("week_start",week).maybeSingle();
+        setHealth({unresolved:(hz.data&&hz.data.unresolved)||0});
+      }
+      function addFri(sat){ const d=new Date(sat+"T00:00:00"); d.setDate(d.getDate()+6);
+        return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+
+      // Jobs with tagged hours in the window but NO progress reading in the window (accrual lag, spec §7)
+      async function computeWarnings(st,en){
+        const cp=await sb.from("job_checkpoint").select("job_id,work_date").gte("work_date",st).lte("work_date",en);
+        const pr=await sb.from("job_progress").select("job_id,work_date").gte("work_date",st).lte("work_date",en);
+        const hoursJobs=new Set((cp.data||[]).map(r=>r.job_id));
+        const progJobs=new Set((pr.data||[]).map(r=>r.job_id));
+        return [...hoursJobs].filter(j=>!progJobs.has(j));
+      }
+
+      async function closeWeek(){
+        if(!actor.trim()){ setMsg({type:"err",text:"Enter your name (recorded on the close)."}); return; }
+        if(!ack){ setMsg({type:"err",text:"Tick the box affirming payroll is finalized for this week before closing."}); return; }
+        if(!confirm(`Close ${week} → ${addFri(week)}? This writes an immutable record.`)) return;
+        setBusy(true);
+        const st=await isClosed(week);
+        if(st.closed){ setBusy(false); setMsg({type:"err",text:"Already closed."}); return; }
+        const unresolved=(health&&health.unresolved)||0;
+        const maxv=await sb.from("efficiency_week").select("close_version").eq("week_start",week)
+          .order("close_version",{ascending:false}).limit(1);
+        const version=((maxv.data&&maxv.data[0]&&maxv.data[0].close_version)||0)+1;
+        const nowIso=new Date().toISOString();
+        const src=await sb.from("v_worker_week_efficiency").select("*").eq("week_start",week);
+        const payload=(src.data||[]).map(r=>({
+          employee_code:r.employee_code, week_start:r.week_start, week_end:r.week_end,
+          earned_hours:r.earned_hours, actual_hours:r.actual_hours, efficiency:r.efficiency,
+          calibrated_earned_hours:r.calibrated_earned_hours, uncalibrated_earned_hours:r.uncalibrated_earned_hours,
+          breakdown:r.breakdown, close_version:version, closed_by:actor.trim(),
+          finalized_ack_by:actor.trim(), finalized_ack_at:nowIso, unresolved_at_close:unresolved,
+        }));
+        if(payload.length){
+          const ins=await sb.from("efficiency_week").insert(payload);
+          if(ins.error){ setBusy(false); setMsg({type:"err",text:ins.error.message}); return; }
+        }
+        await sb.from("efficiency_week_audit").insert({week_start:week,action:"close",version,actor:actor.trim(),note:`payroll finalized ack; unresolved=${unresolved}`});
+        setBusy(false); setMsg({type:"ok",text:`Closed ${payload.length} worker record(s).`}); loadWeek();
+      }
+
+      async function reopenWeek(){
+        if(!actor.trim()){ setMsg({type:"err",text:"Enter your name (recorded on the reopen)."}); return; }
+        const note=prompt("Reason for reopening this closed week?")||"";
+        setBusy(true);
+        const st=await isClosed(week);
+        await sb.from("efficiency_week_audit").insert({week_start:week,action:"reopen",version:st.version,actor:actor.trim(),note});
+        setBusy(false); setMsg({type:"ok",text:"Week reopened (logged). You can re-close after edits."}); loadWeek();
+      }
+
+      async function toggleCalib(j){
+        setBusy(true);
+        const payload=j.calibrated
+          ? {calibrated:false, calibrated_by:null, calibrated_at:null}
+          : {calibrated:true, calibrated_by:actor.trim()||null, calibrated_at:new Date().toISOString()};
+        const {error}=await sb.from("jobs").update(payload).eq("id",j.job_id);
+        setBusy(false);
+        if(error){ setMsg({type:"err",text:error.message}); return; }
+        loadJobs();
+      }
+
+      // ---- views ----
+      function JobView(){
+        if(jobs===null) return html`<div class="loading">Loading&hellip;</div>`;
+        if(jobs.length===0) return html`<div class="empty">No job orders yet.</div>`;
+        return jobs.map(j=>html`
+          <div class="row">
+            <div><span class="jno">${j.job_no}</span> <span class="rn">${j.vessel}</span>
+              ${!j.calibrated && html`<span class="badge amber">factors not calibrated · incentive pending</span>`}
+              ${j.overrun && html`<span class="badge over">overrun · estimate review</span>`}
+            </div>
+            <div class="fig">
+              <span>earned <b>${fmtNum(j.earned_hours)}</b>h</span>
+              <span>actual <b>${fmtNum(j.actual_hours)}</b>h</span>
+              <span>eff <b class="eff">${pct(j.efficiency)}</b></span>
+              <span>units <b>${fmtNum(j.units_cumulative)}</b>/${fmtNum(j.quantity)}</span>
+            </div>
+            <button class="mini" style="margin-top:8px" disabled=${busy} onClick=${()=>toggleCalib(j)}>
+              ${j.calibrated?"Un-calibrate":"Mark calibrated (admin)"}
+            </button>
+          </div>`);
+      }
+      function VesselView(){
+        if(vessels===null) return html`<div class="loading">Loading&hellip;</div>`;
+        if(vessels.length===0) return html`<div class="empty">No vessels yet.</div>`;
+        return vessels.map(v=>html`
+          <div class="row">
+            <div class="rn">${v.vessel} <span class="sub">(${v.jobs} jobs)</span></div>
+            <div class="fig">
+              <span>earned <b>${fmtNum(v.earned_hours)}</b>h</span>
+              <span>actual <b>${fmtNum(v.actual_hours)}</b>h</span>
+              <span>eff <b class="eff">${pct(v.efficiency)}</b></span>
+              <span>calibrated earned <b>${fmtNum(v.calibrated_earned_hours)}</b>h</span>
+            </div>
+          </div>`);
+      }
+      function WorkerView(){
+        return html`
+          <div class="bar">
+            <label>Pay week (Saturday start)</label>
+            <input type="date" value=${week} onInput=${e=>setWeek(e.target.value)} />
+            <div class="sub" style="margin-top:6px">${week} → ${addFri(week)} ${closed?html`<span class="badge ok">closed</span>`:""}</div>
+            <label style="margin-top:10px">Your name (recorded on close/reopen)</label>
+            <input value=${actor} onInput=${e=>saveActor(e.target.value)} placeholder="admin name" />
+            ${!closed && warnJobs.length>0 && html`<div class="warnbox">${warnJobs.length} job(s) have hours this week but no progress reading in the window — enter a Friday units-done reading before closing, or their earned hours land next week.</div>`}
+            ${!closed && health && health.unresolved>0 && html`<div class="warnbox">⚠ ${health.unresolved} attendance row(s) this week are unresolved in payroll (missing punch / zero-hour). Closing now freezes wrong hours — finalize payroll first.</div>`}
+            ${!closed && html`
+              <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-weight:600;color:var(--ink)">
+                <input type="checkbox" style="width:auto;margin-top:3px" checked=${ack} onChange=${e=>setAck(e.target.checked)} />
+                <span>I confirm payroll for ${week} → ${addFri(week)} is finalized${health?` (${health.unresolved} unresolved)`:""}.</span>
+              </label>`}
+            ${closed
+              ? html`<button class="ghost" disabled=${busy} onClick=${reopenWeek}>Reopen week (admin, logged)</button>`
+              : html`<button class="primary" disabled=${busy||!ack} onClick=${closeWeek}>Close week (admin)</button>`}
+          </div>
+          ${wrows===null? html`<div class="loading">Loading&hellip;</div>`
+            : wrows.length===0? html`<div class="empty">No worker activity in this week.</div>`
+            : wrows.map(r=>html`
+                <div class="row">
+                  <div class="rn">${nameOf(r.employee_code)}</div>
+                  <div class="fig">
+                    <span>earned <b>${fmtNum(r.earned_hours)}</b>h</span>
+                    <span>actual <b>${fmtNum(r.actual_hours)}</b>h</span>
+                    <span>eff <b class="eff">${pct(r.efficiency)}</b></span>
+                    <span>calibrated <b>${fmtNum(r.calibrated_earned_hours)}</b>h</span>
+                  </div>
+                </div>`)}
+        `;
+      }
+
+      return html`
+        <div class="tabs">
+          <div class="tab ${tab==="job"?"on":""}" onClick=${()=>{setTab("job");setMsg(null);}}>By job</div>
+          <div class="tab ${tab==="vessel"?"on":""}" onClick=${()=>{setTab("vessel");setMsg(null);}}>By vessel</div>
+          <div class="tab ${tab==="worker"?"on":""}" onClick=${()=>{setTab("worker");setMsg(null);}}>By worker</div>
+        </div>
+        ${msg && html`<div class="msg ${msg.type}">${msg.text}</div>`}
+        ${tab==="job"?JobView():tab==="vessel"?VesselView():WorkerView()}
+      `;
+    }
+    render(html`<${App} />`, document.getElementById("app"));
+  </script>
+</body>
+</html>
