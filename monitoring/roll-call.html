@@ -90,7 +90,8 @@
     import { h, render } from "preact";
     import { useState, useEffect } from "preact/hooks";
     import htm from "htm";
-    import { sb, CHECKPOINTS, HOURS_PER_CHECKPOINT, loadEmployees, todayLocal, ymd, addDays } from "./config.js";
+    import { sb, CHECKPOINTS, HOURS_PER_CHECKPOINT, loadEmployees, todayLocal, ymd, addDays,
+             upsertJobProgress, loadJobProgressFor } from "./config.js";
     const html = htm.bind(h);
 
     const cpMinutes = (code) => { const [h,m]=code.split(":").map(Number); return h*60+m; };
@@ -114,6 +115,8 @@
       const [pausing,setPausing]=useState(null);   // job_id currently choosing a reason
       const [msg,setMsg]=useState("");
       const [busy,setBusy]=useState(false);
+      const [progress,setProgress]=useState({});   // job_id -> cumulative units to date
+      const [pedit,setPedit]=useState({});          // job_id -> in-progress text field value
 
       useEffect(()=>{ loadEmployees().then(setEmps); },[]);
       useEffect(()=>{ reload(); },[date,cp]);
@@ -122,7 +125,7 @@
         setMsg("");
         const dnow=date;
         const jq = sb.from("jobs")
-          .select("id,job_no,vessel,location,start_date,target_date,status,est_manhours")
+          .select("id,job_no,vessel,location,start_date,target_date,status,est_manhours,quantity,unit")
           .neq("status","done").order("job_no");
         const aq = sb.from("job_assignment").select("job_id,employee_code");
         const cq = sb.from("job_checkpoint").select("id,job_id,employee_code")
@@ -139,6 +142,10 @@
         setRows(cr.data||[]);
         // pause is active on date if not yet resumed (resumed_on null or after date)
         setPauses((pr.data||[]).filter(p=> !p.resumed_on || p.resumed_on>dnow));
+        const prog = await loadJobProgressFor(dnow);
+        const pm={}; prog.forEach(r=>{ pm[r.job_id]=Number(r.units_cumulative); });
+        setProgress(pm);
+        setPedit(Object.fromEntries(Object.entries(pm).map(([k,v])=>[k,String(v)])));
       }
 
       const nameOf = (code)=>{ const e=emps.find(x=>x.id===code); return e? e.name : code; };
@@ -181,6 +188,15 @@
         await toggle(job,code);
       }
 
+      async function saveProgress(job){
+        const v=Number(pedit[job]);
+        if(isNaN(v)||v<0){ setMsg("Enter a valid units-done number."); return; }
+        setBusy(true);
+        const {error}=await upsertJobProgress(job, date, v, null);
+        setBusy(false);
+        if(error){ setMsg(error.message); return; }
+        setProgress({...progress,[job]:v});
+      }
       async function doPause(job,reason){
         setPausing(null);
         setBusy(true);
@@ -272,6 +288,16 @@
                           </select>
                           <button class="tog" disabled=${busy||!addPick[j.id]} onClick=${()=>addMovedIn(j.id)}>Add</button>
                         </div>
+                        <div class="add">
+                          <label style="flex:0 0 auto;font-size:12.5px;color:var(--muted);font-weight:600">Units done to date${j.unit?` (${j.unit})`:""}</label>
+                          <input type="number" inputmode="decimal" style="flex:1;padding:9px 10px;border:1px dashed #c3d3e4;border-radius:9px;background:#f7fafd;font-size:13.5px"
+                                 value=${pedit[j.id]!=null?pedit[j.id]:""} onInput=${e=>setPedit({...pedit,[j.id]:e.target.value})}
+                                 placeholder=${j.quantity!=null?`of ${j.quantity}`:"0"} />
+                          <button class="tog" disabled=${busy} onClick=${()=>saveProgress(j.id)}>Save</button>
+                        </div>
+                        ${progress[j.id]!=null && j.quantity!=null && progress[j.id]>j.quantity
+                          ? html`<div class="holdnote" style="color:var(--warn)">Units exceed the estimate of ${j.quantity} — job flagged for estimate review; no incentive on overrun units until admin approves.</div>`
+                          : ""}
                         ${pausing===j.id
                           ? html`<div class="reasons">
                               ${["Absent","Pulled to priority","No material","Weather","Other"].map(r=>
