@@ -114,7 +114,9 @@ the SQL file (idempotent `CREATE OR REPLACE FUNCTION` + `DROP/CREATE TRIGGER`).
 - `v_attendance_day`: per worker (`employees.id`) per ISO day, `paid_hours = worked_ms/3.6e6`,
   plus `is_incomplete`, `status`. Bridges keys: `attendance_records.employee_code = employees.code`;
   the KPI worker key is `employees.id`. **`attendance_records.date` is mixed-format TEXT → normalized
-  to a real date inside this view** (the landmine now applies here).
+  to a real date inside this view** (the landmine applies here). The view **aggregates to one row per
+  (employee, work_date)** (max paid_hours) so a mixed-format duplicate row cannot fan out the
+  downstream join and double a worker's actual hours.
 - `v_job_worker_day`: per (job, worker, day), `actual_hours = paid_hours × blocks_on_job / total_blocks`
   (blocks from `job_checkpoint`). Sum over a worker-day = `paid_hours`. Tagged-but-no-attendance → 0.
 

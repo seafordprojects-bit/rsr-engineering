@@ -261,19 +261,31 @@ create trigger trg_effaudit_immutable before update or delete on efficiency_week
 -- mixed formats (YYYY-MM-DD and MM/DD/YYYY) -> normalized to a real date here, once.
 -- attendance is keyed by employees.code; roll-call by employees.id -> bridge via employees.
 create or replace view v_attendance_day as
-select e.id   as employee_id,
-       e.code as employee_code,
-       e.name as employee_name,
-       (case
-          when a.date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'   then substr(a.date,1,10)::date
-          when a.date ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' then to_date(a.date,'MM/DD/YYYY')
-          else null
-        end)                                   as work_date,
-       (coalesce(a.worked_ms,0)/3600000.0)::numeric as paid_hours,
-       coalesce(a.is_incomplete,false)         as is_incomplete,
-       a.status                                as status
-from attendance_records a
-join employees e on e.code = a.employee_code;
+with norm as (
+  select e.id   as employee_id,
+         e.code as employee_code,
+         e.name as employee_name,
+         (case
+            when a.date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'   then substr(a.date,1,10)::date
+            when a.date ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' then to_date(a.date,'MM/DD/YYYY')
+            else null
+          end)                                   as work_date,
+         (coalesce(a.worked_ms,0)/3600000.0)::numeric as paid_hours,
+         coalesce(a.is_incomplete,false)         as is_incomplete,
+         a.status                                as status
+  from attendance_records a
+  join employees e on e.code = a.employee_code
+)
+-- Collapse cross-format duplicate rows for the same logical day to ONE row per
+-- (employee, work_date). The unique index on attendance_records is on the RAW TEXT date,
+-- so a mixed-format duplicate (e.g. 2026-07-04 and 07/04/2026) could otherwise fan out the
+-- downstream join and double a worker's attributed actual hours. Keep the fuller record.
+select employee_id, employee_code, min(employee_name) as employee_name, work_date,
+       max(paid_hours)        as paid_hours,
+       bool_or(is_incomplete) as is_incomplete,
+       max(status)            as status
+from norm
+group by employee_id, employee_code, work_date;
 
 -- Attribute each worker-day's paid hours across the jobs they were roll-call-tagged to
 -- that day, in proportion to checkpoint blocks (spec D9). Sum over a worker-day == paid_hours.

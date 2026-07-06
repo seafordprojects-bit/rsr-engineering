@@ -4,6 +4,24 @@ Internal web operations system for ship repair (attendance/payroll kiosk, wareho
 purchasing, job monitoring, coordinator liquidation). **This repo is LIVE PRODUCTION —
 the payroll pays real salaries. Be conservative.**
 
+## Decision authority
+The owner is the business owner, **not a programmer**. Decide ALL technical matters
+yourself, without asking — libraries, code structure, SQL design, naming, file layout,
+error handling, algorithms, anything about HOW the code works.
+
+Ask the owner ONLY when a decision changes what the SYSTEM DOES for the business:
+- policies (e.g. Policy A: missing-punch zeroes the session),
+- money / pay / incentive rules,
+- what workers or admins SEE on screen,
+- workflow steps people must follow,
+- thresholds and flags,
+- anything touching live production data or payroll.
+
+When you ask, use **plain language with a concrete real-life example** of what each option
+means — no jargon. If a question is part technical and part business, decide the technical
+part yourself and ask only the business part. (This scopes Hard rule 1: "confirm direction"
+means confirm the *business* direction, not implementation details.)
+
 ## Stack (non-negotiable)
 - Vanilla JS + Preact/htm via CDN. **No build step, no npm, no bundler, no frameworks.**
 - Hosted on GitHub Pages: https://seafordprojects-bit.github.io/rsr-engineering
