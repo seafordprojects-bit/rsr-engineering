@@ -45,8 +45,14 @@
                    : "payroll week logic CHANGED — re-sync shared/payweek.mjs and update this pin");
     }catch(e){ check("Payroll source pin", false, "could not fetch payroll/index.html: "+e); }
 
-    // 3 -- KPI data integrity
-    try{
+    // Preflight: KPI views must be applied, else checks 3-4 vacuously "pass" on empty data.
+    const probe=await sb.from("v_job_efficiency").select("job_id").limit(1);
+    const viewsReady=!probe.error;
+    check("KPI views applied (run monitoring/sql/personnel-kpi.sql)", viewsReady,
+      viewsReady?"views present":("NOT applied — "+((probe.error&&probe.error.message)||"missing")));
+
+    // 3 -- KPI data integrity (only when views are applied)
+    if(viewsReady) try{
       const je=await sb.from("v_job_efficiency").select("job_no,units_cumulative,quantity,credited_units,overrun");
       const capOk=(je.data||[]).every(r=>Number(r.credited_units)<=Number(r.quantity)+1e-9);
       check("Earned cap honoured (credited_units ≤ quantity)", capOk,
@@ -65,8 +71,8 @@
       check("Week bucketing consistent", bad.length===0, bad.length+" mismatched of "+((jp.data||[]).length));
     }catch(e){ check("KPI data integrity", false, String(e)); }
 
-    // 4 -- attendance-sourced actual hours (payroll-effective) integrity
-    try{
+    // 4 -- attendance-sourced actual hours (payroll-effective) integrity (only when views applied)
+    if(viewsReady) try{
       // 4a: attendance dates all normalizable (YYYY-MM-DD or MM/DD/YYYY) -> v_attendance_day.work_date not null
       const ar=await sb.from("attendance_records").select("date").limit(500);
       const unparsable=(ar.data||[]).filter(r=>{ const s=String(r.date||""); return !/^\d{4}-\d{2}-\d{2}/.test(s) && !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s); });
