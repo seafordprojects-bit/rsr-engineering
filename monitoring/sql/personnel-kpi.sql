@@ -1,5 +1,10 @@
 -- personnel-kpi.sql  --  Personnel efficiency (phase 1). Idempotent: safe to re-run.
 -- Run in the Supabase SQL editor for project wpmcbjrisuyjvobvzaus.
+--
+-- ACTUAL HOURS come from payroll-effective worked_ms (attendance_records), NOT the
+-- roll-call 2h blocks. Roll-call only supplies the WHICH-JOB split. See v_attendance_day
+-- and v_job_worker_day. worked_ms is what payroll persists after punch edits
+-- (payroll/index.html:1016), so KPI actual hours equal paid hours exactly.
 
 -- ============================================================ TABLES
 create table if not exists job_progress (
@@ -14,7 +19,7 @@ create table if not exists job_progress (
 
 create table if not exists efficiency_week (
   id                        uuid primary key default gen_random_uuid(),
-  employee_code             text not null,
+  employee_code             text not null,     -- employees.id (uuid), the KPI worker key
   week_start                date not null,     -- Saturday
   week_end                  date not null,     -- Friday
   earned_hours              numeric not null,
@@ -26,8 +31,15 @@ create table if not exists efficiency_week (
   close_version             integer not null default 1,
   closed_by                 text,
   closed_at                 timestamptz not null default now(),
+  finalized_ack_by          text,              -- admin who affirmed payroll finalized for the week
+  finalized_ack_at          timestamptz,
+  unresolved_at_close       integer,           -- payroll-health unresolved count at close time
   unique (employee_code, week_start, close_version)
 );
+-- Add the finalize-ack columns on re-run if an older efficiency_week already exists.
+alter table efficiency_week add column if not exists finalized_ack_by    text;
+alter table efficiency_week add column if not exists finalized_ack_at    timestamptz;
+alter table efficiency_week add column if not exists unresolved_at_close integer;
 
 create table if not exists efficiency_week_audit (
   id         uuid primary key default gen_random_uuid(),
@@ -76,15 +88,53 @@ create trigger trg_effaudit_immutable before update or delete on efficiency_week
   for each row execute function block_mutation();
 
 -- ============================================================ VIEWS
--- Per job: earned-to-date (capped at estimate), actual (all tagged hours incl OT), efficiency.
+-- Payroll-effective hours per worker (employees.id) per ISO day. Reads the SAME worked_ms
+-- payroll persists after edits, so KPI actual == paid. attendance_records.date is TEXT in
+-- mixed formats (YYYY-MM-DD and MM/DD/YYYY) -> normalized to a real date here, once.
+-- attendance is keyed by employees.code; roll-call by employees.id -> bridge via employees.
+create or replace view v_attendance_day as
+select e.id   as employee_id,
+       e.code as employee_code,
+       e.name as employee_name,
+       (case
+          when a.date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'   then substr(a.date,1,10)::date
+          when a.date ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' then to_date(a.date,'MM/DD/YYYY')
+          else null
+        end)                                   as work_date,
+       (coalesce(a.worked_ms,0)/3600000.0)::numeric as paid_hours,
+       coalesce(a.is_incomplete,false)         as is_incomplete,
+       a.status                                as status
+from attendance_records a
+join employees e on e.code = a.employee_code;
+
+-- Attribute each worker-day's paid hours across the jobs they were roll-call-tagged to
+-- that day, in proportion to checkpoint blocks (spec D9). Sum over a worker-day == paid_hours.
+-- Tagged but no attendance row -> paid_hours 0 -> actual_hours 0 (spec edge case).
+create or replace view v_job_worker_day as
+with crew as (
+  select job_id, employee_code as employee_id, (work_date::date) as work_date, count(*) as blocks
+  from job_checkpoint
+  group by job_id, employee_code, (work_date::date)
+),
+daytot as (
+  select employee_id, work_date, sum(blocks) as total_blocks
+  from crew group by employee_id, work_date
+)
+select c.job_id, c.employee_id, c.work_date, c.blocks,
+       round(coalesce(p.paid_hours,0) * c.blocks / nullif(dt.total_blocks,0), 3) as actual_hours
+from crew c
+join daytot dt        on dt.employee_id = c.employee_id and dt.work_date = c.work_date
+left join v_attendance_day p on p.employee_id = c.employee_id and p.work_date = c.work_date;
+
+-- Per job: earned-to-date (capped at estimate) vs attributed payroll-effective actual hours.
 create or replace view v_job_efficiency as
 with prog as (
   select distinct on (job_id) job_id, units_cumulative
   from job_progress order by job_id, work_date desc
 ),
 act as (
-  select job_id, sum(hours)::numeric as actual_hours
-  from job_checkpoint group by job_id
+  select job_id, sum(actual_hours)::numeric as actual_hours
+  from v_job_worker_day group by job_id
 )
 select j.id as job_id, j.job_no, j.vessel, j.site, j.status,
        j.quantity, j.unit, j.rate_used, j.correction_factor, j.calibrated,
@@ -93,7 +143,7 @@ select j.id as job_id, j.job_no, j.vessel, j.site, j.status,
        (coalesce(p.units_cumulative,0) > j.quantity)                 as overrun,
        round(least(coalesce(p.units_cumulative,0), j.quantity)
              * j.rate_used * j.correction_factor, 2)                 as earned_hours,
-       coalesce(a.actual_hours,0)                                    as actual_hours,
+       round(coalesce(a.actual_hours,0),2)                           as actual_hours,
        case when coalesce(a.actual_hours,0) > 0
             then round(least(coalesce(p.units_cumulative,0), j.quantity)
                        * j.rate_used * j.correction_factor / a.actual_hours, 3)
@@ -114,8 +164,9 @@ select vessel,
 from v_job_efficiency
 group by vessel;
 
--- Per worker, per job, per DAY: split the day's earned delta by hours logged (spec D9).
--- Week bucket: Saturday on/before work_date. Postgres dow: Sun=0..Sat=6, so
+-- Per worker, per job, per DAY: split the day's earned delta among the day's crew in
+-- proportion to their ATTRIBUTED paid hours (spec D9) -> everyone lands at the job-day's
+-- efficiency. Week bucket: Saturday on/before work_date. Postgres dow Sun=0..Sat=6, so
 -- (dow+1)%7 gives Sat=0..Fri=6, identical to shared/payweek.mjs.
 create or replace view v_worker_week_job as
 with deltas as (
@@ -128,27 +179,22 @@ with deltas as (
   from job_progress jp
   join jobs j on j.id = jp.job_id
 ),
-crew as (
-  select job_id, (work_date::date) as work_date, employee_code, sum(hours)::numeric as emp_hours
-  from job_checkpoint
-  group by job_id, (work_date::date), employee_code
-),
-crewtot as (
-  select job_id, work_date, sum(emp_hours) as crew_hours
-  from crew group by job_id, work_date
+jobday as (
+  select job_id, work_date, sum(actual_hours) as crew_actual
+  from v_job_worker_day group by job_id, work_date
 )
-select c.employee_code,
-       (c.work_date - ((extract(dow from c.work_date)::int + 1) % 7))::date       as week_start,
-       (c.work_date - ((extract(dow from c.work_date)::int + 1) % 7) + 6)::date   as week_end,
-       c.job_id, j.job_no, j.vessel, j.calibrated,
-       c.emp_hours                                                                as actual_hours,
-       case when ct.crew_hours > 0
-            then round(coalesce(d.earned_delta,0) * c.emp_hours / ct.crew_hours, 3)
-            else 0 end                                                            as earned_hours
-from crew c
-join crewtot ct on ct.job_id = c.job_id and ct.work_date = c.work_date
-join jobs j     on j.id = c.job_id
-left join deltas d on d.job_id = c.job_id and d.work_date = c.work_date;
+select jwd.employee_id                                                        as employee_code,
+       (jwd.work_date - ((extract(dow from jwd.work_date)::int + 1) % 7))::date     as week_start,
+       (jwd.work_date - ((extract(dow from jwd.work_date)::int + 1) % 7) + 6)::date as week_end,
+       jwd.job_id, j.job_no, j.vessel, j.calibrated,
+       jwd.actual_hours,
+       case when jd.crew_actual > 0
+            then round(coalesce(d.earned_delta,0) * jwd.actual_hours / jd.crew_actual, 3)
+            else 0 end                                                        as earned_hours
+from v_job_worker_day jwd
+join jobday jd  on jd.job_id = jwd.job_id and jd.work_date = jwd.work_date
+join jobs j     on j.id = jwd.job_id
+left join deltas d on d.job_id = jwd.job_id and d.work_date = jwd.work_date;
 
 -- Per worker, per week: aggregate + breakdown. Source snapshotted by "Close week".
 create or replace view v_worker_week_efficiency as
@@ -165,3 +211,13 @@ select employee_code, week_start, week_end,
        ) order by job_no)                                            as breakdown
 from v_worker_week_job
 group by employee_code, week_start, week_end;
+
+-- Payroll-readiness per Sat-Fri week for the Close-week ordering guard: unresolved rows =
+-- payroll's own is_incomplete (missing OUT under Policy A) OR a zero-hour present-day anomaly.
+create or replace view v_week_payroll_health as
+select (work_date - ((extract(dow from work_date)::int + 1) % 7))::date as week_start,
+       count(*) filter (where is_incomplete or (paid_hours = 0 and status is distinct from 'absent'))
+                                                                          as unresolved
+from v_attendance_day
+where work_date is not null
+group by (work_date - ((extract(dow from work_date)::int + 1) % 7))::date;
