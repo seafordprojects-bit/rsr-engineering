@@ -117,7 +117,11 @@ $$;
 -- Exact-match here would silently drop rows on any spacing/case difference (the payroll landmine).
 create or replace view v_attendance_day as
 with norm as (
-  select e.id   as employee_id,
+  -- employee_id is the KPI worker key. It equals employees.id but is exposed as LOWERCASE TEXT,
+  -- because the monitoring tables (job_checkpoint/job_assignment/efficiency_week) store that key
+  -- in TEXT columns. Comparing text=text (never uuid=text) both avoids the operator-mismatch error
+  -- and, like payroll's normCode, is immune to any case drift that would otherwise silently drop rows.
+  select lower(e.id::text) as employee_id,
          e.code as employee_code,
          e.name as employee_name,
          (case
@@ -148,9 +152,11 @@ group by employee_id, employee_code, work_date;
 -- Tagged but no attendance row -> paid_hours 0 -> actual_hours 0 (spec edge case).
 create or replace view v_job_worker_day as
 with crew as (
-  select job_id, employee_code as employee_id, (work_date::date) as work_date, count(*) as blocks
+  -- job_checkpoint.employee_code is TEXT holding employees.id (a uuid string). Normalize it to
+  -- lowercase text so it joins v_attendance_day.employee_id (also lowercase text) as text=text.
+  select job_id, lower(employee_code) as employee_id, (work_date::date) as work_date, count(*) as blocks
   from job_checkpoint
-  group by job_id, employee_code, (work_date::date)
+  group by job_id, lower(employee_code), (work_date::date)
 ),
 daytot as (
   select employee_id, work_date, sum(blocks) as total_blocks
