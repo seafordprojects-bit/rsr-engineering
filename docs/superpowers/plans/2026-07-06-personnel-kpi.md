@@ -954,8 +954,14 @@ git commit -m "feat(kpi): efficiency page (by job/vessel/worker) with admin clos
                    : "payroll week logic CHANGED — re-sync shared/payweek.mjs and update this pin");
     }catch(e){ check("Payroll source pin", false, "could not fetch payroll/index.html: "+e); }
 
-    // 3 -- KPI data integrity
-    try{
+    // Preflight: KPI views must be applied, else checks 3-4 vacuously "pass" on empty data.
+    const probe=await sb.from("v_job_efficiency").select("job_id").limit(1);
+    const viewsReady=!probe.error;
+    check("KPI views applied (run monitoring/sql/personnel-kpi.sql)", viewsReady,
+      viewsReady?"views present":("NOT applied — "+((probe.error&&probe.error.message)||"missing")));
+
+    // 3 -- KPI data integrity (only when views are applied)
+    if(viewsReady) try{
       const je=await sb.from("v_job_efficiency").select("job_no,units_cumulative,quantity,credited_units,overrun");
       const capOk=(je.data||[]).every(r=>Number(r.credited_units)<=Number(r.quantity)+1e-9);
       check("Earned cap honoured (credited_units ≤ quantity)", capOk,
@@ -974,8 +980,8 @@ git commit -m "feat(kpi): efficiency page (by job/vessel/worker) with admin clos
       check("Week bucketing consistent", bad.length===0, bad.length+" mismatched of "+((jp.data||[]).length));
     }catch(e){ check("KPI data integrity", false, String(e)); }
 
-    // 4 -- attendance-sourced actual hours (payroll-effective) integrity
-    try{
+    // 4 -- attendance-sourced actual hours (payroll-effective) integrity (only when views applied)
+    if(viewsReady) try{
       // 4a: attendance dates all normalizable (YYYY-MM-DD or MM/DD/YYYY) -> v_attendance_day.work_date not null
       const ar=await sb.from("attendance_records").select("date").limit(500);
       const unparsable=(ar.data||[]).filter(r=>{ const s=String(r.date||""); return !/^\d{4}-\d{2}-\d{2}/.test(s) && !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s); });
@@ -990,6 +996,15 @@ git commit -m "feat(kpi): efficiency page (by job/vessel/worker) with admin clos
       const viol=Object.keys(attr).filter(k=> paid[k]!=null && Math.abs(attr[k]-paid[k])>0.02 );
       check("Attributed job hours reconcile to payroll paid hours", viol.length===0,
         viol.length+" worker-days off by >0.02h of "+Object.keys(attr).length+" attributed");
+
+      // 4c: orphan attendance codes — attendance_records.employee_code with no employees.code match
+      // silently drop from v_attendance_day (inner join), so their hours never reach the KPI. Surface them.
+      const emp=await sb.from("employees").select("code");
+      const codes=new Set((emp.data||[]).map(r=>r.code));
+      const arc=await sb.from("attendance_records").select("employee_code").limit(2000);
+      const orphans=new Set((arc.data||[]).map(r=>r.employee_code).filter(c=>c && !codes.has(c)));
+      check("Attendance employee codes all map to employees", orphans.size===0,
+        orphans.size+" unmatched code(s): "+[...orphans].slice(0,8).join(", "));
     }catch(e){ check("Actual-hours integrity", false, String(e)); }
 
     out.innerHTML=rows.join("");
