@@ -510,20 +510,24 @@ Inside `reload()`, after `setPauses(...)` (roll-call.html:141), add:
 const prog = await loadJobProgressFor(dnow);
 const pm={}; prog.forEach(r=>{ pm[r.job_id]=Number(r.units_cumulative); });
 setProgress(pm);
-setPedit(Object.fromEntries(Object.entries(pm).map(([k,v])=>[k,String(v)])));
+// Do NOT seed pedit here — pedit holds only the user's unsaved typed overrides, so a reload
+// (which fires after every presence toggle) never discards in-progress typing.
 ```
 
 - [ ] **Step 4: Add a save handler** (near `doPause`, roll-call.html:184):
 
 ```js
 async function saveProgress(job){
-  const v=Number(pedit[job]);
+  const raw = pedit[job]!=null ? pedit[job] : (progress[job]!=null?String(progress[job]):"");
+  if(String(raw).trim()===""){ setMsg("Enter a units-done number."); return; }
+  const v=Number(raw);
   if(isNaN(v)||v<0){ setMsg("Enter a valid units-done number."); return; }
   setBusy(true);
   const {error}=await upsertJobProgress(job, date, v, null);
   setBusy(false);
   if(error){ setMsg(error.message); return; }
   setProgress({...progress,[job]:v});
+  setPedit(prev=>{ const n={...prev}; delete n[job]; return n; });
 }
 ```
 
@@ -533,7 +537,7 @@ async function saveProgress(job){
 <div class="add">
   <label style="flex:0 0 auto;font-size:12.5px;color:var(--muted);font-weight:600">Units done to date${j.unit?` (${j.unit})`:""}</label>
   <input type="number" inputmode="decimal" style="flex:1;padding:9px 10px;border:1px dashed #c3d3e4;border-radius:9px;background:#f7fafd;font-size:13.5px"
-         value=${pedit[j.id]!=null?pedit[j.id]:""} onInput=${e=>setPedit({...pedit,[j.id]:e.target.value})}
+         value=${pedit[j.id]!=null ? pedit[j.id] : (progress[j.id]!=null?String(progress[j.id]):"")} onInput=${e=>setPedit({...pedit,[j.id]:e.target.value})}
          placeholder=${j.quantity!=null?`of ${j.quantity}`:"0"} />
   <button class="tog" disabled=${busy} onClick=${()=>saveProgress(j.id)}>Save</button>
 </div>
