@@ -255,6 +255,21 @@ drop trigger if exists trg_effaudit_immutable on efficiency_week_audit;
 create trigger trg_effaudit_immutable before update or delete on efficiency_week_audit
   for each row execute function block_mutation();
 
+-- ============================================================ COLUMN CONTRACTS
+comment on column job_checkpoint.employee_code is
+  'Holds employees.id (uuid), NOT the human code. Monitoring keys people by employees.id; attendance/payroll use employees.code, bridged in v_attendance_day.';
+comment on column job_assignment.employee_code is
+  'Holds employees.id (uuid), NOT the human code. Same contract as job_checkpoint.employee_code.';
+comment on column efficiency_week.employee_code is
+  'Holds employees.id (uuid), the KPI worker key (same key as job_checkpoint.employee_code).';
+
+-- ============================================================ WEEK HELPER (drift-guard)
+-- Sat-on/before a date, exposed so diagnostic.html compares SQL bucketing vs shared/payweek.mjs.
+create or replace function kpi_week_start(d date) returns date
+language sql immutable as $$
+  select (d - ((extract(dow from d)::int + 1) % 7))::date
+$$;
+
 -- ============================================================ VIEWS
 -- Payroll-effective hours per worker (employees.id) per ISO day. Reads the SAME worked_ms
 -- payroll persists after edits, so KPI actual == paid. attendance_records.date is TEXT in
@@ -274,7 +289,8 @@ with norm as (
          coalesce(a.is_incomplete,false)         as is_incomplete,
          a.status                                as status
   from attendance_records a
-  join employees e on e.code = a.employee_code
+  join employees e
+    on upper(regexp_replace(e.code, '\s', '', 'g')) = upper(regexp_replace(a.employee_code, '\s', '', 'g'))
 )
 -- Collapse cross-format duplicate rows for the same logical day to ONE row per
 -- (employee, work_date). The unique index on attendance_records is on the RAW TEXT date,
@@ -966,6 +982,24 @@ git commit -m "feat(kpi): efficiency page (by job/vessel/worker) with admin clos
                    : "payroll week logic CHANGED — re-sync shared/payweek.mjs and update this pin");
     }catch(e){ check("Payroll source pin", false, "could not fetch payroll/index.html: "+e); }
 
+    // 2b -- SQL week bucketing must equal shared/payweek.mjs (incl year boundaries), via kpi_week_start() RPC
+    try{
+      const probe0=await sb.rpc("kpi_week_start",{d:"2026-01-01"});
+      if(probe0.error){
+        check("SQL week_start matches shared/payweek.mjs", false,
+          "kpi_week_start() not found — apply the SQL, then re-check ("+probe0.error.message+")");
+      } else {
+        const dates=["2025-12-31","2026-01-01","2026-01-02","2026-01-03","2026-07-03","2026-07-04","2026-07-06","2024-02-29","2027-01-01","2026-12-31"];
+        const mism=[];
+        for(const d of dates){
+          const r=await sb.rpc("kpi_week_start",{d});
+          const sqlWk=r.error?null:String(r.data).slice(0,10);
+          if(r.error) mism.push(d+" rpc-err"); else if(sqlWk!==weekContaining(d).start) mism.push(`${d}: SQL ${sqlWk} != JS ${weekContaining(d).start}`);
+        }
+        check("SQL week_start matches shared/payweek.mjs (incl year boundaries)", mism.length===0, mism.join("; ")||("all "+dates.length+" probe dates agree"));
+      }
+    }catch(e){ check("SQL vs JS week bucketing", false, String(e)); }
+
     // Preflight: KPI views must be applied, else checks 3-4 vacuously "pass" on empty data.
     const probe=await sb.from("v_job_efficiency").select("job_id").limit(1);
     const viewsReady=!probe.error;
@@ -1009,14 +1043,15 @@ git commit -m "feat(kpi): efficiency page (by job/vessel/worker) with admin clos
       check("Attributed job hours reconcile to payroll paid hours", viol.length===0,
         viol.length+" worker-days off by >0.02h of "+Object.keys(attr).length+" attributed");
 
-      // 4c: orphan attendance codes — attendance_records.employee_code with no employees.code match
-      // silently drop from v_attendance_day (inner join), so their hours never reach the KPI. Surface them.
+      // 4c: orphan attendance codes — normalize both sides exactly like payroll normCode
+      // (payroll/index.html:682: upper + strip whitespace); count attendance codes matching NO employee.
+      const normCode=c=>String(c||"").toUpperCase().replace(/\s+/g,"");
       const emp=await sb.from("employees").select("code");
-      const codes=new Set((emp.data||[]).map(r=>r.code));
-      const arc=await sb.from("attendance_records").select("employee_code").limit(2000);
-      const orphans=new Set((arc.data||[]).map(r=>r.employee_code).filter(c=>c && !codes.has(c)));
-      check("Attendance employee codes all map to employees", orphans.size===0,
-        orphans.size+" unmatched code(s): "+[...orphans].slice(0,8).join(", "));
+      const codes=new Set((emp.data||[]).map(r=>normCode(r.code)));
+      const arc=await sb.from("attendance_records").select("employee_code").limit(5000);
+      const orphans=new Set((arc.data||[]).map(r=>r.employee_code).filter(c=>c && !codes.has(normCode(c))));
+      check("Attendance codes map to an employee (normalized, matches payroll)", orphans.size===0,
+        orphans.size+" attendance code(s) match NO employee after upper()+strip-spaces: "+[...orphans].slice(0,8).join(", "));
     }catch(e){ check("Actual-hours integrity", false, String(e)); }
 
     out.innerHTML=rows.join("");

@@ -87,11 +87,34 @@ drop trigger if exists trg_effaudit_immutable on efficiency_week_audit;
 create trigger trg_effaudit_immutable before update or delete on efficiency_week_audit
   for each row execute function block_mutation();
 
+-- ============================================================ COLUMN CONTRACTS
+-- The monitoring module keys people by employees.id (uuid): roll-call and assign write
+-- employees.id into these *_code columns, NOT the human "RSR 0009" code. Make it explicit.
+-- (Confirmed in roll-call.html: <option value=${e.id}> and job_checkpoint insert employee_code:e.id.)
+comment on column job_checkpoint.employee_code is
+  'Holds employees.id (uuid), NOT the human code. Monitoring keys people by employees.id; attendance/payroll use employees.code, bridged in v_attendance_day.';
+comment on column job_assignment.employee_code is
+  'Holds employees.id (uuid), NOT the human code. Same contract as job_checkpoint.employee_code.';
+comment on column efficiency_week.employee_code is
+  'Holds employees.id (uuid), the KPI worker key (same key as job_checkpoint.employee_code).';
+
+-- ============================================================ WEEK HELPER (drift-guard)
+-- Saturday-on/before a date, exposed so monitoring/diagnostic.html can compare the SQL week
+-- bucketing against shared/payweek.mjs. This is the SAME formula the views use inline:
+-- Postgres dow Sun=0..Sat=6, so (dow+1)%7 gives Sat=0..Fri=6 (matches the JS helper).
+create or replace function kpi_week_start(d date) returns date
+language sql immutable as $$
+  select (d - ((extract(dow from d)::int + 1) % 7))::date
+$$;
+
 -- ============================================================ VIEWS
 -- Payroll-effective hours per worker (employees.id) per ISO day. Reads the SAME worked_ms
 -- payroll persists after edits, so KPI actual == paid. attendance_records.date is TEXT in
 -- mixed formats (YYYY-MM-DD and MM/DD/YYYY) -> normalized to a real date here, once.
 -- attendance is keyed by employees.code; roll-call by employees.id -> bridge via employees.
+-- The code join is NORMALIZED exactly like payroll's client normCode (payroll/index.html:682):
+--   normCode = upper(code) with ALL whitespace stripped  ('rsr 0009' == 'RSR 0009' == 'RSR0009').
+-- Exact-match here would silently drop rows on any spacing/case difference (the payroll landmine).
 create or replace view v_attendance_day as
 with norm as (
   select e.id   as employee_id,
@@ -106,7 +129,8 @@ with norm as (
          coalesce(a.is_incomplete,false)         as is_incomplete,
          a.status                                as status
   from attendance_records a
-  join employees e on e.code = a.employee_code
+  join employees e
+    on upper(regexp_replace(e.code, '\s', '', 'g')) = upper(regexp_replace(a.employee_code, '\s', '', 'g'))
 )
 -- Collapse cross-format duplicate rows for the same logical day to ONE row per
 -- (employee, work_date). The unique index on attendance_records is on the RAW TEXT date,
