@@ -21,6 +21,7 @@
 - **Zero peso amounts, zero bonus/provisional formulas** on any screen or record. Phase 2 is a separate spec. (spec D7, §10)
 - **Owner applies SQL and commits/deploys.** Do not auto-commit pay-affecting changes without explicit approval; propose → confirm → implement → validate → show. (CLAUDE.md workflow)
 - Monitoring module carries **no version stamp** and is **not** in `preflight.html`'s `EXPECT`. Do not add stamps to monitoring pages.
+- **Live-Supabase verification is read-unrestricted but write-restricted (user mandate):** automated verification may write ONLY to the new `job_progress` table, using clearly TEST-marked rows (e.g. `reported_by:"TEST-…"`, a sentinel `work_date`) that are deleted immediately after. **ZERO writes to any pre-existing table** (`jobs`, `job_checkpoint`, `employees`, …) — reference existing rows by reading their id, never by inserting/updating them. `efficiency_week`/`efficiency_week_audit` are append-only (undeletable via PostgREST), so do NOT insert TEST rows there during automated checks; their Close/immutability/calibration behaviour is verified by local validation + reviewer inspection + an owner-run manual acceptance.
 
 ## Access-control scope note
 
@@ -493,23 +494,21 @@ grep -c azfmpleswqixaslvcito monitoring/roll-call.html   # expect 0
 ```
 Expected: `node --check` clean; second grep `0`. (The URL lives in config.js; the page importing it is fine.)
 
-- [ ] **Step 7: End-to-end check** (local server + Playwright, real Supabase). Seed a probe job, report progress, confirm the row lands, then clean up.
+- [ ] **Step 7: Live checks — reads + `job_progress` round-trip only (NO writes to pre-existing tables).** First, a read-only DOM smoke test: serve the repo, open `http://localhost:8123/monitoring/roll-call.html`, confirm the "Units done to date" field renders on active jobs (no Save clicked — clicking Save on a real job would write `job_progress` for a real job/today, which is a real row, not a TEST row). Then prove the write path with an isolated TEST row that references an EXISTING job by FK (read only) on a sentinel date, and delete it:
 
 ```bash
-# Serve repo root (any static server on :8123). Then, using the anon key:
-KEY="<anon key>"; BASE="https://wpmcbjrisuyjvobvzaus.supabase.co/rest/v1"
-# Create a probe job (uuid auto). Capture its id:
-curl -s "$BASE/jobs" -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -H "Prefer: return=representation" \
-  -d '{"job_no":"JOB-CAR-KPITEST","vessel":"KPI TEST","site":"CAR","quantity":200,"unit":"kg","rate_used":0.05,"correction_factor":1,"est_manhours":10,"status":"open","start_date":"2026-07-06","target_date":"2026-07-10"}'
+KEY="<anon key from monitoring/config.js:12>"; BASE="https://wpmcbjrisuyjvobvzaus.supabase.co/rest/v1"
+# Read an existing job id (NO write to jobs):
+JOB=$(curl -s "$BASE/jobs?select=id&limit=1" -H "apikey: $KEY" -H "Authorization: Bearer $KEY" | sed -E 's/.*"id":"([^"]+)".*/\1/')
+# Insert a TEST job_progress row (NEW table) on a sentinel date that cannot collide with real data:
+curl -s "$BASE/job_progress" -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d "{\"job_id\":\"$JOB\",\"work_date\":\"2000-01-01\",\"units_cumulative\":1,\"reported_by\":\"TEST-kpi-verify\"}"
+curl -s "$BASE/job_progress?select=units_cumulative,reported_by&job_id=eq.$JOB&work_date=eq.2000-01-01" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"  # expect units_cumulative 1
+# Clean up the TEST row (job_progress is deletable):
+curl -s -X DELETE "$BASE/job_progress?job_id=eq.$JOB&work_date=eq.2000-01-01" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
+curl -s "$BASE/job_progress?select=id&work_date=eq.2000-01-01" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"  # expect []
 ```
-Open `http://localhost:8123/monitoring/roll-call.html`, enter Units done to date = `120` on the probe job, Save. Then verify + clean up:
-```bash
-curl -s "$BASE/job_progress?select=units_cumulative&job_id=eq.<probe-id>" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"  # expect 120
-curl -s -X DELETE "$BASE/job_progress?job_id=eq.<probe-id>" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
-curl -s -X DELETE "$BASE/jobs?id=eq.<probe-id>" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
-```
-Expected: query returns `120`; deletes succeed (leave no probe rows behind).
+Expected: the field renders; the TEST row inserts and reads back `1`; the delete leaves `[]`. No pre-existing table is written; the only KPI-table write is the TEST `job_progress` row, removed at the end.
 
 - [ ] **Step 8: Commit**
 
@@ -791,28 +790,21 @@ grep -c azfmpleswqixaslvcito monitoring/efficiency.html   # expect 0
 ```
 Expected: `node --check` clean; grep `0`.
 
-- [ ] **Step 3: End-to-end via local server + probe data.** Reuse the probe job from Task 4 (or recreate). Seed a checkpoint + two progress readings across a week, open `efficiency.html`, confirm By-job efficiency and the amber calibration badge, mark calibrated, then Close the week and confirm an immutable `efficiency_week` row.
+- [ ] **Step 3: Live checks — reads only (NO writes to any pre-existing table; NO TEST rows in append-only tables).** Serve the repo and open `http://localhost:8123/monitoring/efficiency.html`:
+  - **By job** reads `v_job_efficiency` and renders real jobs, each with an amber "factors not calibrated · incentive pending" badge (since no job is calibrated yet), earned/actual/eff, and an overrun badge where applicable. Read-only — do NOT click "Mark calibrated" (that writes `jobs.calibrated`, a pre-existing table).
+  - **By vessel** reads `v_vessel_efficiency` and renders per-vessel roll-ups.
+  - **By worker** for the current pay week reads `v_worker_week_efficiency`. With `job_checkpoint` empty in the live DB this list is expected to be empty and must render the empty-state without error. Do NOT click "Close week" (writes append-only `efficiency_week`/audit, which cannot be cleaned via PostgREST).
 
+  Confirm the three views return `200` and the page throws no console error:
 ```bash
-KEY="<anon key>"; BASE="https://wpmcbjrisuyjvobvzaus.supabase.co/rest/v1"
-# probe job id from Task 4; seed one checkpoint (2h) and progress 0->120 in week of 2026-07-04
-curl -s "$BASE/job_checkpoint" -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"job_id":"<probe-id>","employee_code":"<any employees.id>","work_date":"2026-07-06","checkpoint":"08:30","hours":2,"is_ot":false}'
-curl -s "$BASE/job_progress" -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
-  -d '{"job_id":"<probe-id>","work_date":"2026-07-06","units_cumulative":120}'
-curl -s "$BASE/v_worker_week_efficiency?week_start=eq.2026-07-04" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
+KEY="<anon key from monitoring/config.js:12>"; BASE="https://wpmcbjrisuyjvobvzaus.supabase.co/rest/v1"
+for v in v_job_efficiency v_vessel_efficiency v_worker_week_efficiency; do
+  echo "$v -> $(curl -s -o /dev/null -w '%{http_code}' "$BASE/$v?select=*&limit=1" -H "apikey: $KEY" -H "Authorization: Bearer $KEY")"
+done
 ```
-In the browser: By-job shows the probe with an amber badge and an efficiency; click "Mark calibrated" → badge clears. By-worker for week `2026-07-04` shows the employee; click "Close week" (enter a name) → success. Verify + clean up:
-```bash
-curl -s "$BASE/efficiency_week?week_start=eq.2026-07-04&select=employee_code,earned_hours,actual_hours,close_version" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
-# Immutability check — UPDATE must FAIL:
-curl -s -o /dev/null -w "%{http_code}\n" -X PATCH "$BASE/efficiency_week?week_start=eq.2026-07-04" -H "apikey: $KEY" -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" -d '{"earned_hours":999}'  # expect 4xx (blocked by trigger)
-# Cleanup probe rows (efficiency_week is immutable by design; leave the test week or drop via SQL editor if needed):
-curl -s -X DELETE "$BASE/job_checkpoint?job_id=eq.<probe-id>" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
-curl -s -X DELETE "$BASE/job_progress?job_id=eq.<probe-id>" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
-curl -s -X DELETE "$BASE/jobs?id=eq.<probe-id>" -H "apikey: $KEY" -H "Authorization: Bearer $KEY"
-```
-Expected: view returns the worker with earned≈6 (120×0.05×1) and actual=2 (note efficiency>1 is fine for the probe); `efficiency_week` has one row; the PATCH returns 4xx (immutability enforced). NOTE for the owner: the seeded `efficiency_week`/audit test rows for week `2026-07-04` are immutable via PostgREST — delete them in the Supabase SQL editor (`delete from efficiency_week where week_start='2026-07-04' and closed_by='<test name>'; delete from efficiency_week_audit where week_start='2026-07-04';`) after the check.
+Expected: each view returns `200`; the page renders By-job/By-vessel from real read-only data and an empty By-worker list, with no writes anywhere.
+
+**The Close-week insert, immutability trigger, calibration toggle, and reopen are NOT exercised against production here** (they write `jobs`/append-only tables). Their correctness is covered by local `node --check` + this task's reviewer inspecting the insert/update payloads against the Task-2 DDL, and by an **owner-run manual acceptance** in a controlled setting (the owner can disable the immutability trigger in the Supabase SQL editor to clean up afterward). Note this hand-off in the task report.
 
 - [ ] **Step 4: Commit**
 
