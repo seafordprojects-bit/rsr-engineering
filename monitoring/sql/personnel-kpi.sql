@@ -40,6 +40,7 @@ create table if not exists efficiency_week (
 alter table efficiency_week add column if not exists finalized_ack_by    text;
 alter table efficiency_week add column if not exists finalized_ack_at    timestamptz;
 alter table efficiency_week add column if not exists unresolved_at_close integer;
+alter table efficiency_week add column if not exists no_target_at_close  integer;   -- jobs active this week with no target quantity (shown but not payable) at close time
 
 create table if not exists efficiency_week_audit (
   id         uuid primary key default gen_random_uuid(),
@@ -55,6 +56,18 @@ create table if not exists efficiency_week_audit (
 alter table jobs add column if not exists calibrated    boolean not null default false;
 alter table jobs add column if not exists calibrated_by text;
 alter table jobs add column if not exists calibrated_at timestamptz;
+
+-- A job with NO target quantity is NOT payable: it can never be calibrated (owner rule 2026-07-06).
+-- Enforced at the DB so no path (UI or API) can mark a target-less job calibrated. Existing rows all
+-- have calibrated=false (column defaulted above), so the constraint holds on add. The reset trigger
+-- below already flips calibrated->false when quantity changes, so clearing a quantity can't violate it.
+-- Idempotent: only added if absent.
+do $$ begin
+  if not exists (select 1 from pg_constraint where conname = 'jobs_calibrated_needs_quantity') then
+    alter table jobs add constraint jobs_calibrated_needs_quantity
+      check (calibrated = false or quantity is not null);
+  end if;
+end $$;
 
 -- ============================================================ TRIGGERS
 -- Editing a job's estimate inputs invalidates its calibration (spec D6).
@@ -239,7 +252,19 @@ join jobs j     on j.id = jwd.job_id
 left join deltas d on d.job_id = jwd.job_id and d.work_date = jwd.work_date;
 
 -- Per worker, per week: aggregate + breakdown. Source snapshotted by "Close week".
+-- v_worker_week_job is per (worker, job, DAY); collapse to one row per (worker, job) FIRST so the
+-- breakdown lists each job ONCE, not once per day. Weekly totals are unchanged (sum of per-day sums).
 create or replace view v_worker_week_efficiency as
+with per_job as (
+  select employee_code, week_start, week_end, job_id,
+         min(job_no)          as job_no,
+         min(vessel)          as vessel,
+         bool_and(calibrated) as calibrated,   -- constant per job across its days; bool_and just collapses them
+         sum(earned_hours)    as earned_hours,
+         sum(actual_hours)    as actual_hours
+  from v_worker_week_job
+  group by employee_code, week_start, week_end, job_id
+)
 select employee_code, week_start, week_end,
        round(sum(earned_hours),3)                                   as earned_hours,
        round(sum(actual_hours),3)                                   as actual_hours,
@@ -249,9 +274,9 @@ select employee_code, week_start, week_end,
        round(coalesce(sum(earned_hours) filter (where not calibrated),0),3) as uncalibrated_earned_hours,
        jsonb_agg(jsonb_build_object(
          'job_id', job_id, 'job_no', job_no, 'vessel', vessel,
-         'earned', earned_hours, 'actual', actual_hours, 'calibrated', calibrated
+         'earned', round(earned_hours,3), 'actual', round(actual_hours,3), 'calibrated', calibrated
        ) order by job_no)                                            as breakdown
-from v_worker_week_job
+from per_job
 group by employee_code, week_start, week_end;
 
 -- Payroll-readiness per Sat-Fri week for the Close-week ordering guard: unresolved rows =

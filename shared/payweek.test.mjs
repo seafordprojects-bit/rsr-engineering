@@ -16,6 +16,17 @@ test("weekContaining returns the Sat-Fri window", () => {
   assert.deepEqual(weekContaining("2026-07-04"), { start: "2026-07-04", end: "2026-07-10" }); // Sat (week start)
 });
 
+test("weekContaining holds across year boundaries and leap day", () => {
+  // A Sat-Fri window that straddles New Year must not split at the calendar year.
+  assert.deepEqual(weekContaining("2025-12-31"), { start: "2025-12-27", end: "2026-01-02" }); // Wed, spans into 2026
+  assert.deepEqual(weekContaining("2026-01-01"), { start: "2025-12-27", end: "2026-01-02" }); // Thu, same window
+  assert.deepEqual(weekContaining("2026-01-03"), { start: "2026-01-03", end: "2026-01-09" }); // Sat, new window
+  assert.deepEqual(weekContaining("2026-12-31"), { start: "2026-12-26", end: "2027-01-01" }); // Thu, spans into 2027
+  // Leap day and the day after must land in adjacent windows, not desync.
+  assert.deepEqual(weekContaining("2024-02-29"), { start: "2024-02-24", end: "2024-03-01" }); // leap Thu
+  assert.deepEqual(weekContaining("2024-03-02"), { start: "2024-03-02", end: "2024-03-08" }); // next Sat
+});
+
 test("defaultPayWeek mirrors payroll: on payday Sat it shows the week that just ended", () => {
   // payroll comment: on Sat Jul 4 it loads Jun 27 -> Jul 3
   assert.deepEqual(defaultPayWeek(0, new Date("2026-07-04T09:00:00")), { start: "2026-06-27", end: "2026-07-03" });

@@ -73,6 +73,7 @@
       const [wrows,setWrows]=useState(null);
       const [closed,setClosed]=useState(false);
       const [warnJobs,setWarnJobs]=useState([]);
+      const [noTargetJobs,setNoTargetJobs]=useState([]);  // job_no[] active this week with no target quantity (not payable)
       const [health,setHealth]=useState(null);   // {unresolved} payroll-readiness for the week
       const [ack,setAck]=useState(false);         // admin affirms payroll finalized for the week
       const [actor,setActor]=useState(localStorage.getItem("rsr_prepared_by")||"");
@@ -100,32 +101,40 @@
       }
 
       async function loadWeek(){
-        setWrows(null); setMsg(null); setAck(false); setHealth(null);
+        setWrows(null); setMsg(null); setAck(false); setHealth(null); setNoTargetJobs([]);
         const st=await isClosed(week); setClosed(st.closed);
         if(st.closed){
           const {data}=await sb.from("efficiency_week").select("*")
             .eq("week_start",week).eq("close_version",st.version).order("employee_code");
-          setWrows(data||[]); setWarnJobs([]); return;
+          setWrows(data||[]); setWarnJobs([]); setNoTargetJobs([]); return;
         }
         // live (not yet closed): read the view + accrual-lag warnings + payroll-readiness
         const end=addFri(week);
         const {data,error}=await sb.from("v_worker_week_efficiency").select("*").eq("week_start",week);
         if(error){ setMsg({type:"err",text:error.message}); setWrows([]); return; }
         setWrows(data||[]);
-        setWarnJobs(await computeWarnings(week,end));
+        const flags=await computeWeekFlags(week,end);
+        setWarnJobs(flags.accrualLag); setNoTargetJobs(flags.noTarget);
         const hz=await sb.from("v_week_payroll_health").select("unresolved").eq("week_start",week).maybeSingle();
         setHealth({unresolved:(hz.data&&hz.data.unresolved)||0});
       }
       function addFri(sat){ const d=new Date(sat+"T00:00:00"); d.setDate(d.getDate()+6);
         return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
 
-      // Jobs with tagged hours in the window but NO progress reading in the window (accrual lag, spec §7)
-      async function computeWarnings(st,en){
+      // Per-week job flags for the close gate:
+      //  · accrualLag — tagged hours this window but NO progress reading (spec §7); earned lands next week
+      //  · noTarget   — active this window but jobs.quantity is null: earned is shown but NOT payable,
+      //                 so the count must surface at close (owner rule) and never freeze unnoticed.
+      async function computeWeekFlags(st,en){
         const cp=await sb.from("job_checkpoint").select("job_id,work_date").gte("work_date",st).lte("work_date",en);
         const pr=await sb.from("job_progress").select("job_id,work_date").gte("work_date",st).lte("work_date",en);
         const hoursJobs=new Set((cp.data||[]).map(r=>r.job_id));
         const progJobs=new Set((pr.data||[]).map(r=>r.job_id));
-        return [...hoursJobs].filter(j=>!progJobs.has(j));
+        const accrualLag=[...hoursJobs].filter(j=>!progJobs.has(j));
+        const active=new Set([...hoursJobs,...progJobs]);
+        const jq=await sb.from("v_job_efficiency").select("job_id,job_no,quantity");
+        const noTarget=(jq.data||[]).filter(r=>active.has(r.job_id) && r.quantity==null).map(r=>r.job_no);
+        return { accrualLag, noTarget };
       }
 
       async function closeWeek(){
@@ -136,6 +145,7 @@
         const st=await isClosed(week);
         if(st.closed){ setBusy(false); setMsg({type:"err",text:"Already closed."}); return; }
         const unresolved=(health&&health.unresolved)||0;
+        const noTargetCount=noTargetJobs.length;
         const maxv=await sb.from("efficiency_week").select("close_version").eq("week_start",week)
           .order("close_version",{ascending:false}).limit(1);
         const version=((maxv.data&&maxv.data[0]&&maxv.data[0].close_version)||0)+1;
@@ -147,12 +157,13 @@
           calibrated_earned_hours:r.calibrated_earned_hours, uncalibrated_earned_hours:r.uncalibrated_earned_hours,
           breakdown:r.breakdown, close_version:version, closed_by:actor.trim(),
           finalized_ack_by:actor.trim(), finalized_ack_at:nowIso, unresolved_at_close:unresolved,
+          no_target_at_close:noTargetCount,
         }));
         if(payload.length){
           const ins=await sb.from("efficiency_week").insert(payload);
           if(ins.error){ setBusy(false); setMsg({type:"err",text:ins.error.message}); return; }
         }
-        await sb.from("efficiency_week_audit").insert({week_start:week,action:"close",version,actor:actor.trim(),note:`payroll finalized ack; unresolved=${unresolved}`});
+        await sb.from("efficiency_week_audit").insert({week_start:week,action:"close",version,actor:actor.trim(),note:`payroll finalized ack; unresolved=${unresolved}; no_target_jobs=${noTargetCount}`});
         setBusy(false); setMsg({type:"ok",text:`Closed ${payload.length} worker record(s).`}); loadWeek();
       }
 
@@ -166,6 +177,10 @@
       }
 
       async function toggleCalib(j){
+        if(!j.calibrated && j.quantity==null){
+          setMsg({type:"err",text:"Set a target quantity for this job before it can be calibrated (made payable)."});
+          return;
+        }
         setBusy(true);
         const payload=j.calibrated
           ? {calibrated:false, calibrated_by:null, calibrated_at:null}
@@ -180,22 +195,27 @@
       function JobView(){
         if(jobs===null) return html`<div class="loading">Loading&hellip;</div>`;
         if(jobs.length===0) return html`<div class="empty">No job orders yet.</div>`;
-        return jobs.map(j=>html`
+        return jobs.map(j=>{
+          const noTarget=(j.quantity==null);   // no estimate -> earned shown but NOT payable (owner rule)
+          return html`
           <div class="row">
             <div><span class="jno">${j.job_no}</span> <span class="rn">${j.vessel}</span>
-              ${!j.calibrated && html`<span class="badge amber">factors not calibrated · incentive pending</span>`}
-              ${j.overrun && html`<span class="badge over">overrun · estimate review</span>`}
+              ${noTarget && html`<span class="badge over">no target set · not payable</span>`}
+              ${!noTarget && !j.calibrated && html`<span class="badge amber">factors not calibrated · incentive pending</span>`}
+              ${!noTarget && j.overrun && html`<span class="badge over">overrun · estimate review</span>`}
             </div>
             <div class="fig">
               <span>earned <b>${fmtNum(j.earned_hours)}</b>h</span>
               <span>actual <b>${fmtNum(j.actual_hours)}</b>h</span>
               <span>eff <b class="eff">${pct(j.efficiency)}</b></span>
-              <span>units <b>${fmtNum(j.units_cumulative)}</b>/${fmtNum(j.quantity)}</span>
+              <span>units <b>${fmtNum(j.units_cumulative)}</b>/${noTarget?"—":fmtNum(j.quantity)}</span>
             </div>
-            <button class="mini" style="margin-top:8px" disabled=${busy} onClick=${()=>toggleCalib(j)}>
-              ${j.calibrated?"Un-calibrate":"Mark calibrated (admin)"}
-            </button>
-          </div>`);
+            ${noTarget
+              ? html`<div class="sub" style="margin-top:8px">Set a target quantity (units) for this job to enable calibration / incentive.</div>`
+              : html`<button class="mini" style="margin-top:8px" disabled=${busy} onClick=${()=>toggleCalib(j)}>
+                  ${j.calibrated?"Un-calibrate":"Mark calibrated (admin)"}
+                </button>`}
+          </div>`});
       }
       function VesselView(){
         if(vessels===null) return html`<div class="loading">Loading&hellip;</div>`;
@@ -212,6 +232,10 @@
           </div>`);
       }
       function WorkerView(){
+        const flagBits=[];
+        if(health) flagBits.push(`${health.unresolved} unresolved`);
+        if(noTargetJobs.length) flagBits.push(`${noTargetJobs.length} no-target job${noTargetJobs.length>1?"s":""}`);
+        const flagSuffix=flagBits.length?` (${flagBits.join(", ")})`:"";
         return html`
           <div class="bar">
             <label>Pay week (Saturday start)</label>
@@ -221,10 +245,11 @@
             <input value=${actor} onInput=${e=>saveActor(e.target.value)} placeholder="admin name" />
             ${!closed && warnJobs.length>0 && html`<div class="warnbox">${warnJobs.length} job(s) have hours this week but no progress reading in the window — enter a Friday units-done reading before closing, or their earned hours land next week.</div>`}
             ${!closed && health && health.unresolved>0 && html`<div class="warnbox">⚠ ${health.unresolved} attendance row(s) this week are unresolved in payroll (missing punch / zero-hour). Closing now freezes wrong hours — finalize payroll first.</div>`}
+            ${!closed && noTargetJobs.length>0 && html`<div class="warnbox">⚠ ${noTargetJobs.length} job(s) active this week have NO TARGET SET — their earned hours are shown but are NOT payable. Set a target quantity before closing, or they freeze as unpayable: ${noTargetJobs.join(", ")}.</div>`}
             ${!closed && html`
               <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-weight:600;color:var(--ink)">
                 <input type="checkbox" style="width:auto;margin-top:3px" checked=${ack} onChange=${e=>setAck(e.target.checked)} />
-                <span>I confirm payroll for ${week} → ${addFri(week)} is finalized${health?` (${health.unresolved} unresolved)`:""}.</span>
+                <span>I confirm payroll for ${week} → ${addFri(week)} is finalized${flagSuffix}.</span>
               </label>`}
             ${closed
               ? html`<button class="ghost" disabled=${busy} onClick=${reopenWeek}>Reopen week (admin, logged)</button>`
