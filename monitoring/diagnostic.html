@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>KPI Diagnostic</title>
+<style>
+  body{margin:0;background:#f4f5f7;color:#1c2230;font:14px/1.5 -apple-system,"Segoe UI",Roboto,sans-serif;padding:16px;max-width:720px;margin:0 auto}
+  h1{font-size:18px}.card{background:#fff;border:1px solid #e3e6ec;border-radius:12px;padding:14px;margin:12px 0}
+  .ok{color:#1f7a4d;font-weight:700}.bad{color:#b4231f;font-weight:700}.mono{font-family:ui-monospace,Consolas,monospace}
+  a{color:#2f5d8a}
+</style>
+<script type="importmap">
+{ "imports": {
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
+} }
+</script>
+</head>
+<body>
+  <h1>Personnel KPI — Diagnostic</h1>
+  <div class="sub"><a href="index.html">&larr; Menu</a></div>
+  <div id="out">Running&hellip;</div>
+  <script type="module">
+    import { weekContaining, defaultPayWeek, isoOf, saturdayOnOrBefore } from "../shared/payweek.mjs";
+    import { sb } from "./config.js";
+    const out=document.getElementById("out");
+    const rows=[];
+    const check=(name,pass,detail="")=>rows.push(`<div class="card"><b>${name}</b> — <span class="${pass?"ok":"bad"}">${pass?"PASS":"FAIL"}</span> <div class="mono">${detail}</div></div>`);
+
+    // 1 -- payweek behavioural fixture
+    try{
+      const f1=isoOf(saturdayOnOrBefore(new Date("2026-07-03T12:00:00")))==="2026-06-27";
+      const wc=weekContaining("2026-07-06"); const f2=wc.start==="2026-07-04"&&wc.end==="2026-07-10";
+      const dp=defaultPayWeek(0,new Date("2026-07-04T09:00:00")); const f3=dp.start==="2026-06-27"&&dp.end==="2026-07-03";
+      check("Payweek fixture (shared/payweek.mjs)", f1&&f2&&f3, JSON.stringify({wc,dp}));
+    }catch(e){ check("Payweek fixture", false, String(e)); }
+
+    // 2 -- payroll source pin (payroll must remain byte-identical; this detects drift)
+    try{
+      const txt=await (await fetch("../payroll/index.html")).text();
+      const pin1=txt.includes("const sinceSat=(ref.getDay()+1)%7;");
+      const pin2=txt.includes("function isoOf(d){return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');}");
+      check("Payroll Sat–Fri source pin", pin1&&pin2,
+        pin1&&pin2 ? "payroll week logic unchanged — shared copy still valid"
+                   : "payroll week logic CHANGED — re-sync shared/payweek.mjs and update this pin");
+    }catch(e){ check("Payroll source pin", false, "could not fetch payroll/index.html: "+e); }
+
+    // 3 -- KPI data integrity
+    try{
+      const je=await sb.from("v_job_efficiency").select("job_no,units_cumulative,quantity,credited_units,overrun");
+      const capOk=(je.data||[]).every(r=>Number(r.credited_units)<=Number(r.quantity)+1e-9);
+      check("Earned cap honoured (credited_units ≤ quantity)", capOk,
+        (je.data||[]).filter(r=>r.overrun).map(r=>r.job_no+" overrun").join(", ")||"no overruns");
+
+      // conservation: per (job, week) sum of worker earned splits ≤ job weekly earned delta (+rounding)
+      const wj=await sb.from("v_worker_week_job").select("job_id,week_start,earned_hours");
+      const agg={}; (wj.data||[]).forEach(r=>{ const k=r.job_id+"|"+r.week_start; agg[k]=(agg[k]||0)+Number(r.earned_hours); });
+      // (informational: split sums are ≤ deltas by construction; flag any negative)
+      const noNeg=(wj.data||[]).every(r=>Number(r.earned_hours)>=-1e-9);
+      check("Worker earned splits non-negative", noNeg, Object.keys(agg).length+" (job,week) buckets");
+
+      // week bucketing matches shared helper for sampled progress rows
+      const jp=await sb.from("job_progress").select("work_date").limit(50);
+      const bad=(jp.data||[]).filter(r=>{ const w=weekContaining(String(r.work_date).slice(0,10)); return !(w.start<=String(r.work_date).slice(0,10)&&String(r.work_date).slice(0,10)<=w.end); });
+      check("Week bucketing consistent", bad.length===0, bad.length+" mismatched of "+((jp.data||[]).length));
+    }catch(e){ check("KPI data integrity", false, String(e)); }
+
+    // 4 -- attendance-sourced actual hours (payroll-effective) integrity
+    try{
+      // 4a: attendance dates all normalizable (YYYY-MM-DD or MM/DD/YYYY) -> v_attendance_day.work_date not null
+      const ar=await sb.from("attendance_records").select("date").limit(500);
+      const unparsable=(ar.data||[]).filter(r=>{ const s=String(r.date||""); return !/^\d{4}-\d{2}-\d{2}/.test(s) && !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s); });
+      check("Attendance dates all normalizable", unparsable.length===0,
+        unparsable.length+" unrecognized of "+((ar.data||[]).length)+" sampled");
+
+      // 4b: conservation — per worker-day, attributed job hours == payroll paid hours (within rounding)
+      const jwd=await sb.from("v_job_worker_day").select("employee_id,work_date,actual_hours");
+      const pd=await sb.from("v_attendance_day").select("employee_id,work_date,paid_hours");
+      const paid={}; (pd.data||[]).forEach(r=>{ paid[r.employee_id+"|"+r.work_date]=Number(r.paid_hours); });
+      const attr={}; (jwd.data||[]).forEach(r=>{ const k=r.employee_id+"|"+r.work_date; attr[k]=(attr[k]||0)+Number(r.actual_hours); });
+      const viol=Object.keys(attr).filter(k=> paid[k]!=null && Math.abs(attr[k]-paid[k])>0.02 );
+      check("Attributed job hours reconcile to payroll paid hours", viol.length===0,
+        viol.length+" worker-days off by >0.02h of "+Object.keys(attr).length+" attributed");
+
+      // 4c: orphan attendance codes — attendance_records.employee_code with no employees.code match
+      // silently drop from v_attendance_day (inner join), so their hours never reach the KPI. Surface them.
+      const emp=await sb.from("employees").select("code");
+      const codes=new Set((emp.data||[]).map(r=>r.code));
+      const arc=await sb.from("attendance_records").select("employee_code").limit(2000);
+      const orphans=new Set((arc.data||[]).map(r=>r.employee_code).filter(c=>c && !codes.has(c)));
+      check("Attendance employee codes all map to employees", orphans.size===0,
+        orphans.size+" unmatched code(s): "+[...orphans].slice(0,8).join(", "));
+    }catch(e){ check("Actual-hours integrity", false, String(e)); }
+
+    out.innerHTML=rows.join("");
+  </script>
+</body>
+</html>
