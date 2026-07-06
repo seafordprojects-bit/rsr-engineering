@@ -72,3 +72,12 @@ Purchasing Department module.
 Sequential and confirmation-gated: propose → owner confirms → implement → validate
 (`node --check` + hygiene) → show result → owner commits/deploys. Never auto-commit
 pay-affecting changes without explicit approval.
+
+### Deploy rule (push to `main`)
+- **Pages workers or admins INTERACT with** — kiosk, roll-call, payroll, forms, close
+  actions, and any similar interactive surface — **always pause for the owner's localhost
+  walkthrough before pushing to `main`.** No exceptions; wait for explicit go.
+- **Small follow-up fixes to already-reviewed features** — wording, thresholds, and view
+  (SQL) definitions the owner re-runs themselves anyway — **may push directly without a
+  walkthrough, but ALWAYS tell the owner immediately what went live** (exact commit + files).
+- When unsure which bucket a change falls in, treat it as interactive and pause.
