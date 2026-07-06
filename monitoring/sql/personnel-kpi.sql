@@ -279,12 +279,40 @@ select employee_code, week_start, week_end,
 from per_job
 group by employee_code, week_start, week_end;
 
--- Payroll-readiness per Sat-Fri week for the Close-week ordering guard: unresolved rows =
--- payroll's own is_incomplete (missing OUT under Policy A) OR a zero-hour present-day anomaly.
+-- Payroll-readiness per Sat-Fri week for the Close-week ordering guard. A row counts as UNRESOLVED
+-- only when its hours are genuinely NOT settled -- the gate must stay small and real, not cry wolf
+-- (a weekly false alarm gets ignored). Two cases:
+--   (a) zero usable hours: paid_hours = 0 and not marked 'absent', OR
+--   (b) a missing-OUT day (is_incomplete) whose credit fell MEANINGFULLY short of a full regular
+--       day. Regular day = 8h (4h AM + 4h PM); a <1h trim is just a late-in, so flag only < 7h.
+--       A forgotten-OUT day that payroll boundary-credited to a full ~8h is SETTLED and does NOT count.
+-- Approved leave days are excluded (when not already 'absent'): leave_requests is keyed by human
+-- employee_code and its start/end dates are TEXT (mixed-format landmine), so normalize the code the
+-- same way payroll does (upper + strip whitespace) and normalize+expand the date range per day.
 create or replace view v_week_payroll_health as
-select (work_date - ((extract(dow from work_date)::int + 1) % 7))::date as week_start,
-       count(*) filter (where is_incomplete or (paid_hours = 0 and status is distinct from 'absent'))
-                                                                          as unresolved
-from v_attendance_day
-where work_date is not null
-group by (work_date - ((extract(dow from work_date)::int + 1) % 7))::date;
+with leave_days as (
+  select upper(regexp_replace(lr.employee_code, '\s', '', 'g')) as nc,
+         gs::date                                               as leave_date
+  from leave_requests lr
+  cross join lateral generate_series(
+    (case when lr.start_date ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'                       then substr(lr.start_date,1,10)::date
+          when lr.start_date ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$'                  then to_date(lr.start_date,'MM/DD/YYYY') end),
+    (case when coalesce(lr.end_date,lr.start_date) ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}'      then substr(coalesce(lr.end_date,lr.start_date),1,10)::date
+          when coalesce(lr.end_date,lr.start_date) ~ '^[0-9]{1,2}/[0-9]{1,2}/[0-9]{4}$' then to_date(coalesce(lr.end_date,lr.start_date),'MM/DD/YYYY') end),
+    interval '1 day'
+  ) as gs
+  where lr.status = 'Approved'
+)
+select (a.work_date - ((extract(dow from a.work_date)::int + 1) % 7))::date as week_start,
+       count(*) filter (where
+             (a.is_incomplete and a.paid_hours < 7)
+          or (a.paid_hours = 0 and a.status is distinct from 'absent')
+       )                                                                    as unresolved
+from v_attendance_day a
+where a.work_date is not null
+  and not exists (                                    -- drop approved-leave days (not already 'absent')
+    select 1 from leave_days ld
+    where ld.nc = upper(regexp_replace(a.employee_code, '\s', '', 'g'))
+      and ld.leave_date = a.work_date
+  )
+group by (a.work_date - ((extract(dow from a.work_date)::int + 1) % 7))::date;

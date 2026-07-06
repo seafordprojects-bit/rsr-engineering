@@ -244,7 +244,7 @@
             <label style="margin-top:10px">Your name (recorded on close/reopen)</label>
             <input value=${actor} onInput=${e=>saveActor(e.target.value)} placeholder="admin name" />
             ${!closed && warnJobs.length>0 && html`<div class="warnbox">${warnJobs.length} job(s) have hours this week but no progress reading in the window — enter a Friday units-done reading before closing, or their earned hours land next week.</div>`}
-            ${!closed && health && health.unresolved>0 && html`<div class="warnbox">⚠ ${health.unresolved} attendance row(s) this week are unresolved in payroll (missing punch / zero-hour). Closing now freezes wrong hours — finalize payroll first.</div>`}
+            ${!closed && health && health.unresolved>0 && html`<div class="warnbox">⚠ ${health.unresolved} attendance row(s) this week have unsettled hours (missing-OUT day credited short of a full day, or zero-hour not-absent). Closing now freezes wrong hours — finalize payroll first.</div>`}
             ${!closed && noTargetJobs.length>0 && html`<div class="warnbox">⚠ ${noTargetJobs.length} job(s) active this week have NO TARGET SET — their earned hours are shown but are NOT payable. Set a target quantity before closing, or they freeze as unpayable: ${noTargetJobs.join(", ")}.</div>`}
             ${!closed && html`
               <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-weight:600;color:var(--ink)">
