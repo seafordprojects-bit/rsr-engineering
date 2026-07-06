@@ -52,3 +52,25 @@ export function todayLocal() { return ymd(new Date()); }
 export function addDays(d, n) { const t = asDate(d); t.setDate(t.getDate()+n); return t; }
 export function mondayOf(d) { const t = asDate(d); const off = (t.getDay()+6)%7; t.setDate(t.getDate()-off); return t; }
 export function fmtNum(n, dp=2) { return (n==null||isNaN(n)) ? "\u2014" : Number(n).toLocaleString(undefined,{maximumFractionDigits:dp}); }
+
+/* ---- personnel KPI (phase 1) ---- */
+export { weekContaining, defaultPayWeek, isoOf } from "../shared/payweek.mjs";
+
+// Upsert one cumulative units-to-date reading for a job on a day (unique job_id+work_date).
+export async function upsertJobProgress(jobId, workDate, units, reportedBy) {
+  return await sb.from("job_progress")
+    .upsert({ job_id: jobId, work_date: workDate, units_cumulative: units, reported_by: reportedBy || null },
+            { onConflict: "job_id,work_date" });
+}
+
+// Latest cumulative reading per job on or before a given date (for pre-filling Roll-call).
+export async function loadJobProgressFor(workDate) {
+  const { data, error } = await sb.from("job_progress")
+    .select("job_id,work_date,units_cumulative")
+    .lte("work_date", workDate)
+    .order("work_date", { ascending: false });
+  if (error) { console.error("loadJobProgressFor", error); return []; }
+  const seen = {}, out = [];
+  (data || []).forEach(r => { if (!(r.job_id in seen)) { seen[r.job_id] = 1; out.push(r); } });
+  return out;
+}
