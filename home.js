@@ -682,6 +682,7 @@ function App() {
   const [empSite, setEmpSite] = useState('A');
   const [coordPin, setCoordPin] = useState('');
   const [sitePin, setSitePin] = useState('');
+  const [ownerPin, setOwnerPin] = useState('');
   const [tgTokenV, setTgTokenV] = useState('');
   const [tgGroupV, setTgGroupV] = useState('');
   const [tgBackupV, setTgBackupV] = useState('');
@@ -724,6 +725,15 @@ function App() {
     if (!sitePin.trim()) { flash('Enter a passcode'); return; }
     try { await setSetting('issuance_pin', sitePin.trim()); setSitePin(''); flash('Issuance passcode set'); }
     catch (e) { flash('Error: ' + e.message); }
+  };
+  const saveOwnerPin = async () => {
+    if (!ownerPin.trim()) { flash('Enter a passcode'); return; }
+    try {
+      const existed = (await getSetting('owner_pin')) != null;
+      await setSetting('owner_pin', ownerPin.trim());
+      await supabase.from('settings_audit').insert({ key: 'owner_pin', action: existed ? 'change' : 'set', actor: (localStorage.getItem('rsr_prepared_by') || null) });
+      setOwnerPin(''); flash(existed ? 'Owner passcode changed' : 'Owner passcode set');
+    } catch (e) { flash('Failed: ' + e.message); }
   };
   const saveTg = async () => {
     try {
@@ -1418,6 +1428,15 @@ function App() {
         </div>
 
         <div class="card">
+          <div class="sectlabel" style="margin-top:0">Owner passcode (incentive approval)</div>
+          <p class="note" style="margin:0 0 12px">No default — set your own. Required to approve incentive pay on closed job orders.</p>
+          <${Field} label="Set / change owner passcode">
+            <input type="password" inputmode="numeric" value=${ownerPin} onInput=${e => setOwnerPin(e.target.value)} placeholder="choose a passcode" />
+          <//>
+          <button class="btn" onClick=${saveOwnerPin}>Save owner passcode</button>
+        </div>
+
+        <div class="card">
           <div class="sectlabel" style="margin-top:0">Attendance times (kiosk override)</div>
           <p class="note" style="margin:0 0 12px">Sets the morning clock-in and evening clock-out used by the kiosk. The kiosk pulls these automatically. Example: set 07:00 and a 7:00 AM time-in with a 12:00 NN lunch-out computes as 5 hours.</p>
           <${Field} label="Morning clock-in">
@@ -1534,6 +1553,7 @@ function App() {
           { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse', href:'../warehouse/' },
           { ico:'🛒', num:m.poInbox, unit:'to purchase', title:'Purchasing', href:'../purchasing/' },
           { ico:'💵', num:null, unit:'weekly', title:'Payroll', href:'../payroll/' },
+          { ico:'📊', num:null, unit:'close & approve jobs', title:'Job Monitoring', href:'../monitoring/' },
         ].map(t => html`<${Tile} ...${t} />`)}
       </div>
 
