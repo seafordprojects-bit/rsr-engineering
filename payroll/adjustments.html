@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>RSR Payroll Adjustments</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;color:#1a1a1a;background:#f5f5f0;min-height:100vh}
+.wrap{max-width:480px;margin:0 auto;padding:14px}
+.header{text-align:center;margin-bottom:14px}
+.app-title{font-size:16px;font-weight:700;text-transform:uppercase;letter-spacing:0.08em}
+.app-sub{font-size:11px;color:#888;margin-top:1px}
+.card{background:#fff;border:1px solid #e8e8e3;border-radius:16px;padding:1rem;margin-bottom:12px}
+.card h4{font-size:13px;font-weight:600;margin-bottom:4px}
+.card .hint{font-size:11px;color:#888;margin-bottom:12px;line-height:1.5}
+.field-label{font-size:12px;color:#888;display:block;margin-bottom:4px;margin-top:10px}
+.field-label:first-of-type{margin-top:0}
+.field-input{width:100%;font-size:13px;padding:9px 12px;border:1px solid #e8e8e3;border-radius:10px;background:#f9f9f7;color:#1a1a1a}
+select.field-input{appearance:none}
+.btn-primary{width:100%;padding:12px;font-size:13px;font-weight:600;border-radius:12px;cursor:pointer;border:none;background:#378ADD;color:#fff;margin-top:12px}
+.btn-primary:disabled{opacity:.5}
+.btn-sm{font-size:12px;padding:7px 14px;border-radius:10px;cursor:pointer;border:1px solid #e8e8e3;background:#fff;color:#1a1a1a;font-weight:600}
+.btn-green{background:#1D9E75;color:#fff;border:none}
+.adj-row{display:flex;justify-content:space-between;align-items:flex-start;gap:10px;padding:12px 0;border-bottom:1px solid #f0f0eb}
+.adj-row:last-child{border-bottom:none}
+.adj-name{font-size:14px;font-weight:700;color:#1B2A4A}
+.adj-code{font-size:11px;color:#aaa;font-weight:500}
+.adj-reason{font-size:11px;color:#888;margin-top:3px;line-height:1.45}
+.adj-meta{font-size:10px;color:#bbb;margin-top:3px;text-transform:uppercase;letter-spacing:.03em}
+.adj-right{text-align:right;white-space:nowrap}
+.adj-amt{font-size:16px;font-weight:800;color:#1D9E75;font-variant-numeric:tabular-nums}
+.adj-amt.zero{color:#aaa}
+.pill{display:inline-block;font-size:10px;padding:2px 8px;border-radius:999px;font-weight:600;background:#E1F5EE;color:#085041;margin-top:6px}
+.pill.settled{background:#eee;color:#888}
+.empty-state{text-align:center;color:#aaa;padding:1.5rem;font-size:13px}
+.msg{font-size:12px;padding:8px 10px;border-radius:9px;margin-top:10px;display:none}
+.msg.ok{display:block;background:#E1F5EE;color:#0a7d4f}
+.msg.err{display:block;background:#FCEBEB;color:#a32d2d}
+.actor{font-size:12px;color:#888;margin-bottom:12px;display:flex;gap:8px;align-items:center}
+.actor input{flex:1;font-size:12px;padding:7px 10px;border:1px solid #e8e8e3;border-radius:9px;background:#f9f9f7}
+.back{display:inline-block;font-size:12px;color:#378ADD;text-decoration:none;margin-bottom:10px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a class="back" href="../index.html">← Back</a>
+  <div class="header">
+    <div class="app-title">Payroll Adjustments</div>
+    <div class="app-sub">Pending pay additions · v2026-07-07a</div>
+  </div>
+
+  <div class="actor">
+    <span>You:</span>
+    <input id="actor" placeholder="Your name (for the record)" oninput="saveActor(this.value)">
+  </div>
+
+  <div class="card">
+    <h4>Pending — not yet paid</h4>
+    <div class="hint">Add the <b>+ amount</b> to the worker's slip when you run payroll, then tap <b>Mark settled</b> here so it isn't paid twice.</div>
+    <div id="pending"><div class="empty-state">Loading…</div></div>
+  </div>
+
+  <div class="card">
+    <h4>Add an adjustment</h4>
+    <div class="hint">Logs a new pay addition. Amount and worker are locked once saved — settling later only marks it paid.</div>
+    <label class="field-label">Worker</label>
+    <select id="a-emp" class="field-input"><option value="">Select worker…</option></select>
+    <label class="field-label">Amount (₱, added to pay)</label>
+    <input id="a-amt" class="field-input" type="number" inputmode="decimal" placeholder="0.00">
+    <label class="field-label">Reason</label>
+    <input id="a-reason" class="field-input" placeholder="e.g. late-synced punch, paid short">
+    <label class="field-label">Source week (optional)</label>
+    <input id="a-week" class="field-input" type="date">
+    <button id="a-btn" class="btn-primary" onclick="addAdj()">Add adjustment</button>
+    <div id="a-msg" class="msg"></div>
+  </div>
+
+  <div class="card">
+    <h4>Settled — already paid</h4>
+    <div id="settled"><div class="empty-state">Loading…</div></div>
+  </div>
+</div>
+
+<script>
+// Same Supabase project as payroll & kiosk (wpmcbjrisuyjvobvzaus). RLS disabled.
+const SUPABASE_URL = 'https://wpmcbjrisuyjvobvzaus.supabase.co';
+const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+const peso = n => '₱'+(Math.round((n||0)*100)/100).toLocaleString('en-PH',{minimumFractionDigits:2,maximumFractionDigits:2});
+const esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+const fmtDate = s => { if(!s) return ''; const d=new Date(s); return isNaN(d)?String(s):d.toLocaleDateString('en-PH',{year:'numeric',month:'short',day:'numeric'}); };
+
+// Actor name persists locally (same key the other admin surfaces use).
+function saveActor(v){ localStorage.setItem('rsr_prepared_by', v.trim()); }
+function actor(){ return (document.getElementById('actor').value||'').trim(); }
+
+async function loadEmployees(){
+  const { data, error } = await sb.from('employees').select('code,name').order('name');
+  if(error){ return; }
+  const sel = document.getElementById('a-emp');
+  (data||[]).forEach(e=>{
+    const o=document.createElement('option');
+    o.value=e.code; o.textContent=(e.name||e.code)+' ('+e.code+')';
+    o.dataset.name=e.name||e.code;
+    sel.appendChild(o);
+  });
+}
+
+function pendingRow(r){
+  const zero = Number(r.amount)===0;
+  return '<div class="adj-row"><div>'
+    + '<div class="adj-name">'+esc(r.employee_name||r.employee_code)+' <span class="adj-code">'+esc(r.employee_code)+'</span></div>'
+    + (r.reason?'<div class="adj-reason">'+esc(r.reason)+'</div>':'')
+    + '<div class="adj-meta">'+(r.source_week?'week '+esc(r.source_week)+' · ':'')+'approved '+esc(r.approved_by||'—')+' · '+fmtDate(r.created_at)+'</div>'
+    + '</div><div class="adj-right">'
+    + '<div class="adj-amt'+(zero?' zero':'')+'">+'+peso(r.amount)+'</div>'
+    + '<button class="btn-sm btn-green" style="margin-top:8px" onclick="settle(\''+r.id+'\')">Mark settled</button>'
+    + '</div></div>';
+}
+function settledRow(r){
+  const zero = Number(r.amount)===0;
+  return '<div class="adj-row"><div>'
+    + '<div class="adj-name">'+esc(r.employee_name||r.employee_code)+' <span class="adj-code">'+esc(r.employee_code)+'</span></div>'
+    + (r.reason?'<div class="adj-reason">'+esc(r.reason)+'</div>':'')
+    + '<div class="adj-meta">settled '+fmtDate(r.settled_at)+(r.settled_by?' by '+esc(r.settled_by):'')+(r.settled_note?' · '+esc(r.settled_note):'')+'</div>'
+    + '<span class="pill settled">Paid</span>'
+    + '</div><div class="adj-right"><div class="adj-amt'+(zero?' zero':'')+'">+'+peso(r.amount)+'</div></div></div>';
+}
+
+async function load(){
+  const pend = document.getElementById('pending');
+  const setl = document.getElementById('settled');
+  const { data: pd, error: pe } = await sb.from('v_pending_adjustments').select('*');
+  if(pe){ pend.innerHTML='<div class="empty-state">Could not load ('+esc(pe.message)+')</div>'; }
+  else if(!pd||!pd.length){ pend.innerHTML='<div class="empty-state">Nothing pending — all caught up.</div>'; }
+  else{ pend.innerHTML = pd.map(pendingRow).join(''); }
+
+  const { data: sd, error: se } = await sb.from('payroll_adjustment').select('*').eq('settled',true).order('settled_at',{ascending:false});
+  if(se){ setl.innerHTML='<div class="empty-state">Could not load ('+esc(se.message)+')</div>'; }
+  else if(!sd||!sd.length){ setl.innerHTML='<div class="empty-state">None settled yet.</div>'; }
+  else{ setl.innerHTML = sd.map(settledRow).join(''); }
+}
+
+async function settle(id){
+  const who = actor();
+  if(!who){ alert('Enter your name at the top first.'); return; }
+  if(!confirm('Mark this adjustment as settled (paid this run)? This cannot be undone.')) return;
+  const note = (prompt('Which payroll run? (optional note)','')||'').trim();
+  const { error } = await sb.from('payroll_adjustment')
+    .update({ settled:true, settled_at:new Date().toISOString(), settled_by:who, settled_note:note||null })
+    .eq('id', id);
+  if(error){ alert('Failed: '+error.message); return; }
+  await load();
+}
+
+function msg(el,cls,text){ const m=document.getElementById(el); m.className='msg '+cls; m.textContent=text; }
+
+async function addAdj(){
+  const who = actor();
+  if(!who){ msg('a-msg','err','Enter your name at the top first.'); return; }
+  const sel = document.getElementById('a-emp');
+  const code = sel.value;
+  const name = sel.options[sel.selectedIndex] ? sel.options[sel.selectedIndex].dataset.name : '';
+  const amt = parseFloat(document.getElementById('a-amt').value);
+  const reason = document.getElementById('a-reason').value.trim();
+  const week = document.getElementById('a-week').value;
+  if(!code){ msg('a-msg','err','Pick a worker.'); return; }
+  if(!(amt>0)){ msg('a-msg','err','Enter an amount greater than zero.'); return; }
+  const btn=document.getElementById('a-btn'); btn.disabled=true; btn.textContent='Saving…';
+  const { error } = await sb.from('payroll_adjustment').insert({
+    employee_code:code, employee_name:name, amount:amt, reason:reason||null,
+    source_week:week||null, approved_by:who
+  });
+  btn.disabled=false; btn.textContent='Add adjustment';
+  if(error){ msg('a-msg','err','Failed: '+error.message); return; }
+  msg('a-msg','ok','Adjustment logged.');
+  document.getElementById('a-amt').value=''; document.getElementById('a-reason').value=''; document.getElementById('a-week').value=''; sel.value='';
+  await load();
+}
+
+document.getElementById('actor').value = localStorage.getItem('rsr_prepared_by') || '';
+loadEmployees();
+load();
+</script>
+</body>
+</html>
