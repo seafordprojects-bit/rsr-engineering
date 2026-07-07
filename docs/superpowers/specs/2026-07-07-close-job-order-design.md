@@ -18,13 +18,13 @@ Jobs are never formally "closed" today — `jobs.status` is free text (`open`/`o
 
 **Stage 2 — Incentive approval (owner only).**
 - Owner reviews final quantity, discrepancy note, overrun flag, earned/actual/efficiency.
-- Requires the **owner PIN** (NEW `settings.owner_pin`).
+- Requires the **owner PIN** (NEW `settings.owner_pin`, unset by default). If no owner PIN exists yet, the first approval **forces the owner to create one** (server-side) before proceeding — see Authorization model.
 - Effect: job → **"approved"**. Only approved jobs will feed the Phase-2 vessel-level settlement.
 - **Gate:** Approve is disabled unless the job is **calibrated**. A **no-target** job (`quantity` null) can be operationally closed but can **never** be approved (never payable).
 
 **Reopen (owner only, any stage).** Owner PIN + a required reason. Un-freezes the job (accepts tags/progress again). The immutable snapshot stays; re-closing bumps a version.
 
-**Authorization model.** No login system exists; gates are client-side PINs read from the `settings` table (same pattern as the coordinator app), and the actor is a typed name recorded in the audit. This is a **workflow lock, not hacker-proof security** (RLS is off) — consistent with the rest of the app. Stage 1 = coordinator PIN; Stage 2 + reopen = owner PIN. The new `settings.owner_pin` defaults to `'1234'` (like the existing coordinator/issuance PINs) with a visible "set your own passcode" nudge in the admin dashboard; the owner should change it before first use.
+**Authorization model.** No login system exists; gates are client-side PINs read from the `settings` table (same pattern as the coordinator app), and the actor is a typed name recorded in the audit. This is a **workflow lock, not hacker-proof security** (RLS is off) — consistent with the rest of the app. Stage 1 = coordinator PIN; Stage 2 + reopen = owner PIN. The new `settings.owner_pin` starts **UNSET — no default of any kind.** The PIN is checked **only against the server-side stored value** (never a client default, never localStorage). Until it is set, **Stage 2 approval is blocked**: the first approval attempt (or the admin dashboard setter) forces the owner to choose a PIN before any approval can happen. **Setting or changing the owner PIN is logged** to a security-config audit table (event + actor + timestamp — never the PIN value itself).
 
 ## Settlement mechanics
 
@@ -88,8 +88,19 @@ create table if not exists job_close_audit (
   at      timestamptz not null default now()
 );
 
--- Reuse the existing block_mutation(): both tables are append-only.
--- (create triggers trg_jobclose_immutable / trg_jobcloseaudit_immutable before update or delete)
+-- Security-config audit (append-only): logs owner-PIN set/change events. NEVER stores the PIN value.
+create table if not exists settings_audit (
+  id     uuid primary key default gen_random_uuid(),
+  key    text not null,          -- e.g. 'owner_pin'
+  action text not null,          -- 'set' | 'change'
+  actor  text,
+  at     timestamptz not null default now()
+);
+
+-- Reuse the existing block_mutation(): job_close, job_close_audit, and settings_audit are append-only.
+-- (create triggers trg_jobclose_immutable / trg_jobcloseaudit_immutable / trg_settingsaudit_immutable
+--  before update or delete)
+-- owner_pin lives in the existing `settings` table; there is NO row/value until the owner sets one.
 
 -- Latest close-status per job, for badges.
 create or replace view v_job_close_status as
@@ -113,7 +124,9 @@ from job_close_audit order by job_id, at desc;
 
 **`monitoring/roll-call.html`, `monitoring/assign.html`:** exclude `status in ('done','closed')`.
 
-**`home.js`:** add a **"Job Monitoring"** admin-dashboard tile (`href:'../monitoring/'`, Operations pattern) and an **owner-PIN setter** in the admin PIN area (mirrors `saveCoordPin`; `settings.owner_pin`).
+**`home.js`:** add a **"Job Monitoring"** admin-dashboard tile (`href:'../monitoring/'`, Operations pattern) and an **owner-PIN setter** in the admin PIN area (mirrors `saveCoordPin` but with **no default** — the field starts empty and must be chosen; writes `settings.owner_pin` and appends a `settings_audit` `set`/`change` row). Approval stays blocked until a PIN exists.
+
+**Owner-PIN check (shared helper):** always reads `settings.owner_pin` fresh from the server at check time; returns "not set" when absent (triggering the forced-setup path), never falls back to any default or cached value.
 
 **Optional (consistency):** show closed/approved badge on `monitor.html` / `job-order.html` rows.
 
@@ -133,7 +146,7 @@ from job_close_audit order by job_id, at desc;
 
 ## Files touched
 
-- `monitoring/sql/personnel-kpi.sql` — new tables, triggers, `v_job_close_status`, backstop trigger.
+- `monitoring/sql/personnel-kpi.sql` — new tables (`job_close`, `job_close_audit`, `settings_audit`), append-only triggers, `v_job_close_status`, backstop trigger.
 - `monitoring/efficiency.html` — close form, badges, approve/reopen, PIN gates, closed-week warning.
 - `monitoring/config.js` — close/approve/reopen/status helpers + PIN check.
 - `monitoring/roll-call.html`, `monitoring/assign.html` — exclude closed jobs.
