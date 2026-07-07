@@ -127,7 +127,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub">Weekly Payroll · v2026-07-05b</div>
+    <div class="app-sub">Weekly Payroll · v2026-07-07a</div>
   </div>
 
   <div class="tabs">
@@ -933,7 +933,7 @@ function slipHTML(r){
       <div style="font-size:10px;color:#888;padding:3px 0">Total hours worked: ${basicHrs.toFixed(0)}h basic + ${r.otHrs.toFixed(0)}h overtime</div>
       ${slipRow('Less late / undertime', r.lateUT>0?'('+peso(r.lateUT)+')':peso(0))}
       ${slipRow('Add OT allowance', peso(Number(r.otAllowance)||0))}
-      ${(Number(r.stayInAllowance)||0)>0?slipRow('Add stay-in allowance', peso(r.stayInAllowance)):''}
+      ${slipRow('Add stay-in allowance', peso(Number(r.stayInAllowance)||0))}
       ${slipRow('Less cash advance', (Number(r.valeDeduct)||0)>0?'('+peso(r.valeDeduct)+')':peso(0))}
       ${(Number(r.allowDeduct)||0)>0?slipRow('Less allowance'+(r.allowDates&&r.allowDates.length?' ('+r.allowDates.join(', ')+')':''), '('+peso(r.allowDeduct)+')'):''}
       ${(Number(r.otherDeduct)||0)>0?slipRow('Less other deduction', '('+peso(r.otherDeduct)+')'):''}
@@ -1048,7 +1048,7 @@ function slipMini(r){
     <div class="mini-l" style="font-size:11px;color:#888"><span>${basicHrs.toFixed(0)}h basic + ${r.otHrs.toFixed(0)}h OT</span><span></span></div>
     ${L('Late/UT',r.lateUT,true)}
     ${L('OT allow.',Number(r.otAllowance)||0)}
-    ${(Number(r.stayInAllowance)||0)>0?L('Stay-in',Number(r.stayInAllowance)||0):''}
+    ${L('Stay-in allow.',Number(r.stayInAllowance)||0)}
     ${L('Less cash advance',Number(r.valeDeduct)||0,true)}
     ${(Number(r.allowDeduct)||0)>0?L('Less allowance'+(r.allowDates&&r.allowDates.length?' ('+r.allowDates.join(', ')+')':''),Number(r.allowDeduct)||0,true):''}
     ${(Number(r.otherDeduct)||0)>0?L('Less other deduction',Number(r.otherDeduct)||0,true):''}
