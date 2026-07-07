@@ -187,6 +187,7 @@ textarea.field-input{resize:none;height:65px}
 .modal{background:#fff;border-radius:20px 20px 0 0;padding:1.5rem;width:100%;max-width:480px}
 .modal-bg.center{align-items:center;padding:16px}
 #bisaya-modal{z-index:150}
+#bisaya-confirm-modal{z-index:150}
 .bisaya-modal{border-radius:20px;max-width:440px;padding:1.9rem 1.6rem;text-align:center}
 .bisaya-text{font-size:21px;line-height:1.5;color:#1a1a1a;font-weight:500;white-space:pre-line}
 .bisaya-ok{width:100%;margin-top:20px;font-size:19px;padding:16px;font-weight:700}
@@ -234,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-07b</span>
+        <span id="version-stamp">v2026-07-07c</span>
       </div>
     </div>
   </div>
@@ -678,6 +679,16 @@ textarea.field-input{resize:none;height:65px}
     <button class="btn-primary bisaya-ok" onclick="closeBisayaModal()">OK</button>
   </div>
 </div>
+<!-- (v2026-07-07c) BISAYA EARLY-PUNCH CONFIRM (early Lunch Out / PM Break Out with deduction) -->
+<div class="modal-bg center" id="bisaya-confirm-modal">
+  <div class="modal bisaya-modal">
+    <div class="bisaya-text" id="bisaya-confirm-text"></div>
+    <div style="display:flex;gap:10px;justify-content:center;margin-top:6px">
+      <button class="btn-primary bisaya-ok" style="background:#8a8a86" onclick="bisayaConfirmCancel()">Kanselahon</button>
+      <button class="btn-primary bisaya-ok" onclick="bisayaConfirmProceed()">Padayon</button>
+    </div>
+  </div>
+</div>
 
 <!-- LATE TIMEOUT WARNING MODAL -->
 <div class="modal-bg" id="late-timeout-modal">
@@ -977,6 +988,29 @@ function bisayaDate(d){
 }
 function showBisayaModal(text){ const el=document.getElementById('bisaya-text'); if(el)el.textContent=text; document.getElementById('bisaya-modal').classList.add('show'); }
 function closeBisayaModal(){ document.getElementById('bisaya-modal').classList.remove('show'); kpClr(); }
+// (v2026-07-07c) Two-button Bisaya confirm for EARLY Lunch Out / PM Break Out with deduction.
+// Padayon → sets earlyBreakConfirmed and re-runs the punch. Kanselahon → aborts, nothing recorded.
+let _bisayaConfirmType=null;
+function openEarlyBisayaConfirm(type){
+  _bisayaConfirmType=type;
+  let msg='';
+  if(type==='lunch_out'){
+    msg='⚠ Sayo pa ang Lunch Out — '+fmt12(lunchOutEarlyH,lunchOutEarlyM)+' ang tinuod nga oras. Kung mo-punch ka karon, ang imong BUNTAG maihap lang hangtod karon nga oras — ma-deduct ang kulang. Kung dili ka mobalik og Lunch In hangtod '+fmt12(pmOutEarlyH,pmOutEarlyM)+', ang imong adlaw ma-close dinhi. Padayon?';
+  }else{
+    msg='⚠ Sayo pa ang PM Break Out — '+fmt12(pmOutEarlyH,pmOutEarlyM)+' ang tinuod nga oras. Kung mo-punch ka karon, ang imong HAPON maihap lang hangtod karon nga oras — ma-deduct ang kulang. Ug kung DILI ka mobalik, KINI NA ang imong TIME OUT. Padayon?';
+  }
+  const el=document.getElementById('bisaya-confirm-text'); if(el)el.textContent=msg;
+  document.getElementById('bisaya-confirm-modal').classList.add('show');
+}
+function bisayaConfirmProceed(){
+  document.getElementById('bisaya-confirm-modal').classList.remove('show');
+  const t=_bisayaConfirmType;_bisayaConfirmType=null;
+  if(t){ earlyBreakConfirmed=true; punch(t); }
+}
+function bisayaConfirmCancel(){
+  document.getElementById('bisaya-confirm-modal').classList.remove('show');
+  _bisayaConfirmType=null; earlyBreakConfirmed=false; kpClr();
+}
 // Duration as Bisaya "X oras Y minuto" (drops a zero hour or zero minute part).
 function bisayaHM(ms){
   const totalMin=Math.round((ms>0?ms:0)/60000), h=Math.floor(totalMin/60), m=totalMin%60;
@@ -1017,10 +1051,12 @@ let shiftH=8,shiftM=0,graceMins=10,endH=17,endM=0,company='RSR Engineering';
 let lunchInEarliestH=12,lunchInEarliestM=40,pmInEarliestH=17,pmInEarliestM=40;
 let lunchOutEarlyH=12,lunchOutEarlyM=0,pmOutEarlyH=17,pmOutEarlyM=0;
 let lunchOutLatestH=12,lunchOutLatestM=30,pmOutLatestH=17,pmOutLatestM=30;
-// ── STRICT PUNCH WINDOWS (v2026-07-07b) ──
+// ── STRICT PUNCH WINDOWS (v2026-07-07b, early-punch update v2026-07-07c) ──
 // Each button is pressable ONLY inside its window (plus sequence rules):
-//   Time In (AM) 7:00–10:00 · Time In (PM-only) 12:40–3:00 · Lunch Out 12:00–12:40
-//   Lunch In 12:40–5:00 · PM Break Out 5:00–5:40 · PM Break In 5:40–dismissal (approved OT end)
+//   Time In (AM) 7:00–10:00 · Time In (PM-only) 12:40–3:00
+//   Lunch Out: any time after Time In–12:40 (before 12:00 = Bisaya deduction confirm)
+//   Lunch In 12:40–5:00 · PM Break Out 1:01 PM–5:40 (before 5:00 = Bisaya deduction confirm)
+//   PM Break In 5:40–dismissal (approved OT end)
 //   Time Out: only real PM Break In (OT) / straight-duty-PM after 5:00 / filed Undertime today.
 // PM Break Out doubles as Time Out (auto day-close); PM Break In within window reopens the day.
 let timeInAmOpenH=7,timeInAmOpenM=0;    // Time In (AM) opens
@@ -2184,12 +2220,13 @@ function updBtns(rec){
       const lateFlow=_now>=_wAt(endH,endM);
       if(!(amOk||pmOk||nightOk||lateFlow))_lock('timein');
     }
-    // Lunch Out: 12:00–12:40 only (before 12:00 it is locked — no early-lunch confirm).
-    if(!rec.punches.lunch_out&&_now<_wAt(lunchOutEarlyH,lunchOutEarlyM))_lock('lunch_out');
     // Lunch In: 12:40–5:00 PM.
     if(!rec.punches.lunch_in&&_now>=_wAt(pmOutEarlyH,pmOutEarlyM))_lock('lunch_in');
-    // PM Break Out: 5:00–5:40 PM only (leaving earlier = file Undertime / Half Day).
-    if(!rec.punches.pm_out&&_now<_wAt(pmOutEarlyH,pmOutEarlyM))_lock('pm_out');
+    // (v2026-07-07c) Lunch Out: pressable any time after Time In — early punches (before 12:00)
+    // go through the Bisaya deduction confirm in punch(). Hard close at 12:40 still applies above.
+    // PM Break Out: pressable from 1:01 PM. Early zone 1:01–5:00 goes through the Bisaya
+    // deduction confirm; 5:00–5:40 is the normal window; hard close at 5:40 still applies above.
+    if(!rec.punches.pm_out&&_now<_wAt(13,1))_lock('pm_out');
     // PM Break In: 5:40 PM until dismissal (= approved OT end). Punching it REOPENS a
     // day that was auto-closed at PM Break Out.
     if(!rec.punches.pm_in){
@@ -2376,11 +2413,8 @@ async function punch(type){
     }
   }
   if(type==='lunch_out'){
-    // Must have worked at least 2 hours before Lunch Out
-    if(rec.msMap.timein){
-      const workedSoFar=(now.getTime()-effectiveStart(rec))/3600000;
-      if(workedSoFar<2){showMsg('err','Too early for Lunch Out','You must work at least 2 hours before going to lunch. Worked: '+msToHM(now.getTime()-effectiveStart(rec))+'.',4000);return;}
-    }
+    // (v2026-07-07c) The old 2-hour minimum was removed — early Lunch Out is now allowed any
+    // time after Time In, gated by the Bisaya deduction confirm (Padayon/Kanselahon) instead.
     // Must punch between lunchOutEarly and lunchOutLatest
     // Lunch Out closes at 12:40 (when Lunch In opens). Past that it is unavailable — direct them to Lunch In.
     const loCut=new Date(now);loCut.setHours(lunchInEarliestH,lunchInEarliestM,0,0);
@@ -2422,14 +2456,22 @@ async function punch(type){
       rec.pmInReopened=true; // show the "day reopened" Bisaya modal after this punch records
     }
   }
-  // Early break-out: PIN confirmation with deduction warning
+  // (v2026-07-07c) Early break-out: Bisaya confirm with deduction warning (Padayon/Kanselahon)
   if(type==='lunch_out'&&!earlyBreakConfirmed){
     const threshold=new Date(now);threshold.setHours(lunchOutEarlyH,lunchOutEarlyM,0,0);
-    if(now<threshold){openEarlyBreakModal('lunch_out');return;}
+    if(now<threshold){openEarlyBisayaConfirm('lunch_out');return;}
+  }
+  if(type==='pm_out'){
+    // Floor: PM Break Out never before 1:01 PM.
+    const poFloor=new Date(now);poFloor.setHours(13,1,0,0);
+    if(now<poFloor){
+      showBisayaModal('⚠ Dili pa pwede ang PM Break Out sa dili pa 1:01 PM. Kung mopauli ka og sayo sa buntag, gamita ang Lunch Out o i-file ang Undertime / Half Day.');
+      return;
+    }
   }
   if(type==='pm_out'&&!earlyBreakConfirmed){
     const threshold=new Date(now);threshold.setHours(pmOutEarlyH,pmOutEarlyM,0,0);
-    if(now<threshold){openEarlyBreakModal('pm_out');return;}
+    if(now<threshold){openEarlyBisayaConfirm('pm_out');return;}
   }
   // Late PM Break Out — Telegram admin approval required
   if(type==='pm_out'){
@@ -2499,6 +2541,8 @@ async function punch(type){
     rec.punches.timeout=recordStr;rec.msMap.timeout=recordMs;
     rec.autoTimeout=true;rec.autoTimeoutReason='Left at PM Break Out — auto day-close (PM Break In reopens)';
     rec.pmOutAutoClosed=true;
+    // (v2026-07-07c) Early departures: surface the shortfall in the Undertime tab (loud flag).
+    try{detectUndertime(emp,rec);}catch(e){}
   }
 
   let isLate=false,lateMs=0,hasAllow=false,allowAmt=0;
@@ -4522,6 +4566,7 @@ function autoCloseAbandonedBreaks(){
       autoClosedBreaks.add(key);
       rec.punches.timeout=rec.punches.pm_out;rec.msMap.timeout=rec.msMap.pm_out;
       rec.autoTimeout=true;rec.autoTimeoutReason='No return from PM break — auto-closed at 7:30 PM';
+      try{detectUndertime(emp,rec);}catch(e){}
       try{saveData();queueRecord(emp.code,today);syncFlush();}catch(e){}
       try{logNotif(emp.name+' — auto Time Out at PM Out time (no return from PM break)','late-n',true);}catch(e){}
       return;
@@ -4532,6 +4577,7 @@ function autoCloseAbandonedBreaks(){
       autoClosedBreaks.add(key);
       rec.punches.timeout=rec.punches.lunch_out;rec.msMap.timeout=rec.msMap.lunch_out;
       rec.autoTimeout=true;rec.autoTimeoutReason='No return from lunch — auto-closed at 5:00 PM (Lunch In closed)';
+      try{detectUndertime(emp,rec);}catch(e){}
       try{saveData();queueRecord(emp.code,today);syncFlush();}catch(e){}
       try{logNotif(emp.name+' — auto Time Out at Lunch Out time (no return from lunch)','late-n',true);}catch(e){}
       return;
