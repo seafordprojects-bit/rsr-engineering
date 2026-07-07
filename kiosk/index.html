@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-07c</span>
+        <span id="version-stamp">v2026-07-07d</span>
       </div>
     </div>
   </div>
@@ -594,9 +594,9 @@ textarea.field-input{resize:none;height:65px}
       <label class="field-label">Site B name</label>
       <input type="text" id="s-site-b-name" value="Site B" class="field-input" />
       <label class="field-label">Away allowance at Site A (₱ per day)</label>
-      <input type="number" id="s-allow-a" value="300" min="0" class="field-input" placeholder="e.g. 300" />
+      <input type="number" id="s-allow-a" value="50" min="0" class="field-input" placeholder="e.g. 50" />
       <label class="field-label">Away allowance at Site B (₱ per day)</label>
-      <input type="number" id="s-allow-b" value="300" min="0" class="field-input" placeholder="e.g. 300" />
+      <input type="number" id="s-allow-b" value="50" min="0" class="field-input" placeholder="e.g. 50" />
       <label class="field-label">OT allowance (₱ per session, fixed)</label>
       <input type="number" id="s-ot-allow" value="50" min="0" class="field-input" placeholder="e.g. 50" />
       <label class="field-label">OT allowance minimum hours (default: 3)</label>
@@ -1065,7 +1065,7 @@ let dismissalH=21,dismissalM=0; // Admin-set dismissal time (9PM default)
 // Within 1hr after dismissal → auto-snap to dismissal time
 // More than 1hr after dismissal → punch proceeds + Telegram notification
 let earlyBreakConfirmed=false;
-let activeSite='A',siteAName='Site A',siteBName='Site B',allowA=300,allowB=300;
+let activeSite='A',siteAName='Site A',siteBName='Site B',allowA=50,allowB=50; // (v2026-07-07d) away allowance policy: ₱50/day
 let otAllowanceAmt=50,otAllowanceMinHrs=3;
 let pin='',curEmp=null,msgTimer=null;
 let adminSecs=ADMIN_TO,adminTick=null;
@@ -3799,7 +3799,7 @@ function loadData(){
       dismissalH=s.dismissalH??21;dismissalM=s.dismissalM??0;
 
       activeSite=s.activeSite||'A';siteAName=s.siteAName||'Site A';siteBName=s.siteBName||'Site B';
-      allowA=s.allowA??300;allowB=s.allowB??300;
+      allowA=50;allowB=50; // (v2026-07-07d) policy ₱50/day — stored values ignored (admin UI disabled in kiosk-only mode, code is source of truth)
       otAllowanceAmt=s.otAllowanceAmt??50;otAllowanceMinHrs=s.otAllowanceMinHrs??3;
       if(s.adminPassword)adminPassword=s.adminPassword;
       if(s.assistantPassword)assistantPassword=s.assistantPassword;
