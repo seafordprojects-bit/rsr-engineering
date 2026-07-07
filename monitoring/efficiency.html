@@ -236,7 +236,7 @@
       }
       async function doReopen(j){
         if(!actor.trim()){ setMsg({type:"err",text:"Enter your name (owner)."}); return; }
-        const reason=prompt("Reason for reopening this job?")||""; if(reason===null) return;
+        const reason=prompt("Reason for reopening this job?"); if(reason===null) return;
         const pin=prompt("Owner passcode:"); if(pin==null) return;
         setBusy(true);
         try{ await reopenJob(j, { ownerPin:pin, owner:actor.trim(), reason }); setMsg({type:"ok",text:"Job reopened (logged)."}); await loadJobs(); }
