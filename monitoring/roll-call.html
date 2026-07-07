@@ -127,7 +127,7 @@
         const dnow=date;
         const jq = sb.from("jobs")
           .select("id,job_no,vessel,location,start_date,target_date,status,est_manhours,quantity,unit")
-          .neq("status","done").order("job_no");
+          .not("status","in","(done,closed)").order("job_no");
         const aq = sb.from("job_assignment").select("job_id,employee_code");
         const cq = sb.from("job_checkpoint").select("id,job_id,employee_code")
           .eq("work_date",dnow).eq("checkpoint",cp);

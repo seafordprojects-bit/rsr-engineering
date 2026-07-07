@@ -96,7 +96,7 @@
 
       async function reload(){
         setMsg("");
-        const jq=sb.from("jobs").select("id,job_no,vessel,location,start_date,target_date,status").neq("status","done").order("job_no");
+        const jq=sb.from("jobs").select("id,job_no,vessel,location,start_date,target_date,status").not("status","in","(done,closed)").order("job_no");
         const aq=sb.from("job_assignment").select("job_id,employee_code");
         const cq=sb.from("job_checkpoint").select("job_id");
         const [jr,ar,cr]=await Promise.all([jq,aq,cq]);
