@@ -118,7 +118,7 @@ export async function loadAllJobCloseStatus(){
 export async function closedWeekWarning(jobId, actualInstalled, lastCum){
   if (Number(actualInstalled) === Number(lastCum||0)) return [];   // no earned change -> no warning
   const { data:cps } = await sb.from("job_checkpoint").select("work_date").eq("job_id", jobId);
-  const weeks = [...new Set((cps||[]).map(r => weekContaining(r.work_date)))];
+  const weeks = [...new Set((cps||[]).map(r => weekContaining(r.work_date).start))];
   const closed = [];
   for (const wk of weeks){
     const { data } = await sb.from("efficiency_week_audit").select("action").eq("week_start", wk).order("at",{ascending:false}).limit(1);
