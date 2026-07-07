@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-07d</span>
+        <span id="version-stamp">v2026-07-07e</span>
       </div>
     </div>
   </div>
@@ -3776,6 +3776,9 @@ function loadData(){
     // Load all saved records
     const savedRecs=localStorage.getItem('rsr_records');
     if(savedRecs){try{const parsed=JSON.parse(savedRecs);if(parsed)records=parsed;}catch(e){records={};}}
+    // (v2026-07-07d) One-time migration: away allowance policy has always been ₱50/day —
+    // payroll paid ₱50 all along (its own config), but kiosk displays stored ₱300. Correct all.
+    Object.keys(records).forEach(k=>{ const r=records[k]; if(r&&r.hasAllowance&&r.allowanceAmt!==50)r.allowanceAmt=50; });
     // Clean up records older than 10 days
     const cutoff=new Date();cutoff.setDate(cutoff.getDate()-10);
     Object.keys(records).forEach(k=>{
@@ -4705,22 +4708,29 @@ async function syncSmsLogToSupabase(entry) {
 }
 
 // ── LOAD EMPLOYEES FROM SUPABASE ON START ──
+// (v2026-07-07e) Supabase is the SOURCE OF TRUTH for the roster. The kiosk admin UI is
+// disabled, so employee edits happen server-side (admin page / table editor). This merge
+// now UPDATES existing local employees from the server — previously it only added missing
+// ones, so edits like a home-site change never reached the tablet and away/stay-in
+// allowance flags were stamped from stale data.
 async function loadEmployeesFromSupabase() {
   try {
     const { data } = await sbClient.from('employees').select('*');
     if (data && data.length > 0) {
-      // Merge with existing localStorage employees
       data.forEach(se => {
+        const fresh = {
+          name: se.name, dept: se.dept || '—',
+          position: se.position || '—', phone: se.phone || '',
+          network: se.network || 'smart', homeSite: se.home_site || 'A',
+          shift: se.shift || 8, dailyRate: se.daily_rate || 500,
+          pin: se.pin || '',
+          balance: { VL: se.vl_balance ?? 2, SL: se.sl_balance ?? 2 }
+        };
         const existing = employees.find(e => e.code === se.code);
-        if (!existing) {
-          employees.push({
-            code: se.code, name: se.name, dept: se.dept || '—',
-            position: se.position || '—', phone: se.phone || '',
-            network: se.network || 'smart', homeSite: se.home_site || 'A',
-            shift: se.shift || 8, dailyRate: se.daily_rate || 500,
-            pin: se.pin || '',
-            balance: { VL: se.vl_balance || 2, SL: se.sl_balance || 2 }
-          });
+        if (existing) {
+          Object.assign(existing, fresh); // server wins on profile fields; local-only fields untouched
+        } else {
+          employees.push({ code: se.code, ...fresh });
         }
       });
       saveData();
