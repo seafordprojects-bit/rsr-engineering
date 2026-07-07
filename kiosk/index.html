@@ -234,7 +234,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-07a</span>
+        <span id="version-stamp">v2026-07-07b</span>
       </div>
     </div>
   </div>
@@ -1017,6 +1017,14 @@ let shiftH=8,shiftM=0,graceMins=10,endH=17,endM=0,company='RSR Engineering';
 let lunchInEarliestH=12,lunchInEarliestM=40,pmInEarliestH=17,pmInEarliestM=40;
 let lunchOutEarlyH=12,lunchOutEarlyM=0,pmOutEarlyH=17,pmOutEarlyM=0;
 let lunchOutLatestH=12,lunchOutLatestM=30,pmOutLatestH=17,pmOutLatestM=30;
+// ── STRICT PUNCH WINDOWS (v2026-07-07b) ──
+// Each button is pressable ONLY inside its window (plus sequence rules):
+//   Time In (AM) 7:00–10:00 · Time In (PM-only) 12:40–3:00 · Lunch Out 12:00–12:40
+//   Lunch In 12:40–5:00 · PM Break Out 5:00–5:40 · PM Break In 5:40–dismissal (approved OT end)
+//   Time Out: only real PM Break In (OT) / straight-duty-PM after 5:00 / filed Undertime today.
+// PM Break Out doubles as Time Out (auto day-close); PM Break In within window reopens the day.
+let timeInAmOpenH=7,timeInAmOpenM=0;    // Time In (AM) opens
+let timeInPmCloseH=15,timeInPmCloseM=0; // Time In (PM-only) closes (3:00 PM)
 let dismissalH=21,dismissalM=0; // Admin-set dismissal time (9PM default)
 // Within 1hr after dismissal → auto-snap to dismissal time
 // More than 1hr after dismissal → punch proceeds + Telegram notification
@@ -1069,6 +1077,12 @@ function getNext(rec){
   required.push('timeout');
   for(const p of required)if(!rec.punches[p])return p;
   return null;
+}
+// (v2026-07-07b) A filed/approved Undertime or Half-Day for today unlocks Time Out
+// for legitimate early departures. Everything else uses PM Break Out to close the day.
+function hasUndertimeToday(code){
+  const t=todayKey();
+  return undertimeRequests.some(r=>r.code===code&&r.date===t&&['Filed','Filed with Time In','Approved'].includes(r.status));
 }
 function calcBreak(rec){
   let t=0;
@@ -2140,13 +2154,11 @@ function updBtns(rec){
     _r.push('timeout');
     const _S={lunch_out:1,lunch_in:1,pm_out:1,pm_in:1};
     const iN=_r.indexOf(next);
-    if(iN>=0&&_S[next]) for(let j=iN+1;j<_r.length;j++){ const b=document.getElementById(BIDS[_r[j]]); if(b)b.disabled=false; if(!_S[_r[j]])break; }
+    if(iN>=0&&_S[next]) for(let j=iN+1;j<_r.length;j++){ if(!_S[_r[j]])break; const b=document.getElementById(BIDS[_r[j]]); if(b)b.disabled=false; }
   }
-  // PM-break decision point: when PM Out is the next step, ALSO allow Time Out so an
-  // employee leaving at 5 PM can clock out without taking the 5–6 PM break.
-  if(next==='pm_out'&&rec&&rec.punches&&!rec.punches.timeout){
-    const tb=document.getElementById(BIDS['timeout']);if(tb)tb.disabled=false;
-  }
+  // (v2026-07-07b) Time Out is NEVER enabled by forward-skip or at the 5 PM decision point.
+  // Leaving at 5 PM = press PM BREAK OUT (it doubles as Time Out unless the employee returns).
+  // Time Out unlocks only via the strict-window rules below.
   // Hard cutoff: Lunch Out closes when Lunch In opens (12:40); PM Break Out closes when PM Break In opens (5:40).
   // After the cutoff the OUT button is unavailable; the matching IN button stays enabled (forward-skip),
   // and pressing it triggers the "session not recorded" notice.
@@ -2156,6 +2168,51 @@ function updBtns(rec){
     const _poCut=new Date(_n);_poCut.setHours(pmInEarliestH,pmInEarliestM,0,0);
     if(_n>=_loCut&&!rec.punches.lunch_out){const b=document.getElementById(BIDS['lunch_out']);if(b){b.disabled=true;b.classList.remove('highlight-next');}const li=document.getElementById(BIDS['lunch_in']);if(li&&!li.disabled)li.classList.add('highlight-next');}
     if(_n>=_poCut&&!rec.punches.pm_out){const b=document.getElementById(BIDS['pm_out']);if(b){b.disabled=true;b.classList.remove('highlight-next');}const pi=document.getElementById(BIDS['pm_in']);if(pi&&!pi.disabled)pi.classList.add('highlight-next');}
+  }
+  // ── (v2026-07-07b) STRICT WINDOW LOCKS — applied on top of sequence gating ──
+  if(rec&&(!rec.punches.timeout||rec.pmOutAutoClosed)){
+    const _now=new Date();
+    const _wAt=(h,m)=>{const d=new Date(_now);d.setHours(h,m,0,0);return d;};
+    const _lock=(k)=>{const b=document.getElementById(BIDS[k]);if(b){b.disabled=true;b.classList.remove('highlight-next');}};
+    const _open=(k,hl)=>{const b=document.getElementById(BIDS[k]);if(b){b.disabled=false;if(hl)b.classList.add('highlight-next');}};
+    // Time In: 7:00–10:00 AM or 12:40–3:00 PM. Midnight–1 AM stays open (matches the 1–7 AM
+    // dead zone), and after shift end the existing late-Time-In admin-approval flow applies.
+    if(!rec.punches.timein){
+      const amOk=_now>=_wAt(timeInAmOpenH,timeInAmOpenM)&&_now<_wAt(lunchOutEarlyH-2,lunchOutEarlyM);
+      const pmOk=_now>=_wAt(lunchInEarliestH,lunchInEarliestM)&&_now<_wAt(timeInPmCloseH,timeInPmCloseM);
+      const nightOk=_now.getHours()<1;
+      const lateFlow=_now>=_wAt(endH,endM);
+      if(!(amOk||pmOk||nightOk||lateFlow))_lock('timein');
+    }
+    // Lunch Out: 12:00–12:40 only (before 12:00 it is locked — no early-lunch confirm).
+    if(!rec.punches.lunch_out&&_now<_wAt(lunchOutEarlyH,lunchOutEarlyM))_lock('lunch_out');
+    // Lunch In: 12:40–5:00 PM.
+    if(!rec.punches.lunch_in&&_now>=_wAt(pmOutEarlyH,pmOutEarlyM))_lock('lunch_in');
+    // PM Break Out: 5:00–5:40 PM only (leaving earlier = file Undertime / Half Day).
+    if(!rec.punches.pm_out&&_now<_wAt(pmOutEarlyH,pmOutEarlyM))_lock('pm_out');
+    // PM Break In: 5:40 PM until dismissal (= approved OT end). Punching it REOPENS a
+    // day that was auto-closed at PM Break Out.
+    if(!rec.punches.pm_in){
+      const piOk=_now>=_wAt(pmInEarliestH,pmInEarliestM)&&_now<=_wAt(dismissalH,dismissalM);
+      if(!piOk)_lock('pm_in');
+      else if(rec.pmOutAutoClosed&&rec.punches.pm_out&&!isPunchMarker(rec.punches.pm_out))_open('pm_in',true);
+    }
+    // Time Out: only for real OT (has PM Break In), straight-duty-PM after 5:00 PM,
+    // or a filed/approved Undertime/Half-Day for today.
+    if(!rec.punches.timeout){
+      const hasPmIn=!!(rec.punches.pm_in&&!isPunchMarker(rec.punches.pm_in));
+      const sdOk=!!rec.straightDutyPm&&_now>=_wAt(pmOutEarlyH,pmOutEarlyM);
+      const utOk=hasUndertimeToday(rec.code);
+      if(!(hasPmIn||sdOk||utOk))_lock('timeout');
+      // Cross-midnight OT: before 4 AM with YESTERDAY's shift still open, Time Out is the
+      // valid punch (it attaches to yesterday) — enable it even though today is empty.
+      if(!rec.punches.timein&&_now.getHours()<NIGHT_CLOSE_CUTOFF_H){
+        const _y=new Date(_now);_y.setDate(_y.getDate()-1);
+        const _yk=_y.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
+        const _yr=records[rec.code+'_'+_yk];
+        if(_yr&&_yr.punches&&_yr.punches.timein&&!_yr.punches.timeout)_open('timeout',true);
+      }
+    }
   }
   if(!rec){
     document.getElementById('btn-leave').disabled=true;
@@ -2260,6 +2317,27 @@ async function punch(type){
       showBisayaModal('⚠ Dili na pwede mo-Time In karon — lapas na sa 10:00 AM. Balik ug punch og Time In sa 12:40 PM para sa hapon nga shift. Ang imong sweldo magsugod sa hapon.');
       return;
     }
+    // (v2026-07-07b) Afternoon Time In closes at 3:00 PM. Between 3:00 PM and shift end the
+    // button is locked; after shift end the existing late-Time-In approval flow takes over.
+    const pmTiClose=new Date(now);pmTiClose.setHours(timeInPmCloseH,timeInPmCloseM,0,0);
+    const shiftEndW=new Date(now);shiftEndW.setHours(endH,endM,0,0);
+    if(now>=pmTiClose&&now<shiftEndW){
+      showBisayaModal('⚠ Lapas na sa '+fmt12(timeInPmCloseH,timeInPmCloseM)+' — sirado na ang Time In para sa hapon nga shift. Palihug adto sa Admin kung kinahanglan pa nimo mo-duty karon.');
+      return;
+    }
+  }
+  // (v2026-07-07b) STRICT Time Out guard: Time Out exists only for real OT (has PM Break In),
+  // straight-duty-PM after 5:00 PM, or a filed Undertime/Half-Day today. Everyone else closes
+  // their day with PM BREAK OUT (auto day-close). Cross-midnight closes are exempt.
+  if(type==='timeout'&&!_crossMidnight){
+    const _hasPmIn=!!(rec.punches.pm_in&&!isPunchMarker(rec.punches.pm_in));
+    const _sd5=new Date(now);_sd5.setHours(pmOutEarlyH,pmOutEarlyM,0,0);
+    const _sdOk=!!rec.straightDutyPm&&now>=_sd5;
+    const _utOk=hasUndertimeToday(emp.code);
+    if(!(_hasPmIn||_sdOk||_utOk)){
+      showBisayaModal('⚠ Dili pwede ang Time Out karon. Kung mopauli ka sa '+fmt12(pmOutEarlyH,pmOutEarlyM)+', i-punch ang PM BREAK OUT — mao na kana ang imong Time Out kung dili ka mobalik. Kung mopauli og sayo, i-file ang Undertime / Half Day. Ang Time Out para lang sa naka-PM Break In (overtime).');
+      return;
+    }
   }
   // Time Out logic
   if(type==='timeout'){
@@ -2318,12 +2396,30 @@ async function punch(type){
       const lbl=fmt12(lunchInEarliestH,lunchInEarliestM);
       showMsg('err','Too early for Lunch In','You can only punch Lunch In at '+lbl+' or later.',4000);return;
     }
+    // (v2026-07-07b) Lunch In closes at 5:00 PM.
+    const liClose=new Date(now);liClose.setHours(pmOutEarlyH,pmOutEarlyM,0,0);
+    if(now>=liClose){
+      showBisayaModal('⚠ Sirado na ang Lunch In human sa '+fmt12(pmOutEarlyH,pmOutEarlyM)+'. Dili na maihap ang imong HAPON nga oras. Palihug adto sa Admin aron ma-rekord.');
+      return;
+    }
   }
   if(type==='pm_in'){
     const earliest=new Date(now);earliest.setHours(pmInEarliestH,pmInEarliestM,0,0);
     if(now<earliest){
       const lbl=fmt12(pmInEarliestH,pmInEarliestM);
       showMsg('err','Too early for PM Break In','You can only punch PM Break In at '+lbl+' or later.',4000);return;
+    }
+    // (v2026-07-07b) PM Break In closes at dismissal (= approved OT end).
+    const piClose=new Date(now);piClose.setHours(dismissalH,dismissalM,0,0);
+    if(now>piClose){
+      showBisayaModal('⚠ Sirado na ang PM Break In (lapas na sa '+fmt12(dismissalH,dismissalM)+'). Ang imong adlaw na-close na sa oras sa imong PM Break Out. Palihug adto sa Admin kung naa kay overtime nga dapat marekord.');
+      return;
+    }
+    // Returning for OT: clear the auto Time Out that was written at PM Break Out — the day reopens.
+    if(rec.pmOutAutoClosed){
+      delete rec.punches.timeout;delete rec.msMap.timeout;
+      rec.autoTimeout=false;rec.autoTimeoutReason='';rec.pmOutAutoClosed=false;
+      rec.pmInReopened=true; // show the "day reopened" Bisaya modal after this punch records
     }
   }
   // Early break-out: PIN confirmation with deduction warning
@@ -2396,6 +2492,14 @@ async function punch(type){
   // Flag early break outs
   if(type==='lunch_out'){const t=new Date();const thr=new Date(t);thr.setHours(lunchOutEarlyH,lunchOutEarlyM,0,0);if(t<thr)rec.earlyLunchOut=true;}
   if(type==='pm_out'){const t=new Date();const thr=new Date(t);thr.setHours(pmOutEarlyH,pmOutEarlyM,0,0);if(t<thr)rec.earlyPmOut=true;}
+  // (v2026-07-07b) PM BREAK OUT doubles as TIME OUT: write the day-close immediately so
+  // payroll always sees a complete day (no payroll changes needed). A PM Break In inside
+  // its window clears this and reopens the day for overtime.
+  if(type==='pm_out'){
+    rec.punches.timeout=recordStr;rec.msMap.timeout=recordMs;
+    rec.autoTimeout=true;rec.autoTimeoutReason='Left at PM Break Out — auto day-close (PM Break In reopens)';
+    rec.pmOutAutoClosed=true;
+  }
 
   let isLate=false,lateMs=0,hasAllow=false,allowAmt=0;
   if(type==='timein'){
@@ -2462,6 +2566,11 @@ async function punch(type){
     showBisayaModal('✅ Na-rekord na ang imong Time Out para sa imong shift sa '+bisayaDate(_crossKey)+'. Naapil na ang imong overtime. Salamat sa imong trabaho!');
   } else if(type==='timein' && isLate){
     showBisayaModal('⚠ Na-late ka og '+bisayaHM(lateMs)+' karon. Ang imong sweldo karon nga adlaw maihap gikan sa imong pag-abot. Palihug og sayo og abot ugma. Salamat!');
+  } else if(type==='pm_out'){
+    showBisayaModal('✅ Na-rekord ang imong PM Break Out. Kung DILI ka mobalik, kini na ang imong TIME OUT — kompleto na ang imong adlaw. Kung mobalik ka para sa overtime, i-punch ang PM BREAK IN sugod sa '+fmt12(pmInEarliestH,pmInEarliestM)+'. Salamat!');
+  } else if(type==='pm_in' && rec.pmInReopened){
+    rec.pmInReopened=false;
+    showBisayaModal('✅ Nakabalik ka para sa overtime — na-abli pag-usab ang imong adlaw. AYAW KALIMOT i-punch ang TIME OUT inig human sa imong overtime. Salamat!');
   }
   setTimeout(()=>kpClr(),2800);
 }
@@ -4391,13 +4500,14 @@ pollAdminApprovals();
 setInterval(pollAdminApprovals,15000);
 
 // ── AUTO-CLOSE abandoned breaks: punched a break-OUT but never returned ──
-// Lunch Out with no return  → close at Lunch Out time, checked from 2:30 PM.
-// PM Out with no return      → close at PM Out time,   checked from 7:30 PM.
+// Lunch Out with no return  → close at Lunch Out time, checked from 5:00 PM (when Lunch In closes).
+// PM Out with no return      → close at PM Out time,   checked from 7:30 PM (legacy safety net —
+//                              v2026-07-07b writes the day-close AT PM Break Out already).
 // (Forgetting a punch while still working stays "incomplete" — not auto-closed.)
 const autoClosedBreaks=new Set();
 function autoCloseAbandonedBreaks(){
   const now=new Date();
-  const lunchTrigger=new Date(now);lunchTrigger.setHours(14,30,0,0); // 2:30 PM
+  const lunchTrigger=new Date(now);lunchTrigger.setHours(pmOutEarlyH,pmOutEarlyM,0,0); // 5:00 PM — Lunch In closes here (v2026-07-07b)
   const pmTrigger=new Date(now);pmTrigger.setHours(19,30,0,0);       // 7:30 PM
   const pastLunch=now>=lunchTrigger, pastPm=now>=pmTrigger;
   if(!pastLunch&&!pastPm)return;
@@ -4416,12 +4526,12 @@ function autoCloseAbandonedBreaks(){
       try{logNotif(emp.name+' — auto Time Out at PM Out time (no return from PM break)','late-n',true);}catch(e){}
       return;
     }
-    // Abandoned lunch: Lunch Out, no Lunch In, never reached PM → close at Lunch Out time (from 2:30 PM)
+    // Abandoned lunch: Lunch Out, no Lunch In, never reached PM → close at Lunch Out time (from 5:00 PM)
     if(pastLunch&&rec.punches.lunch_out&&rec.msMap.lunch_out>0&&!rec.punches.lunch_in&&!rec.punches.pm_out
        &&rec.punches.lunch_out!=='(auto-deducted)'&&rec.punches.lunch_out!=='(straight duty)'&&!isMissingMark(rec.punches.lunch_out)){
       autoClosedBreaks.add(key);
       rec.punches.timeout=rec.punches.lunch_out;rec.msMap.timeout=rec.msMap.lunch_out;
-      rec.autoTimeout=true;rec.autoTimeoutReason='No return from lunch — auto-closed at 2:30 PM';
+      rec.autoTimeout=true;rec.autoTimeoutReason='No return from lunch — auto-closed at 5:00 PM (Lunch In closed)';
       try{saveData();queueRecord(emp.code,today);syncFlush();}catch(e){}
       try{logNotif(emp.name+' — auto Time Out at Lunch Out time (no return from lunch)','late-n',true);}catch(e){}
       return;
