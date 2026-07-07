@@ -33,6 +33,8 @@
   button.mini{border:1px solid var(--line);background:#fcfcfd;border-radius:8px;font-size:12px;font-weight:700;padding:6px 10px;color:var(--ink)}
   .warnbox{background:var(--warnbg);border:1px solid #f0d9bf;color:var(--warn);font-size:12.5px;border-radius:10px;padding:9px 12px;margin:8px 0}
   .infobox{background:#eef3f8;border:1px solid #cfe0ee;color:var(--steel-d);font-size:12.5px;border-radius:10px;padding:9px 12px;margin:8px 0}
+  .modal-bg{position:fixed;inset:0;background:rgba(20,26,38,.45);display:flex;align-items:center;justify-content:center;padding:16px;z-index:50}
+  .modal{background:var(--paper);border:1px solid var(--line);border-radius:14px;padding:16px;max-width:420px;width:100%}
   .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:20px 0;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
   .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
   .msg{margin:0 0 12px;font-size:13px;padding:9px 11px;border-radius:9px}
@@ -61,7 +63,10 @@
     import { h, render } from "preact";
     import { useState, useEffect } from "preact/hooks";
     import htm from "htm";
-    import { sb, loadEmployees, fmtNum, defaultPayWeek } from "./config.js";
+    import { sb, loadEmployees, fmtNum, defaultPayWeek,
+             loadAllJobCloseStatus, closeJobOrder, approveJob, reopenJob,
+             setOwnerPin, closedWeekWarning } from "./config.js";
+    import { computeDiscrepancy } from "./jobclose.mjs";
     const html = htm.bind(h);
     const pct = (e) => e==null ? "—" : fmtNum(e*100,0)+"%";
 
@@ -70,6 +75,7 @@
       const [emps,setEmps]=useState([]);
       const [jobs,setJobs]=useState(null);
       const [vessels,setVessels]=useState(null);
+      const [closeStatus,setCloseStatus]=useState({});
       const [week,setWeek]=useState(defaultPayWeek(0).start);
       const [wrows,setWrows]=useState(null);
       const [closed,setClosed]=useState(false);
@@ -92,6 +98,7 @@
         const v=await sb.from("v_vessel_efficiency").select("*").order("vessel");
         if(j.error) setMsg({type:"err",text:j.error.message});
         setJobs(j.data||[]); setVessels(v.data||[]);
+        setCloseStatus(await loadAllJobCloseStatus());
       }
 
       // is this week already closed? latest audit action for the week === 'close'
@@ -193,6 +200,56 @@
         loadJobs();
       }
 
+      const [closeForm,setCloseForm]=useState(null);   // {job, actual, lastCum, warn:[]}
+
+      async function openClose(j){
+        const { data:lr } = await sb.from("job_progress").select("units_cumulative").eq("job_id",j.job_id).order("work_date",{ascending:false}).limit(1);
+        const lastCum=(lr&&lr[0])?Number(lr[0].units_cumulative):null;
+        setCloseForm({ job:j, actual: lastCum!=null?String(lastCum):"", lastCum, warn:[] });
+      }
+      async function submitClose(){
+        const f=closeForm; const actual=Number(f.actual);
+        if(!f.actual.trim()||isNaN(actual)){ setMsg({type:"err",text:"Enter the actual-installed quantity."}); return; }
+        if(!actor.trim()){ setMsg({type:"err",text:"Enter your name (coordinator)."}); return; }
+        const coordPin=prompt("Coordinator passcode:"); if(coordPin==null) return;
+        setBusy(true);
+        try{
+          const warn=await closedWeekWarning(f.job.job_id, actual, f.lastCum);
+          if(warn.length && !confirm(`Heads up: this changes earned hours in already-closed week(s): ${warn.join(", ")}. Those frozen weeks will NOT recalculate. Continue closing the job?`)){ setBusy(false); return; }
+          await closeJobOrder(f.job, { actualInstalled:actual, coordinator:actor.trim(), coordPin });
+          setCloseForm(null); setMsg({type:"ok",text:"Job closed — pending incentive approval."}); await loadJobs();
+        }catch(e){ setMsg({type:"err",text:e.message}); }
+        setBusy(false);
+      }
+      async function doApprove(j){
+        if(!actor.trim()){ setMsg({type:"err",text:"Enter your name (owner)."}); return; }
+        let pin=prompt("Owner passcode:"); if(pin==null) return;
+        setBusy(true);
+        try{
+          await approveJob(j, { ownerPin:pin, owner:actor.trim() });
+          setMsg({type:"ok",text:"Job approved for incentive."}); await loadJobs();
+        }catch(e){
+          if(e.message==="OWNER_PIN_NOT_SET"){ await forceSetOwnerPin(); }
+          else setMsg({type:"err",text:e.message});
+        }
+        setBusy(false);
+      }
+      async function doReopen(j){
+        if(!actor.trim()){ setMsg({type:"err",text:"Enter your name (owner)."}); return; }
+        const reason=prompt("Reason for reopening this job?")||""; if(reason===null) return;
+        const pin=prompt("Owner passcode:"); if(pin==null) return;
+        setBusy(true);
+        try{ await reopenJob(j, { ownerPin:pin, owner:actor.trim(), reason }); setMsg({type:"ok",text:"Job reopened (logged)."}); await loadJobs(); }
+        catch(e){ if(e.message==="OWNER_PIN_NOT_SET"){ await forceSetOwnerPin(); } else setMsg({type:"err",text:e.message}); }
+        setBusy(false);
+      }
+      async function forceSetOwnerPin(){
+        const p1=prompt("No owner passcode is set yet. Create one now (owner only):"); if(!p1) return;
+        const p2=prompt("Re-enter the new owner passcode:"); if(p2!==p1){ setMsg({type:"err",text:"Passcodes did not match."}); return; }
+        try{ await setOwnerPin(p1, actor.trim()||null); setMsg({type:"ok",text:"Owner passcode set. Try the action again."}); }
+        catch(e){ setMsg({type:"err",text:e.message}); }
+      }
+
       // ---- views ----
       function JobView(){
         if(jobs===null) return html`<div class="loading">Loading&hellip;</div>`;
@@ -205,6 +262,10 @@
               ${noTarget && html`<span class="badge over">no target set · not payable</span>`}
               ${!noTarget && !j.calibrated && html`<span class="badge amber">factors not calibrated · incentive pending</span>`}
               ${!noTarget && j.overrun && html`<span class="badge over">overrun · estimate review</span>`}
+              ${(()=>{ const cs=(closeStatus[j.job_id]||{}).status||"open";
+                if(cs==="pending") return html`<span class="badge amber">pending incentive approval</span>`;
+                if(cs==="approved") return html`<span class="badge ok">approved</span>`;
+                return null; })()}
             </div>
             <div class="fig">
               <span>earned <b>${fmtNum(j.earned_hours)}</b>h</span>
@@ -214,9 +275,19 @@
             </div>
             ${noTarget
               ? html`<div class="sub" style="margin-top:8px">Set a target quantity (units) for this job to enable calibration / incentive.</div>`
-              : html`<button class="mini" style="margin-top:8px" disabled=${busy} onClick=${()=>toggleCalib(j)}>
-                  ${j.calibrated?"Un-calibrate":"Mark calibrated (admin)"}
-                </button>`}
+              : html``}
+            ${(()=>{ const cs=(closeStatus[j.job_id]||{}).status||"open";
+              if(cs==="open") return html`<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+                ${!noTarget && html`<button class="mini" disabled=${busy} onClick=${()=>toggleCalib(j)}>${j.calibrated?"Un-calibrate":"Mark calibrated (admin)"}</button>`}
+                <button class="mini" disabled=${busy} onClick=${()=>openClose(j)}>Close job order (coordinator)</button>
+              </div>`;
+              if(cs==="pending") return html`<div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+                <button class="primary" style="width:auto;margin:0" disabled=${busy||!j.calibrated} onClick=${()=>doApprove(j)}>Approve for incentive (owner)</button>
+                ${!j.calibrated && html`<span class="sub">calibrate first</span>`}
+                <button class="ghost" style="width:auto;margin:0" disabled=${busy} onClick=${()=>doReopen(j)}>Reopen (owner)</button>
+              </div>`;
+              return html`<div style="margin-top:8px"><button class="ghost" style="width:auto;margin:0" disabled=${busy} onClick=${()=>doReopen(j)}>Reopen (owner)</button></div>`;
+            })()}
           </div>`});
       }
       function VesselView(){
@@ -282,6 +353,23 @@
         </div>
         ${msg && html`<div class="msg ${msg.type}">${msg.text}</div>`}
         ${tab==="job"?JobView():tab==="vessel"?VesselView():WorkerView()}
+        ${closeForm && html`<div class="modal-bg" onClick=${e=>{ if(e.target===e.currentTarget) setCloseForm(null); }}>
+          <div class="modal">
+            <h3 style="margin:0 0 8px">Close ${closeForm.job.job_no}</h3>
+            <div class="fig"><span>target <b>${closeForm.job.quantity==null?"—":fmtNum(closeForm.job.quantity)}</b></span>
+              <span>last roll-call <b>${closeForm.lastCum==null?"—":fmtNum(closeForm.lastCum)}</b></span></div>
+            <label style="margin-top:8px">Actual installed (${closeForm.job.unit||"units"})</label>
+            <input value=${closeForm.actual} onInput=${e=>setCloseForm({...closeForm, actual:e.target.value})} inputmode="decimal" />
+            ${(()=>{ const a=Number(closeForm.actual); if(!closeForm.actual.trim()||isNaN(a)) return null;
+              const d=computeDiscrepancy(a, closeForm.lastCum, closeForm.job.unit||"units");
+              const over=(closeForm.job.quantity!=null && a>closeForm.job.quantity);
+              return html`<div class="infobox" style="margin-top:8px">${d.text}${over?" · overrun (over target — extra units not payable)":""}</div>`; })()}
+            <div style="display:flex;gap:8px;margin-top:12px">
+              <button class="primary" style="margin:0" disabled=${busy} onClick=${submitClose}>Confirm close</button>
+              <button class="ghost" style="margin:0" disabled=${busy} onClick=${()=>setCloseForm(null)}>Cancel</button>
+            </div>
+          </div>
+        </div>`}
       `;
     }
     render(html`<${App} />`, document.getElementById("app"));
