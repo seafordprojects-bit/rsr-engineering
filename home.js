@@ -1008,6 +1008,18 @@ function App() {
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
 
+  // ---- admin: job monitoring (efficiency + incentive close/approve), embedded so it stays in the admin area ----
+  if (adminTab === 'monitoring') {
+    // base-safe: resolves from the app root or /admin/, on localhost and the /rsr-engineering/ Pages base
+    const effUrl = location.pathname.replace(/(admin\/)?(index\.html)?$/, '') + 'monitoring/efficiency.html';
+    return html`
+      <header class="app"><div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">JOB MONITORING</span></span>
+        <button onClick=${() => setAdminTab('dash')} style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">← Back</button>
+      </div></div></header>
+      <iframe src=${effUrl} title="Job Monitoring — efficiency & incentive approval" style="width:100%;height:calc(100vh - 52px);border:none;display:block"></iframe>`;
+  }
+
   // ---- admin: material issuance monitor (read-only) ----
   if (adminTab === 'matusage') return html`<${MatUsage} toast=${flash} onBack=${() => setAdminTab('issued')} />`;
   if (adminTab === 'materials') return html`<${MaterialsAdmin} toast=${flash} onBack=${() => setAdminTab('dash')} />`;
@@ -1553,7 +1565,7 @@ function App() {
           { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse', href:'../warehouse/' },
           { ico:'🛒', num:m.poInbox, unit:'to purchase', title:'Purchasing', href:'../purchasing/' },
           { ico:'💵', num:null, unit:'weekly', title:'Payroll', href:'../payroll/' },
-          { ico:'📊', num:null, unit:'close & approve jobs', title:'Job Monitoring', href:'../monitoring/' },
+          { ico:'📊', num:null, unit:'close & approve jobs', title:'Job Monitoring', onClick:() => setAdminTab('monitoring') },
         ].map(t => html`<${Tile} ...${t} />`)}
       </div>
 
