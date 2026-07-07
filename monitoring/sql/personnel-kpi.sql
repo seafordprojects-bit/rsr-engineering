@@ -144,7 +144,12 @@ with norm as (
           end)                                   as work_date,
          (coalesce(a.worked_ms,0)/3600000.0)::numeric as paid_hours,
          coalesce(a.is_incomplete,false)         as is_incomplete,
-         a.status                                as status
+         a.status                                as status,
+         -- has_out: the worker actually punched an end-of-day clock-out (afternoon-out or final out).
+         -- A real short day (e.g. a 3:00 PM early-out) HAS this; a forgotten-OUT day does not. Legacy
+         -- placeholder literals like '(auto-deducted)'/'(skipped)' are NOT real punches, so exclude them.
+         (   (a.pm_out  is not null and a.pm_out  !~* 'auto|skip')
+          or (a.timeout is not null and a.timeout !~* 'auto|skip')) as has_out
   from attendance_records a
   join employees e
     on upper(regexp_replace(e.code, '\s', '', 'g')) = upper(regexp_replace(a.employee_code, '\s', '', 'g'))
@@ -156,7 +161,8 @@ with norm as (
 select employee_id, employee_code, min(employee_name) as employee_name, work_date,
        max(paid_hours)        as paid_hours,
        bool_or(is_incomplete) as is_incomplete,
-       max(status)            as status
+       max(status)            as status,
+       bool_or(has_out)       as has_out
 from norm
 group by employee_id, employee_code, work_date;
 
@@ -283,9 +289,14 @@ group by employee_code, week_start, week_end;
 -- only when its hours are genuinely NOT settled -- the gate must stay small and real, not cry wolf
 -- (a weekly false alarm gets ignored). Two cases:
 --   (a) zero usable hours: paid_hours = 0 and not marked 'absent', OR
---   (b) a missing-OUT day (is_incomplete) whose credit fell MEANINGFULLY short of a full regular
---       day. Regular day = 8h (4h AM + 4h PM); a <1h trim is just a late-in, so flag only < 7h.
---       A forgotten-OUT day that payroll boundary-credited to a full ~8h is SETTLED and does NOT count.
+--   (b) a missing-OUT day (is_incomplete) with NO real clock-out punch (not has_out) whose credit
+--       fell MEANINGFULLY short of a full regular day. Regular day = 8h (4h AM + 4h PM); a <1h trim
+--       is just a late-in, so flag only < 7h. A forgotten-OUT day boundary-credited to a full ~8h is
+--       SETTLED and does NOT count.
+-- BLOCK ON UNKNOWNS, INFORM ON KNOWNS: a short day that HAS a real clock-out punch (e.g. a 3:00 PM
+-- early-out, is_incomplete only because the final `timeout` is blank) is a KNOWN, correct short day.
+-- It is NOT counted in `unresolved`; it is surfaced separately as `short_days` (informational,
+-- non-blocking) so real early-outs stay visible on the Close-week summary instead of vanishing.
 -- Approved leave days are excluded (when not already 'absent'): leave_requests is keyed by human
 -- employee_code and its start/end dates are TEXT (mixed-format landmine), so normalize the code the
 -- same way payroll does (upper + strip whitespace) and normalize+expand the date range per day.
@@ -305,9 +316,12 @@ with leave_days as (
 )
 select (a.work_date - ((extract(dow from a.work_date)::int + 1) % 7))::date as week_start,
        count(*) filter (where
-             (a.is_incomplete and a.paid_hours < 7)
-          or (a.paid_hours = 0 and a.status is distinct from 'absent')
-       )                                                                    as unresolved
+             (a.is_incomplete and a.paid_hours < 7 and not a.has_out)       -- missing-OUT short day (UNKNOWN -> block)
+          or (a.paid_hours = 0 and a.status is distinct from 'absent')       -- zero usable hours, not absent (block)
+       )                                                                    as unresolved,
+       count(*) filter (where
+             a.is_incomplete and a.paid_hours > 0 and a.paid_hours < 7 and a.has_out
+       )                                                                    as short_days   -- real early-out, KNOWN -> inform, non-blocking
 from v_attendance_day a
 where a.work_date is not null
   and not exists (                                    -- drop approved-leave days (not already 'absent')

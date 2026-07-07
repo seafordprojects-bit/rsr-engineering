@@ -32,6 +32,7 @@
   button.ghost{margin-top:8px;width:100%;padding:10px;border:1px solid var(--line);background:#fcfcfd;color:var(--muted);border-radius:11px;font-weight:600}
   button.mini{border:1px solid var(--line);background:#fcfcfd;border-radius:8px;font-size:12px;font-weight:700;padding:6px 10px;color:var(--ink)}
   .warnbox{background:var(--warnbg);border:1px solid #f0d9bf;color:var(--warn);font-size:12.5px;border-radius:10px;padding:9px 12px;margin:8px 0}
+  .infobox{background:#eef3f8;border:1px solid #cfe0ee;color:var(--steel-d);font-size:12.5px;border-radius:10px;padding:9px 12px;margin:8px 0}
   .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:20px 0;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
   .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
   .msg{margin:0 0 12px;font-size:13px;padding:9px 11px;border-radius:9px}
@@ -115,8 +116,8 @@
         setWrows(data||[]);
         const flags=await computeWeekFlags(week,end);
         setWarnJobs(flags.accrualLag); setNoTargetJobs(flags.noTarget);
-        const hz=await sb.from("v_week_payroll_health").select("unresolved").eq("week_start",week).maybeSingle();
-        setHealth({unresolved:(hz.data&&hz.data.unresolved)||0});
+        const hz=await sb.from("v_week_payroll_health").select("unresolved,short_days").eq("week_start",week).maybeSingle();
+        setHealth({unresolved:(hz.data&&hz.data.unresolved)||0, shortDays:(hz.data&&hz.data.short_days)||0});
       }
       function addFri(sat){ const d=new Date(sat+"T00:00:00"); d.setDate(d.getDate()+6);
         return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
@@ -145,6 +146,7 @@
         const st=await isClosed(week);
         if(st.closed){ setBusy(false); setMsg({type:"err",text:"Already closed."}); return; }
         const unresolved=(health&&health.unresolved)||0;
+        const shortDays=(health&&health.shortDays)||0;
         const noTargetCount=noTargetJobs.length;
         const maxv=await sb.from("efficiency_week").select("close_version").eq("week_start",week)
           .order("close_version",{ascending:false}).limit(1);
@@ -163,7 +165,7 @@
           const ins=await sb.from("efficiency_week").insert(payload);
           if(ins.error){ setBusy(false); setMsg({type:"err",text:ins.error.message}); return; }
         }
-        await sb.from("efficiency_week_audit").insert({week_start:week,action:"close",version,actor:actor.trim(),note:`payroll finalized ack; unresolved=${unresolved}; no_target_jobs=${noTargetCount}`});
+        await sb.from("efficiency_week_audit").insert({week_start:week,action:"close",version,actor:actor.trim(),note:`payroll finalized ack; unresolved=${unresolved}; short_days=${shortDays}; no_target_jobs=${noTargetCount}`});
         setBusy(false); setMsg({type:"ok",text:`Closed ${payload.length} worker record(s).`}); loadWeek();
       }
 
@@ -234,6 +236,7 @@
       function WorkerView(){
         const flagBits=[];
         if(health) flagBits.push(`${health.unresolved} unresolved`);
+        if(health && health.shortDays) flagBits.push(`${health.shortDays} short day${health.shortDays>1?"s":""} — real early-outs`);
         if(noTargetJobs.length) flagBits.push(`${noTargetJobs.length} no-target job${noTargetJobs.length>1?"s":""}`);
         const flagSuffix=flagBits.length?` (${flagBits.join(", ")})`:"";
         return html`
@@ -246,6 +249,7 @@
             ${!closed && warnJobs.length>0 && html`<div class="warnbox">${warnJobs.length} job(s) have hours this week but no progress reading in the window — enter a Friday units-done reading before closing, or their earned hours land next week.</div>`}
             ${!closed && health && health.unresolved>0 && html`<div class="warnbox">⚠ ${health.unresolved} attendance row(s) this week have unsettled hours (missing-OUT day credited short of a full day, or zero-hour not-absent). Closing now freezes wrong hours — finalize payroll first.</div>`}
             ${!closed && noTargetJobs.length>0 && html`<div class="warnbox">⚠ ${noTargetJobs.length} job(s) active this week have NO TARGET SET — their earned hours are shown but are NOT payable. Set a target quantity before closing, or they freeze as unpayable: ${noTargetJobs.join(", ")}.</div>`}
+            ${health && health.shortDays>0 && html`<div class="infobox">ℹ ${health.shortDays} short day(s) this week — real early-outs (worker clocked out, day under a full shift). Known and correct: recorded, not blocking the close.</div>`}
             ${!closed && html`
               <label style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;font-weight:600;color:var(--ink)">
                 <input type="checkbox" style="width:auto;margin-top:3px" checked=${ack} onChange=${e=>setAck(e.target.checked)} />
