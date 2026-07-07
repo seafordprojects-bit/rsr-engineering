@@ -39,6 +39,9 @@
   .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
   .msg{margin:0 0 12px;font-size:13px;padding:9px 11px;border-radius:9px}
   .msg.ok{background:var(--okbg);color:var(--ok);border:1px solid #bfe3cf}.msg.err{background:var(--overbg);color:var(--over);border:1px solid #f0bdba}
+  /* When embedded in the admin dashboard (iframe), the dashboard supplies the header — hide this page's own. */
+  html.embedded header.top{display:none}
+  html.embedded .wrap{padding-top:6px}
 </style>
 <script type="importmap">
 {
@@ -50,6 +53,7 @@
   }
 }
 </script>
+<script>if (window.self !== window.top) document.documentElement.classList.add('embedded');</script>
 </head>
 <body>
   <div class="wrap">
