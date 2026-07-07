@@ -330,3 +330,80 @@ where a.work_date is not null
       and ld.leave_date = a.work_date
   )
 group by (a.work_date - ((extract(dow from a.work_date)::int + 1) % 7))::date;
+
+-- ============================================================ CLOSE JOB ORDER
+-- Two-stage close (coordinator operational close -> owner incentive approval),
+-- append-only, mirroring the efficiency_week pattern. See
+-- docs/superpowers/specs/2026-07-07-close-job-order-design.md
+create table if not exists job_close (
+  id                  uuid primary key default gen_random_uuid(),
+  job_id              uuid not null references jobs(id),
+  close_version       integer not null default 1,
+  actual_installed    numeric not null,        -- coordinator's final measured quantity (job unit)
+  last_rollcall_units numeric,                 -- latest job_progress cumulative BEFORE this close
+  target_quantity     numeric,                 -- jobs.quantity at close (null = no target)
+  credited_units      numeric,                 -- least(actual_installed, target); null if no target
+  earned_hours        numeric,                 -- frozen from v_job_efficiency at close
+  actual_hours        numeric,
+  efficiency          numeric,
+  overrun             boolean not null default false,
+  discrepancy_delta   numeric,
+  discrepancy_pct     numeric,
+  calibrated_at_close boolean not null default false,
+  closed_by           text,
+  closed_at           timestamptz not null default now(),
+  unique (job_id, close_version)
+);
+
+create table if not exists job_close_audit (
+  id      uuid primary key default gen_random_uuid(),
+  job_id  uuid not null references jobs(id),
+  action  text not null,        -- 'operational_close' | 'incentive_approve' | 'reopen'
+  version integer not null,
+  actor   text,
+  note    text,
+  at      timestamptz not null default now()
+);
+
+-- Security-config audit: logs owner-PIN set/change. NEVER stores the PIN value.
+create table if not exists settings_audit (
+  id     uuid primary key default gen_random_uuid(),
+  key    text not null,         -- e.g. 'owner_pin'
+  action text not null,         -- 'set' | 'change'
+  actor  text,
+  at     timestamptz not null default now()
+);
+
+-- Append-only immutability (reuse the existing block_mutation() from this file).
+drop trigger if exists trg_jobclose_immutable on job_close;
+create trigger trg_jobclose_immutable before update or delete on job_close
+  for each row execute function block_mutation();
+drop trigger if exists trg_jobcloseaudit_immutable on job_close_audit;
+create trigger trg_jobcloseaudit_immutable before update or delete on job_close_audit
+  for each row execute function block_mutation();
+drop trigger if exists trg_settingsaudit_immutable on settings_audit;
+create trigger trg_settingsaudit_immutable before update or delete on settings_audit
+  for each row execute function block_mutation();
+
+-- Current close status per job = latest audit action (mirrors efficiency isClosed()).
+create or replace view v_job_close_status as
+select distinct on (job_id) job_id, action, version, actor, at
+from job_close_audit order by job_id, at desc;
+
+-- Backstop: once a job is closed, freeze it — reject progress/checkpoint writes.
+-- The close flow writes the final job_progress row BEFORE flipping status='closed',
+-- so only post-close writes are blocked. Reopen sets status back to 'ongoing'.
+create or replace function block_closed_job_write() returns trigger as $$
+begin
+  if exists (select 1 from jobs j where j.id = new.job_id and j.status = 'closed') then
+    raise exception 'job % is closed; progress/checkpoint writes are frozen', new.job_id;
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+drop trigger if exists trg_jp_block_closed on job_progress;
+create trigger trg_jp_block_closed before insert or update on job_progress
+  for each row execute function block_closed_job_write();
+drop trigger if exists trg_jc_block_closed on job_checkpoint;
+create trigger trg_jc_block_closed before insert or update on job_checkpoint
+  for each row execute function block_closed_job_write();
