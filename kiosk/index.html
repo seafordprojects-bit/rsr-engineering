@@ -996,6 +996,9 @@ function openEarlyBisayaConfirm(type){
   let msg='';
   if(type==='lunch_out'){
     msg='⚠ Sayo pa ang Lunch Out — '+fmt12(lunchOutEarlyH,lunchOutEarlyM)+' ang tinuod nga oras. Kung mo-punch ka karon, ang imong BUNTAG maihap lang hangtod karon nga oras — ma-deduct ang kulang. Kung dili ka mobalik og Lunch In hangtod '+fmt12(pmOutEarlyH,pmOutEarlyM)+', ang imong adlaw ma-close dinhi. Padayon?';
+  }else if(type==='nightarm'){
+    // (nd Task 4) Self-serve night-duty arming confirm shown inside the arming window.
+    msg="Night duty ka ba karon (" + fmt24(nightShiftH,nightShiftM) + " – " + fmt24(nightEndH,nightEndM) + ")? Ang imong oras maihap gikan sa " + fmt24(nightShiftH,nightShiftM) + ".";
   }else{
     msg='⚠ Sayo pa ang PM Break Out — '+fmt12(pmOutEarlyH,pmOutEarlyM)+' ang tinuod nga oras. Kung mo-punch ka karon, ang imong HAPON maihap lang hangtod karon nga oras — ma-deduct ang kulang. Ug kung DILI ka mobalik, KINI NA ang imong TIME OUT. Padayon?';
   }
@@ -1005,11 +1008,14 @@ function openEarlyBisayaConfirm(type){
 function bisayaConfirmProceed(){
   document.getElementById('bisaya-confirm-modal').classList.remove('show');
   const t=_bisayaConfirmType;_bisayaConfirmType=null;
+  if(t==='nightarm'){ nightArmConfirmed=true; punch('timein'); return; }
   if(t){ earlyBreakConfirmed=true; punch(t); }
 }
 function bisayaConfirmCancel(){
   document.getElementById('bisaya-confirm-modal').classList.remove('show');
-  _bisayaConfirmType=null; earlyBreakConfirmed=false; kpClr();
+  const t=_bisayaConfirmType;_bisayaConfirmType=null;
+  if(t==='nightarm'){ nightArmConfirmed=false; kpClr(); return; }
+  earlyBreakConfirmed=false; kpClr();
 }
 // Duration as Bisaya "X oras Y minuto" (drops a zero hour or zero minute part).
 function bisayaHM(ms){
@@ -1067,6 +1073,7 @@ let dismissalH=21,dismissalM=0; // Admin-set dismissal time (9PM default)
 let nightShiftH=22,nightShiftM=0,nightEndH=8,nightEndM=0;   // config- S / E, overridden by Supabase
 const ND_START_H=22, ND_END_H=6;                            // statutory ND window — NEVER moves
 let earlyBreakConfirmed=false;
+let nightArmConfirmed=false; // (nd Task 4) set true only for the in-flight confirmed night-arm Time In replay
 let activeSite='A',siteAName='Site A',siteBName='Site B',allowA=50,allowB=50; // (v2026-07-07d) away allowance policy: ₱50/day
 let otAllowanceAmt=50,otAllowanceMinHrs=3;
 let pin='',curEmp=null,msgTimer=null;
@@ -1097,6 +1104,7 @@ function nowShort(){return new Date().toLocaleTimeString('en-PH',{hour:'2-digit'
 function msToHM(ms){if(!ms||ms<0)return'0h 0m';return Math.floor(ms/3600000)+'h '+Math.floor((ms%3600000)/60000)+'m';}
 function msToH(ms){if(!ms||ms<0)return'0.00';return(ms/3600000).toFixed(2);}
 function fmt12(h,m){return(h%12||12)+':'+(m<10?'0':'')+m+' '+(h>=12?'PM':'AM');}
+function fmt24(h,m){return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');}
 function ddiff(s,e){return Math.round((new Date(e)-new Date(s))/86400000)+1;}
 function lkey(t){return t==='Vacation Leave'?'VL':t==='Sick Leave'?'SL':t==='Leave Without Pay'?'LWP':'EL';}
 function siteName(s){return s==='A'?siteAName:siteBName;}
@@ -1145,6 +1153,13 @@ function effectiveStart(rec){
     const aft=new Date(rec.msMap.timein);aft.setHours(lunchOutEarlyH+1,lunchOutEarlyM,0,0);
     return Math.max(aft.getTime(),rec.msMap.timein); // ≥1:00 PM; late afternoon arrivals count from actual
   }
+  // (nd Task 4) Night shift → anchor to the configured night start S instead of the day shiftH/M.
+  if(rec.nightShift){
+    const nightStart=new Date(rec.msMap.timein);nightStart.setHours(nightShiftH,nightShiftM,0,0);
+    const nightGraceEnd=new Date(nightStart.getTime()+graceMins*60000);
+    if(rec.msMap.timein<=nightGraceEnd.getTime())return nightStart.getTime();
+    return rec.msMap.timein;
+  }
   const shiftStart=new Date(rec.msMap.timein);shiftStart.setHours(shiftH,shiftM,0,0);
   const graceEnd=new Date(shiftStart.getTime()+graceMins*60000);
   // Early or within grace period → count from shift start (morning clock-in); late → actual punch.
@@ -1192,6 +1207,11 @@ function calcSessions(rec){
 function calcWorked(rec){ return calcSessions(rec).worked; }
 function calcWorkedPartial(rec){ return calcSessions(rec).worked; }
 function chkLate(ms){const now=new Date(ms),s=new Date(now);s.setHours(shiftH,shiftM,0,0);const g=new Date(s.getTime()+graceMins*60000);return now>g?{late:true,lateMs:now-s}:{late:false,lateMs:0};}
+// (nd Task 4) Night arming window: [S-60min, S+120min] around today's configured night start S.
+function inNightArmWindow(nowMs){
+  const s=new Date(nowMs);s.setHours(nightShiftH,nightShiftM,0,0);
+  return nowMs>=(s.getTime()-3600000)&&nowMs<=(s.getTime()+7200000);
+}
 function onLeaveToday(code){const t=todayKey();return leaveRequests.some(r=>r.code===code&&r.status==='Approved'&&r.startDate<=t&&r.endDate>=t);}
 function onLWPToday(code){const t=todayKey();return leaveRequests.some(r=>r.code===code&&r.status==='Approved'&&r.type==='Leave Without Pay'&&r.startDate<=t&&r.endDate>=t);}
 
@@ -2273,6 +2293,15 @@ async function punch(type){
       rec=_yr; next=getNext(rec); _crossMidnight=true; _crossKey=_yk;
     }
   }
+  // (nd Task 4) Self-serve night arming at Time In — inside the arming window [S-1h, S+2h]
+  // around the configured night start S, offer the night-duty confirm BEFORE any of the
+  // day-only Time-In window/approval checks below. Day-shift Time In never enters this
+  // branch: inNightArmWindow() is false outside that window (e.g. false at 8 AM for a
+  // default S=22:00), so a day worker's Time In is completely unaffected.
+  if(type==='timein' && !rec.nightShift && inNightArmWindow(Date.now())){
+    if(!nightArmConfirmed){ openEarlyBisayaConfirm('nightarm'); return; }
+    rec.nightShift=true; rec.straightDutyPm=true; nightArmConfirmed=false;
+  }
   // Allow Time Out at the PM-break decision point (employee leaving at 5 PM, skipping the 5–6 break).
   const pmDecisionTimeout=(type==='timeout'&&next==='pm_out'&&rec.punches&&!rec.punches.timeout);
   // Forward-skip: if an earlier session punch was missed, let the employee jump ahead
@@ -2331,8 +2360,9 @@ async function punch(type){
       'Absent 3+ days without leave. Admin reinstatement required before clocking in.',6000);
     return;
   }
-  // Time In at or after shift end requires admin approval
-  if(type==='timein'){
+  // Time In at or after shift end requires admin approval — a confirmed night-shift arrival
+  // (rec.nightShift already set by the arming confirm above) skips this day-only gate.
+  if(type==='timein'&&!rec.nightShift){
     const shiftEnd=new Date(now);shiftEnd.setHours(endH,endM,0,0);
     if(now>=shiftEnd&&!lateTimeInRequests[emp.code]?.approved){
       if(lateTimeInRequests[emp.code]?.pending){
@@ -2512,12 +2542,20 @@ async function punch(type){
   const _snapAt=(h,m)=>{const d=new Date(nowMs);d.setHours(h,m,0,0);return d.getTime();};
   const _snapSet=(ms)=>{recordMs=ms;recordStr=new Date(ms).toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});};
   if(type==='timein'){
-    const _shiftStart=_snapAt(shiftH,shiftM);                     // morning clock-in (shift start)
-    const _aftOpen=_snapAt(lunchInEarliestH,lunchInEarliestM);    // 12:40
-    const _aftStart=_snapAt(lunchOutEarlyH+1,lunchOutEarlyM);     // 1:00 afternoon open
-    if(nowMs<_shiftStart)_snapSet(_shiftStart);                   // early (before shift start) → shift start
-    else if(nowMs>=_aftOpen&&nowMs<_aftStart)_snapSet(_aftStart); // 12:40–12:59 → 1:00
-    // grace/late and afternoon-late keep their actual time
+    if(rec.nightShift){
+      // (nd Task 4) Early arrivals from S-1h and within-grace arrivals snap-pay from S;
+      // later than grace keeps the actual punch time (isLate/lateMs already computed above).
+      const _nightStart=_snapAt(nightShiftH,nightShiftM);
+      const _nightGraceEnd=_nightStart+graceMins*60000;
+      if(nowMs<=_nightGraceEnd)_snapSet(_nightStart);
+    }else{
+      const _shiftStart=_snapAt(shiftH,shiftM);                     // morning clock-in (shift start)
+      const _aftOpen=_snapAt(lunchInEarliestH,lunchInEarliestM);    // 12:40
+      const _aftStart=_snapAt(lunchOutEarlyH+1,lunchOutEarlyM);     // 1:00 afternoon open
+      if(nowMs<_shiftStart)_snapSet(_shiftStart);                   // early (before shift start) → shift start
+      else if(nowMs>=_aftOpen&&nowMs<_aftStart)_snapSet(_aftStart); // 12:40–12:59 → 1:00
+      // grace/late and afternoon-late keep their actual time
+    }
   }
   if(type==='lunch_out'){
     const _lo=_snapAt(lunchOutEarlyH,lunchOutEarlyM);             // 12:00 morning close
@@ -2549,15 +2587,26 @@ async function punch(type){
 
   let isLate=false,lateMs=0,hasAllow=false,allowAmt=0;
   if(type==='timein'){
-    const r=chkLate(nowMs);isLate=r.late;lateMs=r.lateMs;rec.isLate=isLate;rec.lateMs=lateMs;
+    // (nd Task 4) Night lateness is measured from the configured night start S, never from
+    // the day shiftH/M — avoids a false "late vs 8 AM" for a night-arming worker.
+    if(rec.nightShift){
+      const _ns=new Date(nowMs);_ns.setHours(nightShiftH,nightShiftM,0,0);
+      const _ng=new Date(_ns.getTime()+graceMins*60000);
+      const _nowD=new Date(nowMs);
+      isLate=_nowD>_ng;lateMs=isLate?(_nowD-_ns):0;
+    }else{
+      const r=chkLate(nowMs);isLate=r.late;lateMs=r.lateMs;
+    }
+    rec.isLate=isLate;rec.lateMs=lateMs;
     rec.clockedSite=activeSite;
     hasAllow=isAwayDeployment(emp);
     allowAmt=getAllowanceAmt(emp);
     rec.hasAllowance=hasAllow;rec.allowanceAmt=allowAmt;
     // Afternoon-only arrival (clocked in at/after the afternoon open time, e.g. 12:40 PM):
     // skip lunch with NO deduction, and credit the day from 1:00 PM (so 1–5 PM = 4 hours).
+    // Day-only rule — a night shift never takes this branch (rec.nightShift already true).
     const afternoonOpen=new Date(nowMs);afternoonOpen.setHours(lunchInEarliestH,lunchInEarliestM,0,0);
-    if(nowMs>=afternoonOpen.getTime()){
+    if(!rec.nightShift&&nowMs>=afternoonOpen.getTime()){
       rec.straightDutyLunch=true; // skip lunch punches AND no lunch deduction
       rec.afternoonStart=true;    // work time credited from 1:00 PM
       rec.lunchSkipped=true;
