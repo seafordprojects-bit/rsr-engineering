@@ -1064,6 +1064,8 @@ let timeInPmCloseH=15,timeInPmCloseM=0; // Time In (PM-only) closes (3:00 PM)
 let dismissalH=21,dismissalM=0; // Admin-set dismissal time (9PM default)
 // Within 1hr after dismissal → auto-snap to dismissal time
 // More than 1hr after dismissal → punch proceeds + Telegram notification
+let nightShiftH=22,nightShiftM=0,nightEndH=8,nightEndM=0;   // config- S / E, overridden by Supabase
+const ND_START_H=22, ND_END_H=6;                            // statutory ND window — NEVER moves
 let earlyBreakConfirmed=false;
 let activeSite='A',siteAName='Site A',siteBName='Site B',allowA=50,allowB=50; // (v2026-07-07d) away allowance policy: ₱50/day
 let otAllowanceAmt=50,otAllowanceMinHrs=3;
@@ -1098,7 +1100,7 @@ function fmt12(h,m){return(h%12||12)+':'+(m<10?'0':'')+m+' '+(h>=12?'PM':'AM');}
 function ddiff(s,e){return Math.round((new Date(e)-new Date(s))/86400000)+1;}
 function lkey(t){return t==='Vacation Leave'?'VL':t==='Sick Leave'?'SL':t==='Leave Without Pay'?'LWP':'EL';}
 function siteName(s){return s==='A'?siteAName:siteBName;}
-function getRec(code){const k=code+'_'+todayKey();if(!records[k])records[k]={code,punches:{},msMap:{},isLate:false,lateMs:0,photos:{},clockedSite:null,hasAllowance:false,allowanceAmt:0};return records[k];}
+function getRec(code){const k=code+'_'+todayKey();if(!records[k])records[k]={code,punches:{},msMap:{},isLate:false,lateMs:0,photos:{},clockedSite:null,hasAllowance:false,allowanceAmt:0,nightShift:false};return records[k];}
 function findEmp(code){return employees.find(e=>e.pin&&e.pin===code);}
 function getStatus(rec){if(!rec.punches.timein)return'absent';if(rec.punches.timeout)return'out';for(const[bo,bi]of BPAIRS)if(rec.punches[bo]&&!rec.punches[bi])return'break';return rec.isLate?'late':'working';}
 function isIncomplete(rec){return !!(rec.punches.timein&&!rec.punches.timeout);}
@@ -4496,16 +4498,18 @@ loadTgFromCloud();
 // values when offline, and leaves local values untouched if nothing is set in the cloud.
 async function loadShiftFromCloud(){
   try{
-    const { data, error } = await sbClient.from('settings').select('key,value').in('key',['shift_start','dismissal']);
+    const { data, error } = await sbClient.from('settings').select('key,value').in('key',['shift_start','dismissal','night_shift_start','night_shift_end']);
     if(error) throw error;
     const map={}; (data||[]).forEach(r=>map[r.key]=r.value);
     let applied=false;
     if(map.shift_start&&/^\d{1,2}:\d{2}$/.test(map.shift_start)){const p=map.shift_start.split(':');const h=+p[0],m=+p[1];if(h>=0&&h<24&&m>=0&&m<60){shiftH=h;shiftM=m;applied=true;}}
     if(map.dismissal&&/^\d{1,2}:\d{2}$/.test(map.dismissal)){const p=map.dismissal.split(':');const h=+p[0],m=+p[1];if(h>=0&&h<24&&m>=0&&m<60){dismissalH=h;dismissalM=m;applied=true;}}
-    if(applied){try{localStorage.setItem('rsr_shift_override',JSON.stringify({shiftH,shiftM,dismissalH,dismissalM}));}catch(e){}try{updShiftPill();}catch(e){}}
+    if(map.night_shift_start&&/^\d{1,2}:\d{2}$/.test(map.night_shift_start)){const p=map.night_shift_start.split(':');const h=+p[0],m=+p[1];if(h>=0&&h<24&&m>=0&&m<60){nightShiftH=h;nightShiftM=m;applied=true;}}
+    if(map.night_shift_end&&/^\d{1,2}:\d{2}$/.test(map.night_shift_end)){const p=map.night_shift_end.split(':');const h=+p[0],m=+p[1];if(h>=0&&h<24&&m>=0&&m<60){nightEndH=h;nightEndM=m;applied=true;}}
+    if(applied){try{localStorage.setItem('rsr_shift_override',JSON.stringify({shiftH,shiftM,dismissalH,dismissalM,nightShiftH,nightShiftM,nightEndH,nightEndM}));}catch(e){}try{updShiftPill();}catch(e){}}
     return applied;
   }catch(e){
-    try{const c=JSON.parse(localStorage.getItem('rsr_shift_override')||'null');if(c){if(typeof c.shiftH==='number'){shiftH=c.shiftH;shiftM=c.shiftM;}if(typeof c.dismissalH==='number'){dismissalH=c.dismissalH;dismissalM=c.dismissalM;}try{updShiftPill();}catch(e){}}}catch(e){}
+    try{const c=JSON.parse(localStorage.getItem('rsr_shift_override')||'null');if(c){if(typeof c.shiftH==='number'){shiftH=c.shiftH;shiftM=c.shiftM;}if(typeof c.dismissalH==='number'){dismissalH=c.dismissalH;dismissalM=c.dismissalM;}if(typeof c.nightShiftH==='number'){nightShiftH=c.nightShiftH;nightShiftM=c.nightShiftM;}if(typeof c.nightEndH==='number'){nightEndH=c.nightEndH;nightEndM=c.nightEndM;}try{updShiftPill();}catch(e){}}}catch(e){}
     return false;
   }
 }
