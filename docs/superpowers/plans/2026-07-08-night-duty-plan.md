@@ -99,27 +99,44 @@
   Padayon → set a module flag `nightArmConfirmed=true` and replay `punch('timein')`; Kanselahon → abort, write nothing (mirror `bisayaConfirmCancel`). On the replay, set `rec.nightShift=true` and `rec.straightDutyPm=true` (reuse the PM-skip seam) before recording the punch.
 - [ ] **Step 4: Night lateness + snap.** When `rec.nightShift`: compute lateness and effective start against `nightShiftH/M` instead of `shiftH/M` (branch inside `chkLate`'s caller at 2550 and `effectiveStart` 1139-1151 / write-time snap 2506-2530). Early arrivals from `S−1h` snap-pay from `S`; within-grace snaps to `S`; later than grace = actual, `isLate`. **No false "late vs 8 AM."**
 - [ ] **Step 5: Preserve** the existing after-shift-end late-Time-In approval flow for punches **outside** the arming window (do not route those through the night branch).
+- [ ] **Step 5b: Away-allowance parity (spec point 4).** Verify the night Time In still runs the **exact** day away-allowance stamping (2552-2554, 2568): `has_away_allowance`/`allowanceAmt` set by the same `isAwayDeployment`/home-site-vs-active-site test. Home-site worker on a night shift = **no allowance** (absent, correct). The night branch must not bypass or duplicate this — assert in `nd-arming.mjs`: an away-deployed night arm stamps `hasAllowance:true` @ ₱50; a home-site night arm stamps `hasAllowance:false`.
 - [ ] **Step 6: Validate + E2E.** `node --check`; run `nd-arming.mjs` (passes) and `regression-dayshift.mjs` (still passes — day Time In never enters the arming branch because `inNightArmWindow` is false at 8 AM for a 22:00 S).
 - [ ] **Step 7: Commit** `git commit -m "feat(nd): kiosk night arming confirm + lateness/snap vs configured start"`.
 
 ---
 
-## Task 5: Kiosk night meal sequence (shift-anchored windows)
+## Task 5: Kiosk night meal sequence (day-lunch pattern, re-anchored to S)
+
+> **The night meal is the day-lunch window math EXACTLY, with the anchor moved from
+> the 8:00 day-start to the configured night start S.** Same offsets, same snapping, same
+> 1-hour unpaid deduction, same 40-min minimum gap. Implement by parameterizing the existing
+> lunch logic on an anchor (`shiftStart` for day, `S` for night) — do not invent new rules.
 
 **Files:**
-- Modify: `kiosk/index.html` — `getNext` 1105-1116 (already skips PM via `straightDutyPm`); `updBtns` window locks 2201-2253; `punch()` meal window checks (early Lunch Out 2460-2462, etc.); `calcSessions`/`calcBreak` meal math 1133-1189.
+- Modify: `kiosk/index.html` — `getNext` 1105-1116 (already skips PM via `straightDutyPm`); `updBtns` window locks 2201-2253; `punch()` meal window checks (early Lunch Out 2460-2462, hard cutoff 2205, snaps 2506-2530); `calcSessions`/`calcBreak` meal math 1133-1189.
 
 **Interfaces:**
-- Consumes: `rec.nightShift`, night constants, the early-deduction Bisaya confirm, Policy-A "(missing)" marker.
-- Produces: night meal windows anchored to **S** (not to the punch): normal meal-out `S+4h`–`S+4h30m`; earlier allowed via deduction confirm; hard close `S+4h40m` → Policy A `(missing)` after; meal-in from `actualMealOut+30m`, closes `S+9h`; night timeout after meal-in, windowed to **12:00 noon** cutoff.
+- Consumes: `rec.nightShift`, night constants, the early-deduction Bisaya confirm, the day-lunch snap/hard-close code.
+- Produces: night meal windows anchored to **S**, mapping the day-lunch offsets 1:1:
 
-- [ ] **Step 1: E2E first (fails).** `nd-meal.mjs`: armed 22:00 worker; meal-out offered normally at 02:00 (=S+4h); an attempt at 00:30 triggers the deduction Bisaya confirm; meal-in blocked until 30m after meal-out; timeout enabled after meal-in; assert the meal window is anchored to S (see Task 7 late-worker case for punch-independence).
-- [ ] **Step 2: Night meal-out window.** In `updBtns`/`punch` for `lunch_out` when `rec.nightShift`: normal-enable in `[S+4h, S+4h30m]`; before `S+4h` allow only through the existing early-deduction Bisaya confirm (reuse `openEarlyBisayaConfirm('lunch_out')`); **hard close at `S+4h40m`** → if no meal-out by then, mark `rec.punches.lunch_out='(missing)'`/`msMap` per Policy A (mirror the existing 12:40 hard-close at 2205 but against `S+4h40m`).
-- [ ] **Step 3: Night meal-in window.** For `lunch_in` when `rec.nightShift`: earliest = `actualMealOut + 30min`; latest/close = `S+9h`. Branch the existing lunch-in floor (2224) on `nightShift`.
-- [ ] **Step 4: Night timeout window.** For `timeout` when `rec.nightShift`: enabled after a real `lunch_in` (meal-in); windowed with a **12:00 noon** cutoff; still open at noon → existing incomplete flow (do not auto-close). Branch the timeout gate (2239-2251) on `nightShift`; undertime detection on early leaves still applies.
-- [ ] **Step 5: Confirm PM break stays skipped** (via `straightDutyPm=true` from Task 4) — `getNext` omits `pm_out/pm_in`; no PM deduction.
-- [ ] **Step 6: Validate + E2E.** `node --check`; `nd-meal.mjs` passes; `regression-dayshift.mjs` passes (day meal windows unchanged).
-- [ ] **Step 7: Commit** `git commit -m "feat(nd): kiosk shift-anchored night meal sequence + noon timeout window"`.
+  | Stage | Day (anchor 8:00) | Night (anchor S) | Credit |
+  |---|---|---|---|
+  | Meal OUT window | 12:00–12:30 | **S+4h – S+4h30m** | snapped to **S+4h** |
+  | Late-request zone | 12:30–12:40 | **S+4h30m – S+4h40m** | — |
+  | Hard close | 12:40 | **S+4h40m** | Policy A after |
+  | Meal IN earliest | 12:40 | **S+4h40m** | in-punch S+4h40m–S+5h → credited **S+5h**; later → actual |
+  | Unpaid deduction | 12:00→1:00 (1h) | **S+4h → S+5h (1h)** | fixed 1-hour deduct, ≥40-min gap |
+
+  Net: 10 PM–8 AM ⇒ **9h worked = 8 basic + 1 OT**.
+
+- [ ] **Step 1: E2E first (fails).** `nd-meal.mjs`: armed 22:00 worker; meal-out at 02:00–02:30 credits **02:00** (=S+4h); meal-out at 02:35 lands in the late-request zone; hard close at 02:40; meal-in at 02:40–03:00 credits **03:00** (=S+5h); meal-in at 03:15 credits 03:15 (actual); confirm the unpaid deduction is exactly **1h** and worked_ms for a 22:00→08:00 shift = **9h**.
+- [ ] **Step 2: Parameterize the meal anchor.** Introduce `mealAnchor(rec)` = `S` datetime when `rec.nightShift`, else the existing day `shiftStart`. Route the meal-out window/snap (2506-2530), the 12:30/12:40 grace+hard-close (2205, 1053), and the meal-in earliest/credit through `mealAnchor + {4h,4h30m,4h40m,5h}` instead of the hard-coded 12:xx constants. Day path: anchor = 8:00 → identical constants → byte-for-byte unchanged.
+- [ ] **Step 3: Meal-out** for `rec.nightShift`: normal-enable `[S+4h, S+4h30m]` credit-snapped to S+4h; late-request `[S+4h30m, S+4h40m]`; **hard close S+4h40m** → Policy A `(missing)` marker if absent (mirror 2205).
+- [ ] **Step 4: Meal-in** for `rec.nightShift`: earliest `S+4h40m`; punches in `[S+4h40m, S+5h]` credited at **S+5h**; later returns credited at actual punch time (mirror the day lunch-in credit at 2224 + snaps).
+- [ ] **Step 5: Night timeout window.** For `timeout` when `rec.nightShift`: enabled after a real meal-in; windowed with a **12:00 noon** cutoff; still open at noon → existing incomplete flow (do not auto-close). Branch the timeout gate (2239-2251) on `nightShift`; undertime detection on early leaves still applies.
+- [ ] **Step 6: Confirm PM break stays skipped** (via `straightDutyPm=true` from Task 4) — `getNext` omits `pm_out/pm_in`; no PM deduction.
+- [ ] **Step 7: Validate + E2E.** `node --check`; `nd-meal.mjs` passes; `regression-dayshift.mjs` passes (day anchor = 8:00 unchanged).
+- [ ] **Step 8: Commit** `git commit -m "feat(nd): kiosk night meal = day-lunch pattern re-anchored to S"`.
 
 ---
 
@@ -150,9 +167,9 @@
 - Consumes: `rec.nightShift`, effective (snapped) worked interval, meal interval, `ND_START_H/ND_END_H`.
 - Produces: `rec.nd_ms` computed on close; `night_duty` + `nd_ms` added to the upsert payload; 🌙 Telegram tagging.
 
-- [ ] **Step 1: E2E first (fails).** Extend `nd-arming.mjs`/`nd-crossmidnight.mjs` assertions: config 22:00–08:00 worked 22:00→08:00 with meal 02:00–02:40 → `nd_ms === 7h20m` (26,400,000 ms); config 20:00–06:00 → `nd_ms` = overlap(20:00→06:00 worked, 22:00–06:00) minus meal overlap in that window; assert the sync payload carries `night_duty:true` and the numeric `nd_ms`.
+- [ ] **Step 1: E2E first (fails).** Extend `nd-arming.mjs`/`nd-crossmidnight.mjs` assertions: config 22:00–08:00, worked 22:00→08:00, meal credited 02:00–03:00 (1h) → `nd_ms === 7h` (**25,200,000 ms**); config 20:00–06:00, meal credited 00:00–01:00 → `nd_ms === 7h` (worked∩window 8h − 1h meal); assert the sync payload carries `night_duty:true` and the numeric `nd_ms`.
 - [ ] **Step 2: Add `overlapMs(aStart,aEnd,wStart,wEnd)`** = `Math.max(0, Math.min(aEnd,wEnd) − Math.max(aStart,wStart))`.
-- [ ] **Step 3: Compute `nd_ms` on close** when `rec.nightShift`: derive the ND window `[ndStart,ndEnd]` = the `22:00` on the timein's calendar date → `+8h` (06:00 next day); `worked = overlapMs(effectiveTimeinMs, timeoutMs, ndStart, ndEnd)`; `meal = overlapMs(mealOutMs, mealInMs, ndStart, ndEnd)` (0 if no meal punches); `rec.nd_ms = Math.max(0, worked − meal)`. Use the **snapped/effective** timein (same basis as `worked_ms`).
+- [ ] **Step 3: Compute `nd_ms` on close** when `rec.nightShift`: derive the ND window `[ndStart,ndEnd]` = the `22:00` on the timein's calendar date → `+8h` (06:00 next day); `worked = overlapMs(effectiveTimeinMs, timeoutMs, ndStart, ndEnd)`; subtract the **credited unpaid-meal** interval `[mealOutCreditedMs (S+4h), mealInCreditedMs (S+5h, or actual late-return)]` overlap: `meal = overlapMs(mealOutCreditedMs, mealInCreditedMs, ndStart, ndEnd)` (0 if no meal punches); `rec.nd_ms = Math.max(0, worked − meal)`. Use the **snapped/credited** times (same basis as `worked_ms`), so the deducted meal is the full 1-hour credited block, not the raw punch gap.
 - [ ] **Step 4: Payload.** In `pushRecord` (4887-4895) add `night_duty: !!rec.nightShift, nd_ms: Number(rec.nd_ms)||0`. Day records send `false`/`0` — payload otherwise byte-for-byte identical.
 - [ ] **Step 5: Telegram.** In `sendPunchNotif` for a night Time In (`rec.nightShift` && `punchType==='timein'`), prefix/tag **🌙 NIGHT DUTY** with the configured shift `hhmm(S)–hhmm(E)` and the actual punch time. Ensure night workers are counted in `buildSummary` (present/late tallies include them — verify they aren't filtered out by a day-only condition).
 - [ ] **Step 6: Validate + E2E.** `node --check`; ND E2E asserts pass; `regression-dayshift.mjs` passes (day payload has `night_duty:false,nd_ms:0`, Telegram unchanged).
@@ -187,7 +204,7 @@
 
 - [ ] **Step 1: Bump stamps** — kiosk `v2026-07-07e`→`v2026-07-08a` (line 238); payroll `v2026-07-07a`→`v2026-07-08a` (line 130).
 - [ ] **Step 2: Bump preflight EXPECT** (line 38) both entries to `v2026-07-08a` in lockstep.
-- [ ] **Step 3: Full E2E suite** — run all scenarios: the three spec E2E (22:00 config → 9h20m/nd_ms 7h20m; 20:00 cross-midnight meal remap; late-worker meal still shift-anchored at 02:00) **and** the entire day-shift regression. All pass.
+- [ ] **Step 3: Full E2E suite** — run all scenarios: the three spec E2E (22:00 config → **9h worked (8+1 OT)**, **nd_ms = 7h**; 20:00 cross-midnight meal remap, nd_ms = 7h; late-worker meal still shift-anchored — meal-out window at 02:00 regardless of an 23:00 arrival) **and** the entire day-shift regression. All pass.
 - [ ] **Step 4: Validate + hygiene** on kiosk, payroll, preflight.
 - [ ] **Step 5: Commit** `git commit -m "chore(nd): bump kiosk+payroll to v2026-07-08a and preflight EXPECT in lockstep"`.
 - [ ] **Step 6: STOP — owner localhost walkthrough.** Do not push. Hand the owner the walkthrough (kiosk night arming→meal→cross-midnight→timeout on localhost with a mocked/real clock, payroll ND line). Push the whole bundle only after explicit "go"; then verify live stamps via cache-busted curl and confirm.

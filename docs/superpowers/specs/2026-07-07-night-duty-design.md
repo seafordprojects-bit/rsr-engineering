@@ -66,9 +66,14 @@
    **"Add night diff (X.Xh × 10%)"** on the modal + batch tiles, shown when > 0.
 
 ## E2E (mocked clock)
+> **CORRECTION 2026-07-08 (owner):** the night meal mirrors the DAY LUNCH exactly — a fixed
+> **1-hour unpaid deduction** (meal-out credit snapped to S+4h, meal-in credit snapped to S+5h),
+> not the raw 40-min punch gap. So the 22:00 case below is **9h worked = 8 basic + 1 OT** and
+> **nd_ms = 7h** (8h window − 1h credited meal). The 9h20m/7h20m figures originally written here
+> are superseded. See docs/superpowers/plans/2026-07-08-night-duty-plan.md Tasks 5 & 7.
 - **Config 22:00–08:00:** arm 10:02 PM → meal out 2:00 AM → meal in 2:40 AM → timeout 8:00 AM →
-  attaches to night record, **9h20m worked** → 8h basic + 1.33h OT via existing math,
-  **nd_ms = 7h20m**, `night_duty=true` synced.
+  attaches to night record, **9h worked** → 8h basic + 1h OT via existing math,
+  **nd_ms = 7h**, `night_duty=true` synced.
 - **Config 20:00–06:00:** arm 8:05 PM → meal out 12:00 MN → meal in 12:40 AM → timeout 6:00 AM →
   **meal remap across midnight works**, nd_ms = 22:00–06:00 overlap minus any meal overlap in that window.
 - **Late-worker:** config 22:00, arm at 11:00 PM → LATE 1h vs 22:00, **meal window still 2:00 AM**
