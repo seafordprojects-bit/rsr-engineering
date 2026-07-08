@@ -245,6 +245,11 @@ async function setSetting(key, value) {
   if (data) { const { error } = await supabase.from('settings').update({ value }).eq('key', key); if (error) throw error; }
   else { const { error } = await supabase.from('settings').insert({ key, value }); if (error) throw error; }
 }
+async function checkOwnerPin(pin) {
+  const v = await getSetting('owner_pin');
+  if (v == null) return { ok: false, notSet: true };
+  return { ok: String(pin) === String(v), notSet: false };
+}
 
 function Field({ label, children }) {
   return html`<div class="field"><label>${label}</label>${children}</div>`;
@@ -689,6 +694,8 @@ function App() {
   const [tgLoaded, setTgLoaded] = useState(false);
   const [shiftStartV, setShiftStartV] = useState('08:00');
   const [dismissalV, setDismissalV] = useState('21:00');
+  const [nightStart, setNightStart] = useState('22:00');
+  const [nightEnd, setNightEnd] = useState('08:00');
   const [rate, setRate] = useState('');          // current/starting daily rate
   const [incRate, setIncRate] = useState('');     // new rate for an increase
   const [incDate, setIncDate] = useState('');
@@ -733,6 +740,28 @@ function App() {
       await setSetting('owner_pin', ownerPin.trim());
       await supabase.from('settings_audit').insert({ key: 'owner_pin', action: existed ? 'change' : 'set', actor: (localStorage.getItem('rsr_prepared_by') || null) });
       setOwnerPin(''); flash(existed ? 'Owner passcode changed' : 'Owner passcode set');
+    } catch (e) { flash('Failed: ' + e.message); }
+  };
+  const saveNightShift = async () => {
+    const re = /^([01]?\d|2[0-3]):[0-5]\d$/;
+    if (!re.test(nightStart) || !re.test(nightEnd)) { flash('Enter valid times (HH:MM, 24-hour, e.g. 22:00)'); return; }
+    const pin = prompt('Owner passcode:'); if (pin == null) return;
+    try {
+      const chk = await checkOwnerPin(pin);
+      if (chk.notSet) { flash('Set the owner passcode first (see the Owner passcode card above)'); return; }
+      if (!chk.ok) { flash('Wrong owner passcode'); return; }
+      const actor = localStorage.getItem('rsr_prepared_by') || null;
+      const [oldStart, oldEnd] = await Promise.all([getSetting('night_shift_start'), getSetting('night_shift_end')]);
+      const changes = [];
+      if (oldStart !== nightStart) changes.push({ key: 'night_shift_start', action: oldStart == null ? 'set' : 'change' });
+      if (oldEnd !== nightEnd) changes.push({ key: 'night_shift_end', action: oldEnd == null ? 'set' : 'change' });
+      if (!changes.length) { flash('No changes to save'); return; }
+      await setSetting('night_shift_start', nightStart);
+      await setSetting('night_shift_end', nightEnd);
+      for (const c of changes) {
+        await supabase.from('settings_audit').insert({ key: c.key, action: c.action, actor });
+      }
+      flash('Night shift schedule saved');
     } catch (e) { flash('Failed: ' + e.message); }
   };
   const saveTg = async () => {
@@ -833,12 +862,14 @@ function App() {
     if (!(authed && showSet) || tgLoaded) return;
     (async () => {
       try {
-        const [tok, grp, bak, ss, dis] = await Promise.all([
+        const [tok, grp, bak, ss, dis, ns, ne] = await Promise.all([
           getSetting('tg_token'), getSetting('tg_group'), getSetting('tg_backup_group'),
           getSetting('shift_start'), getSetting('dismissal'),
+          getSetting('night_shift_start'), getSetting('night_shift_end'),
         ]);
         setTgTokenV(tok || ''); setTgGroupV(grp || ''); setTgBackupV(bak || ''); setTgLoaded(true);
         if (ss) setShiftStartV(ss); if (dis) setDismissalV(dis);
+        if (ns) setNightStart(ns); if (ne) setNightEnd(ne);
       } catch (_) {}
     })();
   }, [authed, showSet, tgLoaded]);
@@ -1446,6 +1477,18 @@ function App() {
             <input type="password" inputmode="numeric" value=${ownerPin} onInput=${e => setOwnerPin(e.target.value)} placeholder="choose a passcode" />
           <//>
           <button class="btn" onClick=${saveOwnerPin}>Save owner passcode</button>
+        </div>
+
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Night shift schedule</div>
+          <p class="note" style="margin:0 0 12px">Start and end of the night-shift window (24-hour HH:MM). Requires the owner passcode to save.</p>
+          <${Field} label="Start">
+            <input value=${nightStart} onInput=${e => setNightStart(e.target.value)} placeholder="22:00" />
+          <//>
+          <${Field} label="End">
+            <input value=${nightEnd} onInput=${e => setNightEnd(e.target.value)} placeholder="08:00" />
+          <//>
+          <button class="btn" onClick=${saveNightShift}>Save night shift schedule</button>
         </div>
 
         <div class="card">
