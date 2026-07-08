@@ -69,10 +69,12 @@
     import htm from "htm";
     import { sb, loadEmployees, fmtNum, defaultPayWeek,
              loadAllJobCloseStatus, closeJobOrder, approveJob, reopenJob,
-             setOwnerPin, closedWeekWarning } from "./config.js";
+             setOwnerPin, closedWeekWarning,
+             loadIncentiveConfig, loadWorkerIncentive, setIncentiveRate } from "./config.js";
     import { computeDiscrepancy } from "./jobclose.mjs";
     const html = htm.bind(h);
     const pct = (e) => e==null ? "—" : fmtNum(e*100,0)+"%";
+    const peso = (n) => "₱" + Number(n||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 
     function App(){
       const [tab,setTab]=useState("job");
@@ -90,6 +92,9 @@
       const [actor,setActor]=useState(localStorage.getItem("rsr_prepared_by")||"");
       const [busy,setBusy]=useState(false);
       const [msg,setMsg]=useState(null);
+      const [incRate,setIncRate]=useState(null);      // ₱/hour saved (settings.incentive_rate_per_hour)
+      const [incPayable,setIncPayable]=useState(false); // settings.incentive_payable — off until owner flips it
+      const [incByWorker,setIncByWorker]=useState({});  // employee_code -> v_worker_week_incentive row
 
       useEffect(()=>{ loadEmployees().then(setEmps); loadJobs(); },[]);
       useEffect(()=>{ if(tab==="worker") loadWeek(); },[tab,week]);
@@ -114,6 +119,11 @@
 
       async function loadWeek(){
         setWrows(null); setMsg(null); setAck(false); setHealth(null); setNoTargetJobs([]);
+        // Provisional incentive (display-only, independent of week-close): rate + gate + per-worker amounts.
+        loadIncentiveConfig().then(c=>{ setIncRate(c.rate); setIncPayable(c.payable); });
+        loadWorkerIncentive(week).then(rows=>{
+          const m={}; (rows||[]).forEach(r=>{ m[r.employee_code]=r; }); setIncByWorker(m);
+        });
         const st=await isClosed(week); setClosed(st.closed);
         if(st.closed){
           const {data}=await sb.from("efficiency_week").select("*")
@@ -253,6 +263,24 @@
         try{ await setOwnerPin(p1, actor.trim()||null); setMsg({type:"ok",text:"Owner passcode set. Try the action again."}); }
         catch(e){ setMsg({type:"err",text:e.message}); }
       }
+      // Owner-gated: change the provisional incentive rate (₱/hour saved). Re-prices the view on save.
+      async function setRate(){
+        const cur=incRate==null?"":String(incRate);
+        const v=prompt("Provisional incentive rate (₱ per hour saved):", cur); if(v==null) return;
+        const n=Number(v);
+        if(v.trim()===""||isNaN(n)||n<0){ setMsg({type:"err",text:"Enter a valid non-negative number."}); return; }
+        const pin=prompt("Owner passcode:"); if(pin==null) return;
+        setBusy(true);
+        try{
+          await setIncentiveRate(n, pin, actor.trim()||null);
+          setMsg({type:"ok",text:`Incentive rate set to ${peso(n)} / hour saved (provisional — still not payable).`});
+          await loadWeek();
+        }catch(e){
+          if(e.message==="OWNER_PIN_NOT_SET"){ await forceSetOwnerPin(); }
+          else setMsg({type:"err",text:e.message});
+        }
+        setBusy(false);
+      }
 
       // ---- views ----
       function JobView(){
@@ -333,6 +361,15 @@
             ${closed
               ? html`<button class="ghost" disabled=${busy} onClick=${reopenWeek}>Reopen week (admin, logged)</button>`
               : html`<button class="primary" disabled=${busy||!ack} onClick=${closeWeek}>Close week (admin)</button>`}
+            <div style="margin-top:12px;padding-top:11px;border-top:1px solid var(--line)">
+              <label>Incentive rate (provisional)</label>
+              <div class="fig">
+                <span><b>${incRate==null?"…":peso(incRate)}</b> / hour saved</span>
+                ${!incPayable && html`<span class="badge amber">not payable yet</span>`}
+              </div>
+              <div class="sub" style="margin-top:5px">Preview only — per-worker amounts below are provisional and do NOT flow to payroll until enabled after calibration.</div>
+              <button class="ghost" disabled=${busy} onClick=${setRate}>Set rate (owner)</button>
+            </div>
           </div>
           ${wrows===null? html`<div class="loading">Loading&hellip;</div>`
             : wrows.length===0? html`<div class="empty">No worker activity in this week.</div>`
@@ -345,6 +382,14 @@
                     <span>eff <b class="eff">${pct(r.efficiency)}</b></span>
                     <span>calibrated <b>${fmtNum(r.calibrated_earned_hours)}</b>h</span>
                   </div>
+                  ${(()=>{ const inc=incByWorker[r.employee_code];
+                    const amt=inc?Number(inc.incentive_amount):0;
+                    const saved=inc?Number(inc.hours_saved):0;
+                    return html`<div class="fig" style="margin-top:3px">
+                      <span>incentive <b>${peso(amt)}</b></span>
+                      <span class="sub">(${fmtNum(saved,2)}h saved${incRate!=null?` @ ${peso(incRate)}`:""})</span>
+                      ${!incPayable && html`<span class="badge amber">provisional — not payable yet</span>`}
+                    </div>`; })()}
                 </div>`)}
         `;
       }

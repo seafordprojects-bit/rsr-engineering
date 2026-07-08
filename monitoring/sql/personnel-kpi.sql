@@ -407,3 +407,60 @@ create trigger trg_jp_block_closed before insert or update on job_progress
 drop trigger if exists trg_jc_block_closed on job_checkpoint;
 create trigger trg_jc_block_closed before insert or update on job_checkpoint
   for each row execute function block_closed_job_write();
+
+-- ============================================================ INCENTIVE (phase 2, PROVISIONAL)
+-- Per worker, per Sat-Fri week: provisional incentive = Σ over ELIGIBLE jobs of
+--   max(0, worker_earned_hours − worker_actual_hours) × RATE.
+--   · earned_hours already counts only credited (within-target) units — overruns earn 0.
+--   · floored per job at 0 (an inefficient job contributes nothing; never subtracts from another).
+--   · ELIGIBLE = job is CURRENTLY calibrated AND its latest close action is 'incentive_approve'.
+--   · RATE read LIVE from settings.incentive_rate_per_hour — editing the setting re-prices on read.
+-- DISPLAY-ONLY / NON-PAYABLE: nothing here flows to payroll. The payable gate is
+-- settings.incentive_payable (default 'false'), enforced by the UI, not this view. Owner rule 2026-07-08.
+create or replace view v_worker_week_incentive as
+with rate as (
+  select coalesce((select nullif(btrim(value),'')::numeric
+                   from settings where key = 'incentive_rate_per_hour'), 0) as rate_per_hour
+),
+approved as (   -- jobs whose latest close action is owner incentive-approval
+  select job_id from v_job_close_status where action = 'incentive_approve'
+),
+per_job as (    -- collapse per (worker, week, job): v_worker_week_job is per-day
+  select employee_code, week_start, week_end, job_id,
+         min(job_no)          as job_no,
+         bool_and(calibrated) as calibrated,
+         sum(earned_hours)    as earned_hours,
+         sum(actual_hours)    as actual_hours
+  from v_worker_week_job
+  group by employee_code, week_start, week_end, job_id
+),
+eligible as (
+  select pj.employee_code, pj.week_start, pj.week_end, pj.job_id, pj.job_no,
+         pj.earned_hours, pj.actual_hours,
+         greatest(pj.earned_hours - pj.actual_hours, 0) as hours_saved   -- floor per job at 0
+  from per_job pj
+  join approved a on a.job_id = pj.job_id
+  where pj.calibrated = true
+)
+select e.employee_code, e.week_start, e.week_end,
+       round(sum(e.hours_saved), 3)                                    as hours_saved,
+       (select rate_per_hour from rate)                                as rate_per_hour,
+       round(sum(e.hours_saved) * (select rate_per_hour from rate), 2) as incentive_amount,
+       jsonb_agg(jsonb_build_object(
+         'job_id', e.job_id, 'job_no', e.job_no,
+         'earned', round(e.earned_hours,3), 'actual', round(e.actual_hours,3),
+         'hours_saved', round(e.hours_saved,3),
+         'amount', round(e.hours_saved * (select rate_per_hour from rate), 2)
+       ) order by e.job_no)                                            as breakdown
+from eligible e
+group by e.employee_code, e.week_start, e.week_end;
+
+-- Seed the incentive settings. Idempotent and NON-destructive: never overwrites an owner-set value.
+insert into settings(key, value) select 'incentive_rate_per_hour', '50'
+  where not exists (select 1 from settings where key = 'incentive_rate_per_hour');
+insert into settings(key, value) select 'incentive_payable', 'false'
+  where not exists (select 1 from settings where key = 'incentive_payable');
+
+-- Force PostgREST to pick up newly-created views immediately (else the REST API 404s them
+-- until its schema cache next reloads on its own). Harmless to re-run.
+notify pgrst, 'reload schema';

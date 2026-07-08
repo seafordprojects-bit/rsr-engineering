@@ -102,6 +102,32 @@ export async function checkCoordPin(pin){
   return { ok: v != null && String(pin) === String(v) };
 }
 
+// ---- provisional incentive (phase 2) — DISPLAY-ONLY, non-payable until owner flips the gate ----
+// rate = ₱ per hour saved (settings.incentive_rate_per_hour); payable = settings.incentive_payable.
+export async function loadIncentiveConfig(){
+  const rate    = await getSetting("incentive_rate_per_hour");
+  const payable = await getSetting("incentive_payable");
+  return { rate: (rate == null || rate === "") ? 0 : Number(rate), payable: String(payable) === "true" };
+}
+// Per-worker provisional incentive for a Sat-start week (only workers with eligible approved jobs).
+export async function loadWorkerIncentive(week){
+  const { data, error } = await sb.from("v_worker_week_incentive").select("*").eq("week_start", week);
+  if (error) { console.error("loadWorkerIncentive", error); return []; }
+  return data || [];
+}
+// Owner-gated: set the flat incentive rate. Validates the owner passcode, logs to settings_audit.
+export async function setIncentiveRate(rate, ownerPin, actor){
+  const n = Number(rate);
+  if (!isFinite(n) || n < 0) throw new Error("Rate must be a non-negative number.");
+  const chk = await checkOwnerPin(ownerPin);
+  if (chk.notSet) throw new Error("OWNER_PIN_NOT_SET");
+  if (!chk.ok) throw new Error("Wrong owner passcode.");
+  const existed = (await getSetting("incentive_rate_per_hour")) != null;
+  await setSetting("incentive_rate_per_hour", String(n));
+  const { error } = await sb.from("settings_audit").insert({ key:"incentive_rate_per_hour", action: existed?"change":"set", actor: actor||null });
+  if (error) throw error;
+}
+
 // ---- close status ----
 export async function loadJobCloseStatus(jobId){
   const { data } = await sb.from("v_job_close_status").select("action,version").eq("job_id", jobId).maybeSingle();
