@@ -2298,9 +2298,13 @@ async function punch(type){
   // day-only Time-In window/approval checks below. Day-shift Time In never enters this
   // branch: inNightArmWindow() is false outside that window (e.g. false at 8 AM for a
   // default S=22:00), so a day worker's Time In is completely unaffected.
-  if(type==='timein' && !rec.nightShift && inNightArmWindow(Date.now())){
-    if(!nightArmConfirmed){ openEarlyBisayaConfirm('nightarm'); return; }
-    rec.nightShift=true; rec.straightDutyPm=true; nightArmConfirmed=false;
+  // (fix) The confirmed path is decoupled from re-testing inNightArmWindow() on the replay:
+  // consuming/resetting nightArmConfirmed must NOT depend on the window still being open,
+  // otherwise a real-time crossing of S+2h between confirm-open and Padayon strands the flag
+  // at true, silently auto-arming the next unrelated worker's Time In as night duty.
+  if(type==='timein' && !rec.nightShift){
+    if(nightArmConfirmed){ nightArmConfirmed=false; rec.nightShift=true; rec.straightDutyPm=true; }
+    else if(inNightArmWindow(Date.now())){ openEarlyBisayaConfirm('nightarm'); return; }
   }
   // Allow Time Out at the PM-break decision point (employee leaving at 5 PM, skipping the 5–6 break).
   const pmDecisionTimeout=(type==='timeout'&&next==='pm_out'&&rec.punches&&!rec.punches.timeout);
@@ -2328,7 +2332,11 @@ async function punch(type){
   // Earliest-time restrictions
   const now=new Date();
   // ── DEAD ZONE: Time In is closed 1:00 AM–7:00 AM. Record nothing; tell the worker in Bisaya. ──
-  if(type==='timein'){ const _h=now.getHours(); if(_h>=1 && _h<7){
+  // Guarded with !rec.nightShift: a confirmed night-shift arrival (rec.nightShift already set
+  // by the arming confirm above) must never fall into a day-only gate and get stranded with a
+  // return before its punch is recorded. Under the default S=22:00 this changes nothing (the
+  // arming window doesn't overlap the dead zone); it hardens against a misconfigured S.
+  if(type==='timein'&&!rec.nightShift){ const _h=now.getHours(); if(_h>=1 && _h<7){
     showBisayaModal('⚠ Sirado pa ang Time In karon. Magsugod ang Time In sa 7:00 AM. Kung naa kay emergency nga trabaho, adto sa Admin aron ma-rekord ang imong oras.');
     return;
   } }
@@ -2379,7 +2387,9 @@ async function punch(type){
   }
   // Block late-morning Time In: too late to make 2 hours before lunch, too early for the
   // afternoon session. Must wait until the afternoon clock-in time (Lunch In earliest).
-  if(type==='timein'){
+  // Also guards the PM-close check below. Guarded with !rec.nightShift for the same reason as
+  // the DEAD ZONE gate above — a night record must skip straight to recording the punch.
+  if(type==='timein'&&!rec.nightShift){
     const morningCutoff=new Date(now);morningCutoff.setHours(lunchOutEarlyH-2,lunchOutEarlyM,0,0); // lunch (12:00) minus 2h = 10:00 AM
     const afternoonOpen=new Date(now);afternoonOpen.setHours(lunchInEarliestH,lunchInEarliestM,0,0); // 12:40 PM
     if(now>morningCutoff&&now<afternoonOpen){
