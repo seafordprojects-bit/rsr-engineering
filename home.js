@@ -775,6 +775,15 @@ function App() {
   const saveTimes = async () => {
     const re = /^\d{1,2}:\d{2}$/;
     if (!re.test(shiftStartV) || !re.test(dismissalV)) { flash('Enter valid times (HH:MM)'); return; }
+    // Guard against a past-midnight dismissal (e.g. 01:00): a day-shift clock-out must fall
+    // LATER the same calendar day than the shift start. A value <= start crosses midnight and
+    // breaks the kiosk's same-day dismissal snap. Overnight work uses the Night shift card.
+    const [sh, sm] = shiftStartV.split(':').map(Number);
+    const [dh, dm] = dismissalV.split(':').map(Number);
+    if (dh * 60 + dm <= sh * 60 + sm) {
+      flash('Dismissal must be later than shift start (same day). For overnight work use the Night shift card.');
+      return;
+    }
     try {
       await setSetting('shift_start', shiftStartV);
       await setSetting('dismissal', dismissalV);
