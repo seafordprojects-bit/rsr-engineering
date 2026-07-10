@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-10a</span>
+        <span id="version-stamp">v2026-07-10b</span>
       </div>
     </div>
   </div>
@@ -720,28 +720,7 @@ textarea.field-input{resize:none;height:65px}
 </div>
 
 <!-- EARLY BREAK CONFIRMATION MODAL -->
-<div class="modal-bg" id="early-break-modal">
-  <div class="modal">
-    <h3 id="eb-title" style="color:#D85A30">⚠️ Early Lunch Out</h3>
-    <div id="eb-body" style="background:#FAEEDA;border:1px solid #FAC775;border-radius:10px;padding:10px 14px;font-size:13px;color:#633806;margin-bottom:14px;line-height:1.6"></div>
-    <div style="font-size:13px;color:#888;margin-bottom:8px">Re-enter your PIN to confirm:</div>
-    <div style="display:flex;justify-content:center;gap:16px;margin-bottom:8px" id="eb-pin-dots">
-      <div class="pin-dot" id="eb-d0"></div><div class="pin-dot" id="eb-d1"></div>
-      <div class="pin-dot" id="eb-d2"></div><div class="pin-dot" id="eb-d3"></div>
-      <div class="pin-dot" id="eb-d4"></div><div class="pin-dot" id="eb-d5"></div>
-    </div>
-    <div class="keypad" style="margin-bottom:10px">
-      <button class="key" onclick="ebKp('1')">1</button><button class="key" onclick="ebKp('2')">2</button><button class="key" onclick="ebKp('3')">3</button>
-      <button class="key" onclick="ebKp('4')">4</button><button class="key" onclick="ebKp('5')">5</button><button class="key" onclick="ebKp('6')">6</button>
-      <button class="key" onclick="ebKp('7')">7</button><button class="key" onclick="ebKp('8')">8</button><button class="key" onclick="ebKp('9')">9</button>
-      <button class="key del" onclick="ebKpDel()">&#9003;</button>
-      <button class="key zero" onclick="ebKp('0')">0</button>
-      <button class="key del" onclick="ebKpClr()" style="font-size:12px">CLR</button>
-    </div>
-    <div id="eb-err" style="font-size:12px;color:#A32D2D;min-height:14px;margin-bottom:8px;text-align:center"></div>
-    <button onclick="closeEarlyBreakModal()" class="btn-sm" style="width:100%">Cancel</button>
-  </div>
-</div>
+<!-- early-break PIN modal removed (dead code — early breaks confirm via the Padayon/Kanselahon two-button confirm, no PIN) -->
 
 <!-- UNDERTIME / HALF DAY MODAL -->
 <div class="modal-bg" id="ut-modal">
@@ -1238,7 +1217,18 @@ function calcSessions(rec){
   const aFlag = (!sdL && LO!=null && LI==null && (PO!=null||PI!=null||toEve))
              || (!sdP && (aftStart?TI:LI)!=null && PO==null && (PI!=null||toEve));
   const eFlag = !sdP && PO!=null && PI==null && toEve;
-  return {morning,afternoon,evening,worked,mFlag,aFlag,eFlag,anyFlag:(mFlag||aFlag||eFlag),corrupt:corruptTO};
+  // ── HARD FLAG (impossible day) — mirrors payroll prSessions so the same-day alert
+  // predicts what payroll will pay ₱0. Uses payroll-style spans (a close before its open
+  // crosses midnight, +24h) so a balloon is detectable even though the worked calc above
+  // zeroes negatives for display. MUST match payroll's 16h-session / 20h-day numbers.
+  const _psp=(o,c)=>(o!=null&&c!=null)?Math.max(0,(c>=o?c:c+86400000)-o):0;
+  const _pM=_psp(mOpen,mClose),_pA=_psp(aOpen,aClose),_pE=_psp(eOpen,eClose);
+  const _overMax=Math.max(_pM,_pA,_pE)>16*3600000 || (_pM+_pA+_pE)>20*3600000;
+  const _ord=[M.timein,M.lunch_out,M.lunch_in,M.pm_out,M.pm_in].filter(v=>typeof v==='number'&&v>0);
+  let _orderBad=false; for(let i=1;i<_ord.length;i++){ if(_ord[i]<_ord[i-1]) _orderBad=true; }
+  const hardReasons=[]; if(_overMax)hardReasons.push('impossible hours (a session or the day is too long)'); if(_orderBad)hardReasons.push('punches out of order');
+  const hardFlag=_overMax||_orderBad;
+  return {morning,afternoon,evening,worked,mFlag,aFlag,eFlag,anyFlag:(mFlag||aFlag||eFlag),corrupt:corruptTO,hardFlag,hardReasons};
 }
 function calcWorked(rec){ return calcSessions(rec).worked; }
 function calcWorkedPartial(rec){ return calcSessions(rec).worked; }
@@ -1445,6 +1435,22 @@ async function tgSendText(chatId,text){
 }
 
 
+// Same-day heads-up: when a saved punch makes the day IMPOSSIBLE (payroll will pay ₱0),
+// alert the owner immediately — once per employee+date. No backend cron exists, so this
+// fires from the tablet at punch time. Dedup key persists in localStorage.
+async function maybeAlertHardFlag(emp, rec){
+  try{
+    if(!emp||!rec) return;
+    const s=calcSessions(rec); if(!s.hardFlag) return;
+    const key=emp.code+'_'+todayKey();
+    let seen={}; try{seen=JSON.parse(localStorage.getItem('rsr_hardflag_alerts')||'{}');}catch(e){}
+    if(seen[key]) return;
+    seen[key]=1; try{localStorage.setItem('rsr_hardflag_alerts',JSON.stringify(seen));}catch(e){}
+    const chat=tgGroup||tgBackupGroup; if(!tgToken||!chat) return;
+    const txt='🚫 <b>FLAGGED punch — will pay ₱0 until fixed</b>\n'+emp.name+' ('+emp.code+') · '+todayKey()+'\n'+s.hardReasons.join('; ')+'\nFix via payroll ✎ Edit times to release pay.';
+    await tgSendText(chat, txt);
+  }catch(e){ console.warn('maybeAlertHardFlag:',e&&e.message); }
+}
 async function tgSendWithButtons(chatId,text,buttons){
   if(!tgToken||!chatId)return null;
   try{
@@ -2158,48 +2164,7 @@ function openUndertimeConfirmModal(emp,recordedStr,shortMs){
 function closeUndertimeModal(){ document.getElementById('undertime-modal').classList.remove('show'); }
 function confirmUndertime(){ closeUndertimeModal(); undertimeConfirmed=true; punch('timeout'); }
 
-// ── EARLY BREAK MODAL ──
-let ebPin='';
-function openEarlyBreakModal(type){
-  ebPin='';ebUpdDots();
-  document.getElementById('eb-err').textContent='';
-  document.getElementById('early-break-modal').dataset.punchType=type;
-  const rec=getRec(curEmp.code);
-  const workedSoFar=rec.msMap.timein?Date.now()-effectiveStart(rec)-calcBreak(rec):0;
-  const isLunch=type==='lunch_out';
-  const threshLbl=isLunch?fmt12(lunchOutEarlyH,lunchOutEarlyM):fmt12(pmOutEarlyH,pmOutEarlyM);
-  document.getElementById('eb-title').textContent='⚠️ Early '+(isLunch?'Lunch Out':'PM Break Out');
-  document.getElementById('eb-body').innerHTML=
-    '<strong>Going on '+(isLunch?'lunch':'PM break')+' before '+threshLbl+'</strong><br>'+
-    'You have only worked <strong>'+msToHM(Math.max(0,workedSoFar))+'</strong> so far.<br><br>'+
-    '⚠️ <strong>Only '+msToHM(Math.max(0,workedSoFar))+' will be counted</strong> as your worked time before this break.<br><br>'+
-    'Enter your PIN to confirm and accept the deduction.';
-  document.getElementById('early-break-modal').classList.add('show');
-}
-function closeEarlyBreakModal(){
-  document.getElementById('early-break-modal').classList.remove('show');
-  ebPin='';ebUpdDots();
-  document.getElementById('eb-err').textContent='';
-}
-function ebUpdDots(){for(let i=0;i<PIN_LEN;i++){const d=document.getElementById('eb-d'+i);if(d)d.className='pin-dot'+(i<ebPin.length?' filled':'');}}
-function ebKp(n){
-  if(ebPin.length>=PIN_LEN)return;
-  ebPin+=n;ebUpdDots();
-  document.getElementById('eb-err').textContent='';
-  if(ebPin.length===PIN_LEN){
-    if(ebPin===curEmp.code){
-      const confirmedType=document.getElementById('early-break-modal').dataset.punchType;
-      closeEarlyBreakModal();
-      earlyBreakConfirmed=true;
-      punch(confirmedType);
-    } else {
-      document.getElementById('eb-err').textContent='Incorrect PIN. Please try again.';
-      setTimeout(()=>{ebPin='';ebUpdDots();document.getElementById('eb-err').textContent='';},1200);
-    }
-  }
-}
-function ebKpDel(){ebPin=ebPin.slice(0,-1);ebUpdDots();document.getElementById('eb-err').textContent='';}
-function ebKpClr(){ebPin='';ebUpdDots();document.getElementById('eb-err').textContent='';}
+// (early-break PIN modal removed — dead code; early breaks confirm via bisayaConfirm, no PIN)
 
 function showEmpPreview(emp){
   const rec=getRec(emp.code);
@@ -2739,6 +2704,7 @@ async function punch(type){
   showPhotoOverlay(photoData,emp.name,type,isLive);
   await sendPunchNotif(emp,type,isLate,lateMs,photoData,hasAllow,allowAmt);
   saveData();
+  maybeAlertHardFlag(emp, rec); // same-day ₱0-flag alert (fire-and-forget, deduped per code+date)
   updateStats();
   if(_crossMidnight){ queueRecord(emp.code, _crossKey); syncFlush(); }
   if(_missedKeys && _missedKeys.length){
@@ -2759,22 +2725,14 @@ async function punch(type){
 function showMsg(type,title,sub,dur){if(msgTimer)clearTimeout(msgTimer);document.getElementById('pm-title').className='msg-title '+type;document.getElementById('pm-sub').className='msg-sub '+type;document.getElementById('pm-title').textContent=title;document.getElementById('pm-sub').textContent=sub||'';document.getElementById('punch-msg').className='msg-box show '+type;if(dur)msgTimer=setTimeout(()=>clearMsg(),dur);}
 function clearMsg(){if(msgTimer)clearTimeout(msgTimer);document.getElementById('punch-msg').className='msg-box';}
 
-function openLeaveModal(){lmPin='';lmUpdDots();const lpe=document.getElementById('lm-pin-err');if(lpe)lpe.textContent='';
+function openLeaveModal(){
   const todayMin=new Date().toISOString().split('T')[0];
   const s=document.getElementById('lm-start');const e=document.getElementById('lm-end');
   if(s)s.min=todayMin;if(e)e.min=todayMin;
   updateLeaveMinDate();if(!curEmp)return;const today=new Date().toISOString().split('T')[0];document.getElementById('lm-start').value=today;document.getElementById('lm-end').value=today;document.getElementById('lm-reason').value='';document.getElementById('lm-err').textContent='';document.getElementById('lm-emp').textContent=curEmp.name+' · PIN: '+curEmp.code;updateLeaveBal();document.getElementById('leave-modal').classList.add('show');}
 function closeLeaveModal(){document.getElementById('leave-modal').classList.remove('show');}
 
-let lmPin='';
-function lmKp(n){
-  if(lmPin.length>=PIN_LEN)return;
-  lmPin+=n;lmUpdDots();
-  const lpe=document.getElementById('lm-pin-err');if(lpe)lpe.textContent='';
-}
-function lmKpDel(){lmPin=lmPin.slice(0,-1);lmUpdDots();}
-function lmKpClr(){lmPin='';lmUpdDots();}
-function lmUpdDots(){for(let i=0;i<PIN_LEN;i++){const d=document.getElementById('lm-pd'+i);if(d)d.className='pin-dot'+(i<lmPin.length?' filled':'');}}
+// (leave-modal PIN machinery removed — dead code; the modal never rendered a PIN keypad)
 
 function updateLeaveBal(){
   if(!curEmp)return;

@@ -127,7 +127,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub">Weekly Payroll · v2026-07-10a</div>
+    <div class="app-sub">Weekly Payroll · v2026-07-10b</div>
   </div>
 
   <div class="tabs">
@@ -161,10 +161,12 @@ select.field-input{appearance:none}
       <div class="stats-grid">
         <div class="stat"><div class="stat-label">Headcount</div><div class="stat-val" id="s-head">0</div></div>
         <div class="stat" id="s-miss-tile" onclick="filterFlagged()" title="Show only flagged days" style="cursor:pointer"><div class="stat-label">Missing punches</div><div class="stat-val" id="s-miss">0</div></div>
+        <div class="stat" id="s-flag-tile" onclick="filterHardFlagged()" title="Show only ₱0-flagged days" style="cursor:pointer"><div class="stat-label">Flagged · ₱0</div><div class="stat-val" id="s-flag">0</div></div>
         <div class="stat"><div class="stat-label">OT pay</div><div class="stat-val ot" id="s-ot">₱0</div></div>
         <div class="stat"><div class="stat-label">Vales deducted</div><div class="stat-val vale" id="s-vale">₱0</div></div>
         <div class="stat"><div class="stat-label">Total net payout</div><div class="stat-val net" id="s-net">₱0</div></div>
       </div>
+      <div id="flag-banner" style="display:none"></div>
       <div id="allow-panel"></div>
       <input type="text" id="pr-search" oninput="filterPayroll()" placeholder="Search name or code…" autocomplete="off" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:10px;font-size:14px;margin-bottom:10px;box-sizing:border-box">
       <div id="pr-list"></div>
@@ -401,7 +403,22 @@ function prSessions(rec){
   if(missPmOut)    missing.push('PM Break Out');
   if(missPmIn)     missing.push('PM Break In');
   if(missTimeout)  missing.push('Time Out');
-  return {morning,afternoon,evening,worked,mFlag,aFlag,eFlag,missing,legacyAuto,anyFlag:(mFlag||aFlag||eFlag)};
+  // ── HARD FLAG (impossible day → pays ₱0 until Edit-times fixes it) ─────────────
+  // MUST match the kiosk calcSessions detector byte-for-byte (like the shift-boundary
+  // numbers). Two conditions, data-verified to catch only genuine impossibles:
+  //  (1) CLAMP: any single session > 16h, or the day total > 20h (midnight-crossing balloon).
+  //  (2) ORDER: the first five punches (timein→pm_in), where present, must be non-decreasing
+  //      within the day; the timeout is EXCLUDED (legit night OT crosses midnight).
+  const HARD_MAX_SESSION_MS=16*3600000, HARD_MAX_DAY_MS=20*3600000;
+  const _maxSession=Math.max(morning,afternoon,evening);
+  const overMax=_maxSession>HARD_MAX_SESSION_MS || worked>HARD_MAX_DAY_MS;
+  const _ord=['timein','lunch_out','lunch_in','pm_out','pm_in'].map(k=>{const c=parseClock(rec[k]);return c?c.h*60+c.m:null;}).filter(v=>v!=null);
+  let orderBad=false; for(let i=1;i<_ord.length;i++){ if(_ord[i]<_ord[i-1]) orderBad=true; }
+  const hardReasons=[];
+  if(overMax)  hardReasons.push('impossible hours (a session or the day is too long)');
+  if(orderBad) hardReasons.push('punches out of order');
+  const hardFlag=overMax||orderBad;
+  return {morning,afternoon,evening,worked,mFlag,aFlag,eFlag,missing,legacyAuto,anyFlag:(mFlag||aFlag||eFlag),hardFlag,hardReasons};
 }
 // Recompute worked_ms / ot_ms / flags for one day record after its times change.
 function recomputeDay(rec, shiftHrs){
@@ -424,7 +441,7 @@ function recomputeDay(rec, shiftHrs){
   if(ms.timein!=null && !afternoon){ const st=new Date(y,mo-1,d,PR_SHIFT_H,PR_SHIFT_M,0,0).getTime(); const g=st+PR_GRACE*60000; if(ms.timein>g){ isLate=true; lateMs=ms.timein-st; } }
   rec.worked_ms = worked;
   rec.ot_ms = ot;
-  rec.is_incomplete = (ms.timein!=null && ms.timeout==null) || S.anyFlag;
+  rec.is_incomplete = (ms.timein!=null && ms.timeout==null) || S.anyFlag || S.hardFlag;
   rec.session_flags = [S.mFlag&&'AM',S.aFlag&&'PM',S.eFlag&&'EVE'].filter(Boolean).join(',');
   rec.status = ms.timeout!=null ? 'out' : (ms.timein!=null ? 'incomplete' : 'absent');
   rec.is_late = isLate; rec.late_ms = lateMs;
@@ -712,9 +729,13 @@ async function runPayroll(){
       let daysPresent=0, regularMs=0, otMs=0, shortfallMs=0, otAllowDays=0, awayAllowDays=0, totalWorkedMs=0;
       const dayFlags=[];
       const legacyFlags=[];
+      const hardFlagDays=[];
       rs.forEach(r=>{
-        daysPresent++;
         const S=prSessions(r);
+        // Impossible day (clamp / out-of-order) pays ₱0 for THAT day until Edit-times fixes it.
+        // Skip BEFORE daysPresent/OT/allowances so nothing accrues; other days are untouched.
+        if(S.hardFlag){ hardFlagDays.push({date:r.date, txt:S.hardReasons.join('; ')}); return; }
+        daysPresent++;
         const worked=S.worked;
         const ot=Math.max(0, worked-shiftMs);
         if(S.anyFlag) dayFlags.push({date:r.date, txt:S.missing.join(', ')});
@@ -740,7 +761,7 @@ async function runPayroll(){
       const defaultVale = bal>0 ? Math.min(cfg.weeklyVale, bal) : 0;
       const al = allowancesFor(emp.id);
       computed.push({
-        days: rs, dayFlags, legacyFlags, unknown:!!emp.unknown,
+        days: rs, dayFlags, legacyFlags, hardFlagDays, unknown:!!emp.unknown,
         leavePay, leavePaidDays:leave.paidDays, leaveUnpaidDays:leave.unpaidDays,
         leavePaidDates:leave.paidDates, leaveUnpaidDates:leave.unpaidDates,
         code:emp.code, name:emp.name, dept:emp.dept, homeSite:emp.homeSite,
@@ -787,6 +808,15 @@ function filterFlagged(){
   if(!_flagFilter){ filterPayroll(); return; }
   const cards=document.querySelectorAll('#pr-list .pr-card');
   cards.forEach((c,i)=>{ const f=computed[i]&&computed[i].dayFlags&&computed[i].dayFlags.length>0; c.style.display=f?'':'none'; });
+  const nm=document.getElementById('pr-nomatch'); if(nm) nm.style.display='none';
+}
+let _hardFilter=false;
+// Tapping the "Flagged · ₱0" tile toggles showing only hard-flagged (₱0) cards.
+function filterHardFlagged(){
+  _hardFilter=!_hardFilter;
+  if(!_hardFilter){ filterPayroll(); return; }
+  const cards=document.querySelectorAll('#pr-list .pr-card');
+  cards.forEach((c,i)=>{ const f=computed[i]&&computed[i].hardFlagDays&&computed[i].hardFlagDays.length>0; c.style.display=f?'':'none'; });
   const nm=document.getElementById('pr-nomatch'); if(nm) nm.style.display='none';
 }
 function renderRun(){
@@ -853,6 +883,13 @@ function renderRun(){
       w.innerHTML='\u26A0 <b>MISSING PUNCH \u2014 session pays \u20B10 until fixed:</b> '+r.dayFlags.map(f=>fmtDate(f.date)+' \u2014 missing '+f.txt).join('; ')+'. Use \u270E Edit times to correct.';
       card.insertBefore(w, card.firstChild);
     }
+    // Hard flag: an impossible day pays \u20B10 (day-scoped). Pinned to the very top (most severe).
+    if(r.hardFlagDays && r.hardFlagDays.length){
+      const hw=document.createElement('div');
+      hw.style.cssText='margin:0 0 10px;padding:9px 11px;border-radius:8px;background:#4a0d0d;border:1px solid #ff5a57;color:#ffdedb;font-size:12.5px;font-weight:700;line-height:1.5';
+      hw.innerHTML='\u{1F6AB} <b>FLAGGED \u2014 pays \u20B10 until resolved:</b> '+r.hardFlagDays.map(f=>fmtDate(f.date)+' \u2014 '+f.txt).join('; ')+'. Fix the punches via \u270E Edit times to release pay.';
+      card.insertBefore(hw, card.firstChild);
+    }
   });
   recalcTotals();
   renderAllowPanel();
@@ -917,6 +954,18 @@ function recalcTotals(){
   const mEl=document.getElementById('s-miss'); if(mEl){ mEl.textContent=missN; mEl.style.color=missN>0?'#ffd9d6':''; }
   const mTile=document.getElementById('s-miss-tile');
   if(mTile){ mTile.style.background=missN>0?'#5c1a1a':''; mTile.style.borderColor=missN>0?'#E24B4A':''; }
+  // Hard-flagged (impossible) days pay ₱0 until resolved — loud banner + count before finalize.
+  let flagN=0; const flagList=[];
+  computed.forEach(r=>{ (r.hardFlagDays||[]).forEach(f=>{ flagN++; flagList.push({name:r.name, code:r.code, date:f.date, txt:f.txt}); }); });
+  const fEl=document.getElementById('s-flag'); if(fEl){ fEl.textContent=flagN; fEl.style.color=flagN>0?'#ff8a87':''; }
+  const fTile=document.getElementById('s-flag-tile'); if(fTile){ fTile.style.background=flagN>0?'#4a0d0d':''; fTile.style.borderColor=flagN>0?'#ff5a57':''; }
+  const fb=document.getElementById('flag-banner');
+  if(fb){
+    if(flagN>0){
+      fb.style.cssText='display:block;margin:0 0 12px;padding:11px 13px;border-radius:10px;background:#4a0d0d;border:1px solid #ff5a57;color:#ffdedb;font-size:13px;line-height:1.5';
+      fb.innerHTML='\u{1F6AB} <b>'+flagN+' flagged day'+(flagN===1?'':'s')+' pay ₱0 until resolved.</b> Fix via ✎ Edit times before finalizing:<br>'+flagList.map(f=>'• '+f.name+' ('+f.code+') — '+fmtDate(f.date)+' — '+f.txt).join('<br>');
+    } else { fb.style.display='none'; }
+  }
 }
 
 // ── PAYSLIP ──
@@ -1165,8 +1214,10 @@ function postDeductions(){
   const valeTotal=valeRows.reduce((s,r)=>s+Number(r.valeDeduct),0);
   const allowTotal=allowRows.reduce((s,r)=>s+Number(r.allowDeduct),0);
   const allowCount=allowRows.reduce((s,r)=>s+r.allowIds.length,0);
+  const _flagged=[]; computed.forEach(r=>(r.hardFlagDays||[]).forEach(f=>_flagged.push(r.name+' '+fmtDate(f.date))));
+  const flagWarn=_flagged.length?('\u{1F6AB} '+_flagged.length+" flagged day(s) still pay ₱0 until fixed via Edit times:\n"+_flagged.join(', ')+"\n\n"):'';
   openConfirm('Post deductions',
-    `This will:\n• record ${valeRows.length} cash-advance payment(s) totalling ${peso(valeTotal)}\n• settle ${allowCount} liquidation allowance(s) totalling ${peso(allowTotal)}\nThese reduce balances and mark allowances as deducted (so they won't be deducted again).`,
+    flagWarn+`This will:\n• record ${valeRows.length} cash-advance payment(s) totalling ${peso(valeTotal)}\n• settle ${allowCount} liquidation allowance(s) totalling ${peso(allowTotal)}\nThese reduce balances and mark allowances as deducted (so they won't be deducted again).`,
     async()=>{
       const btn=document.getElementById('post-btn'); btn.disabled=true; btn.innerHTML='<span class="spin"></span> Posting…';
       try{
