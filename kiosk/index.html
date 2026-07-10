@@ -970,14 +970,18 @@ function closeBisayaModal(){ document.getElementById('bisaya-modal').classList.r
 // (v2026-07-07c) Two-button Bisaya confirm for EARLY Lunch Out / PM Break Out with deduction.
 // Padayon → sets earlyBreakConfirmed and re-runs the punch. Kanselahon → aborts, nothing recorded.
 let _bisayaConfirmType=null;
-function openEarlyBisayaConfirm(type){
+function openEarlyBisayaConfirm(type,isNight){
   _bisayaConfirmType=type;
   let msg='';
   if(type==='lunch_out'){
-    msg='⚠ Sayo pa ang Lunch Out — '+fmt12(lunchOutEarlyH,lunchOutEarlyM)+' ang tinuod nga oras. Kung mo-punch ka karon, ang imong BUNTAG maihap lang hangtod karon nga oras — ma-deduct ang kulang. Kung dili ka mobalik og Lunch In hangtod '+fmt12(pmOutEarlyH,pmOutEarlyM)+', ang imong adlaw ma-close dinhi. Padayon?';
+    msg = isNight
+      ? '⚠ Sayo pa ang imong pahulay (meal). Magbukas kini 4 ka oras human sa imong night Time In. Kung mo-punch ka karon, ang imong oras maihap lang hangtod karon — ma-deduct ang kulang. Padayon?'
+      : '⚠ Sayo pa ang Lunch Out — '+fmt12(lunchOutEarlyH,lunchOutEarlyM)+' ang tinuod nga oras. Kung mo-punch ka karon, ang imong BUNTAG maihap lang hangtod karon nga oras — ma-deduct ang kulang. Kung dili ka mobalik og Lunch In hangtod '+fmt12(pmOutEarlyH,pmOutEarlyM)+', ang imong adlaw ma-close dinhi. Padayon?';
   }else if(type==='nightarm'){
-    // (nd Task 4) Self-serve night-duty arming confirm shown inside the arming window.
-    msg="Night duty ka ba karon (" + fmt24(nightShiftH,nightShiftM) + " – " + fmt24(nightEndH,nightEndM) + ")? Ang imong oras maihap gikan sa " + fmt24(nightShiftH,nightShiftM) + ".";
+    // (nd) Self-serve night-duty arming confirm. Each worker's start = NOW (their actual arrival),
+    // and their meal opens at start+4h — no fixed clock time, so it reads back their own numbers.
+    const _m=new Date(Date.now()+MEAL_OUT_OPEN_OFS);
+    msg="Night duty ka ba karon? Ang imong oras magsugod KARON, ug ang imong pahulay (meal) mag-abli mga " + fmt24(_m.getHours(),_m.getMinutes()) + ". Padayon?";
   }else{
     msg='⚠ Sayo pa ang PM Break Out — '+fmt12(pmOutEarlyH,pmOutEarlyM)+' ang tinuod nga oras. Kung mo-punch ka karon, ang imong HAPON maihap lang hangtod karon nga oras — ma-deduct ang kulang. Ug kung DILI ka mobalik, KINI NA ang imong TIME OUT. Padayon?';
   }
@@ -1147,9 +1151,12 @@ const MEAL_HARDCLOSE_OFS=4*3600000+40*60000;  // S+4h40m — night hard close / 
 function mealAt(rec,which,ref){
   const d=ref?new Date(ref):new Date();
   if(rec&&rec.nightShift){
-    d.setHours(nightShiftH,nightShiftM,0,0);
+    // Night meal anchors to THIS worker's actual armed Time-In (+ the same offsets day-lunch uses),
+    // so a crew arming at different vessel-start times each get their own meal window. A 20:00 arm
+    // meals at 00:00 (start+4h) — the cross-midnight remap attaches that punch to the shift's date.
+    const _base=(rec.msMap&&typeof rec.msMap.timein==='number'&&rec.msMap.timein>0)?rec.msMap.timein:d.getTime();
     const ofs=which==='open'?MEAL_OUT_OPEN_OFS:which==='latest'?MEAL_OUT_LATEST_OFS:MEAL_HARDCLOSE_OFS;
-    return new Date(d.getTime()+ofs);
+    return new Date(_base+ofs);
   }
   if(which==='open')       d.setHours(lunchOutEarlyH,lunchOutEarlyM,0,0);   // day 12:00 (configurable)
   else if(which==='latest')d.setHours(lunchOutLatestH,lunchOutLatestM,0,0); // day 12:30 (configurable)
@@ -1163,11 +1170,9 @@ function effectiveStart(rec){
     const aft=new Date(rec.msMap.timein);aft.setHours(lunchOutEarlyH+1,lunchOutEarlyM,0,0);
     return Math.max(aft.getTime(),rec.msMap.timein); // ≥1:00 PM; late afternoon arrivals count from actual
   }
-  // (nd Task 4) Night shift → anchor to the configured night start S instead of the day shiftH/M.
+  // (nd) Night shift → each worker's start is their OWN armed Time-In. Vessel night starts vary per
+  // job, so there is no fixed S to snap to; count hours from their actual punch.
   if(rec.nightShift){
-    const nightStart=new Date(rec.msMap.timein);nightStart.setHours(nightShiftH,nightShiftM,0,0);
-    const nightGraceEnd=new Date(nightStart.getTime()+graceMins*60000);
-    if(rec.msMap.timein<=nightGraceEnd.getTime())return nightStart.getTime();
     return rec.msMap.timein;
   }
   const shiftStart=new Date(rec.msMap.timein);shiftStart.setHours(shiftH,shiftM,0,0);
@@ -1235,21 +1240,20 @@ function calcWorkedPartial(rec){ return calcSessions(rec).worked; }
 function chkLate(ms){const now=new Date(ms),s=new Date(now);s.setHours(shiftH,shiftM,0,0);const g=new Date(s.getTime()+graceMins*60000);return now>g?{late:true,lateMs:now-s}:{late:false,lateMs:0};}
 // (nd Task 4) Night arming window: [S-60min, S+120min] around today's configured night start S.
 function inNightArmWindow(nowMs){
-  // Widened to S−3h (from S−1h): an early night arrival can arm self-serve at the kiosk instead of
-  // waiting on a Telegram approval that may lag. Padayon arms + snap-pays from S; Kanselahon falls
-  // through to the day evening flow. Upper bound stays S+2h. Telegram never gates the night path.
-  const s=new Date(nowMs);s.setHours(nightShiftH,nightShiftM,0,0);
-  return nowMs>=(s.getTime()-10800000)&&nowMs<=(s.getTime()+7200000);
+  // Fixed self-serve arming band 17:30–20:30 — covers the 18:00 and 20:00 vessel-job night starts
+  // plus 30 min slack each side. NOT anchored to a configured start: starts vary per job, and each
+  // worker's meal + pay anchor to their OWN armed Time-In, so no per-night config exists to be set
+  // or gated on the owner, foreman, or Telegram. A worker in this band gets the Bisaya arm confirm.
+  const d=new Date(nowMs); const mins=d.getHours()*60+d.getMinutes();
+  return mins>=(17*60+30) && mins<=(20*60+30);
 }
 // Only for a Time In EARLIER than S−3h — before the night arming window opens — which still reaches
 // the day late-Time-In approval flow. Warn the admin so they don't approve a DAY-type record for
 // someone about to work nights: deny and have them re-punch from S−3h to get the kiosk night confirm.
 function nightArrivalHint(nowMs){
-  const s=new Date(nowMs);s.setHours(nightShiftH,nightShiftM,0,0);
-  const st=s.getTime();
-  if(nowMs<st-10800000){
-    const arm=new Date(st-10800000);
-    return '\n\n🌙 <b>Possibly early for NIGHT DUTY.</b> Configured night start is '+fmt24(nightShiftH,nightShiftM)+'. If this worker is on nights, DENY and have them re-punch from '+fmt24(arm.getHours(),arm.getMinutes())+' (they get the night confirmation at the kiosk). If this is a day-shift late arrival, approve as normal.';
+  const d=new Date(nowMs); const mins=d.getHours()*60+d.getMinutes();
+  if(mins < (17*60+30)){
+    return '\n\n🌙 <b>Possibly early for NIGHT DUTY.</b> Self-serve night arming opens at 5:30 PM. If this worker is on nights, DENY and have them re-punch from 5:30 PM (they get the night confirmation at the kiosk). If this is a day-shift late arrival, approve as normal.';
   }
   return '';
 }
@@ -2264,11 +2268,12 @@ function updBtns(rec){
       // poisoned Time In he never intended. Nobody starts a day shift at midnight, so this only
       // ever fires on a genuine cross-midnight close (yesterday verifiably open).
       let _xOpenY=false;
-      if(_now.getHours()<NIGHT_CLOSE_CUTOFF_H){
-        const _yy=new Date(_now);_yy.setDate(_yy.getDate()-1);
+      { const _yy=new Date(_now);_yy.setDate(_yy.getDate()-1);
         const _yyk=_yy.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
         const _yyr=records[rec.code+'_'+_yyk];
-        _xOpenY=!!(_yyr&&_yyr.punches&&_yyr.punches.timein&&!_yyr.punches.timeout);
+        const _yOpen=!!(_yyr&&_yyr.punches&&_yyr.punches.timein&&!_yyr.punches.timeout);
+        // day-OT close window is <4 AM; a NIGHT shift crosses midnight for its meal/time-out → <7 AM
+        _xOpenY=_yOpen&&(_yyr.nightShift?(_now.getHours()<7):(_now.getHours()<NIGHT_CLOSE_CUTOFF_H));
       }
       if(_xOpenY){ const _tb=document.getElementById(BIDS['timein']); if(_tb)_tb.classList.remove('highlight-next'); }
       else if(!(amOk||pmOk||nightOk||lateFlow))_lock('timein');
@@ -2310,13 +2315,17 @@ function updBtns(rec){
         const sdOk=!!rec.straightDutyPm&&_now>=_wAt(pmOutEarlyH,pmOutEarlyM);
         if(!(hasPmIn||sdOk||utOk))_lock('timeout');
       }
-      // Cross-midnight OT: before 4 AM with YESTERDAY's shift still open, Time Out is the
-      // valid punch (it attaches to yesterday) — enable it even though today is empty.
-      if(!rec.punches.timein&&_now.getHours()<NIGHT_CLOSE_CUTOFF_H){
+      // Cross-midnight: with YESTERDAY's shift still open, the valid punch attaches to yesterday —
+      // enable/highlight it even though today is empty. Day-OT (<4 AM) → Time Out closes yesterday.
+      // Night (<7 AM) → yesterday's next expected punch: meal-out → meal-in → time-out.
+      if(!rec.punches.timein){
         const _y=new Date(_now);_y.setDate(_y.getDate()-1);
         const _yk=_y.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
         const _yr=records[rec.code+'_'+_yk];
-        if(_yr&&_yr.punches&&_yr.punches.timein&&!_yr.punches.timeout)_open('timeout',true);
+        if(_yr&&_yr.punches&&_yr.punches.timein&&!_yr.punches.timeout){
+          if(_yr.nightShift&&_now.getHours()<7){ _open(getNext(_yr)||'timeout',true); }
+          else if(!_yr.nightShift&&_now.getHours()<NIGHT_CLOSE_CUTOFF_H){ _open('timeout',true); }
+        }
       }
     }
   }
@@ -2329,21 +2338,31 @@ function updBtns(rec){
 async function punch(type){
   if(!curEmp){showMsg('err','No employee selected','Please enter your 6-digit PIN first.');return;}
   const emp=curEmp; let rec=getRec(emp.code), next=getNext(rec);
-  // Cross-midnight OT close: in the 00:00–03:59 window, with YESTERDAY's shift still open and
-  // today's record empty, the worker is closing an 8 AM→past-midnight OT day — NOT starting a new
-  // one. Both a Time Out press AND a mistaken Time In press (the fresh day highlights Time In, and
-  // hour 0 slips past the 1 AM dead zone) belong to yesterday. Coerce the Time In to the cross-
-  // midnight Time Out so the punch attaches to yesterday and NO poisoned 00:00 Time In is written
-  // on the new date (which would leave yesterday open and block the worker at 8 AM / flag him late
-  // at noon / refuse him at 1 PM). Intent is unambiguous: nobody starts a day shift at midnight,
-  // and this only fires when yesterday is verifiably open (timein present, timeout absent).
+  // ── Cross-midnight punch routing ──────────────────────────────────────────────────────────────
+  // Today's record is empty but YESTERDAY's shift is still open, and it's past midnight. Route the
+  // punch to yesterday instead of writing a poisoned new-date record:
+  //  • DAY-OT worker (non-night): a 00:00–03:59 Time In/Out press CLOSES yesterday (Time Out). This
+  //    is the midnight-poison guard — unchanged. Nobody starts a day shift at midnight, and it only
+  //    fires when yesterday is verifiably open (timein present, timeout absent). A mistaken Time In
+  //    is coerced to Time Out so the fresh-day highlight can't strand an 8 AM→past-midnight worker.
+  //  • NIGHT worker: the shift legitimately runs past midnight to ~06:00, and its meal (armed
+  //    start+4h, e.g. a 20:00 start meals at 00:00) and Time Out fall after midnight. Route the
+  //    press to yesterday's NEXT expected punch — meal-out → meal-in → time-out — up to 7 AM (when
+  //    the day Time-In window opens). A mistaken Time In tap is coerced the same way.
   let _crossMidnight=false, _crossKey=null, _missedKeys=null;
-  if((type==='timeout'||type==='timein') && !rec.punches.timein && new Date().getHours() < NIGHT_CLOSE_CUTOFF_H){
+  if(!rec.punches.timein && (type==='timein'||type==='timeout'||type==='lunch_out'||type==='lunch_in')){
     const _y=new Date(); _y.setDate(_y.getDate()-1);
     const _yk=_y.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
     const _yr=records[emp.code+'_'+_yk];
     if(_yr && _yr.punches && _yr.punches.timein && !_yr.punches.timeout){
-      type='timeout'; rec=_yr; next=getNext(rec); _crossMidnight=true; _crossKey=_yk;
+      const _h=new Date().getHours();
+      if(_yr.nightShift && _h<7){
+        // night shift crossing midnight → its own next expected punch (meal-out/-in, then time-out)
+        rec=_yr; _crossMidnight=true; _crossKey=_yk; next=getNext(rec); type=next||'timeout';
+      }else if(!_yr.nightShift && (type==='timein'||type==='timeout') && _h<NIGHT_CLOSE_CUTOFF_H){
+        // day-OT close (midnight-poison guard) — unchanged
+        rec=_yr; _crossMidnight=true; _crossKey=_yk; type='timeout'; next=getNext(rec);
+      }
     }
   }
   // (nd Task 4) Self-serve night arming at Time In — inside the arming window [S-1h, S+2h]
@@ -2563,7 +2582,7 @@ async function punch(type){
   // (v2026-07-07c) Early break-out: Bisaya confirm with deduction warning (Padayon/Kanselahon)
   if(type==='lunch_out'&&!earlyBreakConfirmed){
     const threshold=mealAt(rec,'open',now);                      // (nd Task 5) day 12:00 (configurable); night S+4h
-    if(now<threshold){openEarlyBisayaConfirm('lunch_out');return;}
+    if(now<threshold){openEarlyBisayaConfirm('lunch_out',!!rec.nightShift);return;}
   }
   if(type==='pm_out'){
     // Floor: PM Break Out never before 1:01 PM.
@@ -2613,22 +2632,16 @@ async function punch(type){
   // Genuinely-late arrivals keep their actual time (and lose hours).
   const _snapAt=(h,m)=>{const d=new Date(nowMs);d.setHours(h,m,0,0);return d.getTime();};
   const _snapSet=(ms)=>{recordMs=ms;recordStr=new Date(ms).toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});};
-  if(type==='timein'){
-    if(rec.nightShift){
-      // (nd Task 4) Early arrivals from S-1h and within-grace arrivals snap-pay from S;
-      // later than grace keeps the actual punch time (isLate/lateMs already computed above).
-      const _nightStart=_snapAt(nightShiftH,nightShiftM);
-      const _nightGraceEnd=_nightStart+graceMins*60000;
-      if(nowMs<=_nightGraceEnd)_snapSet(_nightStart);
-    }else{
-      const _shiftStart=_snapAt(shiftH,shiftM);                     // morning clock-in (shift start)
-      const _aftOpen=_snapAt(lunchInEarliestH,lunchInEarliestM);    // 12:40
-      const _aftStart=_snapAt(lunchOutEarlyH+1,lunchOutEarlyM);     // 1:00 afternoon open
-      if(nowMs<_shiftStart)_snapSet(_shiftStart);                   // early (before shift start) → shift start
-      else if(nowMs>=_aftOpen&&nowMs<_aftStart)_snapSet(_aftStart); // 12:40–12:59 → 1:00
-      // grace/late and afternoon-late keep their actual time
-    }
+  if(type==='timein' && !rec.nightShift){
+    const _shiftStart=_snapAt(shiftH,shiftM);                     // morning clock-in (shift start)
+    const _aftOpen=_snapAt(lunchInEarliestH,lunchInEarliestM);    // 12:40
+    const _aftStart=_snapAt(lunchOutEarlyH+1,lunchOutEarlyM);     // 1:00 afternoon open
+    if(nowMs<_shiftStart)_snapSet(_shiftStart);                   // early (before shift start) → shift start
+    else if(nowMs>=_aftOpen&&nowMs<_aftStart)_snapSet(_aftStart); // 12:40–12:59 → 1:00
+    // grace/late and afternoon-late keep their actual time
   }
+  // (nd) A night arrival keeps its ACTUAL Time-In — vessel starts vary, so there is no fixed start
+  // to snap to; each worker's own armed Time-In anchors their meal (start+4h) and pay (Phase 2).
   if(type==='lunch_out'){
     const _lo=mealAt(rec,'open',nowMs).getTime();                // (nd Task 5) day 12:00 (configurable); night S+4h
     const _ll=mealAt(rec,'latest',nowMs).getTime();              // day 12:30 (configurable); night S+4h30m
@@ -2662,10 +2675,9 @@ async function punch(type){
     // (nd Task 4) Night lateness is measured from the configured night start S, never from
     // the day shiftH/M — avoids a false "late vs 8 AM" for a night-arming worker.
     if(rec.nightShift){
-      const _ns=new Date(nowMs);_ns.setHours(nightShiftH,nightShiftM,0,0);
-      const _ng=new Date(_ns.getTime()+graceMins*60000);
-      const _nowD=new Date(nowMs);
-      isLate=_nowD>_ng;lateMs=isLate?(_nowD-_ns):0;
+      // (nd) A self-arming night worker defines their own start (their armed Time-In), so there is
+      // no fixed start to be "late" against — never flag night lateness.
+      isLate=false;lateMs=0;
     }else{
       const r=chkLate(nowMs);isLate=r.late;lateMs=r.lateMs;
     }
@@ -4697,7 +4709,12 @@ async function loadShiftFromCloud(){
   try{
     const { data, error } = await sbClient.from('settings').select('key,value').in('key',['shift_start','dismissal','night_shift_start','night_shift_end']);
     if(error) throw error;
-    const map={}; (data||[]).forEach(r=>map[r.key]=r.value);
+    // Tolerate a setting saved with stray wrapping quotes/whitespace (e.g. a table-editor value
+    // stored as the JSON string "18:00" instead of 18:00). Strip them BEFORE the HH:MM checks so a
+    // malformed value can never again silently fail the regex, fall back to the default, and strand
+    // the night crew outside the arming window.
+    const _clean=v=>String(v==null?'':v).trim().replace(/^["']+|["']+$/g,'').trim();
+    const map={}; (data||[]).forEach(r=>map[r.key]=_clean(r.value));
     let applied=false;
     if(map.shift_start&&/^\d{1,2}:\d{2}$/.test(map.shift_start)){const p=map.shift_start.split(':');const h=+p[0],m=+p[1];if(h>=0&&h<24&&m>=0&&m<60){shiftH=h;shiftM=m;applied=true;}}
     // Reject a past-midnight dismissal (<= shift start): it crosses midnight and would make the
