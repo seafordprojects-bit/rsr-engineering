@@ -4,6 +4,13 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Roll-call</title>
+<meta name="theme-color" content="#2f5d8a" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Roll-call" />
+<link rel="manifest" href="roll-call.webmanifest" />
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='512'%20height='512'%3E%3Crect%20width='512'%20height='512'%20rx='96'%20fill='%232f5d8a'/%3E%3Cpath%20d='M150%20260l70%2070%20150-150'%20fill='none'%20stroke='%23fff'%20stroke-width='36'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E" />
 <style>
   :root{
     --ink:#1c2230; --muted:#6b7280; --line:#e3e6ec; --paper:#ffffff;
@@ -63,6 +70,19 @@
   .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:20px 0;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
   .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
   .msg{margin:0 0 12px;font-size:13px;padding:9px 11px;border-radius:9px;background:var(--warnbg);color:var(--warn);border:1px solid #f0d9bf}
+
+  .gate{max-width:340px;margin:6vh auto 0;text-align:center;background:var(--paper);border:1px solid var(--line);
+        border-radius:var(--radius);padding:26px 22px}
+  .gate .gicon{font-size:40px;line-height:1;margin-bottom:8px}
+  .gate h2{font-size:18px;margin:6px 0 4px}
+  .gate p{color:var(--muted);font-size:13.5px;margin:0 0 14px}
+  .gate .gpin{width:100%;padding:14px;font-size:20px;text-align:center;letter-spacing:4px;
+        border:1px solid var(--line);border-radius:12px;background:#fcfcfd;font-family:inherit}
+  .gate .gerr{color:var(--warn);background:var(--warnbg);border:1px solid #f0d9bf;border-radius:9px;
+        padding:8px 10px;font-size:13px;margin-top:11px}
+  .gate .gbtn{width:100%;margin-top:14px;padding:14px;font-size:16px;font-weight:700;color:#fff;
+        background:var(--steel);border:none;border-radius:12px}
+  .gate .gbtn:disabled{opacity:.6}
 </style>
 <script type="importmap">
 {
@@ -94,6 +114,98 @@
     import { sb, CHECKPOINTS, HOURS_PER_CHECKPOINT, loadEmployees, todayLocal, ymd, addDays,
              upsertJobProgress, loadJobProgressFor } from "./config.js";
     const html = htm.bind(h);
+
+    // --- settings helpers (mirror home.js select-then-update-or-insert) ---
+    async function getSetting(key){
+      const { data } = await sb.from("settings").select("value").eq("key", key).limit(1);
+      return data && data.length ? data[0].value : null;
+    }
+    async function setSetting(key, value){
+      const { data } = await sb.from("settings").select("id").eq("key", key).limit(1);
+      if (data && data.length) { await sb.from("settings").update({ value }).eq("key", key); }
+      else { await sb.from("settings").insert({ key, value }); }
+    }
+    const DEVKEY = "rsr_rollcall_device";
+    function newToken(){
+      try { if (crypto && crypto.randomUUID) return crypto.randomUUID(); } catch(_){}
+      return String(Date.now()) + "-" + Math.round(Math.random() * 1e9);
+    }
+
+    // --- passcode + one-device gate that wraps the roll-call app ---
+    function Gate(){
+      const [phase, setPhase] = useState("checking"); // checking|blocked|nopin|need|ok
+      const [pin, setPin] = useState("");
+      const [err, setErr] = useState("");
+      const [busy, setBusy] = useState(false);
+
+      useEffect(() => { (async () => {
+        try {
+          const localTok = localStorage.getItem(DEVKEY);
+          const [regId, cfgPin] = await Promise.all([
+            getSetting("roll_call_device_id"), getSetting("roll_call_pin"),
+          ]);
+          if (regId && localTok !== regId) { setPhase("blocked"); return; }
+          if (!cfgPin) { setPhase("nopin"); return; }
+          setPhase("need");
+        } catch (e) {
+          setErr("Could not reach the server. Check the connection and reload.");
+          setPhase("need");
+        }
+      })(); }, []);
+
+      async function submit(e){
+        if (e && e.preventDefault) e.preventDefault();
+        if (busy) return;
+        setErr("");
+        const entry = pin.trim();
+        if (!entry) { setErr("Enter the passcode."); return; }
+        setBusy(true);
+        try {
+          const cfgPin = await getSetting("roll_call_pin");
+          if (!cfgPin) { setBusy(false); setPhase("nopin"); return; }
+          if (entry !== String(cfgPin)) { setBusy(false); setErr("Wrong passcode."); setPin(""); return; }
+          // passcode correct — enforce / claim the one-device lock
+          const regId = await getSetting("roll_call_device_id");
+          let localTok = localStorage.getItem(DEVKEY);
+          if (regId && localTok !== regId) { setBusy(false); setPhase("blocked"); return; }
+          if (!regId) {
+            const tok = localTok || newToken();
+            localStorage.setItem(DEVKEY, tok);
+            await setSetting("roll_call_device_id", tok);
+          }
+          setBusy(false); setPhase("ok");
+        } catch (err) {
+          setBusy(false); setErr("Could not verify: " + err.message);
+        }
+      }
+
+      if (phase === "checking") return html`<div class="loading">Checking device&hellip;</div>`;
+      if (phase === "ok") return html`<${App} />`;
+      if (phase === "blocked") return html`
+        <div class="gate">
+          <div class="gicon">⛔</div>
+          <h2>This phone isn't the roll-call device</h2>
+          <p>Roll-call is locked to one registered phone. Ask the admin to reset the roll-call device
+             (Admin &rarr; Settings &rarr; Roll-call phone) if this phone should take over.</p>
+        </div>`;
+      if (phase === "nopin") return html`
+        <div class="gate">
+          <div class="gicon">\u{1F512}</div>
+          <h2>Roll-call passcode not set</h2>
+          <p>Ask the admin to set the roll-call passcode in Admin &rarr; Settings &rarr; Roll-call phone,
+             then reload this page.</p>
+        </div>`;
+      return html`
+        <form class="gate" onSubmit=${submit}>
+          <div class="gicon">\u{1F4F1}</div>
+          <h2>Roll-call</h2>
+          <p>Enter the roll-call passcode.</p>
+          <input class="gpin" type="password" inputmode="numeric" autocomplete="off" value=${pin}
+                 onInput=${e => setPin(e.target.value)} placeholder="passcode" autofocus />
+          ${err && html`<div class="gerr">${err}</div>`}
+          <button class="gbtn" type="submit" disabled=${busy}>${busy ? "Checking…" : "Unlock"}</button>
+        </form>`;
+    }
 
     const cpMinutes = (code) => { const [h,m]=code.split(":").map(Number); return h*60+m; };
     function nearestCheckpoint(){
@@ -313,7 +425,7 @@
       `;
     }
 
-    render(html`<${App} />`, document.getElementById("app"));
+    render(html`<${Gate} />`, document.getElementById("app"));
   </script>
 </body>
 </html>

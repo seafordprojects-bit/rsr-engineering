@@ -688,6 +688,8 @@ function App() {
   const [coordPin, setCoordPin] = useState('');
   const [sitePin, setSitePin] = useState('');
   const [ownerPin, setOwnerPin] = useState('');
+  const [rollPin, setRollPin] = useState('');
+  const [rollDev, setRollDev] = useState(null);
   const [tgTokenV, setTgTokenV] = useState('');
   const [tgGroupV, setTgGroupV] = useState('');
   const [tgBackupV, setTgBackupV] = useState('');
@@ -731,6 +733,16 @@ function App() {
   const saveSitePin = async () => {
     if (!sitePin.trim()) { flash('Enter a passcode'); return; }
     try { await setSetting('issuance_pin', sitePin.trim()); setSitePin(''); flash('Issuance passcode set'); }
+    catch (e) { flash('Error: ' + e.message); }
+  };
+  const saveRollPin = async () => {
+    if (!rollPin.trim()) { flash('Enter a passcode'); return; }
+    try { await setSetting('roll_call_pin', rollPin.trim()); setRollPin(''); flash('Roll-call passcode set'); }
+    catch (e) { flash('Error: ' + e.message); }
+  };
+  const resetRollDevice = async () => {
+    if (!confirm('Un-register the current roll-call phone? The next phone to enter the passcode becomes the roll-call device.')) return;
+    try { await setSetting('roll_call_device_id', ''); setRollDev(''); flash('Roll-call device cleared — next phone will register'); }
     catch (e) { flash('Error: ' + e.message); }
   };
   const saveOwnerPin = async () => {
@@ -871,12 +883,14 @@ function App() {
     if (!(authed && showSet) || tgLoaded) return;
     (async () => {
       try {
-        const [tok, grp, bak, ss, dis, ns, ne] = await Promise.all([
+        const [tok, grp, bak, ss, dis, ns, ne, rdev] = await Promise.all([
           getSetting('tg_token'), getSetting('tg_group'), getSetting('tg_backup_group'),
           getSetting('shift_start'), getSetting('dismissal'),
           getSetting('night_shift_start'), getSetting('night_shift_end'),
+          getSetting('roll_call_device_id'),
         ]);
         setTgTokenV(tok || ''); setTgGroupV(grp || ''); setTgBackupV(bak || ''); setTgLoaded(true);
+        setRollDev(rdev || '');
         if (ss) setShiftStartV(ss); if (dis) setDismissalV(dis);
         if (ns) setNightStart(ns); if (ne) setNightEnd(ne);
       } catch (_) {}
@@ -949,6 +963,11 @@ function App() {
           <div class="ico">📦</div>
           <h3>Issuance</h3>
           <div class="unit">Tool inventory & material issuance</div>
+        </a>
+        <a class="tile" href="./monitoring/">
+          <div class="ico">📊</div>
+          <h3>Job Monitoring</h3>
+          <div class="unit">Job orders, roll-call & schedules</div>
         </a>
       </div>
       <p class="note" style="text-align:center;margin-top:6px">RSR Engineering Services · Cebu</p>
@@ -1480,6 +1499,17 @@ function App() {
         </div>
 
         <div class="card">
+          <div class="sectlabel" style="margin-top:0">Roll-call phone</div>
+          <p class="note" style="margin:0 0 12px">The passcode for the dedicated roll-call phone, plus its one-device lock. The first phone to enter the passcode becomes THE roll-call device; other phones are refused with a "see admin" note.</p>
+          <${Field} label="Set / change roll-call passcode">
+            <input type="password" inputmode="numeric" value=${rollPin} onInput=${e => setRollPin(e.target.value)} placeholder="e.g. 2468" />
+          <//>
+          <button class="btn" onClick=${saveRollPin}>Save roll-call passcode</button>
+          <p class="note" style="margin:12px 0 6px">Registered device: <strong>${rollDev === null ? '…' : (rollDev ? 'one phone registered' : 'none yet')}</strong></p>
+          <button class="btn" style="background:#fbf3e8;color:#b4540a;border-color:#f0d9bf" disabled=${!rollDev} onClick=${resetRollDevice}>Reset roll-call device (for phone replacement)</button>
+        </div>
+
+        <div class="card">
           <div class="sectlabel" style="margin-top:0">Owner passcode (incentive approval)</div>
           <p class="note" style="margin:0 0 12px">No default — set your own. Required to approve incentive pay on closed job orders.</p>
           <${Field} label="Set / change owner passcode">
@@ -1618,6 +1648,16 @@ function App() {
           { ico:'🛒', num:m.poInbox, unit:'to purchase', title:'Purchasing', href:'../purchasing/' },
           { ico:'💵', num:null, unit:'weekly', title:'Payroll', href:'../payroll/' },
           { ico:'📊', num:null, unit:'close & approve jobs', title:'Job Monitoring', onClick:() => setAdminTab('monitoring') },
+        ].map(t => html`<${Tile} ...${t} />`)}
+      </div>
+
+      <div class="sectlabel">Job monitoring · reports & setup</div>
+      <div class="grid">
+        ${[
+          { ico:'📈', num:null, unit:'estimate vs actual', title:'Monitor', href:'../monitoring/monitor.html' },
+          { ico:'📋', num:null, unit:'rates & factors', title:'Work Tariff', href:'../monitoring/tariff.html' },
+          { ico:'🔄', num:null, unit:'cross-check clocks', title:'Reconcile', href:'../monitoring/reconcile.html' },
+          { ico:'🩺', num:null, unit:'data quality', title:'KPI diagnostic', href:'../monitoring/diagnostic.html' },
         ].map(t => html`<${Tile} ...${t} />`)}
       </div>
 
