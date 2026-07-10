@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-10b</span>
+        <span id="version-stamp">v2026-07-10c</span>
       </div>
     </div>
   </div>
@@ -2256,7 +2256,22 @@ function updBtns(rec){
       const pmOk=_now>=_wAt(lunchInEarliestH,lunchInEarliestM)&&_now<_wAt(timeInPmCloseH,timeInPmCloseM);
       const nightOk=_now.getHours()<1;
       const lateFlow=_now>=_wAt(endH,endM);
-      if(!(amOk||pmOk||nightOk||lateFlow))_lock('timein');
+      // Cross-midnight guard: if YESTERDAY's shift is still open and it's before the 4 AM cutoff,
+      // this empty "today" is really a pending cross-midnight Time Out. Drop Time In's highlight so
+      // the Time Out button below is the clear call-to-action — but keep Time In PRESSABLE, because
+      // punch()'s coercion turns a mistaken 00:00 Time In tap into the cross-midnight Time Out. A
+      // *disabled* button would swallow the tap and strand an 8 AM→past-midnight OT worker with a
+      // poisoned Time In he never intended. Nobody starts a day shift at midnight, so this only
+      // ever fires on a genuine cross-midnight close (yesterday verifiably open).
+      let _xOpenY=false;
+      if(_now.getHours()<NIGHT_CLOSE_CUTOFF_H){
+        const _yy=new Date(_now);_yy.setDate(_yy.getDate()-1);
+        const _yyk=_yy.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
+        const _yyr=records[rec.code+'_'+_yyk];
+        _xOpenY=!!(_yyr&&_yyr.punches&&_yyr.punches.timein&&!_yyr.punches.timeout);
+      }
+      if(_xOpenY){ const _tb=document.getElementById(BIDS['timein']); if(_tb)_tb.classList.remove('highlight-next'); }
+      else if(!(amOk||pmOk||nightOk||lateFlow))_lock('timein');
     }
     // Lunch In: 12:40–5:00 PM. (nd Task 5) Night meal-in has no upper close — a late return
     // is still credited at actual punch time (see punch()'s lunch_in earliest/close guard).
@@ -2314,15 +2329,21 @@ function updBtns(rec){
 async function punch(type){
   if(!curEmp){showMsg('err','No employee selected','Please enter your 6-digit PIN first.');return;}
   const emp=curEmp; let rec=getRec(emp.code), next=getNext(rec);
-  // Cross-midnight OT close: an early-morning Time Out with no Time In today, while
-  // YESTERDAY's shift is still open, belongs to yesterday — attach it there, don't refuse it.
+  // Cross-midnight OT close: in the 00:00–03:59 window, with YESTERDAY's shift still open and
+  // today's record empty, the worker is closing an 8 AM→past-midnight OT day — NOT starting a new
+  // one. Both a Time Out press AND a mistaken Time In press (the fresh day highlights Time In, and
+  // hour 0 slips past the 1 AM dead zone) belong to yesterday. Coerce the Time In to the cross-
+  // midnight Time Out so the punch attaches to yesterday and NO poisoned 00:00 Time In is written
+  // on the new date (which would leave yesterday open and block the worker at 8 AM / flag him late
+  // at noon / refuse him at 1 PM). Intent is unambiguous: nobody starts a day shift at midnight,
+  // and this only fires when yesterday is verifiably open (timein present, timeout absent).
   let _crossMidnight=false, _crossKey=null, _missedKeys=null;
-  if(type==='timeout' && !rec.punches.timein && new Date().getHours() < NIGHT_CLOSE_CUTOFF_H){
+  if((type==='timeout'||type==='timein') && !rec.punches.timein && new Date().getHours() < NIGHT_CLOSE_CUTOFF_H){
     const _y=new Date(); _y.setDate(_y.getDate()-1);
     const _yk=_y.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
     const _yr=records[emp.code+'_'+_yk];
     if(_yr && _yr.punches && _yr.punches.timein && !_yr.punches.timeout){
-      rec=_yr; next=getNext(rec); _crossMidnight=true; _crossKey=_yk;
+      type='timeout'; rec=_yr; next=getNext(rec); _crossMidnight=true; _crossKey=_yk;
     }
   }
   // (nd Task 4) Self-serve night arming at Time In — inside the arming window [S-1h, S+2h]
