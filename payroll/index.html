@@ -127,7 +127,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub">Weekly Payroll · v2026-07-09a</div>
+    <div class="app-sub">Weekly Payroll · v2026-07-10a</div>
   </div>
 
   <div class="tabs">
@@ -443,6 +443,9 @@ function toISO(s){
   if(m) return m[3]+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0');
   const d=new Date(s); return isNaN(d)?s:isoOf(d);
 }
+// Canonical employee-code key for cross-source matching: uppercase + strip all
+// whitespace ('rsr 0009' == 'RSR 0009' == 'RSR0009'). Never rewrites a stored code.
+const normCode=c=>String(c==null?'':c).toUpperCase().replace(/\s+/g,'');
 function fmtDate(iso){const d=new Date(iso+'T00:00:00');return d.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});}
 function dowOf(iso){const d=new Date(iso+'T00:00:00');return d.toLocaleDateString('en-PH',{weekday:'long'});}
 
@@ -481,8 +484,8 @@ async function loadToday(){
     document.getElementById('today-date').textContent=fmtDate(todayISO);
     const { data } = await sb.from('attendance_records').select('*').order('created_at',{ascending:false}).limit(800);
     const recs=(data||[]).filter(r=>toISO(r.date)===todayISO);
-    const byCode={}; recs.forEach(r=>{ if(!byCode[r.employee_code]) byCode[r.employee_code]=r; });
-    todayRows=employees.map(e=>({ e, r:byCode[e.code]||null }));
+    const byCode={}; recs.forEach(r=>{ const k=normCode(r.employee_code); if(!byCode[k]) byCode[k]=r; });
+    todayRows=employees.map(e=>({ e, r:byCode[normCode(e.code)]||null }));
     todayRows.sort((a,b)=>{
       const ai=a.r&&a.r.timein, bi=b.r&&b.r.timein;
       if(ai&&!bi) return -1; if(!ai&&bi) return 1;
@@ -627,7 +630,8 @@ function allowancesFor(empId){
 
 // outstanding balance for an employee = advances - payments
 function outstanding(code){
-  return advances.filter(a=>a.employee_code===code)
+  const k=normCode(code);
+  return advances.filter(a=>normCode(a.employee_code)===k)
     .reduce((s,a)=> s + (a.type==='payment' ? -Number(a.amount) : Number(a.amount)), 0);
 }
 
@@ -678,8 +682,7 @@ async function runPayroll(){
       recs=(res.data||[]).filter(r=>{ const i=toISO(r.date); return i>=from && i<=to; });
     }catch(e){ msg('run-msg','err','Could not load attendance: '+(e.message||e)); recs=[]; }
 
-    // group by NORMALISED employee_code ('rsr 0009' == 'RSR 0009' == 'RSR0009')
-    const normCode=c=>String(c||'').toUpperCase().replace(/\s+/g,'');
+    // group by NORMALISED employee_code (shared normCode helper): 'rsr 0009' == 'RSR 0009' == 'RSR0009'
     const byEmp={};
     recs.forEach(r=>{ const k=normCode(r.employee_code); (byEmp[k]=byEmp[k]||[]).push(r); });
 

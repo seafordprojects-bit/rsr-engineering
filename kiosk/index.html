@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-08a</span>
+        <span id="version-stamp">v2026-07-10a</span>
       </div>
     </div>
   </div>
@@ -1110,6 +1110,13 @@ function lkey(t){return t==='Vacation Leave'?'VL':t==='Sick Leave'?'SL':t==='Lea
 function siteName(s){return s==='A'?siteAName:siteBName;}
 function getRec(code){const k=code+'_'+todayKey();if(!records[k])records[k]={code,punches:{},msMap:{},isLate:false,lateMs:0,photos:{},clockedSite:null,hasAllowance:false,allowanceAmt:0,nightShift:false};return records[k];}
 function findEmp(code){return employees.find(e=>e.pin&&e.pin===code);}
+// Canonical employee-code key: uppercase + strip all whitespace ('rsr 0002'/'RSR0002' → 'RSR0002').
+// Used ONLY to match codes arriving from OTHER Supabase tables (leave, straight-duty, late-break,
+// admin approvals, roster sync) against the local roster — it never rewrites a stored code.
+function normCode(c){return String(c==null?'':c).toUpperCase().replace(/\s+/g,'');}
+// Resolve an external code to the EXACT roster code string it matches, so downstream '==='
+// comparisons against curEmp.code / record keys keep working. Falls back to the input if unmatched.
+function resolveCode(c){const n=normCode(c);const e=employees.find(x=>normCode(x.code)===n);return e?e.code:c;}
 function getStatus(rec){if(!rec.punches.timein)return'absent';if(rec.punches.timeout)return'out';for(const[bo,bi]of BPAIRS)if(rec.punches[bo]&&!rec.punches[bi])return'break';return rec.isLate?'late':'working';}
 function isIncomplete(rec){return !!(rec.punches.timein&&!rec.punches.timeout);}
 function getNext(rec){
@@ -4743,7 +4750,7 @@ async function pollAdminApprovals(){
       const key=r.id+'_'+r.status;
       if(handledApprovals.has(key))return;
       handledApprovals.add(key);
-      const code=r.employee_code;
+      const code=resolveCode(r.employee_code);
       if(r.status==='Approved'){
         incompleteTimeInRequests[code]={approved:true,pending:false};
         if(curEmp&&curEmp.code===code){
@@ -4943,7 +4950,7 @@ async function loadEmployeesFromSupabase() {
           pin: se.pin || '',
           balance: { VL: se.vl_balance ?? 2, SL: se.sl_balance ?? 2 }
         };
-        const existing = employees.find(e => e.code === se.code);
+        const existing = employees.find(e => normCode(e.code) === normCode(se.code));
         if (existing) {
           Object.assign(existing, fresh); // server wins on profile fields; local-only fields untouched
         } else {
@@ -4962,10 +4969,10 @@ async function loadLeavesFromSupabase() {
     const { data } = await sbClient.from('leave_requests').select('*').order('created_at', { ascending: false }).limit(200);
     if (data && data.length > 0) {
       data.forEach(sl => {
-        const existing = leaveRequests.find(r => r.code === sl.employee_code && r.startDate === sl.start_date && r.type === sl.type);
+        const existing = leaveRequests.find(r => normCode(r.code) === normCode(sl.employee_code) && r.startDate === sl.start_date && r.type === sl.type);
         if (!existing) {
           leaveRequests.push({
-            id: sl.id, code: sl.employee_code, name: sl.employee_name,
+            id: sl.id, code: resolveCode(sl.employee_code), name: sl.employee_name,
             type: sl.type, startDate: sl.start_date, endDate: sl.end_date,
             days: sl.days, reason: sl.reason, status: sl.status,
             filedBy: sl.filed_by, filed: sl.filed_on
@@ -4996,11 +5003,12 @@ async function loadApprovedLateBreaks() {
     if (!data || !data.length) return;
     data.forEach(lb => {
       const store = lb.break_type === 'pm_out' ? latePmOutRequests : lb.break_type === 'timein' ? lateTimeInRequests : lateLunchRequests;
+      const ec = resolveCode(lb.employee_code);
       if (lb.status === 'Approved') {
-        store[lb.employee_code] = { pending: false, approved: true, empCode: lb.employee_code, empName: lb.employee_name };
+        store[ec] = { pending: false, approved: true, empCode: ec, empName: lb.employee_name };
       } else if (lb.status === 'Rejected') {
         // rejected: clear any pending so the kiosk re-asks (penalty stands)
-        if (store[lb.employee_code] && !store[lb.employee_code].approved) delete store[lb.employee_code];
+        if (store[ec] && !store[ec].approved) delete store[ec];
       }
     });
   } catch(e) { console.warn('Load approved late breaks:', e); }
@@ -5016,7 +5024,7 @@ async function loadApprovedStraightDuties() {
     if (!data || !data.length) return;
     let changed = false;
     data.forEach(sd => {
-      const code = sd.employee_code, date = sd.date;
+      const code = resolveCode(sd.employee_code), date = sd.date;
       if (!code || !date) return;
       const key = code + '_' + date;
       // ensure a record exists for that employee+date
