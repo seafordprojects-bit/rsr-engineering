@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-11a</span>
+        <span id="version-stamp">v2026-07-11b</span>
       </div>
     </div>
   </div>
@@ -5112,7 +5112,7 @@ async function pushRecord(empCode, date){
       is_late: rec.isLate || false, late_ms: rec.lateMs || 0, worked_ms: workedMs, ot_ms: otMs,
       has_ot_allowance: rec.hasOTAllowance || false, has_away_allowance: rec.hasAllowance || false,
       is_incomplete: isIncomplete, straight_duty_lunch: rec.straightDutyLunch || false,
-      straight_duty_pm: rec.straightDutyPm || false, status: status
+      straight_duty_pm: rec.straightDutyPm || false, night_shift: rec.nightShift || false, status: status
     };
     // Single atomic upsert keyed on the (employee_code, date) unique constraint
     // (uniq_attendance_emp_date): updates that employee's row for the day, or
