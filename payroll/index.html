@@ -109,6 +109,15 @@ select.field-input{appearance:none}
 }
 .spin{display:inline-block;width:14px;height:14px;border:2px solid #ccc;border-top-color:#378ADD;border-radius:50%;animation:sp .7s linear infinite;vertical-align:middle}
 @keyframes sp{to{transform:rotate(360deg)}}
+/* Edit-times punch row: the six fields wrap on phones; on wider screens the edit
+   modal grows and the fields sit on ONE true row (see @media below). */
+.et-punch-row{display:flex;flex-wrap:wrap;gap:8px}
+.et-punch-cell{display:flex;flex-direction:column;gap:2px;flex:1 1 80px;min-width:74px}
+@media(min-width:560px){
+  #edit-bg .modal{max-width:640px}
+  #edit-area .et-punch-row{flex-wrap:nowrap}
+  #edit-area .et-punch-cell{flex:1 1 0;min-width:0}
+}
 </style>
 </head>
 <body>
@@ -127,7 +136,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub">Weekly Payroll · v2026-07-11b</div>
+    <div class="app-sub">Weekly Payroll · v2026-07-11c</div>
   </div>
 
   <div class="tabs">
@@ -1011,7 +1020,7 @@ function renderEditArea(){
   const days=(c.days||[]).slice().sort((a,b)=>toISO(a.date).localeCompare(toISO(b.date)));
   const body=days.map(rec=>{
     const inputs=fields.map(([k,lbl])=>`
-      <div style="display:flex;flex-direction:column;gap:2px;flex:1 1 80px;min-width:74px">
+      <div class="et-punch-cell">
         <label style="font-size:10px;color:#888">${lbl}</label>
         <input type="text" inputmode="numeric" maxlength="5" id="et_${rec.id}_${k}" value="${toInputVal(rec[k])}" oninput="milFmt(this);edLiveRecalc()" onkeydown="milKey(event,this)" placeholder="HH:MM" style="padding:7px;border:1px solid #ddd;border-radius:7px;font-size:13px;letter-spacing:1px">
       </div>`).join('');
@@ -1021,7 +1030,7 @@ function renderEditArea(){
     // prSessions math the payslip pays with. Display-only.
     return `<div style="border:1px solid #eee;border-radius:10px;padding:10px;margin-bottom:10px">
       <div style="font-weight:600;font-size:13px;margin-bottom:8px">${fmtDate(toISO(rec.date))} <span style="color:#94a3b8;font-weight:500">· ${dowOf(toISO(rec.date))}</span> ${inc?'<span style=\'color:#E8A330;font-size:11px\'>▲ incomplete</span>':''}</div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px">${inputs}</div>
+      <div class="et-punch-row">${inputs}</div>
       <div id="et_sum_${rec.id}" style="margin-top:8px;padding-top:7px;border-top:1px dashed #e2e8f0;font-size:12px;color:#475569"></div>
     </div>`;
   }).join('');
