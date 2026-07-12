@@ -136,7 +136,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub" id="build-stamp">Weekly Payroll · v2026-07-11e</div>
+    <div class="app-sub" id="build-stamp">Weekly Payroll · v2026-07-12a</div>
   </div>
 
   <div class="tabs">
@@ -177,6 +177,11 @@ select.field-input{appearance:none}
       </div>
       <div id="flag-banner" style="display:none"></div>
       <div id="allow-panel"></div>
+      <div id="picker-row" style="display:flex;gap:8px;align-items:center;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px;padding:8px 10px;margin-bottom:10px">
+        <span style="font-size:12px;color:#475569;font-weight:600;white-space:nowrap">Backfill a worker not listed</span>
+        <select id="picker-emp" style="flex:1;min-width:0;padding:7px;border:1px solid #ddd;border-radius:7px;font-size:13px"></select>
+        <button class="btn-sm" style="margin-top:0;white-space:nowrap" onclick="openWorkerEdit()">Open Edit-times</button>
+      </div>
       <input type="text" id="pr-search" oninput="filterPayroll()" placeholder="Search name or code…" autocomplete="off" style="width:100%;padding:10px 12px;border:1px solid #ddd;border-radius:10px;font-size:14px;margin-bottom:10px;box-sizing:border-box">
       <div id="pr-list"></div>
       <div id="pr-nomatch" style="display:none;color:#888;font-size:13px;padding:6px 2px 10px">No employee matches your search.</div>
@@ -282,7 +287,7 @@ select.field-input{appearance:none}
   <div class="modal">
     <div id="edit-area"></div>
     <div style="display:flex;gap:8px;margin-top:14px">
-      <button class="btn-sm" style="flex:1" onclick="document.getElementById('edit-bg').classList.remove('show')">Cancel</button>
+      <button class="btn-sm" style="flex:1" onclick="closeEditModal()">Cancel</button>
       <button class="btn-primary" style="flex:1;margin-top:0" id="edit-save">Save &amp; recompute</button>
     </div>
   </div>
@@ -890,7 +895,7 @@ async function runPayroll(){
     else {
       if(unknownN>0) msg('run-msg','err','⚠ '+unknownN+' worker(s) punched but have no employee record (rate ₱0) — add them in Settings/employees, then reload.');
       else clearMsg('run-msg');
-      renderRun(); document.getElementById('run-results').style.display='block';
+      renderRun(); populateWorkerPicker(); document.getElementById('run-results').style.display='block';
     }
   }catch(err){
     msg('run-msg','err','Error: '+err.message);
@@ -927,8 +932,8 @@ function filterHardFlagged(){
   const nm=document.getElementById('pr-nomatch'); if(nm) nm.style.display='none';
 }
 function renderRun(){
-  document.getElementById('s-head').textContent=computed.length;
-  document.getElementById('pr-list').innerHTML=computed.map((r,i)=>`
+  document.getElementById('s-head').textContent=computed.filter(r=>!r._picker).length;
+  document.getElementById('pr-list').innerHTML=computed.map((r,i)=> r._picker ? '' : `
     <div class="pr-card" data-emp="${(r.name+' '+r.code+' '+(r.dept||'')).toLowerCase()}">
       <div class="pr-head">
         <div>
@@ -1114,6 +1119,45 @@ function showSlip(i){
 // ── EDIT TIMES ──
 let _editIdx=-1;
 function editTimes(i){ _editIdx=i; renderEditArea(); document.getElementById('edit-bg').classList.add('show'); }
+// ── Backfill picker: open Edit-times for ANY active worker, even one with zero rows this week ──
+// (the gate-removal fallout — a worker whose only punch was eaten has no card, so runPayroll skips
+// them at line ~827; this lets the owner still key in a missing day for them).
+function populateWorkerPicker(){
+  const sel=document.getElementById('picker-emp'); if(!sel) return;
+  const active=employees.filter(e=>!e.suspended).slice().sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  sel.innerHTML='<option value="">— pick a worker —</option>'+
+    active.map(e=>`<option value="${e.code}">${_escAudit(e.name||e.code)} · ${_escAudit(e.code)}</option>`).join('');
+}
+function _blankCardFor(emp){
+  const hourly=emp.shift>0?emp.dailyRate/emp.shift:0;
+  return { _picker:true, days:[], code:emp.code, name:emp.name, dept:emp.dept, homeSite:emp.homeSite,
+    suspended:emp.suspended, dailyRate:emp.dailyRate, shift:emp.shift, hourly,
+    daysPresent:0, dayFlags:[], legacyFlags:[], hardFlagDays:[], unknown:false,
+    otHrs:0, totalHrs:0, basic:0, lateUT:0, otPay:0, ndPay:0, ndHrs:0, ndRegHrs:0, ndOtHrs:0,
+    leavePay:0, leavePaidDays:0, leaveUnpaidDays:0, leavePaidDates:[], leaveUnpaidDates:[],
+    valeBalance:0, otAllowance:0, stayInAllowance:0, valeDeduct:0, otherDeduct:0, allowDeduct:0, allowIds:[] };
+}
+function openWorkerEdit(){
+  if(_buildStale){ alert('OUTDATED BUILD — hard reload (open reset.html) before editing.'); return; }
+  const sel=document.getElementById('picker-emp'); const code=sel?sel.value:'';
+  if(!code){ if(sel)sel.focus(); return; }
+  const nk=normCode(code);
+  let idx=computed.findIndex(c=>normCode(c.code)===nk);   // already listed this week? open that card
+  if(idx<0){
+    const emp=employees.find(e=>normCode(e.code)===nk);
+    if(!emp){ alert('That worker is not in the active roster.'); return; }
+    computed.push(_blankCardFor(emp));                    // ephemeral 0-day card (not rendered in the list)
+    idx=computed.length-1;
+  }
+  editTimes(idx);
+}
+// Close the edit modal and drop any ephemeral picker card that was never saved. A successful save
+// runs runPayroll(), which rebuilds `computed` from scratch (no picker cards), so this only ever
+// cleans up a Cancel.
+function closeEditModal(){
+  document.getElementById('edit-bg').classList.remove('show');
+  if(computed.some(c=>c._picker)) computed=computed.filter(c=>!c._picker);
+}
 function renderEditArea(){
   const i=_editIdx; const c=computed[i];
   const fields=[['timein','Time In'],['lunch_out','Lunch Out'],['lunch_in','Lunch In'],['pm_out','PM Out'],['pm_in','PM In'],['timeout','Time Out']];
