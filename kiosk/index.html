@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-11b</span>
+        <span id="version-stamp">v2026-07-12a</span>
       </div>
     </div>
   </div>
@@ -2416,47 +2416,20 @@ async function punch(type){
   if(type==='timein'&&timeoutAdjustments[emp.code]&&!timeoutAdjustments[emp.code].acknowledged){
     if(showTimeoutNotice(emp))return;
   }
-  // Block if previous day was incomplete (no Time Out) — needs admin approval
-  if(type==='timein'){
-    const yesterday=new Date();yesterday.setDate(yesterday.getDate()-1);
-    const yKey=yesterday.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
-    const yRec=records[emp.code+'_'+yKey];
-    const yIncomplete=yRec&&yRec.punches&&yRec.punches.timein&&!yRec.punches.timeout;
-    if(yIncomplete&&!incompleteTimeInRequests[emp.code]?.approved){
-      if(incompleteTimeInRequests[emp.code]?.pending){
-        showMsg('warn','Still waiting for admin','Your Time In request is pending — incomplete record from yesterday.',4000);return;
-      }
-      const reqId=Date.now();
-      incompleteTimeInRequests[emp.code]={pending:true,approved:false,reqId,empCode:emp.code,empName:emp.name,tgMsgIds:{}};
-      showBisayaModal('⚠ Wala ka ni-punch og Time Out kagahapon '+bisayaDate(yKey)+'. Dili maihap ang imong GABII/OT nga oras. Palihug adto sa Admin karon aron ma-rekord.');
-      sendIncompleteApproval(emp,reqId,yKey,yRec);
-      return;
-    }
-    if(incompleteTimeInRequests[emp.code]?.approved)delete incompleteTimeInRequests[emp.code];
-  }
+  // (v2026-07-12) Policy A: an incomplete previous day (Time In but no Time Out) NO LONGER blocks
+  // today's Time In. The punch records normally; payroll flags yesterday's missing Time Out. No
+  // admin/Telegram wait. (Incomplete-record approval gate removed; its sender, Telegram callback,
+  // and the pending_approvals poller are now inert.)
   // Block suspended employees from punching in
   if(type==='timein'&&suspendedEmployees[emp.code]){
     showMsg('err',emp.name+' — Account Suspended',
       'Absent 3+ days without leave. Admin reinstatement required before clocking in.',6000);
     return;
   }
-  // Time In at or after shift end requires admin approval — a confirmed night-shift arrival
-  // (rec.nightShift already set by the arming confirm above) skips this day-only gate.
-  if(type==='timein'&&!rec.nightShift){
-    const shiftEnd=new Date(now);shiftEnd.setHours(endH,endM,0,0);
-    if(now>=shiftEnd&&!lateTimeInRequests[emp.code]?.approved){
-      if(lateTimeInRequests[emp.code]?.pending){
-        showMsg('warn','Still waiting for admin','Your late Time In request is pending approval. Please wait.',4000);return;
-      }
-      const reqId=Date.now();
-      lateTimeInRequests[emp.code]={pending:true,approved:false,reqId,empCode:emp.code,empName:emp.name};
-      writeLateBreakRequest(emp.code, emp.name, todayKey(), 'timein', nowShort()); // also show in Admin → Late Punches
-      showMsg('warn','Approval requested','Time In after '+fmt12(endH,endM)+' sent to admin for approval. Please wait...',0);
-      sendLateTimeInApproval(emp,reqId);
-      return;
-    }
-    if(lateTimeInRequests[emp.code]?.approved)delete lateTimeInRequests[emp.code];
-  }
+  // (v2026-07-12) Policy A: a Time In at/after shift end NO LONGER waits on admin approval. It
+  // records at the ACTUAL punch time and payroll applies its own rules. (A confirmed night-shift
+  // arrival already skipped this gate.) Late-Time-In approval flow removed; its sender and Telegram
+  // callback are now inert.
   // Block late-morning Time In: too late to make 2 hours before lunch, too early for the
   // afternoon session. Must wait until the afternoon clock-in time (Lunch In earliest).
   // Also guards the PM-close check below. Guarded with !rec.nightShift for the same reason as
@@ -2507,27 +2480,13 @@ async function punch(type){
       return;
     }
     undertimeConfirmed=false; // consume the confirm flag and proceed to record
-    // ── Dismissal snap / late-timeout — DAY SHIFT ONLY. The dismissal (S+…) is a same-day
-    // clock time; a night record's Time Out is anchored to its own shift end (nd Task 7), so it
-    // must never inherit this day-dismissal math (which for a night worker would be nonsensical).
+    // (v2026-07-12) Policy A: DAY-SHIFT late Time Out records the ACTUAL clock-out time — no
+    // snap-to-dismissal and no admin/Telegram wait. A clock-out past dismissal is flagged so
+    // payroll can apply its own evening/OT rules to the real punch time. (Night records, which
+    // anchor Time Out to their own shift end, skip this entirely.)
     if(!rec.nightShift){
       const dismissal=new Date(now);dismissal.setHours(dismissalH,dismissalM,0,0);
-      const oneHrAfter=new Date(dismissal.getTime()+3600000);
-      if(now>dismissal&&now<=oneHrAfter){
-        // Within 1 hour after dismissal → auto-snap to dismissal time
-        rec.timeoutSnapped=true;
-        rec.timeoutSnapTo=dismissal.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
-        rec.timeoutSnapMs=dismissal.getTime();
-      } else if(now>oneHrAfter&&!lateTimeoutConfirmed){
-        // More than 1 hour after dismissal → show warning modal first
-        openLateTimeoutModal(emp);
-        return;
-      } else if(now>oneHrAfter&&lateTimeoutConfirmed){
-        // Employee confirmed — admin will set the official time via Telegram
-        lateTimeoutConfirmed=false;
-        rec.lateTimeOut=true;
-        sendLateTimeoutNotif(emp);
-      }
+      if(now>dismissal) rec.lateTimeOut=true; // flag only — the actual punch time is recorded below
     }
   }
   if(type==='lunch_out'){
@@ -2652,7 +2611,7 @@ async function punch(type){
     const _pl=_snapAt(pmOutLatestH,pmOutLatestM);                 // 5:30
     if(nowMs>=_po&&nowMs<=_pl)recordMs=_po;                       // 5:00–5:30: credit 5:00, DISPLAY stays actual (e.g. 5:20)
   }
-  if(type==='timeout'&&rec.timeoutSnapped&&rec.timeoutSnapMs){recordMs=rec.timeoutSnapMs;recordStr=rec.timeoutSnapTo;}
+  // (v2026-07-12) dismissal-snap removed — Time Out always records the actual punch time.
   rec.punches[type]=recordStr;rec.msMap[type]=recordMs;
   if(!rec.photos)rec.photos={};
   if(photoData)rec.photos[type]=photoData;
@@ -2718,9 +2677,7 @@ async function punch(type){
     let sub='Worked: '+msToHM(worked);if(brk>0)sub+=' · Break: '+msToHM(brk);if(ot>0)sub+=' · OT: '+msToHM(ot);if(rec.hasAllowance)sub+=' · 💰 ₱'+rec.allowanceAmt.toLocaleString();
     if(rec.hasOTAllowance)sub+=' · ⭐ OT Allowance: ₱'+rec.otAllowanceAmt.toLocaleString();
     else if(ot>0&&rec.isLate)sub+=' · ⭐ No OT allowance (late — must be out by '+fmt12(pmInEarliestH+otAllowanceMinHrs+1,pmInEarliestM)+')';
-    if(rec.lateTimeOut)sub+=' · ⚠️ Late Time Out — pending admin confirmation';
-    if(rec.timeoutSnapped)sub+=' · ⏰ Recorded as '+rec.timeoutSnapTo+' (dismissal time)';
-    if(rec.timeoutRoundedTo)sub+=' · ⏰ Rounded to '+rec.timeoutRoundedTo+' (pending admin confirmation)';
+    if(rec.lateTimeOut)sub+=' · ⚠️ Late Time Out (past dismissal — recorded at actual time)';
     // detect undertime
     const fullMs=emp.shift*3600000;
     if(worked<fullMs-60000){
@@ -4763,8 +4720,10 @@ async function pollAdminApprovals(){
     });
   }catch(e){console.warn('pollAdminApprovals:',e&&e.message);}
 }
-pollAdminApprovals();
-setInterval(pollAdminApprovals,15000);
+// (v2026-07-12) Incomplete-record gate removed → pollAdminApprovals is inert. Polling is disabled
+// so no stale/late-resolved pending_approvals row can trigger an auto-punch on a running kiosk.
+// pollAdminApprovals();
+// setInterval(pollAdminApprovals,15000);
 
 // ── AUTO-CLOSE abandoned breaks: punched a break-OUT but never returned ──
 // Lunch Out with no return  → close at Lunch Out time, checked from 5:00 PM (when Lunch In closes).
