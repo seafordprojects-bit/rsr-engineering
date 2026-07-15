@@ -136,7 +136,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub" id="build-stamp">Weekly Payroll · v2026-07-15a</div>
+    <div class="app-sub" id="build-stamp">Weekly Payroll · v2026-07-15b</div>
   </div>
 
   <div class="tabs">
@@ -309,6 +309,10 @@ cfg.weeklyVale = (cfg.weeklyVale===undefined) ? 500 : cfg.weeklyVale;
 cfg.allowance = (cfg.allowance===undefined) ? 50 : cfg.allowance;
 cfg.otAllowMinHrs = (cfg.otAllowMinHrs===undefined) ? 3 : cfg.otAllowMinHrs;
 cfg.sundayPremiumFrom = cfg.sundayPremiumFrom || '2026-07-13'; // first date the Sunday rest-day premium applies (forward-only)
+// (site rename) mirror of the kiosk normalizer: legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue;
+// a real yard name passes through untouched. Site is display/routing only — pay uses has_away_allowance.
+const _SITE_LEGACY={'A':'Carmen','SITE A':'Carmen','B':'Mandaue','SITE B':'Mandaue'};
+function siteNorm(v){const t=String(v==null?'':v).trim();return _SITE_LEGACY[t.toUpperCase()]||t;}
 // Pull the shared settings from Supabase (key 'payroll_cfg'); fall back to local.
 async function loadCfg(){
   try{
@@ -691,7 +695,7 @@ async function loadEmployees(){
     if(error) throw error;
     employees=(data||[]).map(e=>({
       id:e.id, code:e.code, name:e.name, dept:e.dept, position:e.position,
-      homeSite:e.home_site||'A', shift:Number(e.shift)||8,
+      homeSite:siteNorm(e.home_site)||'', shift:Number(e.shift)||8,
       dailyRate:Number(e.daily_rate)||0, suspended:!!e.is_suspended
     }));
     // populate advance dropdown
@@ -836,7 +840,7 @@ async function runPayroll(){
       if(known[k]) return;
       const r0=byEmp[k][0];
       roster.push({ id:null, code:r0.employee_code, name:(r0.employee_name||r0.employee_code||'Unknown'),
-        dept:'', position:'', homeSite:r0.site||'A', shift:8, dailyRate:0, suspended:false, _k:k, unknown:true });
+        dept:'', position:'', homeSite:siteNorm(r0.site)||'', shift:8, dailyRate:0, suspended:false, _k:k, unknown:true });
     });
 
     computed=[];
@@ -1288,7 +1292,7 @@ function addEditDay(){
   if((c.days||[]).some(r=>toISO(r.date)===iso)){ if(errEl)errEl.textContent='That day is already listed below \u2014 edit it there.'; return; }
   const [y,m,d]=iso.split('-');
   c.days=c.days||[];
-  c.days.push({ id:'NEW-'+Date.now(), _new:true, employee_code:c.code, employee_name:c.name, date:m+'/'+d+'/'+y, site:(c.days[0]&&c.days[0].site)||'Site A', timein:null,lunch_out:null,lunch_in:null,pm_out:null,pm_in:null,timeout:null, straight_duty_lunch:false, straight_duty_pm:false });
+  c.days.push({ id:'NEW-'+Date.now(), _new:true, employee_code:c.code, employee_name:c.name, date:m+'/'+d+'/'+y, site:siteNorm((c.days[0]&&c.days[0].site)||c.homeSite)||'Carmen', timein:null,lunch_out:null,lunch_in:null,pm_out:null,pm_in:null,timeout:null, straight_duty_lunch:false, straight_duty_pm:false });
   renderEditArea();
 }
 async function saveTimes(i){
@@ -1337,7 +1341,7 @@ async function saveTimes(i){
             straight_duty_lunch:rec.straight_duty_lunch, straight_duty_pm:rec.straight_duty_pm
           };
           if(rec._new){
-            const full=Object.assign({employee_code:c.code, employee_name:c.name, date:rec.date, site:rec.site||'Site A'}, payload);
+            const full=Object.assign({employee_code:c.code, employee_name:c.name, date:rec.date, site:siteNorm(rec.site)||siteNorm(c.homeSite)||'Carmen'}, payload);
             const { error } = await sb.from('attendance_records').upsert(full,{onConflict:'employee_code,date'});
             if(error) throw error;
           } else {

@@ -6,6 +6,11 @@ import { html, render } from 'htm/preact';
 import { useState, useEffect } from 'preact/hooks';
 import { supabase } from './supabase.js';
 
+// (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
+// The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
+const _SITE_LEGACY = { 'A': 'Carmen', 'SITE A': 'Carmen', 'B': 'Mandaue', 'SITE B': 'Mandaue' };
+const siteNorm = v => { const t = String(v == null ? '' : v).trim(); return _SITE_LEGACY[t.toUpperCase()] || t; };
+
 const SESSION_KEY = 'rsr_admin';
 const onAdminPage = location.pathname.includes('/admin');  // admin lives on its own page
 const PIN_KEY = 'rsr_admin_pin';          // changeable PIN (default 1234)
@@ -684,7 +689,8 @@ function App() {
   const [empPin, setEmpPin] = useState('');
   const [empSick, setEmpSick] = useState('');
   const [empVac, setEmpVac] = useState('');
-  const [empSite, setEmpSite] = useState('A');
+  const [empSite, setEmpSite] = useState('');
+  const [siteList, setSiteList] = useState([]); // (site rename) data-driven yard list from settings.attendance_sites
   const [coordPin, setCoordPin] = useState('');
   const [sitePin, setSitePin] = useState('');
   const [ownerPin, setOwnerPin] = useState('');
@@ -807,7 +813,7 @@ function App() {
   const pickEmp = async (id) => {
     setEmpSel(id);
     const e = emps.find(x => x.id === id) || {};
-    setEmpPin(e.pin || ''); setEmpSick(e.sl_balance ?? ''); setEmpVac(e.vl_balance ?? ''); setEmpSite(e.home_site || 'A');
+    setEmpPin(e.pin || ''); setEmpSick(e.sl_balance ?? ''); setEmpVac(e.vl_balance ?? ''); setEmpSite(siteNorm(e.home_site) || '');
     setRate(e.daily_rate ?? ''); setIncRate(''); setIncDate(''); setIncNote('');
     try { setSalHist(await getSalaryHistory(id)); } catch (_) { setSalHist([]); }
   };
@@ -833,7 +839,7 @@ function App() {
         pin: empPin.trim() || null,
         sl_balance: empSick === '' ? 0 : Number(empSick),
         vl_balance: empVac === '' ? 0 : Number(empVac),
-        home_site: empSite || 'A',
+        home_site: siteNorm(empSite) || siteList[0] || '',
       });
       flash('Saved'); loadEmps();
     } catch (e) { flash('Error: ' + e.message); }
@@ -896,6 +902,18 @@ function App() {
       } catch (_) {}
     })();
   }, [authed, showSet, tgLoaded]);
+
+  // (site rename) load the data-driven yard list once authed — feeds the home-site dropdowns.
+  useEffect(() => {
+    if (!authed) return;
+    (async () => {
+      try {
+        const raw = await getSetting('attendance_sites');
+        const arr = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(arr)) setSiteList(arr.map(x => String(x).trim()).filter(Boolean));
+      } catch (_) {}
+    })();
+  }, [authed]);
 
   useEffect(() => {
     if (!(authed && onAdminPage)) return;
@@ -1431,13 +1449,12 @@ function App() {
                 <div class="unit">Passcode: <span class="mono" style="font-weight:700;letter-spacing:1px">${e.pin || '— not set —'}</span></div>
                 <div class="unit" style="margin-top:6px;display:flex;align-items:center;gap:8px">
                   <span>Home site:</span>
-                  <select value=${e.home_site || 'A'} onChange=${async ev => {
+                  <select value=${siteNorm(e.home_site)} onChange=${async ev => {
                     const site = ev.target.value;
-                    try { await updateEmployee(e.id, { home_site: site }); flash(`${e.name} → Site ${site}`); loadEmps(); }
+                    try { await updateEmployee(e.id, { home_site: site }); flash(`${e.name} → ${site}`); loadEmps(); }
                     catch (err) { flash('Failed: ' + err.message); }
                   }}>
-                    <option value="A">Site A</option>
-                    <option value="B">Site B</option>
+                    ${siteList.map(n => html`<option value=${n}>${n}</option>`)}
                   </select>
                 </div>
               </div>
@@ -1577,7 +1594,7 @@ function App() {
               <div class="unit">Leave — Sick ${e.sl_balance ?? 0} · Vacation ${e.vl_balance ?? 0}</div>
               <div class="unit">Daily rate — ${e.daily_rate ? '₱' + Number(e.daily_rate).toLocaleString('en-PH') : 'not set'}</div>
               <div class="unit">Passcode — ${e.pin ? 'set ✓' : 'not set ⚠'}</div>
-              <div class="unit">Home site (location) — ${e.home_site === 'B' ? 'Site B' : 'Site A'}</div>
+              <div class="unit">Home site (location) — ${siteNorm(e.home_site) || '—'}</div>
             </div>`;
           })()}
           ${empSel && html`
@@ -1590,8 +1607,7 @@ function App() {
             </div>
             <${Field} label="Home site (location)">
               <select value=${empSite} onChange=${e => setEmpSite(e.target.value)}>
-                <option value="A">Site A</option>
-                <option value="B">Site B</option>
+                ${siteList.map(n => html`<option value=${n}>${n}</option>`)}
               </select>
             <//>
             <p class="note" style="margin:6px 0 12px">This is the worker’s base. The kiosk pays the away / stay-in allowance only when they clock in at a site other than this one.</p>

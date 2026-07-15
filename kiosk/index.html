@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-14a</span>
+        <span id="version-stamp">v2026-07-15a</span>
       </div>
     </div>
   </div>
@@ -561,10 +561,7 @@ textarea.field-input{resize:none;height:65px}
           <option value="dito">Dito</option>
         </select>
         <label class="field-label">Home site location</label>
-        <select id="new-home-site" class="field-input">
-          <option value="A" id="site-opt-a">Site A</option>
-          <option value="B" id="site-opt-b">Site B</option>
-        </select>
+        <select id="new-home-site" class="field-input"></select>
         <label class="field-label">Shift hours</label>
         <input type="number" id="new-shift" value="8" min="1" max="24" class="field-input" />
         <label class="field-label">Daily rate (₱)</label>
@@ -585,18 +582,10 @@ textarea.field-input{resize:none;height:65px}
       <h4>Site & allowance settings</h4>
       <p style="font-size:12px;color:#888;margin-bottom:12px">Configure this tablet's active site and allowance rates for each location.</p>
       <label class="field-label">This tablet's active site</label>
-      <select id="s-active-site" class="field-input" onchange="updateSiteBadge()">
-        <option value="A">Site A</option>
-        <option value="B">Site B</option>
-      </select>
-      <label class="field-label">Site A name</label>
-      <input type="text" id="s-site-a-name" value="Site A" class="field-input" />
-      <label class="field-label">Site B name</label>
-      <input type="text" id="s-site-b-name" value="Site B" class="field-input" />
-      <label class="field-label">Away allowance at Site A (₱ per day)</label>
-      <input type="number" id="s-allow-a" value="50" min="0" class="field-input" placeholder="e.g. 50" />
-      <label class="field-label">Away allowance at Site B (₱ per day)</label>
-      <input type="number" id="s-allow-b" value="50" min="0" class="field-input" placeholder="e.g. 50" />
+      <select id="s-active-site" class="field-input" onchange="updateSiteBadge()"></select>
+      <p style="font-size:11px;color:#888;margin:4px 0 10px">Yards come from the central list (settings &middot; <code>attendance_sites</code>). You can also open this tablet with <code>?site=Carmen</code> in the URL.</p>
+      <label class="field-label">Away allowance (₱ per day, flat)</label>
+      <input type="number" id="s-allow" value="50" min="0" class="field-input" placeholder="e.g. 50" />
       <label class="field-label">OT allowance (₱ per session, fixed)</label>
       <input type="number" id="s-ot-allow" value="50" min="0" class="field-input" placeholder="e.g. 50" />
       <label class="field-label">OT allowance minimum hours (default: 3)</label>
@@ -887,10 +876,7 @@ textarea.field-input{resize:none;height:65px}
       <option value="dito">Dito</option>
     </select>
     <label class="field-label">Home site location</label>
-    <select id="edit-home-site" class="field-input">
-      <option value="A" id="edit-site-opt-a">Site A</option>
-      <option value="B" id="edit-site-opt-b">Site B</option>
-    </select>
+    <select id="edit-home-site" class="field-input"></select>
     <label class="field-label">Shift hours</label>
     <input type="number" id="edit-shift" min="1" max="24" class="field-input" />
     <label class="field-label">Daily rate (₱) — used for undertime deduction</label>
@@ -1057,7 +1043,7 @@ let nightShiftH=22,nightShiftM=0,nightEndH=8,nightEndM=0;   // config- S / E, ov
 const ND_START_H=22, ND_END_H=6;                            // statutory ND window — NEVER moves
 let earlyBreakConfirmed=false;
 let nightArmConfirmed=false; // (nd Task 4) set true only for the in-flight confirmed night-arm Time In replay
-let activeSite='A',siteAName='Site A',siteBName='Site B',allowA=50,allowB=50; // (v2026-07-07d) away allowance policy: ₱50/day
+let activeSite='',sites=[],awayAllow=50; // (site rename) activeSite = active yard NAME; `sites` = data-driven yard list (settings key attendance_sites, cached in rsr_sites); away allowance flat ₱50/day
 let otAllowanceAmt=50,otAllowanceMinHrs=3;
 let pin='',curEmp=null,msgTimer=null;
 let adminSecs=ADMIN_TO,adminTick=null;
@@ -1090,7 +1076,26 @@ function fmt12(h,m){return(h%12||12)+':'+(m<10?'0':'')+m+' '+(h>=12?'PM':'AM');}
 function fmt24(h,m){return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0');}
 function ddiff(s,e){return Math.round((new Date(e)-new Date(s))/86400000)+1;}
 function lkey(t){return t==='Vacation Leave'?'VL':t==='Sick Leave'?'SL':t==='Leave Without Pay'?'LWP':'EL';}
-function siteName(s){return s==='A'?siteAName:siteBName;}
+// Site rename (Carmen/Mandaue): sites are stored as NAMES. siteNorm maps any legacy value
+// ('A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue) to its yard name for backward-compat during
+// the migration window; a real yard name passes through untouched. Legacy A/B is a CLOSED
+// historical set (a one-time compat shim) — the LIVE yard list is data (settings key
+// attendance_sites, cached in rsr_sites), never a hardcoded list.
+const _SITE_LEGACY={'A':'Carmen','SITE A':'Carmen','B':'Mandaue','SITE B':'Mandaue'};
+function siteNorm(v){const t=String(v==null?'':v).trim();return _SITE_LEGACY[t.toUpperCase()]||t;}
+function siteName(s){return siteNorm(s);}
+function loadSitesFromCache(){try{const c=JSON.parse(localStorage.getItem('rsr_sites')||'[]');if(Array.isArray(c))sites=c.map(x=>String(x).trim()).filter(Boolean);}catch(e){}}
+// Fill the active-site + home-site dropdowns from the data-driven yard list (no hardcoded A/B).
+function populateSiteSelects(){
+  if(!activeSite&&sites.length)activeSite=siteNorm(sites[0]); // default active yard from data (not a hardcode)
+  const opts=sites.map(n=>'<option value="'+n+'">'+n+'</option>').join('');
+  ['s-active-site','new-home-site','edit-home-site'].forEach(id=>{
+    const el=document.getElementById(id);if(!el)return;
+    const want=(id==='s-active-site')?siteNorm(activeSite):siteNorm(el.value);
+    el.innerHTML=opts;
+    if(want&&sites.indexOf(want)>=0)el.value=want;
+  });
+}
 function getRec(code){const k=code+'_'+todayKey();if(!records[k])records[k]={code,punches:{},msMap:{},isLate:false,lateMs:0,photos:{},clockedSite:null,hasAllowance:false,allowanceAmt:0,nightShift:false};return records[k];}
 function findEmp(code){return employees.find(e=>e.pin&&e.pin===code);}
 // Canonical employee-code key: uppercase + strip all whitespace ('rsr 0002'/'RSR0002' → 'RSR0002').
@@ -1260,22 +1265,21 @@ function nightArrivalHint(nowMs){
 function onLeaveToday(code){const t=todayKey();return leaveRequests.some(r=>r.code===code&&r.status==='Approved'&&r.startDate<=t&&r.endDate>=t);}
 function onLWPToday(code){const t=todayKey();return leaveRequests.some(r=>r.code===code&&r.status==='Approved'&&r.type==='Leave Without Pay'&&r.startDate<=t&&r.endDate>=t);}
 
-function isAwayDeployment(emp){return emp.homeSite!==activeSite;}
+function isAwayDeployment(emp){return siteNorm(emp.homeSite)!==siteNorm(activeSite);}
 function getAllowanceAmt(emp){
   const key=emp.code+'_'+todayKey();
   if(allowanceOverrides[key]!==undefined)return allowanceOverrides[key];
   if(!isAwayDeployment(emp))return 0;
-  return activeSite==='A'?allowA:allowB;
+  return awayAllow; // flat away-allowance policy (₱50/day) — same for any yard
 }
 
 function updateSiteBadge(){
   const at=document.getElementById('app-title-el');
   if(at)at.textContent=(company||'RSR Engineering').toUpperCase();
-  activeSite=document.getElementById('s-active-site')?.value||activeSite;
+  const sel=document.getElementById('s-active-site');
+  if(sel&&sel.value)activeSite=siteNorm(sel.value);
   const wrap=document.getElementById('site-badge-wrap');
-  if(wrap){const cls=activeSite==='A'?'site-a':'site-b';wrap.innerHTML=`<span class="site-badge ${cls}">${siteName(activeSite)}</span>`;}
-  const oa=document.getElementById('site-opt-a');if(oa)oa.textContent=siteAName;
-  const ob=document.getElementById('site-opt-b');if(ob)ob.textContent=siteBName;
+  if(wrap){const cls=(sites.indexOf(siteNorm(activeSite))===1)?'site-b':'site-a';wrap.innerHTML=`<span class="site-badge ${cls}">${siteName(activeSite)}</span>`;}
 }
 
 function showAllowanceBanner(emp){
@@ -3084,11 +3088,9 @@ function exportCSV(){
 }
 
 function saveSiteSettings(){
-  activeSite=document.getElementById('s-active-site').value;
-  siteAName=document.getElementById('s-site-a-name').value.trim()||'Site A';
-  siteBName=document.getElementById('s-site-b-name').value.trim()||'Site B';
-  allowA=parseInt(document.getElementById('s-allow-a').value)||0;
-  allowB=parseInt(document.getElementById('s-allow-b').value)||0;
+  const asel=document.getElementById('s-active-site');
+  if(asel&&asel.value)activeSite=siteNorm(asel.value);
+  awayAllow=parseInt(document.getElementById('s-allow').value)||0;
   otAllowanceAmt=parseInt(document.getElementById('s-ot-allow').value)||0;
   otAllowanceMinHrs=parseFloat(document.getElementById('s-ot-min-hrs').value)||3;
   updateSiteBadge();saveData();
@@ -3841,7 +3843,7 @@ function saveData(){
     localStorage.setItem('rsr_timeout_adj',JSON.stringify(timeoutAdjustments));
     localStorage.setItem('rsr_employees',JSON.stringify(employees));
     localStorage.setItem('rsr_undertime',JSON.stringify(undertimeRequests));
-    localStorage.setItem('rsr_settings',JSON.stringify({shiftH,shiftM,graceMins,endH,endM,company,lunchInEarliestH,lunchInEarliestM,pmInEarliestH,pmInEarliestM,lunchOutEarlyH,lunchOutEarlyM,lunchOutLatestH,lunchOutLatestM,pmOutEarlyH,pmOutEarlyM,pmOutLatestH,pmOutLatestM,dismissalH,dismissalM,activeSite,siteAName,siteBName,allowA,allowB,otAllowanceAmt,otAllowanceMinHrs,adminPassword,assistantPassword,tgToken,tgGroup,tgPosGroup,tgPhotoGroup,tgBackupGroup,mgrIds,semaphoreKey,semaphoreSender}));
+    localStorage.setItem('rsr_settings',JSON.stringify({shiftH,shiftM,graceMins,endH,endM,company,lunchInEarliestH,lunchInEarliestM,pmInEarliestH,pmInEarliestM,lunchOutEarlyH,lunchOutEarlyM,lunchOutLatestH,lunchOutLatestM,pmOutEarlyH,pmOutEarlyM,pmOutLatestH,pmOutLatestM,dismissalH,dismissalM,activeSite,awayAllow,otAllowanceAmt,otAllowanceMinHrs,adminPassword,assistantPassword,tgToken,tgGroup,tgPosGroup,tgPhotoGroup,tgBackupGroup,mgrIds,semaphoreKey,semaphoreSender}));
     localStorage.setItem('rsr_smslog',JSON.stringify(smsLog.slice(0,200)));
     localStorage.setItem('rsr_straightduty',JSON.stringify(straightDutyRequests));
     localStorage.setItem('rsr_violations',JSON.stringify(absenceViolations));
@@ -3969,8 +3971,8 @@ function loadData(){
       pmOutLatestH=s.pmOutLatestH??17;pmOutLatestM=s.pmOutLatestM??30;
       dismissalH=s.dismissalH??21;dismissalM=s.dismissalM??0;
 
-      activeSite=s.activeSite||'A';siteAName=s.siteAName||'Site A';siteBName=s.siteBName||'Site B';
-      allowA=50;allowB=50; // (v2026-07-07d) policy ₱50/day — stored values ignored (admin UI disabled in kiosk-only mode, code is source of truth)
+      activeSite=siteNorm(s.activeSite)||activeSite;
+      awayAllow=50; // policy ₱50/day, flat — payroll cfg governs pay; kiosk display uses this
       otAllowanceAmt=s.otAllowanceAmt??50;otAllowanceMinHrs=s.otAllowanceMinHrs??3;
       if(s.adminPassword)adminPassword=s.adminPassword;
       if(s.assistantPassword)assistantPassword=s.assistantPassword;
@@ -3993,11 +3995,9 @@ function loadData(){
         f('s-pm-out-early',String(pmOutEarlyH).padStart(2,'0')+':'+String(pmOutEarlyM).padStart(2,'0'));
         f('s-pm-out-latest',String(pmOutLatestH).padStart(2,'0')+':'+String(pmOutLatestM).padStart(2,'0'));
         f('s-dismissal',String(dismissalH).padStart(2,'0')+':'+String(dismissalM).padStart(2,'0'));
+        populateSiteSelects();
         f('s-active-site',activeSite);
-        f('s-site-a-name',siteAName);
-        f('s-site-b-name',siteBName);
-        f('s-allow-a',allowA);
-        f('s-allow-b',allowB);
+        f('s-allow',awayAllow);
         f('s-ot-allow',otAllowanceAmt);
         f('s-ot-min-hrs',otAllowanceMinHrs);
         if(tgToken)f('tg-token',tgToken);
@@ -4009,6 +4009,10 @@ function loadData(){
         updShiftPill();updateSiteBadge();if(tgToken&&tgToken.length>20){startTgPolling();scheduleMorningReport();}
       },100);
     }
+    // (site rename) yard list from cache, then a ?site=<yard> URL override (falls back to the
+    // stored/default active yard when the param is absent — preserves current behavior).
+    loadSitesFromCache();
+    try{const _q=new URLSearchParams(location.search).get('site');if(_q&&_q.trim())activeSite=siteNorm(_q.trim());}catch(e){}
   }catch(e){console.warn('LocalStorage load failed',e);}
 }
 
@@ -4155,8 +4159,9 @@ async function sendIncompleteRecordsSummary(){
 // ── CSV IMPORT / EXPORT ──
 function downloadTemplate(){
   const header='PIN,Name,Department,HomeSite,ShiftHours\n';
-  const sample='0001,Juan dela Cruz,Operations,A,8\n0002,Maria Santos,Warehouse,B,8\n0003,Pedro Reyes,Admin,A,8\n';
-  const note='# HomeSite must be A or B. PIN must be exactly 6 digits.\n';
+  const _s0=sites[0]||'Carmen',_s1=sites[1]||sites[0]||'Mandaue';
+  const sample='0001,Juan dela Cruz,Operations,'+_s0+',8\n0002,Maria Santos,Warehouse,'+_s1+',8\n0003,Pedro Reyes,Admin,'+_s0+',8\n';
+  const note='# HomeSite must be a yard name ('+(sites.join(' / ')||'Carmen / Mandaue')+'). PIN must be exactly 6 digits.\n';
   const csv=note+header+sample;
   const a=document.createElement('a');
   a.href=URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
@@ -4198,8 +4203,9 @@ function importStaffCSV(input){
         if(!code||!name){errors.push('Row '+(idx+2)+': missing PIN or name');return;}
         const cleanCode=code.replace(/\D/g,'').padStart(6,'0').slice(0,6);
         if(cleanCode.length!==6){errors.push('Row '+(idx+2)+': invalid PIN "'+code+'"');return;}
-        const site=(homeSite||'A').toUpperCase().trim();
-        const validSite=site==='A'||site==='B'?site:'A';
+        // Home site = a yard name; normalize legacy A/B, validate against the data-driven list.
+        const site=siteNorm(homeSite||'');
+        const validSite=(sites.indexOf(site)>=0)?site:(sites[0]||site);
         const shift=parseInt(shiftStr)||8;
         const vl=parseInt(vlStr)||2,sl=parseInt(slStr)||2,el=parseInt(elStr)||3;
         // Check duplicate PINs within import
@@ -4291,9 +4297,8 @@ function openEditModal(code){
       erprev.src='';erprev.style.background='#f0f0f0';
     }
   }
-  document.getElementById('edit-home-site').value=emp.homeSite;
-  document.getElementById('edit-site-opt-a').textContent=siteAName;
-  document.getElementById('edit-site-opt-b').textContent=siteBName;
+  populateSiteSelects();
+  document.getElementById('edit-home-site').value=siteNorm(emp.homeSite);
   document.getElementById('edit-shift').value=emp.shift;
   document.getElementById('edit-daily-rate').value=emp.dailyRate||500;
   const bal=emp.balance||{VL:2,SL:2};
@@ -4593,7 +4598,7 @@ function exportUndertimeCSV(){
   downloadFile('undertime_'+todayKey().replace(/\//g,'-')+'.csv',csv,'text/csv');
 }
 
-loadData();repairPhantomTimeouts();updateStats();renderRoster();updatePhotoFilter();updateSiteBadge();initCamera();requestWakeLock();resetDimTimer();scheduleMidnightReset();cleanupOldData();scheduleMonthlyExport();
+loadData();repairPhantomTimeouts();updateStats();renderRoster();updatePhotoFilter();populateSiteSelects();updateSiteBadge();initCamera();requestWakeLock();resetDimTimer();scheduleMidnightReset();cleanupOldData();scheduleMonthlyExport();
 // Run absence check on load and schedule daily at midnight
 setTimeout(()=>{
   checkAllAbsences();
@@ -4664,7 +4669,7 @@ loadTgFromCloud();
 // values when offline, and leaves local values untouched if nothing is set in the cloud.
 async function loadShiftFromCloud(){
   try{
-    const { data, error } = await sbClient.from('settings').select('key,value').in('key',['shift_start','dismissal','night_shift_start','night_shift_end']);
+    const { data, error } = await sbClient.from('settings').select('key,value').in('key',['shift_start','dismissal','night_shift_start','night_shift_end','attendance_sites']);
     if(error) throw error;
     // Tolerate a setting saved with stray wrapping quotes/whitespace (e.g. a table-editor value
     // stored as the JSON string "18:00" instead of 18:00). Strip them BEFORE the HH:MM checks so a
@@ -4679,6 +4684,8 @@ async function loadShiftFromCloud(){
     if(map.dismissal&&/^\d{1,2}:\d{2}$/.test(map.dismissal)){const p=map.dismissal.split(':');const h=+p[0],m=+p[1];if(h>=0&&h<24&&m>=0&&m<60&&(h*60+m)>(shiftH*60+shiftM)){dismissalH=h;dismissalM=m;applied=true;}}
     if(map.night_shift_start&&/^\d{1,2}:\d{2}$/.test(map.night_shift_start)){const p=map.night_shift_start.split(':');const h=+p[0],m=+p[1];if(h>=0&&h<24&&m>=0&&m<60){nightShiftH=h;nightShiftM=m;applied=true;}}
     if(map.night_shift_end&&/^\d{1,2}:\d{2}$/.test(map.night_shift_end)){const p=map.night_shift_end.split(':');const h=+p[0],m=+p[1];if(h>=0&&h<24&&m>=0&&m<60){nightEndH=h;nightEndM=m;applied=true;}}
+    // (site rename) data-driven yard list — the source of truth for dropdowns + ?site= validation.
+    if(map.attendance_sites){try{const arr=JSON.parse(map.attendance_sites);if(Array.isArray(arr)&&arr.length){sites=arr.map(x=>String(x).trim()).filter(Boolean);try{localStorage.setItem('rsr_sites',JSON.stringify(sites));}catch(e){}try{populateSiteSelects();updateSiteBadge();}catch(e){}}}catch(e){}}
     if(applied){try{localStorage.setItem('rsr_shift_override',JSON.stringify({shiftH,shiftM,dismissalH,dismissalM,nightShiftH,nightShiftM,nightEndH,nightEndM}));}catch(e){}try{updShiftPill();}catch(e){}}
     return applied;
   }catch(e){
@@ -4837,7 +4844,7 @@ async function syncEmployeeToSupabase(emp) {
       position: emp.position || '—',
       phone: emp.phone || '',
       network: emp.network || 'smart',
-      home_site: emp.homeSite || 'A',
+      home_site: siteNorm(emp.homeSite) || '',
       shift: emp.shift || 8,
       daily_rate: emp.dailyRate || 500,
       pin: emp.pin || null,
@@ -4900,7 +4907,7 @@ async function loadEmployeesFromSupabase() {
         const fresh = {
           name: se.name, dept: se.dept || '—',
           position: se.position || '—', phone: se.phone || '',
-          network: se.network || 'smart', homeSite: se.home_site || 'A',
+          network: se.network || 'smart', homeSite: siteNorm(se.home_site) || '',
           shift: se.shift || 8, dailyRate: se.daily_rate || 500,
           pin: se.pin || '',
           balance: { VL: se.vl_balance ?? 2, SL: se.sl_balance ?? 2 }
