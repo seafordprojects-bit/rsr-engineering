@@ -25,7 +25,7 @@ Copied verbatim from the spec and CLAUDE.md. **Every task's requirements implici
 - **The Supabase SQL editor swallows `RAISE NOTICE`** — never trust "Success" as proof. Always re-query independently to confirm what landed.
 - **Slip numbering: no device-clock fallback.** If the server numbering call fails, refuse with a retry.
 - **Message language:** Bisaya on the roll-call phone (matches the kiosk); English on `tools/index.html` (matches its existing UI). Behavior identical on both.
-- **Bump the version stamp** on every changed page, and `preflight.html`'s `EXPECT` in lockstep.
+- **Version stamps: `monitoring/roll-call.html` and `tools/index.html` have NONE today** (verified — only payroll and kiosk carry one, and `preflight.html`'s `EXPECT` tracks only those two). **ADD a stamp to both** in the format the other pages use (`v2026-07-16a`), render it in the page header, and register both in `EXPECT` in the same commit. This is not ceremony: the roll-call phone is an Add-to-Home-Screen app on a field phone — the worst case for the stale-build landmine — and the stamp is how the owner's walkthrough confirms the phone actually took the new build. Thereafter, bump in lockstep with `EXPECT` on every change.
 - **NOTHING PUSHES** without the owner's localhost walkthrough and their explicit "push". Commit locally per task; do not push.
 
 ## File Structure
@@ -273,9 +273,9 @@ Update `monitoring/roll-call.webmanifest` with a `shortcuts` array for `?site=Ca
 
 Run: `node nd-e2e/roll-call-site.mjs`. Expected: all checks pass, including the new-yard-just-works case.
 
-- [ ] **Step 7: Bump the stamp and validate**
+- [ ] **Step 7: ADD the stamp (this page has none) and validate**
 
-Bump the `roll-call.html` version stamp; update `preflight.html`'s `EXPECT` in the same commit (lockstep — a stamp without its `EXPECT` is how stale builds hide).
+`monitoring/roll-call.html` carries **no version stamp today**. Add `v2026-07-16a` in the page header, matching how kiosk/payroll render theirs, and add `'monitoring/roll-call.html':'v2026-07-16a'` to `preflight.html`'s `EXPECT` in the same commit (lockstep — a stamp without its `EXPECT` is how stale builds hide).
 Run: `node scratchpad/validate.mjs monitoring/roll-call.html`. Expected: `node --check OK` + hygiene OK.
 
 - [ ] **Step 8: Commit**
@@ -408,9 +408,10 @@ Add `source:'coordinator'` to the row map at `:694`, alongside the existing `sit
 
 Run: `node nd-e2e/tool-borrow-concurrency.mjs`. Expected: all checks pass.
 
-- [ ] **Step 7: Bump the stamp and validate**
+- [ ] **Step 7: ADD the stamp (this page has none) and validate**
 
-Run: `node scratchpad/validate.mjs tools/index.html`. Expected: `node --check OK` + hygiene OK. Update `preflight.html` `EXPECT` in lockstep.
+`tools/index.html` carries **no version stamp today**. Add `v2026-07-16a` in the page header and register `'tools/index.html':'v2026-07-16a'` in `preflight.html`'s `EXPECT`, in the same commit.
+Run: `node scratchpad/validate.mjs tools/index.html`. Expected: `node --check OK` + hygiene OK.
 
 - [ ] **Step 8: Commit**
 
@@ -465,7 +466,7 @@ Run: `node nd-e2e/tool-borrow-concurrency.mjs`. Expected: all checks pass, inclu
 
 - [ ] **Step 5: Validate**
 
-Run: `node scratchpad/validate.mjs monitoring/roll-call.html`. Expected: `node --check OK` + hygiene OK. Bump the stamp + `preflight.html` `EXPECT` in lockstep.
+Run: `node scratchpad/validate.mjs monitoring/roll-call.html`. Expected: `node --check OK` + hygiene OK. Bump the stamp added in Task 2 (`v2026-07-16a` → `v2026-07-16b`) and `preflight.html` `EXPECT` in lockstep.
 
 - [ ] **Step 6: Commit**
 

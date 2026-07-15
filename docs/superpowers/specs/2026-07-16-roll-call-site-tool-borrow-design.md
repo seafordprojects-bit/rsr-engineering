@@ -166,9 +166,21 @@ rollback-on-mismatch pattern as `site-rename-carmen-mandaue.sql`, with a read-on
    retry — never a possibly-duplicate number. This applies to the phone **and** the Tools page so both
    writers act alike. Consequence to accept knowingly: if numbering is unavailable, borrowing stops
    rather than producing a bad paper trail.
-2. **`next_no` must be verified collision-safe** (owner agreed). It is not in this repo — applied directly
-   in Supabase — so it cannot be read from the code. If it is not atomic it is itself the shared counter
-   requirement 3 rules out. **This is a hard gate: the plan verifies it before any code relies on it.**
+2. **`next_no` — VERIFIED SAFE 2026-07-16. Gate passed; Tasks 4/5 may rely on it.**
+   The owner supplied the definition: it allocates via
+   `INSERT INTO slip_counters ... ON CONFLICT (prefix, site_code) DO UPDATE SET n = slip_counters.n + 1
+   RETURNING n` — the atomic upsert. Concurrent callers serialize on the counter row lock: the second
+   blocks, re-reads the committed `n`, returns `n+1`. No read-modify-write, no duplicate numbers.
+   **Confirmed it genuinely runs in production, not merely that it would be safe if it did:** `slip_counters`
+   holds live rows with counters past 1 (`DR/CAR n=5`, `LPR/CAR n=4`, `DLV/CAR n=5`, `BS/CAR n=1`), which is
+   only reachable via the `DO UPDATE` branch — proving the required unique index on `(prefix, site_code)`
+   exists. Had that index been missing, `next_no` would error on *every* call and the swallowed-error
+   fallback would have hidden it: a permanently-broken `next_no` looks identical to a working one from the
+   outside. The single real borrow slip is `BS-CAR-000001`, matching `BS/CAR n=1` — a server number.
+   **Consequence to accept knowingly:** the counter commits in its own call, before the borrow row is
+   inserted, so a cancelled or failed borrow **burns a number**. Expect occasional gaps in slip numbers
+   (no `BS-CAR-000004`). Gaps, never duplicates — that is the correct trade, but it will look like a
+   missing slip to anyone auditing the paper trail.
 3. **Stale `sites` rows.** The shared `sites` table still has `A`/"Site A" and `B`/"Site B" next to
    Carmen/Mandaue. Harmless here (we match on `attendance_sites` names), but it is inventory-owned
    cruft worth a separate cleanup decision.
