@@ -3,7 +3,18 @@
 **Supersedes all earlier front-page/monitoring-restructure messages.** Smaller than previously
 specced because the hub page already exists with the right groups.
 
-## Current state (verified 2026-07-10)
+> ## ⚠ SHIPPED 2026-07-10 — scope items 1–4 are DONE (commit `919e147`)
+> **The "Current state" section below is STALE — it describes the world BEFORE this spec was built.**
+> It is kept only as the record of what was true when the spec was written. Do NOT read it as current;
+> notably, the roll-call phone, its passcode and its device registration ARE built and live
+> (`monitoring/roll-call.html:135-208`, admin reset `home.js:1518-1527`), and the `settings` vs
+> `localStorage` TBD resolved to **both** (`settings.roll_call_pin` + `settings.roll_call_device_id`,
+> plus a per-device token in `localStorage['rsr_rollcall_device']`).
+>
+> **Roll-call work continues in `2026-07-16-roll-call-site-tool-borrow-design.md`**, which supersedes
+> section 4 below and carries a freshly verified current-state.
+
+## Current state (verified 2026-07-10 — STALE, see the banner above)
 - Root **CHOOSE YOUR AREA** chooser (`home.js` ~935–951) shows **two** cards: Coordinator, Issuance. No Job Monitoring card.
 - **Hub** `monitoring/index.html` (commit `5c65483`) exists and exposes **all four groups publicly**:
   Field (Job Order, Roll-call), Planning (Schedule, Assign), Productivity (Efficiency, Monitor),
