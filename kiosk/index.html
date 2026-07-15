@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-12a</span>
+        <span id="version-stamp">v2026-07-14a</span>
       </div>
     </div>
   </div>
@@ -5071,7 +5071,10 @@ async function pushRecord(empCode, date){
       is_late: rec.isLate || false, late_ms: rec.lateMs || 0, worked_ms: workedMs, ot_ms: otMs,
       has_ot_allowance: rec.hasOTAllowance || false, has_away_allowance: rec.hasAllowance || false,
       is_incomplete: isIncomplete, straight_duty_lunch: rec.straightDutyLunch || false,
-      straight_duty_pm: rec.straightDutyPm || false, night_shift: rec.nightShift || false, status: status
+      // DB column is `night_duty` (NOT `night_shift`). Sending `night_shift` made PostgREST
+      // reject the whole upsert (400 / PGRST204 unknown column), so every punch 400'd and
+      // stuck in the queue forever ("Syncing N…"). This is the actual stuck-queue cause.
+      straight_duty_pm: rec.straightDutyPm || false, night_duty: rec.nightShift || false, status: status
     };
     // Single atomic upsert keyed on the (employee_code, date) unique constraint
     // (uniq_attendance_emp_date): updates that employee's row for the day, or
@@ -5080,7 +5083,20 @@ async function pushRecord(empCode, date){
       .upsert(payload, { onConflict: 'employee_code,date' });
     if (error) throw error;
     return true;
-  } catch(e) { console.warn('Sync failed (will retry):', e && e.message ? e.message : e); return false; }
+  } catch(e) {
+    // A duplicate-key rejection (Postgres 23505 / HTTP 409) means this punch is ALREADY in
+    // Supabase — the goal is met, so treat it as success and let the caller dequeue it.
+    // Without this, a row that landed during an outage retries forever ("Syncing N…" stuck).
+    // Genuine failures (network down, 5xx) fall through and stay queued for the 30s retry.
+    const code = e && (e.code != null ? String(e.code) : (e.status != null ? String(e.status) : ''));
+    const msg = e && e.message ? String(e.message) : '';
+    if (code === '23505' || code === '409' || /duplicate key|already exists/i.test(msg)) {
+      console.warn('Sync: row already present — treated as done:', msg || code);
+      return true;
+    }
+    console.warn('Sync failed (will retry):', msg || e);
+    return false;
+  }
 }
 
 // keep the old function name working: now it just queues + flushes
@@ -5121,6 +5137,11 @@ setInterval(syncFlush, 30000);
 window.addEventListener('online', () => { updateSyncBadge(); syncFlush(); });
 window.addEventListener('offline', updateSyncBadge);
 setTimeout(updateSyncBadge, 2500);
+// On page load, if punches are already queued from a prior (offline) session, attempt one
+// sync pass immediately — don't wait for the 30s timer or the 2.5s startup delay. Safe here:
+// loadData() (line ~4596) has already populated `employees`/`records` from localStorage, and
+// syncFlush is guarded by `syncing` so it can't overlap the delayed startup flush below.
+if (pendingCount() > 0) syncFlush();
 // Sync hardening (additive): flush shortly after startup so punches stranded from a
 // previous offline session upload immediately (independent of initSupabaseSync, whose
 // flush is gated behind awaited network loads), and again whenever the tab becomes
