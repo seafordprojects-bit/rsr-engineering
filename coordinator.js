@@ -150,6 +150,35 @@ async function getAttendance(dateStr) {
   if (error) throw error;
   return data || [];
 }
+// --- roll-call (READ-ONLY for the coordinator) ---------------------------------
+// Roll-call ENTRY is exclusive to the registered roll-call phone. Everything below is a
+// double-check surface: SELECTs only, never a write. Do not add insert/update/delete here.
+//
+// NOTE: job_checkpoint.work_date is a real DATE (YYYY-MM-DD) — unlike attendance_records.date,
+// which is TEXT in mixed MM/DD/YYYY form. todayPH() returns MM/DD/YYYY and would match nothing.
+function todayYmd() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+async function getRollCall(dateStr) {
+  const { data, error } = await supabase.from('job_checkpoint')
+    .select('id,job_id,employee_code,work_date,checkpoint,hours,is_ot,site')
+    .eq('work_date', dateStr).order('checkpoint', { ascending: true });
+  if (error) throw error;
+  return data || [];
+}
+async function getRollCallPauses(dateStr) {
+  const { data, error } = await supabase.from('job_pause')
+    .select('id,job_id,paused_on,resumed_on,reason,site').lte('paused_on', dateStr);
+  if (error) throw error;
+  return (data || []).filter(p => !p.resumed_on || p.resumed_on > dateStr);
+}
+async function getJobsBrief() {
+  const { data, error } = await supabase.from('jobs').select('id,job_no,vessel,location,site').order('job_no');
+  if (error) throw error;
+  return data || [];
+}
+
 // --- approvals (assistant can approve; notifies admin via Telegram) ---
 async function getPendingLateBreaks() {
   const { data, error } = await supabase.from('late_break_requests')
@@ -659,6 +688,101 @@ function Attendance({ toast }) {
                 </div>`}
               </div>`;
           })}
+    </div>`;
+}
+
+// READ-ONLY roll-call view: see every entry by day / job / yard. Deliberately has NO add,
+// edit, untag or pause control — entry belongs to the registered roll-call phone alone, which
+// is what keeps one source of truth for the KPI hours. If you are tempted to add a write here,
+// that is a change to Policy, not to this file.
+function RollCall({ employees, toast }) {
+  const [date, setDate] = useState(todayYmd());
+  const [rows, setRows] = useState(null);
+  const [pauses, setPauses] = useState([]);
+  const [jobs, setJobs] = useState([]);
+  const [yards, setYards] = useState([]);
+  const [fJob, setFJob] = useState('');
+  const [fSite, setFSite] = useState('');
+
+  useEffect(() => {
+    getJobsBrief().then(setJobs).catch(e => toast && toast('Load failed: ' + e.message, true));
+    // Yard list is DATA (settings.attendance_sites) — the same list the kiosk and the phone read.
+    (async () => {
+      try {
+        const raw = await getSetting('attendance_sites');
+        const a = raw ? JSON.parse(raw) : [];
+        if (Array.isArray(a)) setYards(a.map(x => String(x).trim()).filter(Boolean));
+      } catch (_) {}
+    })();
+  }, []);
+
+  useEffect(() => {
+    setRows(null);
+    getRollCall(date).then(setRows).catch(e => { toast && toast('Load failed: ' + e.message, true); setRows([]); });
+    getRollCallPauses(date).then(setPauses).catch(() => setPauses([]));
+  }, [date]);
+
+  const jobOf = (id) => jobs.find(j => j.id === id);
+  // job_checkpoint.employee_code holds the employees.id UUID (the roll-call phone tags by id).
+  const nameOf = (code) => { const e = (employees || []).find(x => x.id === code || x.code === code); return e ? e.name : code; };
+
+  const shown = (rows || []).filter(r => (!fJob || r.job_id === fJob) && (!fSite || r.site === fSite));
+  const byJob = {};
+  shown.forEach(r => { (byJob[r.job_id] = byJob[r.job_id] || []).push(r); });
+  const hours = shown.reduce((t, r) => t + (Number(r.hours) || 0), 0);
+  const otCount = shown.filter(r => r.is_ot).length;
+
+  return html`
+    <div class="card">
+      ${stepHead(1, 'Pick a day', 'Every roll-call entry for that date — view only')}
+      <${Field} label="Date">
+        <input type="date" value=${date} onInput=${e => setDate(e.target.value)} />
+      <//>
+      <${Field} label="Job order">
+        <select value=${fJob} onChange=${e => setFJob(e.target.value)}>
+          <option value="">All job orders</option>
+          ${jobs.map(j => html`<option value=${j.id}>${j.job_no} · ${j.vessel}</option>`)}
+        </select>
+      <//>
+      <${Field} label="Yard">
+        <select value=${fSite} onChange=${e => setFSite(e.target.value)}>
+          <option value="">All yards</option>
+          ${yards.map(n => html`<option value=${n}>${n}</option>`)}
+        </select>
+      <//>
+      ${rows && html`<div class="sub" style="color:var(--ink-dim)">${shown.length} entr${shown.length === 1 ? 'y' : 'ies'} · ${hours} h${otCount ? ' · ' + otCount + ' OT' : ''}</div>`}
+    </div>
+
+    ${pauses.length > 0 && html`
+      <div class="card">
+        <label>On hold — ${date}</label>
+        ${pauses.filter(p => (!fJob || p.job_id === fJob) && (!fSite || p.site === fSite)).map(p => html`
+          <div class="row" key=${p.id}>
+            <div>
+              <div class="name">${(jobOf(p.job_id) || {}).job_no || 'Job'}</div>
+              <div class="sub">On hold since ${p.paused_on}${p.reason ? ' · ' + p.reason : ''}${p.site ? ' · ' + p.site : ''}</div>
+            </div>
+          </div>`)}
+      </div>`}
+
+    <div class="card">
+      <label>Roll-call — ${date}</label>
+      ${rows == null ? html`<div class="empty">Loading…</div>`
+        : shown.length === 0 ? html`<div class="empty">No roll-call entries for this day${fJob || fSite ? ' with these filters' : ''}.</div>`
+        : Object.keys(byJob).map(jid => {
+            const j = jobOf(jid) || {};
+            const list = byJob[jid];
+            return html`
+              <div class="row" key=${jid} style="flex-direction:column;align-items:stretch;gap:0">
+                <div class="name">${j.job_no || 'Job'} ${j.vessel ? '· ' + j.vessel : ''}</div>
+                <div class="sub" style="margin-bottom:4px">${list.length} present · ${list.reduce((t, r) => t + (Number(r.hours) || 0), 0)} h${list[0] && list[0].site ? ' · ' + list[0].site : ''}</div>
+                <div style="font-size:13px;color:var(--ink-dim);line-height:1.7">
+                  ${list.map(r => html`
+                    <div key=${r.id}>${r.checkpoint} — <b style="color:var(--ink)">${nameOf(r.employee_code)}</b> · ${r.hours}h${r.is_ot ? ' · OT' : ''}</div>`)}
+                </div>
+              </div>`;
+          })}
+      <div class="note" style="color:var(--ink-dim);margin-top:8px">View only — roll-call is entered on the registered roll-call phone.</div>
     </div>`;
 }
 
@@ -1451,17 +1575,22 @@ function App() {
           <div style="font-size:24px">✅</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Approvals</div>
           <div class="sub" style="font-size:12px;color:var(--ink-dim)">Late breaks & straight duty</div>
         </div>
+        <div class="card" style="cursor:pointer;margin:0;grid-column:1/-1" onClick=${() => setArea('rollcall')}>
+          <div style="font-size:24px">📋</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Roll-call</div>
+          <div class="sub" style="font-size:12px;color:var(--ink-dim)">View entries by day, job & yard — view only</div>
+        </div>
       </div>
     </div>
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}`;
 
   // ---- areas ----
   return html`
-    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'attendance' ? 'ATTENDANCE' : area === 'approvals' ? 'APPROVALS' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISCELLANEOUS':'SUMMARY') : '')) : 'PERSONNEL DATA')}
+    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'attendance' ? 'ATTENDANCE' : area === 'rollcall' ? 'ROLL-CALL (VIEW ONLY)' : area === 'approvals' ? 'APPROVALS' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISCELLANEOUS':'SUMMARY') : '')) : 'PERSONNEL DATA')}
     <div class="wrap">
       ${area === 'vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
       ${area === 'expenses' && html`<${Expenses} voyages=${voyages} toast=${flash} />`}
       ${area === 'attendance' && html`<${Attendance} toast=${flash} />`}
+      ${area === 'rollcall' && html`<${RollCall} employees=${employees} toast=${flash} />`}
       ${area === 'approvals' && html`<${Approvals} toast=${flash} />`}
       ${area === 'liquidation' && html`<${Liquidation} voyages=${voyages} employees=${employees} sites=${sites} toast=${flash} tab=${liqTab} setTab=${setLiqTab} />`}
       ${area === 'personnel' && html`
