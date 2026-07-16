@@ -8,6 +8,10 @@
   "orientation": "portrait",
   "background_color": "#f4f5f7",
   "theme_color": "#2f5d8a",
+  "shortcuts": [
+    { "name": "Roll-call — Carmen", "short_name": "Carmen", "url": "./roll-call.html?site=Carmen" },
+    { "name": "Roll-call — Mandaue", "short_name": "Mandaue", "url": "./roll-call.html?site=Mandaue" }
+  ],
   "icons": [
     {
       "src": "data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='512'%20height='512'%3E%3Crect%20width='512'%20height='512'%20rx='96'%20fill='%232f5d8a'/%3E%3Cpath%20d='M150%20260l70%2070%20150-150'%20fill='none'%20stroke='%23fff'%20stroke-width='36'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E",

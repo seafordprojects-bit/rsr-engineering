@@ -26,6 +26,11 @@
   header.top{display:flex;align-items:baseline;justify-content:space-between;padding:10px 2px 12px}
   header.top h1{font-size:19px;margin:0}
   header.top .sub{color:var(--muted);font-size:12.5px}
+  /* Yard badge — filled in by SiteGate from ?site=. Hidden while empty so the header
+     never shows a bare chip before the yard is known. */
+  .sbadge{font-size:12px;font-weight:700;letter-spacing:.3px;vertical-align:middle;background:#e8f0f8;
+        color:var(--steel-d);border:1px solid #cfe0ef;border-radius:10px;padding:2px 8px;margin-left:6px}
+  .sbadge:empty{display:none}
   a.back{color:var(--steel);text-decoration:none;font-size:13px}
 
   .bar{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:13px;margin-bottom:14px}
@@ -99,8 +104,8 @@
   <div class="wrap">
     <header class="top">
       <div>
-        <h1>Roll-call</h1>
-        <div class="sub">Tap who is present each checkpoint</div>
+        <h1>Roll-call <span id="site-badge" class="sbadge"></span></h1>
+        <div class="sub">Tap who is present each checkpoint &middot; v2026-07-16a</div>
       </div>
       <a class="back" href="index.html">&larr; Menu</a>
     </header>
@@ -131,8 +136,82 @@
       return String(Date.now()) + "-" + Math.round(Math.random() * 1e9);
     }
 
+    // --- yard (site) helpers -------------------------------------------------
+    // The yard list is DATA (settings.attendance_sites — the same list the kiosk reads), never a
+    // hardcoded list here. A new yard added to that array works with no code change.
+    async function siteList(){
+      try {
+        const raw = await getSetting("attendance_sites");
+        const arr = raw ? JSON.parse(raw) : [];
+        return Array.isArray(arr) ? arr.map(x => String(x).trim()).filter(Boolean) : [];
+      } catch(_) { return []; }
+    }
+    // Roll-call entries store the yard NAME ("Carmen"); jobs store the CODE ("CAR"). The pairing
+    // comes from the shared `sites` table — read only, the inventory system owns it. Its stale
+    // "Site A"/"Site B" rows can never match, because we only look up names from attendance_sites.
+    async function siteCodeFor(name){
+      const { data } = await sb.from("sites").select("code,name");
+      const hit = (data||[]).find(s => String(s.name).trim().toLowerCase() === String(name).trim().toLowerCase());
+      return hit ? hit.code : null;
+    }
+
+    // --- yard gate: ?site= decides the yard. REFUSE rather than guess ---------
+    // Outermost on purpose: a missing/unknown yard is a URL problem, so there is no point making
+    // the in-charge type the passcode first only to be turned away. Defaulting to a yard is never
+    // an option — a wrong-yard entry is silently wrong data, which is worse than a blocked screen.
+    function SiteGate(){
+      const [phase,setPhase] = useState("checking");   // checking|noyards|nosite|badsite|ok
+      const [yards,setYards] = useState([]);
+      const [asked,setAsked] = useState("");
+      const [site,setSite]   = useState("");
+      const [code,setCode]   = useState(null);
+
+      useEffect(() => { (async () => {
+        const list = await siteList();
+        setYards(list);
+        const want = (new URLSearchParams(location.search).get("site") || "").trim();
+        setAsked(want);
+        if (!list.length) { setPhase("noyards"); return; }
+        if (!want) { setPhase("nosite"); return; }
+        // Match case-insensitively but keep the list's canonical spelling: a hand-typed shortcut
+        // shouldn't fail on case, and it still has to be a yard we actually know.
+        const hit = list.find(n => n.toLowerCase() === want.toLowerCase());
+        if (!hit) { setPhase("badsite"); return; }
+        setSite(hit);
+        setCode(await siteCodeFor(hit));
+        setPhase("ok");
+      })(); }, []);
+
+      // The badge lives in the static header, outside the app root.
+      useEffect(() => {
+        const el = document.getElementById("site-badge");
+        if (el) el.textContent = (phase === "ok") ? site : "";
+      }, [phase, site]);
+
+      if (phase === "checking") return html`<div class="loading">Checking site&hellip;</div>`;
+      if (phase === "ok") return html`<${Gate} site=${site} siteCode=${code} />`;
+      if (phase === "noyards") return html`
+        <div class="gate">
+          <div class="gicon">\u{1F3D7}</div>
+          <h2>Wala pa na-set ang yard</h2>
+          <p>Palihug adto sa Admin aron ma-set ang listahan sa yard, unya i-reload ni nga page.</p>
+        </div>`;
+      if (phase === "badsite") return html`
+        <div class="gate">
+          <div class="gicon">\u{2753}</div>
+          <h2>Wala mailhi nga site: ${asked}</h2>
+          <p>Ablihi ni gikan sa shortcut sa home screen: ${yards.join(" o ")}.</p>
+        </div>`;
+      return html`
+        <div class="gate">
+          <div class="gicon">\u{1F4CD}</div>
+          <h2>Asa nga yard?</h2>
+          <p>Ablihi ni nga page gikan sa shortcut sa home screen: ${yards.join(" o ")}.</p>
+        </div>`;
+    }
+
     // --- passcode + one-device gate that wraps the roll-call app ---
-    function Gate(){
+    function Gate({ site, siteCode }){
       const [phase, setPhase] = useState("checking"); // checking|blocked|nopin|need|ok
       const [pin, setPin] = useState("");
       const [err, setErr] = useState("");
@@ -180,7 +259,7 @@
       }
 
       if (phase === "checking") return html`<div class="loading">Checking device&hellip;</div>`;
-      if (phase === "ok") return html`<${App} />`;
+      if (phase === "ok") return html`<${App} site=${site} siteCode=${siteCode} />`;
       if (phase === "blocked") return html`
         <div class="gate">
           <div class="gicon">⛔</div>
@@ -216,7 +295,7 @@
     }
     function daysBetween(a,b){ return Math.round((new Date(b+"T00:00:00")-new Date(a+"T00:00:00"))/86400000); }
 
-    function App(){
+    function App({ site, siteCode }){
       const [date,setDate]=useState(todayLocal());
       const [cp,setCp]=useState(nearestCheckpoint());
       const [emps,setEmps]=useState([]);          // [{id,name}]
@@ -237,9 +316,12 @@
       async function reload(){
         setMsg("");
         const dnow=date;
+        // Fail closed: a yard with no code in `sites` shows NO jobs rather than every yard's.
+        // Showing the wrong yard's jobs is how a wrong-yard entry gets made.
+        if(!siteCode){ setJobs([]); setRows([]); setPauses([]); return; }
         const jq = sb.from("jobs")
-          .select("id,job_no,vessel,location,start_date,target_date,status,est_manhours,quantity,unit")
-          .not("status","in","(done,closed)").order("job_no");
+          .select("id,job_no,vessel,location,start_date,target_date,status,est_manhours,quantity,unit,site")
+          .not("status","in","(done,closed)").eq("site",siteCode).order("job_no");
         const aq = sb.from("job_assignment").select("job_id,employee_code");
         const cq = sb.from("job_checkpoint").select("id,job_id,employee_code")
           .eq("work_date",dnow).eq("checkpoint",cp);
@@ -286,7 +368,7 @@
         const otFlag = (CHECKPOINTS.find(c=>c.code===cp)||{}).ot || false;
         const {error}=await sb.from("job_checkpoint").insert({
           job_id:job, employee_code:code, work_date:date, checkpoint:cp,
-          hours:HOURS_PER_CHECKPOINT, is_ot:otFlag,
+          hours:HOURS_PER_CHECKPOINT, is_ot:otFlag, site,   // yard NAME, from ?site=
         });
         setBusy(false);
         if(error){ setMsg(error.message); return; }
@@ -315,7 +397,7 @@
       async function doPause(job,reason){
         setPausing(null);
         setBusy(true);
-        const {error}=await sb.from("job_pause").insert({ job_id:job, paused_on:date, reason });
+        const {error}=await sb.from("job_pause").insert({ job_id:job, paused_on:date, reason, site });
         setBusy(false);
         if(error){ setMsg(error.message); return; }
         reload();
@@ -425,7 +507,7 @@
       `;
     }
 
-    render(html`<${Gate} />`, document.getElementById("app"));
+    render(html`<${SiteGate} />`, document.getElementById("app"));
   </script>
 </body>
 </html>
