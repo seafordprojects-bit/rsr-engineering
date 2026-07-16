@@ -88,26 +88,6 @@
   .gate .gbtn{width:100%;margin-top:14px;padding:14px;font-size:16px;font-weight:700;color:#fff;
         background:var(--steel);border:none;border-radius:12px}
   .gate .gbtn:disabled{opacity:.6}
-
-  /* tool borrowing */
-  .borrowbtn{width:100%;margin-bottom:14px;padding:13px;font-size:15px;font-weight:700;color:#fff;
-       background:var(--steel);border:none;border-radius:12px}
-  .borrowbtn:disabled{opacity:.6}
-  .ov{position:fixed;inset:0;background:rgba(20,26,38,.55);z-index:50;display:flex;align-items:flex-start;
-      justify-content:center;padding:14px;overflow-y:auto}
-  .ovcard{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);
-      width:100%;max-width:560px;padding:16px;margin-top:14px}
-  .ovhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px}
-  .ovcard label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin:11px 0 5px}
-  .ovcard select,.ovcard input[type=text]{width:100%;padding:10px 12px;border:1px solid var(--line);
-      border-radius:10px;font-size:15px;background:#fcfcfd;font-family:inherit}
-  .ovhead .x{background:none;border:none;color:var(--muted);font-size:15px;font-weight:700}
-  .brcart{margin-top:11px;display:flex;flex-direction:column;gap:6px}
-  .brrow{display:flex;justify-content:space-between;align-items:center;background:#f7fafd;
-      border:1px solid #e2ebf4;border-radius:9px;padding:8px 11px;font-size:14px}
-  .brrow .rm{background:none;border:none;color:var(--warn);font-size:12.5px;font-weight:700}
-  .brsum{font-size:14px;margin:8px 0;line-height:1.5}
-  .brnote{color:var(--muted);font-size:13px;margin:2px 0 12px}
 </style>
 <script type="importmap">
 {
@@ -125,7 +105,7 @@
     <header class="top">
       <div>
         <h1>Roll-call <span id="site-badge" class="sbadge"></span></h1>
-        <div class="sub">Tap who is present each checkpoint &middot; v2026-07-16b</div>
+        <div class="sub">Tap who is present each checkpoint &middot; v2026-07-16c</div>
       </div>
       <a class="back" href="index.html">&larr; Menu</a>
     </header>
@@ -138,207 +118,10 @@
     import htm from "htm";
     import { sb, CHECKPOINTS, HOURS_PER_CHECKPOINT, loadEmployees, todayLocal, ymd, addDays,
              upsertJobProgress, loadJobProgressFor } from "./config.js";
+    // The ?site= + roll-call-passcode + one-device gate is shared with borrow.html (see
+    // rollcall-core.js) so the two field-phone surfaces can never drift apart.
+    import { Shell } from "./rollcall-core.js";
     const html = htm.bind(h);
-
-    // --- settings helpers (mirror home.js select-then-update-or-insert) ---
-    async function getSetting(key){
-      const { data } = await sb.from("settings").select("value").eq("key", key).limit(1);
-      return data && data.length ? data[0].value : null;
-    }
-    async function setSetting(key, value){
-      const { data } = await sb.from("settings").select("id").eq("key", key).limit(1);
-      if (data && data.length) { await sb.from("settings").update({ value }).eq("key", key); }
-      else { await sb.from("settings").insert({ key, value }); }
-    }
-    const DEVKEY = "rsr_rollcall_device";
-    function newToken(){
-      try { if (crypto && crypto.randomUUID) return crypto.randomUUID(); } catch(_){}
-      return String(Date.now()) + "-" + Math.round(Math.random() * 1e9);
-    }
-
-    // --- yard (site) helpers -------------------------------------------------
-    // The yard list is DATA (settings.attendance_sites — the same list the kiosk reads), never a
-    // hardcoded list here. A new yard added to that array works with no code change.
-    async function siteList(){
-      try {
-        const raw = await getSetting("attendance_sites");
-        const arr = raw ? JSON.parse(raw) : [];
-        const list = Array.isArray(arr) ? arr.map(x => String(x).trim()).filter(Boolean) : [];
-        // Cache for the locked field-phone menu (monitoring/index.html), which renders yard tiles
-        // instantly from this even offline. Shared key with the kiosk's yard cache.
-        try { if (list.length) localStorage.setItem("rsr_sites", JSON.stringify(list)); } catch(_){}
-        return list;
-      } catch(_) { return []; }
-    }
-    // Roll-call entries store the yard NAME ("Carmen"); jobs store the CODE ("CAR"); tool borrows
-    // store the site's id (UUID). All three come from the shared `sites` table — read only, the
-    // inventory system owns it. Its stale "Site A"/"Site B" rows can never match, because we only
-    // look up names present in attendance_sites.
-    async function siteRowFor(name){
-      const { data } = await sb.from("sites").select("id,code,name");
-      return (data||[]).find(s => String(s.name).trim().toLowerCase() === String(name).trim().toLowerCase()) || null;
-    }
-
-    // --- tool-borrow helpers (REUSE borrow_issuance + next_no; no parallel system) ------------
-    // Available tool units at a yard = active units at the site minus anything currently out.
-    async function loadAvailTools(siteId){
-      if(!siteId) return [];
-      const ures = await sb.from("item_units").select("id,unit_code,status,item_id,items(name,item_code,price)").eq("active",true).eq("site_id",siteId);
-      const bres = await sb.from("borrow_issuance").select("unit_id").eq("status","out").eq("site_id",siteId);
-      const out = new Set((bres.data||[]).map(b=>b.unit_id));
-      const map={};
-      (ures.data||[]).forEach(u=>{
-        if(u.status!=="available" || out.has(u.id)) return;
-        const k=u.item_id;
-        if(!map[k]) map[k]={itemId:k, name:(u.items&&u.items.name)||"—", price:(u.items&&u.items.price)||0, units:[]};
-        map[k].units.push({id:u.id, code:u.unit_code});
-      });
-      return Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
-    }
-    // Who holds a unit that is out, on which slip, since when — so a rejection names a person.
-    async function describeUnitHolder(unitId){
-      try{
-        const { data } = await sb.from("borrow_issuance")
-          .select("slip_no,borrowed_at,employees(name)").eq("unit_id",unitId).eq("status","out").limit(1);
-        const r=(data||[])[0]; if(!r) return null;
-        return { name:(r.employees&&r.employees.name)||"someone", slip_no:r.slip_no,
-                 since:r.borrowed_at?String(r.borrowed_at).slice(0,10):"" };
-      }catch(_){ return null; }
-    }
-
-    // --- yard gate: ?site= decides the yard. REFUSE rather than guess ---------
-    // Outermost on purpose: a missing/unknown yard is a URL problem, so there is no point making
-    // the in-charge type the passcode first only to be turned away. Defaulting to a yard is never
-    // an option — a wrong-yard entry is silently wrong data, which is worse than a blocked screen.
-    function SiteGate(){
-      const [phase,setPhase] = useState("checking");   // checking|noyards|nosite|badsite|ok
-      const [yards,setYards] = useState([]);
-      const [asked,setAsked] = useState("");
-      const [site,setSite]   = useState("");
-      const [code,setCode]   = useState(null);
-      const [siteId,setSiteId] = useState(null);
-
-      useEffect(() => { (async () => {
-        const list = await siteList();
-        setYards(list);
-        const want = (new URLSearchParams(location.search).get("site") || "").trim();
-        setAsked(want);
-        if (!list.length) { setPhase("noyards"); return; }
-        if (!want) { setPhase("nosite"); return; }
-        // Match case-insensitively but keep the list's canonical spelling: a hand-typed shortcut
-        // shouldn't fail on case, and it still has to be a yard we actually know.
-        const hit = list.find(n => n.toLowerCase() === want.toLowerCase());
-        if (!hit) { setPhase("badsite"); return; }
-        setSite(hit);
-        const row = await siteRowFor(hit);
-        setCode(row ? row.code : null);
-        setSiteId(row ? row.id : null);
-        setPhase("ok");
-      })(); }, []);
-
-      // The badge lives in the static header, outside the app root.
-      useEffect(() => {
-        const el = document.getElementById("site-badge");
-        if (el) el.textContent = (phase === "ok") ? site : "";
-      }, [phase, site]);
-
-      if (phase === "checking") return html`<div class="loading">Checking site&hellip;</div>`;
-      if (phase === "ok") return html`<${Gate} site=${site} siteCode=${code} siteId=${siteId} />`;
-      if (phase === "noyards") return html`
-        <div class="gate">
-          <div class="gicon">\u{1F3D7}</div>
-          <h2>Wala pa na-set ang yard</h2>
-          <p>Palihug adto sa Admin aron ma-set ang listahan sa yard, unya i-reload ni nga page.</p>
-        </div>`;
-      if (phase === "badsite") return html`
-        <div class="gate">
-          <div class="gicon">\u{2753}</div>
-          <h2>Wala mailhi nga site: ${asked}</h2>
-          <p>Ablihi ni gikan sa shortcut sa home screen: ${yards.join(" o ")}.</p>
-        </div>`;
-      return html`
-        <div class="gate">
-          <div class="gicon">\u{1F4CD}</div>
-          <h2>Asa nga yard?</h2>
-          <p>Ablihi ni nga page gikan sa shortcut sa home screen: ${yards.join(" o ")}.</p>
-        </div>`;
-    }
-
-    // --- passcode + one-device gate that wraps the roll-call app ---
-    function Gate({ site, siteCode, siteId }){
-      const [phase, setPhase] = useState("checking"); // checking|blocked|nopin|need|ok
-      const [pin, setPin] = useState("");
-      const [err, setErr] = useState("");
-      const [busy, setBusy] = useState(false);
-
-      useEffect(() => { (async () => {
-        try {
-          const localTok = localStorage.getItem(DEVKEY);
-          const [regId, cfgPin] = await Promise.all([
-            getSetting("roll_call_device_id"), getSetting("roll_call_pin"),
-          ]);
-          if (regId && localTok !== regId) { setPhase("blocked"); return; }
-          if (!cfgPin) { setPhase("nopin"); return; }
-          setPhase("need");
-        } catch (e) {
-          setErr("Could not reach the server. Check the connection and reload.");
-          setPhase("need");
-        }
-      })(); }, []);
-
-      async function submit(e){
-        if (e && e.preventDefault) e.preventDefault();
-        if (busy) return;
-        setErr("");
-        const entry = pin.trim();
-        if (!entry) { setErr("Enter the passcode."); return; }
-        setBusy(true);
-        try {
-          const cfgPin = await getSetting("roll_call_pin");
-          if (!cfgPin) { setBusy(false); setPhase("nopin"); return; }
-          if (entry !== String(cfgPin)) { setBusy(false); setErr("Wrong passcode."); setPin(""); return; }
-          // passcode correct — enforce / claim the one-device lock
-          const regId = await getSetting("roll_call_device_id");
-          let localTok = localStorage.getItem(DEVKEY);
-          if (regId && localTok !== regId) { setBusy(false); setPhase("blocked"); return; }
-          if (!regId) {
-            const tok = localTok || newToken();
-            localStorage.setItem(DEVKEY, tok);
-            await setSetting("roll_call_device_id", tok);
-          }
-          setBusy(false); setPhase("ok");
-        } catch (err) {
-          setBusy(false); setErr("Could not verify: " + err.message);
-        }
-      }
-
-      if (phase === "checking") return html`<div class="loading">Checking device&hellip;</div>`;
-      if (phase === "ok") return html`<${App} site=${site} siteCode=${siteCode} siteId=${siteId} />`;
-      if (phase === "blocked") return html`
-        <div class="gate">
-          <div class="gicon">⛔</div>
-          <h2>This phone isn't the roll-call device</h2>
-          <p>Roll-call is locked to one registered phone. Ask the admin to reset the roll-call device
-             (Admin &rarr; Settings &rarr; Roll-call phone) if this phone should take over.</p>
-        </div>`;
-      if (phase === "nopin") return html`
-        <div class="gate">
-          <div class="gicon">\u{1F512}</div>
-          <h2>Roll-call passcode not set</h2>
-          <p>Ask the admin to set the roll-call passcode in Admin &rarr; Settings &rarr; Roll-call phone,
-             then reload this page.</p>
-        </div>`;
-      return html`
-        <form class="gate" onSubmit=${submit}>
-          <div class="gicon">\u{1F4F1}</div>
-          <h2>Roll-call</h2>
-          <p>Enter the roll-call passcode.</p>
-          <input class="gpin" type="password" inputmode="numeric" autocomplete="off" value=${pin}
-                 onInput=${e => setPin(e.target.value)} placeholder="passcode" autofocus />
-          ${err && html`<div class="gerr">${err}</div>`}
-          <button class="gbtn" type="submit" disabled=${busy}>${busy ? "Checking…" : "Unlock"}</button>
-        </form>`;
-    }
 
     const cpMinutes = (code) => { const [h,m]=code.split(":").map(Number); return h*60+m; };
     function nearestCheckpoint(){
@@ -349,137 +132,9 @@
     }
     function daysBetween(a,b){ return Math.round((new Date(b+"T00:00:00")-new Date(a+"T00:00:00"))/86400000); }
 
-    // --- Tool borrowing ON THE PHONE (reuses borrow_issuance + next_no + verify_pin) ----------
-    // No warehouse issuance PIN here: the in-charge is already past the roll-call passcode (owner
-    // decision 3). The BORROWER still types their own passcode to accept the tool — that is the
-    // accountability trail. Slip numbers are server-only (next_no); on failure it REFUSES, never a
-    // device-clock fallback (same rule as the Tools page). A unit already out is rejected by the DB
-    // (uniq_borrow_unit_out, 23505) and the message names who has it. source="roll-call-phone".
-    const ISSUER = "Roll-call phone";
-    function Borrow({ site, siteCode, siteId, emps, onClose }){
-      const [avail,setAvail]=useState(null);   // [{itemId,name,price,units:[{id,code}]}]
-      const [empId,setEmpId]=useState("");
-      const [vessel,setVessel]=useState("");
-      const [toolId,setToolId]=useState("");
-      const [unitId,setUnitId]=useState("");
-      const [cart,setCart]=useState([]);        // [{unitId,itemId,code,name}]
-      const [phase,setPhase]=useState("build"); // build | pin
-      const [pin,setPin]=useState("");
-      const [msg,setMsg]=useState("");
-      const [busy,setBusy]=useState(false);
-
-      const refresh = ()=> loadAvailTools(siteId).then(setAvail).catch(()=>setAvail([]));
-      useEffect(()=>{ refresh(); },[]);
-
-      const tool = (avail||[]).find(t=>t.itemId===toolId);
-      const inCart = new Set(cart.map(c=>c.unitId));
-      const unitsFor = tool ? tool.units.filter(u=>!inCart.has(u.id)) : [];
-
-      function addUnit(){
-        if(!toolId||!unitId){ setMsg("Pili og gamit ug unit."); return; }
-        const u=(tool.units||[]).find(x=>x.id===unitId); if(!u) return;
-        setCart([...cart, {unitId:u.id, itemId:toolId, code:u.code, name:tool.name}]);
-        setUnitId(""); setMsg("");
-      }
-      function removeUnit(uid){ setCart(cart.filter(c=>c.unitId!==uid)); }
-
-      function toReview(){
-        setMsg("");
-        if(!empId){ setMsg("Pili kinsa ang mo-hulam."); return; }
-        if(!vessel.trim()){ setMsg("Isulat ang barko / project."); return; }
-        if(!cart.length){ setMsg("Idugang usa ka gamit."); return; }
-        setPhase("pin"); setPin("");
-      }
-
-      async function confirm(){
-        if(busy) return;
-        const code=pin.trim();
-        if(!code){ setMsg("Isulat ang passcode sa mo-hulam."); return; }
-        setBusy(true); setMsg("");
-        try{
-          // Borrower's own passcode (verify_pin) — the accountability trail (owner decision 3).
-          const { data:ok, error:pe } = await sb.rpc("verify_pin",{ emp_id:empId, pin_input:code });
-          if(pe) throw pe;
-          if(!ok){ setBusy(false); setMsg("Sayop nga passcode."); return; }
-
-          // Slip number: server-only. Refuse on failure — never a device-clock duplicate.
-          let slip="";
-          try{ const { data, error } = await sb.rpc("next_no",{ p_prefix:"BS", p_site:siteCode }); if(!error && data) slip=data; }catch(_){ }
-          if(!slip){ setBusy(false); setMsg("Wala makakuha og slip number gikan sa server. Sulayi pag-usab."); return; }
-
-          const batch = newToken();
-          const rows = cart.map(c=>({ txn_type:"borrow", employee_id:empId, item_id:c.itemId, unit_id:c.unitId,
-            site_id:siteId, quantity:1, status:"out", issued_by:ISSUER, project_vessel:vessel.trim(),
-            batch_id:batch, slip_no:slip, borrowed_at:new Date().toISOString(), source:"roll-call-phone" }));
-          const { error } = await sb.from("borrow_issuance").insert(rows);
-          if(error){
-            const ec = error.code!=null?String(error.code):"";
-            if(ec==="23505" || /duplicate key|already exists/i.test(error.message||"")){
-              const outIds=new Set();
-              try{ const { data } = await sb.from("borrow_issuance").select("unit_id").eq("status","out").in("unit_id",cart.map(c=>c.unitId)); (data||[]).forEach(r=>outIds.add(r.unit_id)); }catch(_){ }
-              const clash=cart.find(c=>outIds.has(c.unitId));
-              const holder=clash?await describeUnitHolder(clash.unitId):null;
-              setBusy(false); setPhase("build"); refresh();
-              setMsg(holder
-                ? (clash.name+" ("+clash.code+") gihulam na ni "+holder.name+(holder.slip_no?" (slip "+holder.slip_no+")":"")+". Gi-refresh ang lista.")
-                : "Naa nay laing mo-hulam ani nga gamit. Gi-refresh ang lista.");
-              return;
-            }
-            throw error;
-          }
-          setBusy(false); onClose();
-        }catch(e){ setBusy(false); setMsg("Wala ma-save: "+(e.message||e)); }
-      }
-
-      const overlay = (inner)=> html`<div class="ov"><div class="ovcard">${inner}</div></div>`;
-      if(avail===null) return overlay(html`<div class="loading">Ge-load ang gamit&hellip;</div>`);
-
-      if(phase==="pin"){
-        return overlay(html`
-          <div class="ovhead"><b>Kumpirmahon ang hulam</b><button class="x" onClick=${()=>setPhase("build")}>‹ Balik</button></div>
-          <div class="brsum">${cart.length} ka gamit · ${site}<br/>${cart.map(c=>c.name+" ("+c.code+")").join(", ")}</div>
-          <p class="brnote">Ipa-type sa mo-hulam ang iyang kaugalingong passcode aron modawat sa gamit.</p>
-          <input class="gpin" type="password" inputmode="numeric" autocomplete="off" value=${pin}
-                 onInput=${e=>setPin(e.target.value)} placeholder="passcode sa mo-hulam" autofocus />
-          ${msg && html`<div class="msg">${msg}</div>`}
-          <button class="borrowbtn" disabled=${busy} onClick=${confirm}>${busy?"Ge-proseso…":"Kumpirmahon ang hulam"}</button>
-        `);
-      }
-
-      return overlay(html`
-        <div class="ovhead"><b>\u{1F9F0} Hulam og gamit — ${site}</b><button class="x" onClick=${onClose}>✕</button></div>
-        <label>Kinsa ang mo-hulam</label>
-        <select value=${empId} onChange=${e=>setEmpId(e.target.value)}>
-          <option value="">— Pili —</option>
-          ${(emps||[]).map(e=> html`<option value=${e.id}>${e.name}</option>`)}
-        </select>
-        <label>Barko / Project</label>
-        <input type="text" value=${vessel} onInput=${e=>setVessel(e.target.value)} placeholder="pananglitan MV Maria" />
-        <label>Gamit</label>
-        <select value=${toolId} onChange=${e=>{ setToolId(e.target.value); setUnitId(""); }}>
-          <option value="">— Pili og gamit —</option>
-          ${(avail||[]).filter(t=>t.units.some(u=>!inCart.has(u.id))).map(t=> html`<option value=${t.itemId}>${t.name} (${t.units.filter(u=>!inCart.has(u.id)).length})</option>`)}
-        </select>
-        <div class="add">
-          <select value=${unitId} onChange=${e=>setUnitId(e.target.value)}>
-            <option value="">— unit —</option>
-            ${unitsFor.map(u=> html`<option value=${u.id}>${u.code}</option>`)}
-          </select>
-          <button class="tog" disabled=${!unitId} onClick=${addUnit}>Idugang</button>
-        </div>
-        ${cart.length>0 && html`<div class="brcart">
-          ${cart.map(c=> html`<div class="brrow"><span>${c.name} · ${c.code}</span><button class="rm" onClick=${()=>removeUnit(c.unitId)}>Tangtangon</button></div>`)}
-        </div>`}
-        ${msg && html`<div class="msg">${msg}</div>`}
-        <button class="borrowbtn" onClick=${toReview}>Hulam (${cart.length})</button>
-      `);
-    }
-
     function App({ site, siteCode, siteId }){
       const [date,setDate]=useState(todayLocal());
       const [cp,setCp]=useState(nearestCheckpoint());
-      // ?borrow=1 (from the locked field-phone "Hulam" tile) opens the borrow flow straight away.
-      const [showBorrow,setShowBorrow]=useState(()=>{ try{ return new URLSearchParams(location.search).get("borrow")==="1"; }catch(_){ return false; } });
       const [emps,setEmps]=useState([]);          // [{id,name}]
       const [jobs,setJobs]=useState(null);         // active jobs for date
       const [roster,setRoster]=useState({});       // job_id -> [emp code]
@@ -604,7 +259,6 @@
       const cpLabel=(CHECKPOINTS.find(c=>c.code===cp)||{}).label||cp;
 
       return html`
-        ${showBorrow && html`<${Borrow} site=${site} siteCode=${siteCode} siteId=${siteId} emps=${emps} onClose=${()=>setShowBorrow(false)} />`}
         <div class="bar">
           <label>Date</label>
           <input type="date" value=${date} onInput=${e=>setDate(e.target.value)} />
@@ -615,8 +269,6 @@
               </div>`)}
           </div>
         </div>
-
-        <button id="open-borrow" class="borrowbtn" onClick=${()=>setShowBorrow(true)}>\u{1F9F0} Hulam og gamit</button>
 
         ${msg && html`<div class="msg">${msg}</div>`}
 
@@ -692,7 +344,7 @@
       `;
     }
 
-    render(html`<${SiteGate} />`, document.getElementById("app"));
+    render(html`<${Shell} App=${App} />`, document.getElementById("app"));
   </script>
 </body>
 </html>

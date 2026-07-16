@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Hulam og gamit</title>
+<meta name="theme-color" content="#2f5d8a" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+<meta name="apple-mobile-web-app-title" content="Hulam og gamit" />
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='512'%20height='512'%3E%3Crect%20width='512'%20height='512'%20rx='96'%20fill='%232f5d8a'/%3E%3Cpath%20d='M150%20260l70%2070%20150-150'%20fill='none'%20stroke='%23fff'%20stroke-width='36'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E" />
+<style>
+  :root{
+    --ink:#1c2230; --muted:#6b7280; --line:#e3e6ec; --paper:#ffffff;
+    --bg:#f4f5f7; --steel:#2f5d8a; --steel-d:#234a70; --ok:#1f7a4d; --okbg:#e8f5ee;
+    --warn:#b4540a; --warnbg:#fbf3e8;
+    --radius:14px; --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+       padding:0 0 48px;-webkit-text-size-adjust:100%}
+  .wrap{max-width:600px;margin:0 auto;padding:14px}
+  header.top{display:flex;align-items:baseline;justify-content:space-between;padding:10px 2px 12px}
+  header.top h1{font-size:19px;margin:0}
+  header.top .sub{color:var(--muted);font-size:12.5px}
+  /* Yard badge — filled in by Shell from ?site=. Hidden while empty so the header
+     never shows a bare chip before the yard is known. */
+  .sbadge{font-size:12px;font-weight:700;letter-spacing:.3px;vertical-align:middle;background:#e8f0f8;
+        color:var(--steel-d);border:1px solid #cfe0ef;border-radius:10px;padding:2px 8px;margin-left:6px}
+  .sbadge:empty{display:none}
+  a.back{color:var(--steel);text-decoration:none;font-size:13px}
+
+  .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
+  .card label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin:11px 0 5px}
+  .card label:first-child{margin-top:0}
+  .card select,.card input[type=text]{width:100%;padding:10px 12px;border:1px solid var(--line);
+      border-radius:10px;font-size:15px;background:#fcfcfd;font-family:inherit}
+  .add{margin-top:10px;display:flex;gap:8px;align-items:center}
+  .add select{flex:1}
+  .tog{border:1px solid var(--line);background:#fcfcfd;color:var(--muted);font-size:12.5px;font-weight:700;
+       padding:9px 12px;border-radius:9px;min-width:96px;text-align:center}
+  .tog:disabled{opacity:.5}
+  .brcart{margin-top:11px;display:flex;flex-direction:column;gap:6px}
+  .brrow{display:flex;justify-content:space-between;align-items:center;background:#f7fafd;
+      border:1px solid #e2ebf4;border-radius:9px;padding:8px 11px;font-size:14px}
+  .brrow .rm{background:none;border:none;color:var(--warn);font-size:12.5px;font-weight:700}
+  .brsum{font-size:14px;margin:8px 0;line-height:1.5}
+  .brnote{color:var(--muted);font-size:13px;margin:2px 0 12px}
+  .borrowbtn{width:100%;margin-top:6px;padding:14px;font-size:16px;font-weight:700;color:#fff;
+       background:var(--steel);border:none;border-radius:12px}
+  .borrowbtn:disabled{opacity:.6}
+  .backbtn{background:none;border:none;color:var(--steel);font-size:13px;font-weight:700;padding:0}
+  .cardhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px}
+  .cardhead b{font-size:16px}
+
+  .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:20px 0;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
+  .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
+  .msg{margin:0 0 12px;font-size:13px;padding:9px 11px;border-radius:9px;background:var(--warnbg);color:var(--warn);border:1px solid #f0d9bf}
+
+  .gate{max-width:340px;margin:6vh auto 0;text-align:center;background:var(--paper);border:1px solid var(--line);
+        border-radius:var(--radius);padding:26px 22px}
+  .gate .gicon{font-size:40px;line-height:1;margin-bottom:8px}
+  .gate h2{font-size:18px;margin:6px 0 4px}
+  .gate p{color:var(--muted);font-size:13.5px;margin:0 0 14px}
+  .gate .gpin{width:100%;padding:14px;font-size:20px;text-align:center;letter-spacing:4px;
+        border:1px solid var(--line);border-radius:12px;background:#fcfcfd;font-family:inherit}
+  .gate .gerr{color:var(--warn);background:var(--warnbg);border:1px solid #f0d9bf;border-radius:9px;
+        padding:8px 10px;font-size:13px;margin-top:11px}
+  .gate .gbtn{width:100%;margin-top:14px;padding:14px;font-size:16px;font-weight:700;color:#fff;
+        background:var(--steel);border:none;border-radius:12px}
+  .gate .gbtn:disabled{opacity:.6}
+</style>
+<script type="importmap">
+{
+  "imports": {
+    "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2",
+    "preact": "https://esm.sh/preact@10.19.3",
+    "preact/hooks": "https://esm.sh/preact@10.19.3/hooks",
+    "htm": "https://esm.sh/htm@3.1.1"
+  }
+}
+</script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>Hulam og gamit <span id="site-badge" class="sbadge"></span></h1>
+        <div class="sub">Tool borrowing &middot; v2026-07-16a</div>
+      </div>
+      <a class="back" href="index.html">&larr; Menu</a>
+    </header>
+    <div id="app"><div class="loading">Loading&hellip;</div></div>
+  </div>
+
+  <script type="module">
+    import { h, render } from "preact";
+    import { useState, useEffect } from "preact/hooks";
+    import htm from "htm";
+    import { sb, loadEmployees } from "./config.js";
+    // The ?site= + roll-call-passcode + one-device gate is shared with roll-call.html (see
+    // rollcall-core.js) so the two field-phone surfaces can never drift apart.
+    import { Shell, loadAvailTools, describeUnitHolder, newToken } from "./rollcall-core.js";
+    const html = htm.bind(h);
+
+    // Tool borrowing ON THE PHONE (reuses borrow_issuance + next_no + verify_pin) — the same table
+    // and slip numbering as the warehouse Tools page, tagged source="roll-call-phone". No warehouse
+    // issuance PIN here: the in-charge is already past the roll-call passcode (owner decision 3). The
+    // BORROWER still types their own passcode to accept the tool — that is the accountability trail.
+    // Slip numbers are server-only (next_no); on failure it REFUSES, never a device-clock fallback
+    // (same rule as the Tools page). A unit already out is rejected by the DB (uniq_borrow_unit_out,
+    // 23505) and the message names who has it.
+    const ISSUER = "Roll-call phone";
+
+    function BorrowPage({ site, siteCode, siteId }){
+      const [avail,setAvail]=useState(null);    // [{itemId,name,price,units:[{id,code}]}]
+      const [emps,setEmps]=useState([]);         // [{id,name}]
+      const [empId,setEmpId]=useState("");
+      const [vessel,setVessel]=useState("");
+      const [toolId,setToolId]=useState("");
+      const [unitId,setUnitId]=useState("");
+      const [cart,setCart]=useState([]);         // [{unitId,itemId,code,name}]
+      const [phase,setPhase]=useState("build");  // build | pin
+      const [pin,setPin]=useState("");
+      const [msg,setMsg]=useState("");
+      const [busy,setBusy]=useState(false);
+      const [done,setDone]=useState(null);       // last issued slip summary, or null
+
+      const refresh = ()=> loadAvailTools(siteId).then(setAvail).catch(()=>setAvail([]));
+      useEffect(()=>{ loadEmployees().then(setEmps); refresh(); },[]);
+
+      const tool = (avail||[]).find(t=>t.itemId===toolId);
+      const inCart = new Set(cart.map(c=>c.unitId));
+      const unitsFor = tool ? tool.units.filter(u=>!inCart.has(u.id)) : [];
+
+      function addUnit(){
+        if(!toolId||!unitId){ setMsg("Pili og gamit ug unit."); return; }
+        const u=(tool.units||[]).find(x=>x.id===unitId); if(!u) return;
+        setCart([...cart, {unitId:u.id, itemId:toolId, code:u.code, name:tool.name}]);
+        setUnitId(""); setMsg("");
+      }
+      function removeUnit(uid){ setCart(cart.filter(c=>c.unitId!==uid)); }
+
+      function toReview(){
+        setMsg("");
+        if(!empId){ setMsg("Pili kinsa ang mo-hulam."); return; }
+        if(!vessel.trim()){ setMsg("Isulat ang barko / project."); return; }
+        if(!cart.length){ setMsg("Idugang usa ka gamit."); return; }
+        setPhase("pin"); setPin("");
+      }
+
+      function reset(){
+        setEmpId(""); setVessel(""); setToolId(""); setUnitId(""); setCart([]);
+        setPhase("build"); setPin(""); setMsg("");
+      }
+
+      async function confirm(){
+        if(busy) return;
+        const code=pin.trim();
+        if(!code){ setMsg("Isulat ang passcode sa mo-hulam."); return; }
+        setBusy(true); setMsg("");
+        try{
+          // Borrower's own passcode (verify_pin) — the accountability trail (owner decision 3).
+          const { data:ok, error:pe } = await sb.rpc("verify_pin",{ emp_id:empId, pin_input:code });
+          if(pe) throw pe;
+          if(!ok){ setBusy(false); setMsg("Sayop nga passcode."); return; }
+
+          // Slip number: server-only. Refuse on failure — never a device-clock duplicate.
+          let slip="";
+          try{ const { data, error } = await sb.rpc("next_no",{ p_prefix:"BS", p_site:siteCode }); if(!error && data) slip=data; }catch(_){ }
+          if(!slip){ setBusy(false); setMsg("Wala makakuha og slip number gikan sa server. Sulayi pag-usab."); return; }
+
+          const batch = newToken();
+          const rows = cart.map(c=>({ txn_type:"borrow", employee_id:empId, item_id:c.itemId, unit_id:c.unitId,
+            site_id:siteId, quantity:1, status:"out", issued_by:ISSUER, project_vessel:vessel.trim(),
+            batch_id:batch, slip_no:slip, borrowed_at:new Date().toISOString(), source:"roll-call-phone" }));
+          const { error } = await sb.from("borrow_issuance").insert(rows);
+          if(error){
+            const ec = error.code!=null?String(error.code):"";
+            if(ec==="23505" || /duplicate key|already exists/i.test(error.message||"")){
+              const outIds=new Set();
+              try{ const { data } = await sb.from("borrow_issuance").select("unit_id").eq("status","out").in("unit_id",cart.map(c=>c.unitId)); (data||[]).forEach(r=>outIds.add(r.unit_id)); }catch(_){ }
+              const clash=cart.find(c=>outIds.has(c.unitId));
+              const holder=clash?await describeUnitHolder(clash.unitId):null;
+              setBusy(false); setPhase("build"); refresh();
+              setMsg(holder
+                ? (clash.name+" ("+clash.code+") gihulam na ni "+holder.name+(holder.slip_no?" (slip "+holder.slip_no+")":"")+". Gi-refresh ang lista.")
+                : "Naa nay laing mo-hulam ani nga gamit. Gi-refresh ang lista.");
+              return;
+            }
+            throw error;
+          }
+          const borrower=(emps.find(e=>e.id===empId)||{}).name||"";
+          setBusy(false);
+          setDone({ slip, count:cart.length, items:cart.map(c=>c.name+" ("+c.code+")"), borrower, vessel:vessel.trim() });
+          reset();
+          refresh();
+        }catch(e){ setBusy(false); setMsg("Wala ma-save: "+(e.message||e)); }
+      }
+
+      if(avail===null) return html`<div class="loading">Ge-load ang gamit&hellip;</div>`;
+
+      if(phase==="pin"){
+        return html`
+          <div class="card">
+            <div class="cardhead"><b>Kumpirmahon ang hulam</b><button class="backbtn" onClick=${()=>setPhase("build")}>&lsaquo; Balik</button></div>
+            <div class="brsum">${cart.length} ka gamit · ${site}<br/>${cart.map(c=>c.name+" ("+c.code+")").join(", ")}</div>
+            <p class="brnote">Ipa-type sa mo-hulam ang iyang kaugalingong passcode aron modawat sa gamit.</p>
+            <input class="gpin" type="password" inputmode="numeric" autocomplete="off" value=${pin}
+                   onInput=${e=>setPin(e.target.value)} placeholder="passcode sa mo-hulam" autofocus />
+            ${msg && html`<div class="msg" style="margin-top:11px">${msg}</div>`}
+            <button class="borrowbtn" disabled=${busy} onClick=${confirm}>${busy?"Ge-proseso…":"Kumpirmahon ang hulam"}</button>
+          </div>`;
+      }
+
+      const avtools = (avail||[]).filter(t=>t.units.some(u=>!inCart.has(u.id)));
+      return html`
+        ${done && html`<div class="card" style="border-color:#bfe3cf;background:var(--okbg)">
+          <b style="color:var(--ok)">✓ Na-hulam — slip ${done.slip}</b>
+          <div class="brsum" style="margin-bottom:0">${done.borrower} · ${done.vessel}<br/>${done.items.join(", ")}</div>
+        </div>`}
+        ${msg && html`<div class="msg">${msg}</div>`}
+        <div class="card">
+          <label>Kinsa ang mo-hulam</label>
+          <select value=${empId} onChange=${e=>setEmpId(e.target.value)}>
+            <option value="">— Pili —</option>
+            ${(emps||[]).map(e=> html`<option value=${e.id}>${e.name}</option>`)}
+          </select>
+          <label>Barko / Project</label>
+          <input type="text" value=${vessel} onInput=${e=>setVessel(e.target.value)} placeholder="pananglitan MV Maria" />
+          <label>Gamit</label>
+          ${avtools.length===0
+            ? html`<div class="empty" style="padding:12px 0">Wala nay available nga gamit niini nga yard.</div>`
+            : html`<select value=${toolId} onChange=${e=>{ setToolId(e.target.value); setUnitId(""); }}>
+                <option value="">— Pili og gamit —</option>
+                ${avtools.map(t=> html`<option value=${t.itemId}>${t.name} (${t.units.filter(u=>!inCart.has(u.id)).length})</option>`)}
+              </select>
+              <div class="add">
+                <select value=${unitId} onChange=${e=>setUnitId(e.target.value)}>
+                  <option value="">— unit —</option>
+                  ${unitsFor.map(u=> html`<option value=${u.id}>${u.code}</option>`)}
+                </select>
+                <button class="tog" disabled=${!unitId} onClick=${addUnit}>Idugang</button>
+              </div>`}
+          ${cart.length>0 && html`<div class="brcart">
+            ${cart.map(c=> html`<div class="brrow"><span>${c.name} · ${c.code}</span><button class="rm" onClick=${()=>removeUnit(c.unitId)}>Tangtangon</button></div>`)}
+          </div>`}
+          <button class="borrowbtn" onClick=${toReview}>Hulam (${cart.length})</button>
+        </div>`;
+    }
+
+    render(html`<${Shell} App=${BorrowPage} />`, document.getElementById("app"));
+  </script>
+</body>
+</html>
