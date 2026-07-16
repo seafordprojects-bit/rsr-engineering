@@ -163,7 +163,11 @@
       try {
         const raw = await getSetting("attendance_sites");
         const arr = raw ? JSON.parse(raw) : [];
-        return Array.isArray(arr) ? arr.map(x => String(x).trim()).filter(Boolean) : [];
+        const list = Array.isArray(arr) ? arr.map(x => String(x).trim()).filter(Boolean) : [];
+        // Cache for the locked field-phone menu (monitoring/index.html), which renders yard tiles
+        // instantly from this even offline. Shared key with the kiosk's yard cache.
+        try { if (list.length) localStorage.setItem("rsr_sites", JSON.stringify(list)); } catch(_){}
+        return list;
       } catch(_) { return []; }
     }
     // Roll-call entries store the yard NAME ("Carmen"); jobs store the CODE ("CAR"); tool borrows
@@ -474,7 +478,8 @@
     function App({ site, siteCode, siteId }){
       const [date,setDate]=useState(todayLocal());
       const [cp,setCp]=useState(nearestCheckpoint());
-      const [showBorrow,setShowBorrow]=useState(false);
+      // ?borrow=1 (from the locked field-phone "Hulam" tile) opens the borrow flow straight away.
+      const [showBorrow,setShowBorrow]=useState(()=>{ try{ return new URLSearchParams(location.search).get("borrow")==="1"; }catch(_){ return false; } });
       const [emps,setEmps]=useState([]);          // [{id,name}]
       const [jobs,setJobs]=useState(null);         // active jobs for date
       const [roster,setRoster]=useState({});       // job_id -> [emp code]

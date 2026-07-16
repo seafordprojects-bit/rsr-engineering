@@ -1,9 +1,11 @@
 <!DOCTYPE html>
+<!-- build v2026-07-16a -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
 <title>Job Monitoring</title>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <style>
   :root{
     --ink:#1c2230; --muted:#6b7280; --line:#e3e6ec; --paper:#ffffff; --bg:#f4f5f7;
@@ -26,7 +28,7 @@
          padding:16px 15px;min-height:118px;box-shadow:0 1px 2px rgba(20,30,50,.04)}
   a.tile:active{background:#f7fafd;border-color:#c3d3e4}
   .ico{width:38px;height:38px;border-radius:11px;background:#eef3f9;color:var(--steel-d);
-       display:flex;align-items:center;justify-content:center}
+       display:flex;align-items:center;justify-content:center;font-size:20px}
   .ico svg{width:20px;height:20px;stroke:currentColor;stroke-width:1.9;fill:none;stroke-linecap:round;stroke-linejoin:round}
   a.tile .t{font-weight:700;font-size:15px;margin-top:2px}
   a.tile .d{font-size:12px;color:var(--muted);line-height:1.35}
@@ -35,50 +37,129 @@
        font-weight:700;margin:20px 4px 9px}
   .foot{margin-top:22px;text-align:center}
   .foot a{color:var(--steel);text-decoration:none;font-size:13px}
+  .note{color:var(--muted);font-size:13.5px;text-align:center;padding:20px 0;background:var(--paper);
+        border:1px solid var(--line);border-radius:var(--radius)}
+  [hidden]{display:none !important}
 </style>
 </head>
 <body>
   <div class="wrap">
-    <header class="top">
-      <div class="ey">RSR Engineering</div>
-      <h1>Job Monitoring</h1>
-      <div class="sub">Steel-weight productivity &amp; personnel tracking</div>
-    </header>
+    <!-- Locked menu for the REGISTERED roll-call phone. Filled by JS; empty (and hidden) for
+         everyone else, who sees the full hub below unchanged. -->
+    <div id="locked-menu" hidden></div>
 
-    <div class="sec">Field</div>
-    <div class="grid">
-      <a class="tile" href="job-order.html">
-        <span class="ico"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
-        <span class="t">Job Order</span>
-        <span class="d">Inspect &amp; create job orders with estimated plates</span>
-      </a>
-      <a class="tile" href="roll-call.html">
-        <span class="ico"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3 3-2-2"/></svg></span>
-        <span class="t">Roll-call</span>
-        <span class="d">Tap who is present each checkpoint</span>
-      </a>
-    </div>
+    <div id="full-menu">
+      <header class="top">
+        <div class="ey">RSR Engineering</div>
+        <h1>Job Monitoring</h1>
+        <div class="sub">Steel-weight productivity &amp; personnel tracking</div>
+      </header>
 
-    <div class="sec">Planning</div>
-    <div class="grid">
-      <a class="tile" href="schedule.html">
-        <span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span>
-        <span class="t">Schedule</span>
-        <span class="d">Week look-ahead &amp; personnel projection</span>
-      </a>
-      <a class="tile" href="assign.html">
-        <span class="ico"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg></span>
-        <span class="t">Assign</span>
-        <span class="d">Set who works each job order</span>
-      </a>
-    </div>
+      <div class="sec">Field</div>
+      <div class="grid">
+        <a class="tile" href="job-order.html">
+          <span class="ico"><svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span>
+          <span class="t">Job Order</span>
+          <span class="d">Inspect &amp; create job orders with estimated plates</span>
+        </a>
+        <a class="tile" href="roll-call.html">
+          <span class="ico"><svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3 3-2-2"/></svg></span>
+          <span class="t">Roll-call</span>
+          <span class="d">Tap who is present each checkpoint</span>
+        </a>
+      </div>
 
-    <!-- Productivity (Efficiency, Monitor), Setup & checks (Work Tariff, Reconcile) and the
-         KPI diagnostic moved to the Admin dashboard (admin-gated). Their direct URLs still work. -->
+      <div class="sec">Planning</div>
+      <div class="grid">
+        <a class="tile" href="schedule.html">
+          <span class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg></span>
+          <span class="t">Schedule</span>
+          <span class="d">Week look-ahead &amp; personnel projection</span>
+        </a>
+        <a class="tile" href="assign.html">
+          <span class="ico"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg></span>
+          <span class="t">Assign</span>
+          <span class="d">Set who works each job order</span>
+        </a>
+      </div>
 
-    <div class="foot">
-      <a href="../index.html">&larr; Back to RSR apps</a>
+      <!-- Productivity (Efficiency, Monitor), Setup & checks (Work Tariff, Reconcile) and the
+           KPI diagnostic moved to the Admin dashboard (admin-gated). Their direct URLs still work. -->
+
+      <div class="foot">
+        <a href="../index.html">&larr; Back to RSR apps</a>
+      </div>
     </div>
   </div>
+
+<script>
+// Same Supabase project as the kiosk and payroll (wpmcbjrisuyjvobvzaus).
+const SB_URL = 'https://wpmcbjrisuyjvobvzaus.supabase.co';
+const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
+
+// SVG for the Roll-call tiles (reuse the hub's own roll-call glyph).
+const ICON_RC = '<svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3 3-2-2"/></svg>';
+const escH = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+
+function getSetting(sb, key){
+  return sb.from('settings').select('value').eq('key', key).limit(1)
+    .then(r => (r.data && r.data.length) ? r.data[0].value : null);
+}
+
+// Build the locked menu: one Roll-call tile + one "Hulam og gamit" tile PER yard, from the
+// data-driven yard list. A new yard added to attendance_sites appears here with no code change.
+function renderLocked(yards){
+  const locked = document.getElementById('locked-menu');
+  const head = '<header class="top"><div class="ey">RSR Engineering</div>'
+    + '<h1>Roll-call phone</h1><div class="sub">Pili: roll-call o hulam og gamit</div></header>';
+  if(!yards || !yards.length){
+    locked.innerHTML = head + '<div class="note">Wala pa na-set ang listahan sa yard. '
+      + 'Ikonektar sa internet ug i-reload ni nga page.</div>';
+    return;
+  }
+  const tiles = yards.map(y => {
+    const q = encodeURIComponent(y), n = escH(y);
+    return '<a class="tile" href="roll-call.html?site=' + q + '">'
+         +   '<span class="ico">' + ICON_RC + '</span>'
+         +   '<span class="t">Roll-call</span><span class="d">' + n + '</span></a>'
+         + '<a class="tile" href="roll-call.html?site=' + q + '&borrow=1">'
+         +   '<span class="ico">🧰</span>'
+         +   '<span class="t">Hulam og gamit</span><span class="d">' + n + '</span></a>';
+  }).join('');
+  locked.innerHTML = head + '<div class="grid">' + tiles + '</div>';
+}
+
+// Detection uses the EXISTING device-registration binding: this device is the roll-call phone iff
+// its localStorage token matches settings.roll_call_device_id. Only the registered phone ever holds
+// a token (a non-registered device is blocked before it can claim one), so a token present is a
+// strong signal — we lock down IMMEDIATELY (no flash of Job Order) and confirm against the server.
+(function(){
+  let tok = null; try { tok = localStorage.getItem('rsr_rollcall_device'); } catch(e){}
+  if(!tok) return;   // normal device — leave the full hub exactly as today
+
+  const full = document.getElementById('full-menu');
+  const locked = document.getElementById('locked-menu');
+  full.hidden = true; locked.hidden = false;
+
+  // Instant render from the cached yard list (set by roll-call.html) so the field phone shows its
+  // tiles at once and still works offline.
+  let cached = []; try { const c = JSON.parse(localStorage.getItem('rsr_sites') || '[]'); if(Array.isArray(c)) cached = c; } catch(e){}
+  renderLocked(cached);
+
+  // Confirm against the registered id and refresh the yard list.
+  try {
+    const sb = supabase.createClient(SB_URL, SB_KEY);
+    Promise.all([getSetting(sb, 'roll_call_device_id'), getSetting(sb, 'attendance_sites')]).then(res => {
+      const regId = res[0], yardsRaw = res[1];
+      // This phone was reset/replaced by the admin (a different device now registered) — it is no
+      // longer the roll-call phone, so restore the normal hub.
+      if(regId && regId !== tok){ locked.hidden = true; full.hidden = false; return; }
+      let yards = cached;
+      try { const a = JSON.parse(yardsRaw || '[]'); if(Array.isArray(a) && a.length) yards = a.map(x => String(x).trim()).filter(Boolean); } catch(e){}
+      renderLocked(yards);
+    }).catch(() => { /* offline: stay locked with the cached yards (fail safe) */ });
+  } catch(e){ /* supabase lib unavailable: stay locked with cached yards */ }
+})();
+</script>
 </body>
 </html>
