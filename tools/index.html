@@ -115,7 +115,7 @@
 <div id="s-home" class="screen">
   <div class="app-header">
     <div class="hdr-avatar">R</div>
-    <div class="hdr-info"><div class="hdr-site">RSR Tools</div><div class="hdr-sub" id="home-site-sub">—</div></div>
+    <div class="hdr-info"><div class="hdr-site">RSR Tools <span style="font-size:11px;font-weight:600;opacity:.6">v2026-07-16a</span></div><div class="hdr-sub" id="home-site-sub">—</div></div>
     <button class="hdr-btn" onclick="doLogout()" title="Sign out">&#9211;</button>
     <a href="../" style="text-decoration:none"><button class="hdr-btn">&#8962;</button></a>
   </div>
@@ -647,9 +647,15 @@ async function reviewBorrow(){
   if(!by){toast('Enter who issued the tools');return;}
   if(!cart.length){toast('Add at least one tool');return;}
   if(!reservedSlipNo){
+    // Slip numbers MUST come from the server (next_no allocates atomically via
+    // INSERT ... ON CONFLICT DO UPDATE ... RETURNING on slip_counters). The old fallback minted
+    // 'BS-'+siteCode()+HHMMSS from the DEVICE clock, so two devices issuing in the same second at
+    // the same yard produced the SAME slip number — two paper slips, one number. Now that the
+    // roll-call phone is a second writer, refuse instead: a missing number is recoverable, a
+    // duplicate one is not. (Same behaviour on the phone — both writers act alike.)
     let sn='';
     try{const{data,error}=await sb.rpc('next_no',{p_prefix:'BS',p_site:siteCode()}); if(!error&&data)sn=data;}catch(e){}
-    if(!sn){const n=new Date(),z=x=>String(x).padStart(2,'0');sn='BS-'+siteCode()+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+    if(!sn){toast('Could not get a slip number from the server. Check the connection and try again.');return;}
     reservedSlipNo=sn;
   }
   let total=0; cart.forEach(c=>total+=Number(c.price)||0);
@@ -691,7 +697,7 @@ async function confirmBorrow(){
   const borrowedAt=new Date(pendingSlip.bdate+'T'+z(now.getHours())+':'+z(now.getMinutes())+':00').toISOString();
   const slipNo=pendingSlip.slipNo;
   const batch=crypto.randomUUID();
-  const rows=pendingSlip.items.map(c=>({txn_type:'borrow',employee_id:pendingSlip.empId,item_id:c.itemId,unit_id:c.unitId,site_id:curSite,quantity:1,status:'out',issued_by:pendingSlip.by||null,project_vessel:pendingSlip.vessel||null,batch_id:batch,slip_no:slipNo,borrowed_at:borrowedAt}));
+  const rows=pendingSlip.items.map(c=>({txn_type:'borrow',employee_id:pendingSlip.empId,item_id:c.itemId,unit_id:c.unitId,site_id:curSite,quantity:1,status:'out',issued_by:pendingSlip.by||null,project_vessel:pendingSlip.vessel||null,batch_id:batch,slip_no:slipNo,borrowed_at:borrowedAt,source:'coordinator'}));
   try{
     const{error}=await sb.from('borrow_issuance').insert(rows);
     if(error)throw error;
@@ -699,7 +705,42 @@ async function confirmBorrow(){
     cart=[]; pendingSlip=null; reservedSlipNo='';
     document.getElementById('bslip-modal').style.display='none';
     showSlip(slipNo, count+' tool(s) to '+nm+(ves?' · '+ves:''));
-  }catch(e){toast('Save failed: '+e.message);}
+  }catch(e){
+    // uniq_borrow_unit_out (unit_id WHERE status='out') is what actually guarantees a physical
+    // tool can't be out twice — availability here is only read at screen load (loadAvail), so
+    // another writer (the roll-call phone) can take a tool after this screen rendered. The slip
+    // inserts all its rows at once, so one collision rejects the whole slip.
+    const code=e&&(e.code!=null?String(e.code):'');
+    if(code==='23505'||/duplicate key|already exists/i.test(e&&e.message||'')){
+      const clash=await findClashingUnit(pendingSlip.items);
+      const holder=clash?await describeUnitHolder(clash.unitId):null;
+      toast(holder
+        ? clash.name+' ('+clash.code+') is already out — '+holder.name+' has it'+(holder.slip_no?' (slip '+holder.slip_no+')':'')+(holder.since?', since '+holder.since:'')+'. Refresh to see current stock.'
+        : 'One of these tools was just taken by someone else. Refresh to see current stock.');
+      await loadAvail(); renderToolSelect();   // the stock genuinely changed — never silently retry
+      return;
+    }
+    toast('Save failed: '+e.message);
+  }
+}
+// Which cart unit is now out? (The DB rejects the whole slip but doesn't say which row clashed.)
+async function findClashingUnit(items){
+  try{
+    const ids=items.map(c=>c.unitId);
+    const{data}=await sb.from('borrow_issuance').select('unit_id').eq('status','out').in('unit_id',ids);
+    const outIds=new Set((data||[]).map(r=>r.unit_id));
+    return items.find(c=>outIds.has(c.unitId))||null;
+  }catch(_){return null;}
+}
+// Who has it, on which slip, since when — so the message names a person, not an error code.
+async function describeUnitHolder(unitId){
+  try{
+    const{data}=await sb.from('borrow_issuance')
+      .select('slip_no,borrowed_at,employees(name)').eq('unit_id',unitId).eq('status','out').limit(1);
+    const r=(data||[])[0]; if(!r)return null;
+    return {name:(r.employees&&r.employees.name)||'someone', slip_no:r.slip_no,
+            since:r.borrowed_at?fmtNice(String(r.borrowed_at).slice(0,10)):''};
+  }catch(_){return null;}
 }
 
 /* ══ RETURN ══ */
