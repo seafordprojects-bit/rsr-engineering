@@ -34,9 +34,15 @@
 
   .card{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:16px;margin-bottom:14px}
   .card label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin:11px 0 5px}
-  .card label:first-child{margin-top:0}
-  .card select,.card input[type=text]{width:100%;padding:10px 12px;border:1px solid var(--line);
+  .card label.first{margin-top:0}
+  .card select,.card input[type=text],.card input[type=date]{width:100%;padding:10px 12px;border:1px solid var(--line);
       border-radius:10px;font-size:15px;background:#fcfcfd;font-family:inherit}
+  /* numbered section header — mirrors the warehouse Borrow Slip form */
+  .sec-h{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+  .sec-n{flex:0 0 auto;width:24px;height:24px;border-radius:50%;background:var(--steel);color:#fff;
+      font-size:13px;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .sec-t{font-size:15px;font-weight:700;line-height:1.15}
+  .sec-s{font-size:12px;color:var(--muted)}
   .add{margin-top:10px;display:flex;gap:8px;align-items:center}
   .add select{flex:1}
   .tog{border:1px solid var(--line);background:#fcfcfd;color:var(--muted);font-size:12.5px;font-weight:700;
@@ -88,7 +94,7 @@
     <header class="top">
       <div>
         <h1>Hulam og gamit <span id="site-badge" class="sbadge"></span></h1>
-        <div class="sub">Tool borrowing &middot; v2026-07-16a</div>
+        <div class="sub">Tool borrowing &middot; v2026-07-16c</div>
       </div>
       <a class="back" href="index.html">&larr; Menu</a>
     </header>
@@ -99,26 +105,27 @@
     import { h, render } from "preact";
     import { useState, useEffect } from "preact/hooks";
     import htm from "htm";
-    import { sb, loadEmployees } from "./config.js";
+    import { sb, loadEmployees, todayLocal } from "./config.js";
     // The ?site= + roll-call-passcode + one-device gate is shared with roll-call.html (see
     // rollcall-core.js) so the two field-phone surfaces can never drift apart.
     import { Shell, loadAvailTools, describeUnitHolder, newToken } from "./rollcall-core.js";
     const html = htm.bind(h);
 
-    // Tool borrowing ON THE PHONE (reuses borrow_issuance + next_no + verify_pin) — the same table
-    // and slip numbering as the warehouse Tools page, tagged source="roll-call-phone". No warehouse
-    // issuance PIN here: the in-charge is already past the roll-call passcode (owner decision 3). The
-    // BORROWER still types their own passcode to accept the tool — that is the accountability trail.
-    // Slip numbers are server-only (next_no); on failure it REFUSES, never a device-clock fallback
-    // (same rule as the Tools page). A unit already out is rejected by the DB (uniq_borrow_unit_out,
-    // 23505) and the message names who has it.
-    const ISSUER = "Roll-call phone";
+    // Tool borrowing ON THE PHONE (reuses borrow_issuance + next_no + verify_pin) — the same table,
+    // slip numbering AND form shape as the warehouse Borrow Slip (tools/index.html), tagged
+    // source="roll-call-phone". Field-phone differences kept: no warehouse issuance PIN (the in-charge
+    // is already past the roll-call passcode), the BORROWER types their own passcode to accept (the
+    // accountability trail), server-only slip numbers that REFUSE on failure (never a device clock),
+    // a unit already out is rejected by the DB (uniq_borrow_unit_out, 23505) with the holder named,
+    // and Bisaya labels. "Issued by" prefills as the roll-call phone identity, not warehouse staff.
 
     function BorrowPage({ site, siteCode, siteId }){
       const [avail,setAvail]=useState(null);    // [{itemId,name,price,units:[{id,code}]}]
       const [emps,setEmps]=useState([]);         // [{id,name}]
       const [empId,setEmpId]=useState("");
+      const [date,setDate]=useState(todayLocal());
       const [vessel,setVessel]=useState("");
+      const [issuedBy,setIssuedBy]=useState(site ? site+" roll-call phone" : "Roll-call phone");
       const [toolId,setToolId]=useState("");
       const [unitId,setUnitId]=useState("");
       const [cart,setCart]=useState([]);         // [{unitId,itemId,code,name}]
@@ -135,8 +142,10 @@
       const inCart = new Set(cart.map(c=>c.unitId));
       const unitsFor = tool ? tool.units.filter(u=>!inCart.has(u.id)) : [];
 
+      // Form-side messages are ENGLISH — the in-charge operates this form (matches the warehouse
+      // Borrow Slip). Only the worker-facing bits (the confirm modal + the holder rejection) are Bisaya.
       function addUnit(){
-        if(!toolId||!unitId){ setMsg("Pili og gamit ug unit."); return; }
+        if(!toolId||!unitId){ setMsg("Pick a tool and unit."); return; }
         const u=(tool.units||[]).find(x=>x.id===unitId); if(!u) return;
         setCart([...cart, {unitId:u.id, itemId:toolId, code:u.code, name:tool.name}]);
         setUnitId(""); setMsg("");
@@ -145,14 +154,17 @@
 
       function toReview(){
         setMsg("");
-        if(!empId){ setMsg("Pili kinsa ang mo-hulam."); return; }
-        if(!vessel.trim()){ setMsg("Isulat ang barko / project."); return; }
-        if(!cart.length){ setMsg("Idugang usa ka gamit."); return; }
+        if(!empId){ setMsg("Select a borrower."); return; }
+        if(!date){ setMsg("Pick a date."); return; }
+        if(date<todayLocal()){ setMsg("No back-dating allowed."); return; }
+        if(!vessel.trim()){ setMsg("Enter the project / vessel."); return; }
+        if(!issuedBy.trim()){ setMsg("Enter who issued the tools."); return; }
+        if(!cart.length){ setMsg("Add at least one tool."); return; }
         setPhase("pin"); setPin("");
       }
 
       function reset(){
-        setEmpId(""); setVessel(""); setToolId(""); setUnitId(""); setCart([]);
+        setEmpId(""); setDate(todayLocal()); setVessel(""); setToolId(""); setUnitId(""); setCart([]);
         setPhase("build"); setPin(""); setMsg("");
       }
 
@@ -172,10 +184,13 @@
           try{ const { data, error } = await sb.rpc("next_no",{ p_prefix:"BS", p_site:siteCode }); if(!error && data) slip=data; }catch(_){ }
           if(!slip){ setBusy(false); setMsg("Wala makakuha og slip number gikan sa server. Sulayi pag-usab."); return; }
 
+          // borrowed_at = chosen date + the current wall-clock time (mirrors the warehouse form).
+          const now=new Date(), z=n=>String(n).padStart(2,"0");
+          const borrowedAt=new Date(date+"T"+z(now.getHours())+":"+z(now.getMinutes())+":00").toISOString();
           const batch = newToken();
           const rows = cart.map(c=>({ txn_type:"borrow", employee_id:empId, item_id:c.itemId, unit_id:c.unitId,
-            site_id:siteId, quantity:1, status:"out", issued_by:ISSUER, project_vessel:vessel.trim(),
-            batch_id:batch, slip_no:slip, borrowed_at:new Date().toISOString(), source:"roll-call-phone" }));
+            site_id:siteId, quantity:1, status:"out", issued_by:issuedBy.trim()||null, project_vessel:vessel.trim(),
+            batch_id:batch, slip_no:slip, borrowed_at:borrowedAt, source:"roll-call-phone" }));
           const { error } = await sb.from("borrow_issuance").insert(rows);
           if(error){
             const ec = error.code!=null?String(error.code):"";
@@ -200,13 +215,13 @@
         }catch(e){ setBusy(false); setMsg("Wala ma-save: "+(e.message||e)); }
       }
 
-      if(avail===null) return html`<div class="loading">Ge-load ang gamit&hellip;</div>`;
+      if(avail===null) return html`<div class="loading">Loading tools…</div>`;
 
       if(phase==="pin"){
         return html`
           <div class="card">
-            <div class="cardhead"><b>Kumpirmahon ang hulam</b><button class="backbtn" onClick=${()=>setPhase("build")}>&lsaquo; Balik</button></div>
-            <div class="brsum">${cart.length} ka gamit · ${site}<br/>${cart.map(c=>c.name+" ("+c.code+")").join(", ")}</div>
+            <div class="cardhead"><b>Kumpirmahon ang hulam</b><button class="backbtn" onClick=${()=>setPhase("build")}>‹ Balik</button></div>
+            <div class="brsum">${cart.length} ka gamit · ${site} · ${date}<br/>${cart.map(c=>c.name+" ("+c.code+")").join(", ")}</div>
             <p class="brnote">Ipa-type sa mo-hulam ang iyang kaugalingong passcode aron modawat sa gamit.</p>
             <input class="gpin" type="password" inputmode="numeric" autocomplete="off" value=${pin}
                    onInput=${e=>setPin(e.target.value)} placeholder="passcode sa mo-hulam" autofocus />
@@ -218,23 +233,37 @@
       const avtools = (avail||[]).filter(t=>t.units.some(u=>!inCart.has(u.id)));
       return html`
         ${done && html`<div class="card" style="border-color:#bfe3cf;background:var(--okbg)">
-          <b style="color:var(--ok)">✓ Na-hulam — slip ${done.slip}</b>
+          <b style="color:var(--ok)">✓ Borrowed — slip ${done.slip}</b>
           <div class="brsum" style="margin-bottom:0">${done.borrower} · ${done.vessel}<br/>${done.items.join(", ")}</div>
         </div>`}
         ${msg && html`<div class="msg">${msg}</div>`}
+
         <div class="card">
-          <label>Kinsa ang mo-hulam</label>
+          <div class="sec-h"><div class="sec-n">1</div><div><div class="sec-t">Borrower & date</div><div class="sec-s">Who is borrowing, and when</div></div></div>
+          <label class="first">Borrower</label>
           <select value=${empId} onChange=${e=>setEmpId(e.target.value)}>
-            <option value="">— Pili —</option>
+            <option value="">— Select —</option>
             ${(emps||[]).map(e=> html`<option value=${e.id}>${e.name}</option>`)}
           </select>
-          <label>Barko / Project</label>
-          <input type="text" value=${vessel} onInput=${e=>setVessel(e.target.value)} placeholder="pananglitan MV Maria" />
-          <label>Gamit</label>
+          <label>Date</label>
+          <input type="date" min=${todayLocal()} value=${date} onInput=${e=>setDate(e.target.value)} />
+        </div>
+
+        <div class="card">
+          <div class="sec-h"><div class="sec-n">2</div><div><div class="sec-t">Project / vessel</div><div class="sec-s">Where the tools are going</div></div></div>
+          <label class="first">Project / Vessel</label>
+          <input type="text" value=${vessel} onInput=${e=>setVessel(e.target.value)} placeholder="e.g. MV Maria" />
+          <label>Issued by</label>
+          <input type="text" value=${issuedBy} onInput=${e=>setIssuedBy(e.target.value)} placeholder="who is issuing" />
+        </div>
+
+        <div class="card">
+          <div class="sec-h"><div class="sec-n">3</div><div><div class="sec-t">Tools to borrow</div><div class="sec-s">Add each tool and its unit</div></div></div>
           ${avtools.length===0
-            ? html`<div class="empty" style="padding:12px 0">Wala nay available nga gamit niini nga yard.</div>`
-            : html`<select value=${toolId} onChange=${e=>{ setToolId(e.target.value); setUnitId(""); }}>
-                <option value="">— Pili og gamit —</option>
+            ? html`<div class="empty" style="padding:12px 0">No tools available at this yard.</div>`
+            : html`<label class="first">Add tools to slip</label>
+              <select value=${toolId} onChange=${e=>{ setToolId(e.target.value); setUnitId(""); }}>
+                <option value="">— Select tool —</option>
                 ${avtools.map(t=> html`<option value=${t.itemId}>${t.name} (${t.units.filter(u=>!inCart.has(u.id)).length})</option>`)}
               </select>
               <div class="add">
@@ -242,16 +271,21 @@
                   <option value="">— unit —</option>
                   ${unitsFor.map(u=> html`<option value=${u.id}>${u.code}</option>`)}
                 </select>
-                <button class="tog" disabled=${!unitId} onClick=${addUnit}>Idugang</button>
+                <button class="tog" disabled=${!unitId} onClick=${addUnit}>+ Add to slip</button>
               </div>`}
-          ${cart.length>0 && html`<div class="brcart">
-            ${cart.map(c=> html`<div class="brrow"><span>${c.name} · ${c.code}</span><button class="rm" onClick=${()=>removeUnit(c.unitId)}>Tangtangon</button></div>`)}
-          </div>`}
-          <button class="borrowbtn" onClick=${toReview}>Hulam (${cart.length})</button>
-        </div>`;
+          ${cart.length>0
+            ? html`<div class="brcart">
+                ${cart.map(c=> html`<div class="brrow"><span>${c.name} · ${c.code}</span><button class="rm" onClick=${()=>removeUnit(c.unitId)}>Remove</button></div>`)}
+              </div>`
+            : html`<div class="empty" style="padding:12px 0;margin-top:10px">No tools added yet.</div>`}
+        </div>
+
+        <button class="borrowbtn" onClick=${toReview}>Issue (${cart.length})</button>`;
     }
 
-    render(html`<${Shell} App=${BorrowPage} />`, document.getElementById("app"));
+    // English unlock card — the in-charge operates it (matches the warehouse Borrow Slip). The
+    // borrower-facing confirm modal inside BorrowPage stays Bisaya.
+    render(html`<${Shell} App=${BorrowPage} gate=${{ heading:(s)=>"Borrow Slip — "+s, prompt:"Enter the passcode" }} />`, document.getElementById("app"));
   </script>
 </body>
 </html>

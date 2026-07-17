@@ -26,6 +26,9 @@ export async function setSetting(key, value){
   else { await sb.from("settings").insert({ key, value }); }
 }
 export const DEVKEY = "rsr_rollcall_device";
+// Which yard THIS phone is bound to. Cached so the locked field-phone menu (monitoring/index.html)
+// can show the right yard's tiles instantly and offline; the server per-yard map is authoritative.
+export const SITEKEY = "rsr_rollcall_site";
 export function newToken(){
   try { if (crypto && crypto.randomUUID) return crypto.randomUUID(); } catch(_){}
   return String(Date.now()) + "-" + Math.round(Math.random() * 1e9);
@@ -52,6 +55,15 @@ export async function siteList(){
 export async function siteRowFor(name){
   const { data } = await sb.from("sites").select("id,code,name");
   return (data||[]).find(s => String(s.name).trim().toLowerCase() === String(name).trim().toLowerCase()) || null;
+}
+
+// Per-yard device binding. Each yard has its OWN registered roll-call phone (like the kiosks): a
+// phone is the device for exactly one yard. Keyed by yard NAME to match attendance_sites / ?site=.
+// Returns { yardName: token|null } for the given yard list.
+export async function deviceMap(yards){
+  const out = {};
+  await Promise.all((yards||[]).map(async (y) => { out[y] = await getSetting("roll_call_device_id_" + y); }));
+  return out;
 }
 
 // --- tool-borrow helpers (REUSE borrow_issuance + next_no; no parallel system) ------------
@@ -81,9 +93,18 @@ export async function describeUnitHolder(unitId){
   }catch(_){ return null; }
 }
 
-// --- passcode + one-device gate ------------------------------------------
-function Gate({ site, siteCode, siteId, App }){
-  const [phase, setPhase] = useState("checking"); // checking|blocked|nopin|need|ok
+// --- per-yard device lock + shared passcode gate -------------------------
+// A phone is bound to ONE yard: it claims via ?site=<yard> and is refused at any other yard (settings
+// key roll_call_device_id_<yard>, one per yard). The PASSCODE is a single shared secret for all yard
+// phones (settings key roll_call_pin) — the device binding, not the passcode, is what keeps each
+// phone to its yard. `yards` (from Shell) is the full yard list, needed to spot a phone that is
+// already registered to a DIFFERENT yard.
+// `gate` (optional, from the host page) overrides the passcode-card wording: { heading:(site)=>string,
+// prompt:string }. borrow.html supplies English "Borrow Slip — <yard>" / "Enter the passcode" because
+// the in-charge operates it; roll-call.html omits it and keeps the default "<yard> roll-call" wording.
+function Gate({ site, siteCode, siteId, yards, gate, App }){
+  const [phase, setPhase] = useState("checking"); // checking|blocked|elsewhere|nopin|need|ok
+  const [otherYard, setOtherYard] = useState(""); // the yard this phone is bound to, when != site
   const [pin, setPin] = useState("");
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -91,10 +112,16 @@ function Gate({ site, siteCode, siteId, App }){
   useEffect(() => { (async () => {
     try {
       const localTok = localStorage.getItem(DEVKEY);
-      const [regId, cfgPin] = await Promise.all([
-        getSetting("roll_call_device_id"), getSetting("roll_call_pin"),
+      const [regThis, cfgPin, map] = await Promise.all([
+        getSetting("roll_call_device_id_" + site),
+        getSetting("roll_call_pin"),
+        deviceMap(yards),
       ]);
-      if (regId && localTok !== regId) { setPhase("blocked"); return; }
+      // A different phone already owns THIS yard.
+      if (regThis && localTok !== regThis) { setPhase("blocked"); return; }
+      // This phone owns ANOTHER yard — it is that yard's phone, so refuse here.
+      const elsewhere = localTok ? Object.keys(map).find(y => y !== site && map[y] && map[y] === localTok) : null;
+      if (!regThis && elsewhere) { setOtherYard(elsewhere); setPhase("elsewhere"); return; }
       if (!cfgPin) { setPhase("nopin"); return; }
       setPhase("need");
     } catch (e) {
@@ -114,42 +141,58 @@ function Gate({ site, siteCode, siteId, App }){
       const cfgPin = await getSetting("roll_call_pin");
       if (!cfgPin) { setBusy(false); setPhase("nopin"); return; }
       if (entry !== String(cfgPin)) { setBusy(false); setErr("Wrong passcode."); setPin(""); return; }
-      // passcode correct — enforce / claim the one-device lock
-      const regId = await getSetting("roll_call_device_id");
-      let localTok = localStorage.getItem(DEVKEY);
-      if (regId && localTok !== regId) { setBusy(false); setPhase("blocked"); return; }
-      if (!regId) {
+      // passcode correct — enforce / claim the one-device lock FOR THIS YARD (re-check freshly)
+      const localTok = localStorage.getItem(DEVKEY);
+      const [regThis, map] = await Promise.all([
+        getSetting("roll_call_device_id_" + site), deviceMap(yards),
+      ]);
+      if (regThis && localTok !== regThis) { setBusy(false); setPhase("blocked"); return; }
+      const elsewhere = localTok ? Object.keys(map).find(y => y !== site && map[y] && map[y] === localTok) : null;
+      if (!regThis && elsewhere) { setBusy(false); setOtherYard(elsewhere); setPhase("elsewhere"); return; }
+      if (!regThis) {
         const tok = localTok || newToken();
         localStorage.setItem(DEVKEY, tok);
-        await setSetting("roll_call_device_id", tok);
+        await setSetting("roll_call_device_id_" + site, tok);
       }
+      try { localStorage.setItem(SITEKEY, site); } catch(_){}   // remember the bound yard for the locked menu
       setBusy(false); setPhase("ok");
     } catch (err) {
       setBusy(false); setErr("Could not verify: " + err.message);
     }
   }
 
-  if (phase === "checking") return html`<div class="loading">Checking device&hellip;</div>`;
+  const gHeading = (gate && gate.heading) ? gate.heading(site) : (site + " roll-call");
+  const gPrompt = (gate && gate.prompt) ? gate.prompt : "Enter the roll-call passcode.";
+
+  if (phase === "checking") return html`<div class="loading">Checking device…</div>`;
   if (phase === "ok") return html`<${App} site=${site} siteCode=${siteCode} siteId=${siteId} />`;
   if (phase === "blocked") return html`
     <div class="gate">
       <div class="gicon">⛔</div>
-      <h2>This phone isn't the roll-call device</h2>
-      <p>Roll-call is locked to one registered phone. Ask the admin to reset the roll-call device
-         (Admin &rarr; Settings &rarr; Roll-call phone) if this phone should take over.</p>
+      <h2>This phone isn't the ${site} roll-call device</h2>
+      <p>${site} roll-call is locked to one registered phone. Ask the admin to reset the ${site}
+         roll-call device (Admin → Settings → Roll-call phones) if this phone should take over.</p>
+    </div>`;
+  if (phase === "elsewhere") return html`
+    <div class="gate">
+      <div class="gicon">⛔</div>
+      <h2>This is the ${otherYard} roll-call phone</h2>
+      <p>This phone is registered for ${otherYard}, so it can't do ${site} roll-call. Open the ${otherYard}
+         shortcut instead, or ask the admin to reset it (Admin → Settings → Roll-call phones) to
+         move it to ${site}.</p>
     </div>`;
   if (phase === "nopin") return html`
     <div class="gate">
       <div class="gicon">\u{1F512}</div>
       <h2>Roll-call passcode not set</h2>
-      <p>Ask the admin to set the roll-call passcode in Admin &rarr; Settings &rarr; Roll-call phone,
-         then reload this page.</p>
+      <p>Ask the admin to set the roll-call passcode in Admin → Settings → Roll-call
+         phones, then reload this page.</p>
     </div>`;
   return html`
     <form class="gate" onSubmit=${submit}>
       <div class="gicon">\u{1F4F1}</div>
-      <h2>Roll-call</h2>
-      <p>Enter the roll-call passcode.</p>
+      <h2>${gHeading}</h2>
+      <p>${gPrompt}</p>
       <input class="gpin" type="password" inputmode="numeric" autocomplete="off" value=${pin}
              onInput=${e => setPin(e.target.value)} placeholder="passcode" autofocus />
       ${err && html`<div class="gerr">${err}</div>`}
@@ -162,7 +205,7 @@ function Gate({ site, siteCode, siteId, App }){
 // in-charge type the passcode first only to be turned away. Defaulting to a yard is never an
 // option — a wrong-yard entry is silently wrong data, which is worse than a blocked screen.
 // Renders the given `App` once the yard is known and the passcode/device gate passes.
-export function Shell({ App }){
+export function Shell({ App, gate }){
   const [phase,setPhase] = useState("checking");   // checking|noyards|nosite|badsite|ok
   const [yards,setYards] = useState([]);
   const [asked,setAsked] = useState("");
@@ -192,8 +235,8 @@ export function Shell({ App }){
     if (el) el.textContent = (phase === "ok") ? site : "";
   }, [phase, site]);
 
-  if (phase === "checking") return html`<div class="loading">Checking site&hellip;</div>`;
-  if (phase === "ok") return html`<${Gate} site=${site} siteCode=${code} siteId=${siteId} App=${App} />`;
+  if (phase === "checking") return html`<div class="loading">Checking site…</div>`;
+  if (phase === "ok") return html`<${Gate} site=${site} siteCode=${code} siteId=${siteId} yards=${yards} gate=${gate} App=${App} />`;
   if (phase === "noyards") return html`
     <div class="gate">
       <div class="gicon">\u{1F3D7}</div>

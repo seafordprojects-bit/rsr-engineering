@@ -695,7 +695,7 @@ function App() {
   const [sitePin, setSitePin] = useState('');
   const [ownerPin, setOwnerPin] = useState('');
   const [rollPin, setRollPin] = useState('');
-  const [rollDev, setRollDev] = useState(null);
+  const [rollDevs, setRollDevs] = useState(null); // per-yard device tokens: { yard: token|'' } (null=loading)
   const [tgTokenV, setTgTokenV] = useState('');
   const [tgGroupV, setTgGroupV] = useState('');
   const [tgBackupV, setTgBackupV] = useState('');
@@ -746,9 +746,9 @@ function App() {
     try { await setSetting('roll_call_pin', rollPin.trim()); setRollPin(''); flash('Roll-call passcode set'); }
     catch (e) { flash('Error: ' + e.message); }
   };
-  const resetRollDevice = async () => {
-    if (!confirm('Un-register the current roll-call phone? The next phone to enter the passcode becomes the roll-call device.')) return;
-    try { await setSetting('roll_call_device_id', ''); setRollDev(''); flash('Roll-call device cleared — next phone will register'); }
+  const resetRollDevice = async (yard) => {
+    if (!confirm('Un-register the ' + yard + ' roll-call phone? The next phone to open the ' + yard + ' shortcut and enter the passcode becomes the ' + yard + ' device.')) return;
+    try { await setSetting('roll_call_device_id_' + yard, ''); setRollDevs(d => ({ ...(d || {}), [yard]: '' })); flash(yard + ' roll-call device cleared — next phone will register'); }
     catch (e) { flash('Error: ' + e.message); }
   };
   const saveOwnerPin = async () => {
@@ -889,19 +889,29 @@ function App() {
     if (!(authed && showSet) || tgLoaded) return;
     (async () => {
       try {
-        const [tok, grp, bak, ss, dis, ns, ne, rdev] = await Promise.all([
+        const [tok, grp, bak, ss, dis, ns, ne] = await Promise.all([
           getSetting('tg_token'), getSetting('tg_group'), getSetting('tg_backup_group'),
           getSetting('shift_start'), getSetting('dismissal'),
           getSetting('night_shift_start'), getSetting('night_shift_end'),
-          getSetting('roll_call_device_id'),
         ]);
         setTgTokenV(tok || ''); setTgGroupV(grp || ''); setTgBackupV(bak || ''); setTgLoaded(true);
-        setRollDev(rdev || '');
         if (ss) setShiftStartV(ss); if (dis) setDismissalV(dis);
         if (ns) setNightStart(ns); if (ne) setNightEnd(ne);
       } catch (_) {}
     })();
   }, [authed, showSet, tgLoaded]);
+
+  // Per-yard roll-call device registration (each yard has its own bound phone). Loads once the yard
+  // list is known; a new yard in attendance_sites gets its own reset row with no code change.
+  useEffect(() => {
+    if (!(authed && showSet) || !siteList.length) return;
+    (async () => {
+      try {
+        const entries = await Promise.all(siteList.map(async (y) => [y, (await getSetting('roll_call_device_id_' + y)) || '']));
+        setRollDevs(Object.fromEntries(entries));
+      } catch (_) { setRollDevs({}); }
+    })();
+  }, [authed, showSet, siteList]);
 
   // (site rename) load the data-driven yard list once authed — feeds the home-site dropdowns.
   useEffect(() => {
@@ -1516,14 +1526,25 @@ function App() {
         </div>
 
         <div class="card">
-          <div class="sectlabel" style="margin-top:0">Roll-call phone</div>
-          <p class="note" style="margin:0 0 12px">The passcode for the dedicated roll-call phone, plus its one-device lock. The first phone to enter the passcode becomes THE roll-call device; other phones are refused with a "see admin" note.</p>
-          <${Field} label="Set / change roll-call passcode">
+          <div class="sectlabel" style="margin-top:0">Roll-call phones</div>
+          <p class="note" style="margin:0 0 12px">One shared passcode for all roll-call phones, plus a per-yard one-device lock. Each yard has its OWN registered phone: the first phone to open that yard's shortcut and enter the passcode becomes that yard's device; other phones (and phones registered to another yard) are refused with a "see admin" note.</p>
+          <${Field} label="Set / change roll-call passcode (shared)">
             <input type="password" inputmode="numeric" value=${rollPin} onInput=${e => setRollPin(e.target.value)} placeholder="e.g. 2468" />
           <//>
           <button class="btn" onClick=${saveRollPin}>Save roll-call passcode</button>
-          <p class="note" style="margin:12px 0 6px">Registered device: <strong>${rollDev === null ? '…' : (rollDev ? 'one phone registered' : 'none yet')}</strong></p>
-          <button class="btn" style="background:#fbf3e8;color:#b4540a;border-color:#f0d9bf" disabled=${!rollDev} onClick=${resetRollDevice}>Reset roll-call device (for phone replacement)</button>
+          <div style="margin-top:14px;border-top:1px solid var(--line, #e5e5df);padding-top:12px">
+            <p class="note" style="margin:0 0 8px">Registered phone per yard — reset one when replacing that yard's phone:</p>
+            ${rollDevs === null
+              ? html`<p class="note" style="margin:0">Loading&hellip;</p>`
+              : (siteList.length === 0
+                  ? html`<p class="note" style="margin:0">No yards set yet. Add yards under Attendance sites first.</p>`
+                  : siteList.map(y => html`
+                      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
+                        <div><strong>${y}</strong> — ${rollDevs[y] ? 'one phone registered' : 'none yet'}</div>
+                        <button class="btn" style="background:#fbf3e8;color:#b4540a;border-color:#f0d9bf" disabled=${!rollDevs[y]} onClick=${() => resetRollDevice(y)}>Reset</button>
+                      </div>`)
+                )}
+          </div>
         </div>
 
         <div class="card">

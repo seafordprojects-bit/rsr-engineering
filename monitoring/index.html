@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- build v2026-07-16b -->
+<!-- build v2026-07-16c -->
 <html lang="en">
 <head>
 <meta charset="utf-8" />
@@ -106,33 +106,32 @@ function getSetting(sb, key){
     .then(r => (r.data && r.data.length) ? r.data[0].value : null);
 }
 
-// Build the locked menu: one Roll-call tile + one "Hulam og gamit" tile PER yard, from the
-// data-driven yard list. A new yard added to attendance_sites appears here with no code change.
-function renderLocked(yards){
+// Build the locked menu for ONE yard: its Roll-call tile + its "Hulam og gamit" tile. A registered
+// phone is bound to a single yard (per-yard binding), so it only ever sees that yard's two tiles.
+function renderLocked(yard){
   const locked = document.getElementById('locked-menu');
   const head = '<header class="top"><div class="ey">RSR Engineering</div>'
-    + '<h1>Roll-call phone</h1><div class="sub">Pili: roll-call o hulam og gamit</div></header>';
-  if(!yards || !yards.length){
-    locked.innerHTML = head + '<div class="note">Wala pa na-set ang listahan sa yard. '
+    + '<h1>Roll-call phone</h1><div class="sub">' + (yard ? escH(yard) + ' &middot; pili: roll-call o hulam og gamit' : 'Pili: roll-call o hulam og gamit') + '</div></header>';
+  if(!yard){
+    locked.innerHTML = head + '<div class="note">Wala pa mailhi ang yard niini nga telepono. '
       + 'Ikonektar sa internet ug i-reload ni nga page.</div>';
     return;
   }
-  const tiles = yards.map(y => {
-    const q = encodeURIComponent(y), n = escH(y);
-    return '<a class="tile" href="roll-call.html?site=' + q + '">'
-         +   '<span class="ico">' + ICON_RC + '</span>'
-         +   '<span class="t">Roll-call</span><span class="d">' + n + '</span></a>'
-         + '<a class="tile" href="borrow.html?site=' + q + '">'
-         +   '<span class="ico">🧰</span>'
-         +   '<span class="t">Hulam og gamit</span><span class="d">' + n + '</span></a>';
-  }).join('');
+  const q = encodeURIComponent(yard), n = escH(yard);
+  const tiles = '<a class="tile" href="roll-call.html?site=' + q + '">'
+       +   '<span class="ico">' + ICON_RC + '</span>'
+       +   '<span class="t">Roll-call</span><span class="d">' + n + '</span></a>'
+       + '<a class="tile" href="borrow.html?site=' + q + '">'
+       +   '<span class="ico">🧰</span>'
+       +   '<span class="t">Hulam og gamit</span><span class="d">' + n + '</span></a>';
   locked.innerHTML = head + '<div class="grid">' + tiles + '</div>';
 }
 
-// Detection uses the EXISTING device-registration binding: this device is the roll-call phone iff
-// its localStorage token matches settings.roll_call_device_id. Only the registered phone ever holds
-// a token (a non-registered device is blocked before it can claim one), so a token present is a
-// strong signal — we lock down IMMEDIATELY (no flash of Job Order) and confirm against the server.
+// Detection reuses the device-registration binding, now PER YARD: this device is a roll-call phone
+// iff its localStorage token matches settings.roll_call_device_id_<yard> for some yard. Only a
+// registered phone ever holds a token (others are blocked before they can claim one), so a token
+// present is a strong signal — we lock down IMMEDIATELY (no flash of Job Order) and confirm which
+// yard it belongs to against the server.
 (function(){
   let tok = null; try { tok = localStorage.getItem('rsr_rollcall_device'); } catch(e){}
   if(!tok) return;   // normal device — leave the full hub exactly as today
@@ -141,24 +140,31 @@ function renderLocked(yards){
   const locked = document.getElementById('locked-menu');
   full.hidden = true; locked.hidden = false;
 
-  // Instant render from the cached yard list (set by roll-call.html) so the field phone shows its
-  // tiles at once and still works offline.
-  let cached = []; try { const c = JSON.parse(localStorage.getItem('rsr_sites') || '[]'); if(Array.isArray(c)) cached = c; } catch(e){}
-  renderLocked(cached);
+  // Instant render from the cached bound yard (set by the roll-call/borrow gate) so the field phone
+  // shows ITS yard's tiles at once and still works offline.
+  let boundSite = null; try { boundSite = localStorage.getItem('rsr_rollcall_site'); } catch(e){}
+  renderLocked(boundSite);
 
-  // Confirm against the registered id and refresh the yard list.
+  // Confirm against the per-yard device map: find which yard THIS token is registered for.
   try {
     const sb = supabase.createClient(SB_URL, SB_KEY);
-    Promise.all([getSetting(sb, 'roll_call_device_id'), getSetting(sb, 'attendance_sites')]).then(res => {
-      const regId = res[0], yardsRaw = res[1];
-      // This phone was reset/replaced by the admin (a different device now registered) — it is no
-      // longer the roll-call phone, so restore the normal hub.
-      if(regId && regId !== tok){ locked.hidden = true; full.hidden = false; return; }
-      let yards = cached;
-      try { const a = JSON.parse(yardsRaw || '[]'); if(Array.isArray(a) && a.length) yards = a.map(x => String(x).trim()).filter(Boolean); } catch(e){}
-      renderLocked(yards);
-    }).catch(() => { /* offline: stay locked with the cached yards (fail safe) */ });
-  } catch(e){ /* supabase lib unavailable: stay locked with cached yards */ }
+    getSetting(sb, 'attendance_sites').then(raw => {
+      let yards = [];
+      try { const a = JSON.parse(raw || '[]'); if(Array.isArray(a)) yards = a.map(x => String(x).trim()).filter(Boolean); } catch(e){}
+      if(!yards.length) return;   // offline / no list: stay locked with the cached yard (fail safe)
+      return Promise.all(yards.map(y => getSetting(sb, 'roll_call_device_id_' + y).then(v => ({ y, v }))))
+        .then(rows => {
+          const hit = rows.find(r => r.v && r.v === tok);
+          if(!hit){
+            // This phone is registered for no yard (reset/replaced) — restore the normal hub.
+            try { localStorage.removeItem('rsr_rollcall_site'); } catch(e){}
+            locked.hidden = true; full.hidden = false; return;
+          }
+          try { localStorage.setItem('rsr_rollcall_site', hit.y); } catch(e){}
+          renderLocked(hit.y);
+        });
+    }).catch(() => { /* offline: stay locked with the cached yard (fail safe) */ });
+  } catch(e){ /* supabase lib unavailable: stay locked with the cached yard */ }
 })();
 </script>
 </body>
