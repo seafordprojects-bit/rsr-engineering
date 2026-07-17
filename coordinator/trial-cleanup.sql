@@ -38,9 +38,10 @@
 --
 -- ── SAFETY ─────────────────────────────────────────────────────────────────
 --   * ONE transaction. Any RAISE EXCEPTION rolls back EVERYTHING.
---   * No append-only table is touched, so NO immutability trigger is disabled. (The
---     cleanup-test-rows-v2 pattern disables triggers only because it deleted append-only
---     job_close rows; doing that here would be needless risk.)
+--   * No append-only table is touched, so NO immutability trigger is disabled. (A cleanup
+--     that removed append-only efficiency_week / efficiency_week_audit rows would first have
+--     to disable the block_mutation trigger; this script deletes none of those, so it never
+--     needs to — avoiding that risk entirely.)
 --   * Every KEPT table's row count is captured before and re-checked after: if a single
 --     row moved, the whole thing aborts.
 --   * Deletes run in foreign-key order (borrows -> transfers -> units -> items).
