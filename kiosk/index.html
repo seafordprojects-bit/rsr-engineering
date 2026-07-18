@@ -2740,7 +2740,7 @@ async function punch(type){
   } else if(type==='timein' && isLate){
     showBisayaModal('⚠ Na-late ka og '+bisayaHM(lateMs)+' karon. Ang imong sweldo karon nga adlaw maihap gikan sa imong pag-abot. Palihug og sayo og abot ugma. Salamat!');
   } else if(type==='pm_out'){
-    showBisayaModal('✅ Na-rekord ang imong PM Break Out. Kung DILI ka mobalik, kini na ang imong TIME OUT — kompleto na ang imong adlaw. Kung mobalik ka para sa overtime, i-punch ang PM BREAK IN sugod sa '+fmt12(pmInEarliestH,pmInEarliestM)+'. Salamat!');
+    showBisayaModal('✅ Na-rekord ang imong PM Break Out. Kung DILI ka mobalik, kini na ang imong TIME OUT — kompleto na ang imong adlaw. Kung magpabilin ka para sa OVERTIME: i-punch lang ang TIME OUT inig human sa imong trabaho. (Kung mopahulay usa ka ug mobalik, i-punch ang PM BREAK IN sugod sa '+fmt12(pmInEarliestH,pmInEarliestM)+'.) Salamat!');
   } else if(type==='pm_in' && rec.pmInReopened){
     rec.pmInReopened=false;
     showBisayaModal('✅ Nakabalik ka para sa overtime — na-abli pag-usab ang imong adlaw. AYAW KALIMOT i-punch ang TIME OUT inig human sa imong overtime. Salamat!');
