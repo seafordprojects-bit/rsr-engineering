@@ -64,7 +64,7 @@
 <body>
   <div class="wrap">
     <header class="top">
-      <div><h1>Job Order</h1><div class="sub">Estimate from the tariff</div></div>
+      <div><h1>Job Order</h1><div class="sub">Estimate from the tariff &middot; v2026-07-18a</div></div>
       <a class="back" href="index.html">&larr; Menu</a>
     </header>
     <div id="app"><div class="loading">Loading&hellip;</div></div>
@@ -74,7 +74,7 @@
     import { h, render } from "preact";
     import { useState, useEffect } from "preact/hooks";
     import htm from "htm";
-    import { sb, SITES, todayLocal, ymd, addDays, fmtNum } from "./config.js";
+    import { sb, SITES, todayLocal, ymd, addDays, fmtNum, loadActiveVoyages, activeInYard } from "./config.js";
     const html = htm.bind(h);
 
     const UNITS={each:"each",metre:"metre",m2:"m\u00b2",kg:"kg",set:"set",lot:"lot"};
@@ -91,7 +91,8 @@
       const [jobs,setJobs]=useState(null);
       const [preparedBy,setPreparedBy]=useState(localStorage.getItem("rsr_prepared_by")||"");
 
-      const [vessel,setVessel]=useState("");
+      const [voyages,setVoyages]=useState([]);   // active-in-yard vessels for the dropdown
+      const [voyageId,setVoyageId]=useState("");
       const [site,setSite]=useState(SITES[0]);
       const [selCat,setSelCat]=useState("");
       const [itemId,setItemId]=useState("");
@@ -109,7 +110,7 @@
       async function refresh(){
         const iq=sb.from("work_tariff").select("id,name,unit,manhours_per_unit,use_factors,category").eq("active",true).order("category").order("name");
         const fq=sb.from("correction_factor").select("id,grp,label,factor").eq("active",true).order("grp").order("sort").order("label");
-        const [ir,fr,js]=await Promise.all([iq,fq,fetchJobs()]);
+        const [ir,fr,js,vs]=await Promise.all([iq,fq,fetchJobs(),loadActiveVoyages()]);
         const its=ir.data||[]; setItems(its);
         const cs=[...new Set(its.map(catOf))];
         const c0=cs[0]||""; setSelCat(c0);
@@ -118,6 +119,7 @@
         const def={}; GROUPS.forEach(([g])=>{ const f=fs.find(x=>x.grp===g); if(f) def[g]=f.id; });
         setFsel(def);
         setJobs(js);
+        setVoyages(vs||[]);
       }
       async function fetchJobs(){
         const {data,error}=await sb.from("jobs")
@@ -151,17 +153,23 @@
 
       async function save(){
         setMsg(null);
-        if(!vessel.trim()) return setMsg({type:"err",text:"Enter the vessel."});
+        const voyage=voyages.find(v=>v.id===voyageId);
+        if(!voyage) return setMsg({type:"err",text:"Select a vessel."});
         if(!item) return setMsg({type:"err",text:"Pick a work item."});
         if(q<=0) return setMsg({type:"err",text:"Enter a quantity."});
         setBusy(true);
         try{
+          // Part 3 backstop: the vessel may have undocked between opening the form and now.
+          const { data:freshV } = await sb.from("voyages")
+            .select("id,vessel_name,status,docking_date,undocking_date,afloat_start,afloat_done,emergency_start,emergency_end")
+            .eq("id",voyageId).maybeSingle();
+          if(!freshV || !activeInYard(freshV)){ setBusy(false); return setMsg({type:"err",text:"That vessel has left the yard — pick another vessel."}); }
           const {data:jobNo,error:e1}=await sb.rpc("next_job_no",{p_site:site});
           if(e1) throw e1;
           const fbreak={};
           if(useF) GROUPS.forEach(([g])=>{ const o=optById(fsel[g]); if(o) fbreak[g]={label:o.label,factor:Number(o.factor)}; });
           const {error:e2}=await sb.from("jobs").insert({
-            job_no:jobNo, vessel:vessel.trim(), site,
+            job_no:jobNo, voyage_id:voyageId, vessel:voyage.vessel_name, site,
             location:location.trim()||null, description:desc.trim()||null,
             tariff_id:item.id, quantity:q, unit,
             kilos: unit==="kg"? q : null,
@@ -173,7 +181,7 @@
           });
           if(e2) throw e2;
           setMsg({type:"ok",text:`Created ${jobNo} \u00b7 est ${fmtNum(est)} man-hrs`});
-          setVessel(""); setQty(""); setLocation(""); setDesc("");
+          setVoyageId(""); setQty(""); setLocation(""); setDesc("");
           setJobs(await fetchJobs());
         }catch(err){ console.error(err); setMsg({type:"err",text:"Could not save: "+(err.message||err)}); }
         finally{ setBusy(false); }
@@ -185,7 +193,12 @@
         <div class="card">
           <h2>New job order</h2>
           <label>Vessel</label>
-          <input value=${vessel} onInput=${e=>setVessel(e.target.value)} placeholder="e.g. MV Santa Maria" />
+          ${voyages.length===0
+            ? html`<div class="hint">No vessels are in the yard right now. Add one in the coordinator vessel schedule first.</div>`
+            : html`<select value=${voyageId} onChange=${e=>setVoyageId(e.target.value)}>
+                <option value="">— Select vessel —</option>
+                ${voyages.map(v=>html`<option value=${v.id}>${v.vessel_name}</option>`)}
+              </select>`}
           <label>Site</label>
           <select value=${site} onChange=${e=>setSite(e.target.value)}>${SITES.map(s=>html`<option value=${s}>${s}</option>`)}</select>
 
