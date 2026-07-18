@@ -25,6 +25,7 @@
   .badge.amber{background:var(--warnbg);color:var(--warn);border:1px solid #f0d9bf}
   .badge.over{background:var(--overbg);color:var(--over);border:1px solid #f0bdba}
   .badge.ok{background:var(--okbg);color:var(--ok);border:1px solid #bfe3cf}
+  .vflag{background:#fbe8e7;border:1px solid #f0bdba;color:#b4231f;border-radius:8px;padding:4px 8px;font-size:11px;font-weight:700;margin-top:6px}
   .bar{background:var(--paper);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;margin-bottom:13px}
   .bar label{display:block;font-size:12px;color:var(--muted);font-weight:600;margin-bottom:5px}
   .bar input,.bar select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:15px;background:#fcfcfd}
@@ -58,7 +59,7 @@
 <body>
   <div class="wrap">
     <header class="top">
-      <div><h1>Efficiency</h1><div class="sub">Earned vs actual man-hours</div></div>
+      <div><h1>Efficiency</h1><div class="sub">Earned vs actual man-hours &middot; v2026-07-18a</div></div>
       <a class="back" href="index.html">&larr; Menu</a>
     </header>
     <div id="app"><div class="loading">Loading&hellip;</div></div>
@@ -70,7 +71,8 @@
     import { sb, loadEmployees, fmtNum, defaultPayWeek,
              loadAllJobCloseStatus, closeJobOrder, approveJob, reopenJob,
              setOwnerPin, closedWeekWarning,
-             loadIncentiveConfig, loadWorkerIncentive, setIncentiveRate } from "./config.js";
+             loadIncentiveConfig, loadWorkerIncentive, setIncentiveRate,
+             loadVoyagesById, vesselFlag } from "./config.js";
     import { computeDiscrepancy } from "./jobclose.mjs";
     const html = htm.bind(h);
     const pct = (e) => e==null ? "—" : fmtNum(e*100,0)+"%";
@@ -81,6 +83,7 @@
       const [emps,setEmps]=useState([]);
       const [jobs,setJobs]=useState(null);
       const [vessels,setVessels]=useState(null);
+      const [voyById,setVoyById]=useState(new Map());   // voyage_id -> voyage row, for the lifecycle flag
       const [closeStatus,setCloseStatus]=useState({});
       const [week,setWeek]=useState(defaultPayWeek(0).start);
       const [wrows,setWrows]=useState(null);
@@ -96,7 +99,7 @@
       const [incPayable,setIncPayable]=useState(false); // settings.incentive_payable — off until owner flips it
       const [incByWorker,setIncByWorker]=useState({});  // employee_code -> v_worker_week_incentive row
 
-      useEffect(()=>{ loadEmployees().then(setEmps); loadJobs(); },[]);
+      useEffect(()=>{ loadEmployees().then(setEmps); loadJobs(); loadVoyagesById().then(setVoyById); },[]);
       useEffect(()=>{ if(tab==="worker") loadWeek(); },[tab,week]);
 
       const nameOf=(code)=>{ const e=emps.find(x=>x.id===code); return e? e.name : code; };
@@ -106,7 +109,13 @@
         const j=await sb.from("v_job_efficiency").select("*").order("job_no");
         const v=await sb.from("v_vessel_efficiency").select("*").order("vessel");
         if(j.error) setMsg({type:"err",text:j.error.message});
-        setJobs(j.data||[]); setVessels(v.data||[]);
+        // v_job_efficiency has no voyage_id column — fetch it from jobs and merge by job_id
+        // (status is already on the view row; the lifecycle flag needs both).
+        const jr=j.data||[];
+        const vid=await sb.from("jobs").select("id,voyage_id");
+        const vidMap={}; (vid.data||[]).forEach(r=>{ vidMap[r.id]=r.voyage_id; });
+        jr.forEach(r=>{ r.voyage_id = vidMap[r.job_id] ?? null; });
+        setJobs(jr); setVessels(v.data||[]);
         setCloseStatus(await loadAllJobCloseStatus());
       }
 
@@ -298,6 +307,7 @@
                 if(cs==="pending") return html`<span class="badge amber">pending incentive approval</span>`;
                 if(cs==="approved") return html`<span class="badge ok">approved</span>`;
                 return null; })()}
+              ${(()=>{ const f=vesselFlag(j, voyById); return f? html`<div class="vflag">⚠ ${f.message}</div>` : ""; })()}
             </div>
             <div class="fig">
               <span>earned <b>${fmtNum(j.earned_hours)}</b>h</span>
