@@ -6,6 +6,7 @@
 import { html, render } from 'htm/preact';
 import { useState, useEffect, useCallback } from 'preact/hooks';
 import { supabase, getSites } from './supabase.js';
+import { vesselFlag } from './monitoring/vessel.mjs';
 
 // ---------- data ----------
 async function getEmployees() {
@@ -174,9 +175,18 @@ async function getRollCallPauses(dateStr) {
   return (data || []).filter(p => !p.resumed_on || p.resumed_on > dateStr);
 }
 async function getJobsBrief() {
-  const { data, error } = await supabase.from('jobs').select('id,job_no,vessel,location,site').order('job_no');
+  const { data, error } = await supabase.from('jobs').select('id,job_no,vessel,location,site,voyage_id,status').order('job_no');
   if (error) throw error;
   return data || [];
+}
+// voyage lookup for the vessel-lifecycle flag (badge only — display, never a write).
+async function getVoyagesById() {
+  const { data, error } = await supabase.from('voyages')
+    .select('id,vessel_name,status,docking_date,undocking_date,afloat_start,afloat_done,emergency_start,emergency_end');
+  if (error) throw error;
+  const m = new Map();
+  (data || []).forEach(v => m.set(v.id, v));
+  return m;
 }
 
 // --- approvals (assistant can approve; notifies admin via Telegram) ---
@@ -703,9 +713,11 @@ function RollCall({ employees, toast }) {
   const [yards, setYards] = useState([]);
   const [fJob, setFJob] = useState('');
   const [fSite, setFSite] = useState('');
+  const [voyById, setVoyById] = useState(new Map());
 
   useEffect(() => {
     getJobsBrief().then(setJobs).catch(e => toast && toast('Load failed: ' + e.message, true));
+    getVoyagesById().then(setVoyById).catch(() => {});
     // Yard list is DATA (settings.attendance_sites) — the same list the kiosk and the phone read.
     (async () => {
       try {
@@ -776,6 +788,7 @@ function RollCall({ employees, toast }) {
               <div class="row" key=${jid} style="flex-direction:column;align-items:stretch;gap:0">
                 <div class="name">${j.job_no || 'Job'} ${j.vessel ? '· ' + j.vessel : ''}</div>
                 <div class="sub" style="margin-bottom:4px">${list.length} present · ${list.reduce((t, r) => t + (Number(r.hours) || 0), 0)} h${list[0] && list[0].site ? ' · ' + list[0].site : ''}</div>
+                ${(() => { const f = vesselFlag(j, voyById); return f ? html`<div class="vflag">⚠ ${f.message}</div>` : ''; })()}
                 <div style="font-size:13px;color:var(--ink-dim);line-height:1.7">
                   ${list.map(r => html`
                     <div key=${r.id}>${r.checkpoint} — <b style="color:var(--ink)">${nameOf(r.employee_code)}</b> · ${r.hours}h${r.is_ot ? ' · OT' : ''}</div>`)}
