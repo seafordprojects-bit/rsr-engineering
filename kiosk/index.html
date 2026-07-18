@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-15a</span>
+        <span id="version-stamp">v2026-07-18a</span>
       </div>
     </div>
   </div>
@@ -2284,6 +2284,10 @@ function updBtns(rec){
     }
     // Lunch In: 12:40–5:00 PM. (nd Task 5) Night meal-in has no upper close — a late return
     // is still credited at actual punch time (see punch()'s lunch_in earliest/close guard).
+    // Lower bound (fix): Lunch In is NOT pressable before its window opens (day 12:40). The
+    // forward-skip above may pre-enable it; this strict window is the source of truth and mirrors
+    // punch()'s own lunch_in earliest guard, so at noon only Lunch Out is active.
+    if(!rec.nightShift&&!rec.punches.lunch_in&&_now<mealAt(rec,'hardclose',_now))_lock('lunch_in');
     if(!rec.nightShift&&!rec.punches.lunch_in&&_now>=_wAt(pmOutEarlyH,pmOutEarlyM))_lock('lunch_in');
     // (v2026-07-07c) Lunch Out: pressable any time after Time In — early punches (before 12:00)
     // go through the Bisaya deduction confirm in punch(). Hard close at 12:40 still applies above.
@@ -2331,6 +2335,16 @@ function updBtns(rec){
           else if(!_yr.nightShift&&_now.getHours()<NIGHT_CLOSE_CUTOFF_H){ _open('timeout',true); }
         }
       }
+    }
+    // (OT window) Day-shift Time Out is ALSO pressable from 5 PM until the admin dismissal/OT-end
+    // time, so an OT worker taps Time Out at their real finish time — and it stays live after a
+    // provisional PM-Break-Out auto-close, so that tap REPLACES the auto-close (see punch()). Gated
+    // on lunch being resolved so it can never skip the lunch punches. "OT-approved" = the dismissal
+    // window itself (admin-set OT-end), no per-worker approval.
+    if(!rec.nightShift&&rec.punches.timein){
+      const _lunchDone=rec.straightDutyLunch||rec.afternoonStart||(rec.punches.lunch_in&&!isPunchMarker(rec.punches.lunch_in));
+      const _otWin=_now>=_wAt(pmOutEarlyH,pmOutEarlyM)&&_now<=_wAt(dismissalH,dismissalM);
+      if(_otWin&&_lunchDone&&(!rec.punches.timeout||rec.pmOutAutoClosed))_open('timeout',true);
     }
   }
   if(!rec){
@@ -2381,6 +2395,20 @@ async function punch(type){
   if(type==='timein' && !rec.nightShift){
     if(nightArmConfirmed){ nightArmConfirmed=false; rec.nightShift=true; rec.straightDutyPm=true; }
     else if(inNightArmWindow(Date.now())){ openEarlyBisayaConfirm('nightarm'); return; }
+  }
+  // (Rule 3) A Time Out during the OT window REPLACES the provisional PM-Break-Out auto-close.
+  // Drop the provisional Time Out AND the stray PM Break Out (no PM Break In followed it, so no
+  // break was completed) so the afternoon session runs straight through to the real Time Out — the
+  // overtime is fully counted and no phantom break is deducted. A genuine PM break (pm_out+pm_in)
+  // never reaches here: pm_in already cleared pmOutAutoClosed when it reopened the day. After this,
+  // next becomes 'pm_out' so the existing pmDecisionTimeout path lets the punch through.
+  if(type==='timeout'&&rec.pmOutAutoClosed&&!rec.nightShift){
+    delete rec.punches.timeout;delete rec.msMap.timeout;
+    rec.autoTimeout=false;rec.autoTimeoutReason='';rec.pmOutAutoClosed=false;
+    if(!(rec.punches.pm_in&&!isPunchMarker(rec.punches.pm_in))){
+      delete rec.punches.pm_out;delete rec.msMap.pm_out;rec.earlyPmOut=false;
+    }
+    next=getNext(rec);
   }
   // Allow Time Out at the PM-break decision point (employee leaving at 5 PM, skipping the 5–6 break).
   const pmDecisionTimeout=(type==='timeout'&&next==='pm_out'&&rec.punches&&!rec.punches.timeout);
@@ -2462,7 +2490,11 @@ async function punch(type){
     const _sd5=new Date(now);_sd5.setHours(pmOutEarlyH,pmOutEarlyM,0,0);
     const _sdOk=!!rec.straightDutyPm&&now>=_sd5;
     const _utOk=hasUndertimeToday(emp.code);
-    if(!(_hasPmIn||_sdOk||_utOk)){
+    // (OT window) 5 PM → the admin dismissal/OT-end time unlocks Time Out for a day-shift OT worker,
+    // so they clock out at their real finish time (defense-in-depth partner to updBtns' enable).
+    const _otEnd=new Date(now);_otEnd.setHours(dismissalH,dismissalM,0,0);
+    const _otWinOk=!rec.nightShift&&now>=_sd5&&now<=_otEnd;
+    if(!(_hasPmIn||_sdOk||_utOk||_otWinOk)){
       showBisayaModal('⚠ Dili pwede ang Time Out karon. Kung mopauli ka sa '+fmt12(pmOutEarlyH,pmOutEarlyM)+', i-punch ang PM BREAK OUT — mao na kana ang imong Time Out kung dili ka mobalik. Kung mopauli og sayo, i-file ang Undertime / Half Day. Ang Time Out para lang sa naka-PM Break In (overtime).');
       return;
     }
