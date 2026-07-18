@@ -8,6 +8,8 @@
 
 import { createClient } from "@supabase/supabase-js";
 import { computeDiscrepancy, creditedUnits, isOverrun, closeStatusFromAudit } from "./jobclose.mjs";
+import { activeInYard, vesselFlag } from "./vessel.mjs";
+export { activeInYard, vesselFlag };
 
 const SUPABASE_URL      = "https://wpmcbjrisuyjvobvzaus.supabase.co";
 const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0";
@@ -41,6 +43,24 @@ export async function loadLocations() {
     .from("work_standards").select("location,manhours_per_kg").order("location");
   if (error) { console.error("loadLocations", error); return []; }
   return data || [];
+}
+
+/* ---- vessel schedule (voyages) — read-only from the coordinator's table ---- */
+// Active-in-yard vessels for the Job Order dropdown.
+export async function loadActiveVoyages(){
+  const { data, error } = await sb.from("voyages")
+    .select("id,vessel_name,vessel_code,status,docking_date,undocking_date,afloat_start,afloat_done,emergency_start,emergency_end")
+    .order("vessel_name");
+  if(error){ console.error("loadActiveVoyages", error); return []; }
+  return (data||[]).filter(activeInYard);
+}
+// ALL voyages keyed by id — for the lifecycle flag (a flagged job's vessel is INACTIVE, so it is
+// NOT in loadActiveVoyages()).
+export async function loadVoyagesById(){
+  const { data, error } = await sb.from("voyages")
+    .select("id,vessel_name,status,docking_date,undocking_date,afloat_start,afloat_done,emergency_start,emergency_end");
+  if(error){ console.error("loadVoyagesById", error); return new Map(); }
+  const m=new Map(); (data||[]).forEach(v=>m.set(v.id,v)); return m;
 }
 
 /* ---- date utils — all local-time, no UTC surprises ---- */
