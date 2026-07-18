@@ -115,7 +115,7 @@
 <div id="s-home" class="screen">
   <div class="app-header">
     <div class="hdr-avatar">R</div>
-    <div class="hdr-info"><div class="hdr-site">RSR Tools <span style="font-size:11px;font-weight:600;opacity:.6">v2026-07-16a</span></div><div class="hdr-sub" id="home-site-sub">—</div></div>
+    <div class="hdr-info"><div class="hdr-site">RSR Tools <span style="font-size:11px;font-weight:600;opacity:.6">v2026-07-19a</span></div><div class="hdr-sub" id="home-site-sub">—</div></div>
     <button class="hdr-btn" onclick="doLogout()" title="Sign out">&#9211;</button>
     <a href="../" style="text-decoration:none"><button class="hdr-btn">&#8962;</button></a>
   </div>
@@ -854,9 +854,11 @@ async function reviewRepair(){
   if(!by){toast('Enter who is transmitting it');return;}
   if(!repairCart.length){toast('Add at least one tool');return;}
   if(!reservedRepairNo){
+    // Server-only slip number (next_no allocates atomically). REFUSE on failure — no device-clock
+    // fallback ('RP-'+site+HHMMSS), which could mint a duplicate. A missing number is recoverable.
     let rn='';
     try{const{data,error}=await sb.rpc('next_no',{p_prefix:'RP',p_site:siteCode()}); if(!error&&data)rn=data;}catch(e){}
-    if(!rn){const n=new Date(),z=x=>String(x).padStart(2,'0');rn='RP-'+siteCode()+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+    if(!rn){toast('Could not get a slip number from the server. Check the connection and try again.');return;}
     reservedRepairNo=rn;
   }
   pendingRepair={by,rdate,eta,items:repairCart.slice(),repairNo:reservedRepairNo};
@@ -917,6 +919,14 @@ async function confirmRepaired(){
   const dest=document.getElementById('rback-site').value;
   if(!by){toast('Enter a name');return;}
   const uid=repairBackUid, itemId=repairBackItemId;
+  // Shipping a repaired tool to another site needs a server transfer number. Reserve it BEFORE any
+  // write so a numbering failure refuses cleanly — no half-done "repaired but not shipped" state.
+  // Server-only, REFUSE on failure — no device-clock fallback (a duplicate number is unrecoverable).
+  let tn='';
+  if(dest!==curSite){
+    try{const{data,error}=await sb.rpc('next_no',{p_prefix:'TR',p_site:siteCode()}); if(!error&&data)tn=data;}catch(e){}
+    if(!tn){toast('Could not get a slip number from the server. Check the connection and try again.');return;}
+  }
   try{
     await sb.from('repair_log').update({status:'repaired',received_back_by:by,repaired_at:new Date().toISOString()}).eq('unit_id',uid).eq('status','in_repair');
     if(dest===curSite){
@@ -924,9 +934,6 @@ async function confirmRepaired(){
       document.getElementById('rback-modal').style.display='none';
       toast('Repaired · received back by '+by); goRepair();
     } else {
-      let tn='';
-      try{const{data,error}=await sb.rpc('next_no',{p_prefix:'TR',p_site:siteCode()}); if(!error&&data)tn=data;}catch(e){}
-      if(!tn){const n=new Date(),z=x=>String(x).padStart(2,'0');tn='TR-'+siteCode()+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
       const{error}=await sb.from('tool_transfers').insert([{unit_id:uid,item_id:itemId,from_site:curSite,to_site:dest,status:'in_transit',sent_by:by,transfer_no:tn,note:'Repaired tool'}]); if(error)throw error;
       const{error:e2}=await sb.from('item_units').update({status:'transit',defect:null,repair_eta:null}).eq('id',uid); if(e2)throw e2;
       document.getElementById('rback-modal').style.display='none';
@@ -1073,9 +1080,11 @@ async function reviewTransfer(){
   if(!by){toast('Enter who is sending the tools');return;}
   if(!xferCart.length){toast('Add at least one tool');return;}
   if(!reservedXferNo){
+    // Server-only slip number. REFUSE on failure — no device-clock fallback ('TR-'+site+HHMMSS),
+    // which could mint a duplicate transfer number across two devices in the same second.
     let tn='';
     try{const{data,error}=await sb.rpc('next_no',{p_prefix:'TR',p_site:siteCode()}); if(!error&&data)tn=data;}catch(e){}
-    if(!tn){const n=new Date(),z=x=>String(x).padStart(2,'0');tn='TR-'+siteCode()+'-'+z(n.getHours())+z(n.getMinutes())+z(n.getSeconds());}
+    if(!tn){toast('Could not get a slip number from the server. Check the connection and try again.');return;}
     reservedXferNo=tn;
   }
   const destName=(sites.find(s=>s.id===dest)||{}).name||'—';
