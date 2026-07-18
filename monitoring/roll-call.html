@@ -50,6 +50,7 @@
   .jmeta{font-size:12px;color:var(--muted);margin-top:2px}
   .count{font-size:12px;color:var(--ok);font-weight:700;white-space:nowrap}
   .ntbadge{display:inline-block;font-size:9.5px;font-weight:700;letter-spacing:.3px;color:#b4231f;background:#fbe8e7;border:1px solid #f0bdba;border-radius:10px;padding:1px 6px;margin-left:6px;text-transform:uppercase;vertical-align:middle}
+  .vflag{background:#fbe8e7;border:1px solid #f0bdba;color:#b4231f;border-radius:8px;padding:4px 8px;font-size:11px;font-weight:700;margin-top:6px}
 
   .people{margin-top:11px;display:flex;flex-direction:column;gap:7px}
   .prow{display:flex;align-items:center;justify-content:space-between;gap:8px}
@@ -105,7 +106,7 @@
     <header class="top">
       <div>
         <h1>Roll-call <span id="site-badge" class="sbadge"></span></h1>
-        <div class="sub">Tap who is present each checkpoint &middot; v2026-07-16d</div>
+        <div class="sub">Tap who is present each checkpoint &middot; v2026-07-18a</div>
       </div>
       <a class="back" href="index.html">&larr; Menu</a>
     </header>
@@ -117,7 +118,7 @@
     import { useState, useEffect } from "preact/hooks";
     import htm from "htm";
     import { sb, CHECKPOINTS, HOURS_PER_CHECKPOINT, loadEmployees, todayLocal, ymd, addDays,
-             upsertJobProgress, loadJobProgressFor } from "./config.js";
+             upsertJobProgress, loadJobProgressFor, loadVoyagesById, vesselFlag } from "./config.js";
     // The ?site= + roll-call-passcode + one-device gate is shared with borrow.html (see
     // rollcall-core.js) so the two field-phone surfaces can never drift apart.
     import { Shell } from "./rollcall-core.js";
@@ -146,8 +147,9 @@
       const [busy,setBusy]=useState(false);
       const [progress,setProgress]=useState({});   // job_id -> cumulative units to date
       const [pedit,setPedit]=useState({});          // job_id -> in-progress text field value
+      const [voyById,setVoyById]=useState(new Map());   // voyage_id -> voyage row, for the lifecycle flag
 
-      useEffect(()=>{ loadEmployees().then(setEmps); },[]);
+      useEffect(()=>{ loadEmployees().then(setEmps); loadVoyagesById().then(setVoyById); },[]);
       useEffect(()=>{ reload(); },[date,cp]);
 
       async function reload(){
@@ -157,7 +159,7 @@
         // Showing the wrong yard's jobs is how a wrong-yard entry gets made.
         if(!siteCode){ setJobs([]); setRows([]); setPauses([]); return; }
         const jq = sb.from("jobs")
-          .select("id,job_no,vessel,location,start_date,target_date,status,est_manhours,quantity,unit,site")
+          .select("id,job_no,vessel,location,start_date,target_date,status,est_manhours,quantity,unit,site,voyage_id")
           .not("status","in","(done,closed)").eq("site",siteCode).order("job_no");
         const aq = sb.from("job_assignment").select("job_id,employee_code");
         const cq = sb.from("job_checkpoint").select("id,job_id,employee_code")
@@ -288,6 +290,7 @@
                       <div class="jno">${j.job_no}${j.quantity==null && html`<span class="ntbadge">no target set · not payable</span>`}</div>
                       <div class="jttl">${j.vessel} \u00b7 ${j.location}</div>
                       <div class="jmeta">est ${j.est_manhours} hrs \u00b7 ${j.start_date||"\u2014"} \u2192 ${j.target_date||"\u2014"}</div>
+                      ${(()=>{ const f=vesselFlag(j, voyById); return f? html`<div class="vflag">\u26a0 ${f.message}</div>` : ""; })()}
                     </div>
                     ${!paused && html`<div class="count">${presentCount} present \u00b7 +${presentCount*HOURS_PER_CHECKPOINT}h</div>`}
                   </div>
