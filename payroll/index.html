@@ -236,6 +236,9 @@ select.field-input{appearance:none}
       <input type="text" id="set-co" class="field-input">
       <label class="field-label">Overtime multiplier</label>
       <input type="number" id="set-ot" class="field-input" step="0.05" inputmode="decimal">
+      <label class="field-label">Sunday rest-day premium starts</label>
+      <input type="date" id="set-sunday-from" class="field-input">
+      <div style="font-size:11px;color:#888;margin:-4px 0 10px">Sundays on/after this date pay the rest-day premium (daily ×1.30, OT ×1.69). Applies to any week you run from now on.</div>
       <label class="field-label">Default weekly vale deduction (₱)</label>
       <input type="number" id="set-vale" class="field-input" inputmode="decimal" placeholder="500">
       <label class="field-label">Change payroll passcode (leave blank to keep)</label>
@@ -308,7 +311,7 @@ cfg.otMult = cfg.otMult || 1.25;
 cfg.weeklyVale = (cfg.weeklyVale===undefined) ? 500 : cfg.weeklyVale;
 cfg.allowance = (cfg.allowance===undefined) ? 50 : cfg.allowance;
 cfg.otAllowMinHrs = (cfg.otAllowMinHrs===undefined) ? 3 : cfg.otAllowMinHrs;
-cfg.sundayPremiumFrom = cfg.sundayPremiumFrom || '2026-07-13'; // first date the Sunday rest-day premium applies (forward-only)
+cfg.sundayPremiumFrom = cfg.sundayPremiumFrom || '2026-07-12'; // first date the Sunday rest-day premium applies (forward-only; Sunday Jul 12 2026 included)
 // (site rename) mirror of the kiosk normalizer: legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue;
 // a real yard name passes through untouched. Site is display/routing only — pay uses has_away_allowance.
 const _SITE_LEGACY={'A':'Carmen','SITE A':'Carmen','B':'Mandaue','SITE B':'Mandaue'};
@@ -387,7 +390,7 @@ const PR_ND_START=22, PR_ND_END=6, PR_ND_RATE=0.10;
 const PR_RESTDAY_MULT=1.30;
 const PR_SUNDAY_OT_MULT=PR_RESTDAY_MULT*1.30; // 1.69
 function isSundayPremium(dateStr){
-  const from = cfg.sundayPremiumFrom || '2026-07-13';
+  const from = cfg.sundayPremiumFrom || '2026-07-12';
   const iso=toISO(dateStr); if(!iso || iso<from) return false;
   const p=iso.split('-'); if(p.length!==3) return false;
   return new Date(+p[0], +p[1]-1, +p[2], 12, 0, 0).getDay()===0; // 0 = Sunday (noon-local → TZ-safe)
@@ -677,6 +680,7 @@ async function init(){
   document.getElementById('co-title').textContent=(cfg.company||'RSR Engineering').toUpperCase();
   document.getElementById('set-co').value=cfg.company;
   document.getElementById('set-ot').value=cfg.otMult;
+  document.getElementById('set-sunday-from').value=cfg.sundayPremiumFrom||'2026-07-12';
   document.getElementById('set-vale').value=cfg.weeklyVale;
   document.getElementById('ot-disp').textContent=cfg.otMult;
   document.getElementById('adv-date').value=isoOf(new Date());
@@ -1597,6 +1601,10 @@ function doConfirm(){
 function saveSettings(){
   cfg.company=document.getElementById('set-co').value.trim()||'RSR Engineering';
   cfg.otMult=parseFloat(document.getElementById('set-ot').value)||1.25;
+  // Sunday-premium start date. A blank/invalid field KEEPS the current value — never blank the
+  // gate, or every Sunday would suddenly earn the premium.
+  const _sf=document.getElementById('set-sunday-from').value;
+  if(/^\d{4}-\d{2}-\d{2}$/.test(_sf)) cfg.sundayPremiumFrom=_sf;
   const wv=parseFloat(document.getElementById('set-vale').value);
   cfg.weeklyVale=isNaN(wv)?500:wv;
   const np=document.getElementById('set-pin').value.trim();
