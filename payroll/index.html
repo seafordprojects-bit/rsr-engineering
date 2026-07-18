@@ -136,7 +136,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub" id="build-stamp">Weekly Payroll · v2026-07-15b</div>
+    <div class="app-sub" id="build-stamp">Weekly Payroll · v2026-07-18a</div>
   </div>
 
   <div class="tabs">
@@ -900,6 +900,17 @@ async function runPayroll(){
       // rest-day rate: reg-night = hourly×1.30×10%, OT-night = hourly×1.69×10%.
       const ndPay = _hr(ndRegMs-sunNdRegMs)*hourly*PR_ND_RATE + _hr(ndOtMs-sunNdOtMs)*hourly*cfg.otMult*PR_ND_RATE
                   + _hr(sunNdRegMs)*hourly*PR_RESTDAY_MULT*PR_ND_RATE + _hr(sunNdOtMs)*hourly*PR_SUNDAY_OT_MULT*PR_ND_RATE;
+      // ── DISPLAY-ONLY itemization of the Sunday rest-day premium ──────────────────────────────
+      // These split the SAME amounts netOf() already sums (basic+restDayPay, otPay, ndPay) into
+      // separate payslip lines. They NEVER feed the net — netOf() still reads basic/restDayPay/
+      // otPay/ndPay — so computed totals cannot move by a peso. For a week with no Sunday they
+      // collapse to the originals (sunDays / sunOtMs / sunNd* all 0), so weekday payslips stay identical.
+      const dayPayAll     = emp.dailyRate*daysPresent;                 // ALL present days at 100% (= basic + Sunday base)
+      const sundayPremium = emp.dailyRate*(PR_RESTDAY_MULT-1)*sunDays; // the +30% on the Sunday first-8h (dayPayAll+sundayPremium === basic+restDayPay)
+      const otPayWeekday  = _hr(otMs-sunOtMs)*hourly*cfg.otMult;       // regular OT ×1.30  (weekday+Sunday === otPay)
+      const otPaySunday   = _hr(sunOtMs)*hourly*PR_SUNDAY_OT_MULT;     // Sunday OT ×1.69
+      const ndPayWeekday  = _hr(ndRegMs-sunNdRegMs)*hourly*PR_ND_RATE + _hr(ndOtMs-sunNdOtMs)*hourly*cfg.otMult*PR_ND_RATE;             // weekday ND (weekday+Sunday === ndPay)
+      const ndPaySunday   = _hr(sunNdRegMs)*hourly*PR_RESTDAY_MULT*PR_ND_RATE + _hr(sunNdOtMs)*hourly*PR_SUNDAY_OT_MULT*PR_ND_RATE;     // Sunday-night ND stacked on the Sunday rate
       const bal = outstanding(emp.code);
       const defaultVale = bal>0 ? Math.min(cfg.weeklyVale, bal) : 0;
       const al = allowancesFor(emp.id);
@@ -911,6 +922,9 @@ async function runPayroll(){
         suspended:emp.suspended, dailyRate:emp.dailyRate, shift:emp.shift, hourly,
         daysPresent, otHrs:otMs/3600000, totalHrs:totalWorkedMs/3600000, basic, lateUT, otPay,
         restDayPay, sundayDays:sunDays,
+        dayPayAll, sundayPremium,
+        otPayWeekday, otPaySunday, otHrsWeekday:(otMs-sunOtMs)/3600000, otHrsSunday:sunOtMs/3600000,
+        ndPayWeekday, ndPaySunday, wkNdHrs:((ndRegMs-sunNdRegMs)+(ndOtMs-sunNdOtMs))/3600000, sunNdHrs:(sunNdRegMs+sunNdOtMs)/3600000,
         ndPay, ndHrs:(ndRegMs+ndOtMs)/3600000, ndRegHrs:ndRegMs/3600000, ndOtHrs:ndOtMs/3600000,
         valeBalance:bal, otAllowance:otAllowDays*allowAmt, stayInAllowance:awayAllowDays*allowAmt,
         valeDeduct:defaultVale, otherDeduct:0,
@@ -979,14 +993,16 @@ function renderRun(){
         </div>
       </div>
       <div class="pr-lines">
-        ${(r.daysPresent-(r.sundayDays||0))>0?`<div class="k">Daily pay (${r.daysPresent-(r.sundayDays||0)} day${(r.daysPresent-(r.sundayDays||0))===1?'':'s'})</div><div class="v">${peso(r.basic)}</div>`:''}
-        ${(r.sundayDays||0)>0?`<div class="k">Rest day premium (${r.sundayDays} Sunday${r.sundayDays===1?'':'s'} · daily ×1.30)</div><div class="v">${peso(r.restDayPay)}</div>`:''}
+        ${r.daysPresent>0?`<div class="k">Daily pay (${r.daysPresent} day${r.daysPresent===1?'':'s'})</div><div class="v">${peso(r.dayPayAll)}</div>`:''}
+        ${(r.sundayDays||0)>0?`<div class="k">Sunday premium (30% · ${r.sundayDays} Sunday${r.sundayDays===1?'':'s'})</div><div class="v plus">+${peso(r.sundayPremium)}</div>`:''}
         <div class="k" style="font-size:11px;color:#888">Total hours: ${r.totalHrs.toFixed(2)}h</div><div class="v"></div>
         ${(Number(r.leavePay)||0)>0?`<div class="k">Leave pay (${r.leavePaidDays} VL/SL day${r.leavePaidDays===1?'':'s'})</div><div class="v plus">+${peso(r.leavePay)}</div><div class="k" style="font-size:11px;color:#888">${r.leavePaidDates.map(d=>fmtDate(d)).join(', ')}</div><div class="v"></div>`:''}
         ${(Number(r.leaveUnpaidDays)||0)>0?`<div class="k" style="color:#888">Excused unpaid leave</div><div class="v" style="color:#888">${r.leaveUnpaidDays} day${r.leaveUnpaidDays===1?'':'s'}</div>`:''}
         <div class="k">Less late / undertime</div><div class="v minus">${r.lateUT>0?'−'+peso(r.lateUT):peso(0)}</div>
-        <div class="k">OT pay (${r.otHrs.toFixed(2)}h${(r.sundayDays||0)>0?', incl. Sunday ×1.69':' × '+cfg.otMult})</div><div class="v plus">${r.otPay>0?'+'+peso(r.otPay):peso(0)}</div>
-        ${(Number(r.ndPay)||0)>0?`<div class="k">Night differential (${r.ndHrs.toFixed(2)}h · +10%)</div><div class="v plus">+${peso(r.ndPay)}</div>`:''}
+        <div class="k">OT pay (${r.otHrsWeekday.toFixed(2)}h × ${cfg.otMult})</div><div class="v plus">${r.otPayWeekday>0?'+'+peso(r.otPayWeekday):peso(0)}</div>
+        ${(r.otPaySunday||0)>0?`<div class="k">Sunday OT ×1.69 (${r.otHrsSunday.toFixed(2)}h)</div><div class="v plus">+${peso(r.otPaySunday)}</div>`:''}
+        ${(Number(r.ndPayWeekday)||0)>0?`<div class="k">Night differential (${r.wkNdHrs.toFixed(2)}h · +10%)</div><div class="v plus">+${peso(r.ndPayWeekday)}</div>`:''}
+        ${(Number(r.ndPaySunday)||0)>0?`<div class="k">Sunday night differential (${r.sunNdHrs.toFixed(2)}h · +10% on Sunday rate)</div><div class="v plus">+${peso(r.ndPaySunday)}</div>`:''}
         ${(Number(r.allowDeduct)||0)>0?`<div class="k">Less allowance${r.allowDates&&r.allowDates.length?' ('+r.allowDates.join(', ')+')':''}</div><div class="v minus">−${peso(r.allowDeduct)}</div>`:''}
       </div>
       <div class="pr-inputs">
@@ -1124,10 +1140,12 @@ function slipHTML(r){
       <div style="text-align:center;font-weight:800;font-size:15px;letter-spacing:.05em">${cfg.company}</div>
       <div style="text-align:center;font-size:11px;color:#555;margin:2px 0 12px">PAYSLIP · ${fmtDate(curFrom)} – ${fmtDate(curTo)}</div>
       <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;border-top:1px dashed #999;border-bottom:1px dashed #999;padding:7px 0;margin-bottom:8px"><span>${r.name}</span><span>${r.code}</span></div>
-      ${(r.daysPresent-(r.sundayDays||0))>0?slipRow('Daily pay ('+(r.daysPresent-(r.sundayDays||0))+' day'+((r.daysPresent-(r.sundayDays||0))===1?'':'s')+')', peso(r.basic)):''}
-      ${(r.sundayDays||0)>0?slipRow('Rest day premium ('+r.sundayDays+' Sunday'+(r.sundayDays===1?'':'s')+' · daily ×1.30)', peso(r.restDayPay)):''}
-      ${r.otPay>0?slipRow('Add OT ('+r.otHrs.toFixed(2)+'h'+((r.sundayDays||0)>0?', incl. Sunday ×1.69':' × '+cfg.otMult)+')', peso(r.otPay)):''}
-      ${(Number(r.ndPay)||0)>0?slipRow('Add night differential ('+r.ndHrs.toFixed(2)+'h)', peso(r.ndPay)):''}
+      ${r.daysPresent>0?slipRow('Daily pay ('+r.daysPresent+' day'+(r.daysPresent===1?'':'s')+')', peso(r.dayPayAll)):''}
+      ${(r.sundayDays||0)>0?slipRow('Sunday premium (30% · '+r.sundayDays+' Sunday'+(r.sundayDays===1?'':'s')+')', peso(r.sundayPremium)):''}
+      ${r.otPayWeekday>0?slipRow('Add OT ('+r.otHrsWeekday.toFixed(2)+'h × '+cfg.otMult+')', peso(r.otPayWeekday)):''}
+      ${(r.otPaySunday||0)>0?slipRow('Add Sunday OT ×1.69 ('+r.otHrsSunday.toFixed(2)+'h)', peso(r.otPaySunday)):''}
+      ${(Number(r.ndPayWeekday)||0)>0?slipRow('Add night differential ('+r.wkNdHrs.toFixed(2)+'h)', peso(r.ndPayWeekday)):''}
+      ${(Number(r.ndPaySunday)||0)>0?slipRow('Add Sunday night differential ('+r.sunNdHrs.toFixed(2)+'h)', peso(r.ndPaySunday)):''}
       ${(Number(r.holPay)||0)>0?slipRow('Add holiday pay', peso(r.holPay)):''}
       ${(Number(r.leavePay)||0)>0?slipRow('Add leave pay ('+r.leavePaidDays+' VL/SL day'+(r.leavePaidDays===1?'':'s')+')', peso(r.leavePay)):''}
       ${(Number(r.leaveUnpaidDays)||0)>0?slipRow('Excused unpaid leave', r.leaveUnpaidDays+' day'+(r.leaveUnpaidDays===1?'':'s')):''}
@@ -1387,9 +1405,10 @@ function slipMini(r){
     <div class="mini-co">${cfg.company}</div>
     <div class="mini-top"><span class="mini-name">${r.name}</span><span class="mini-code">${r.code}</span></div>
     <div class="mini-sub">${r.daysPresent} day${r.daysPresent===1?'':'s'}</div>
-    ${(r.daysPresent-(r.sundayDays||0))>0?L('Daily pay ('+(r.daysPresent-(r.sundayDays||0))+'d)',r.basic):''}
-    ${(r.sundayDays||0)>0?L('Rest day premium ('+r.sundayDays+' Sun ×1.30)',r.restDayPay):''}
-    ${r.otPay>0?L('OT ('+r.otHrs.toFixed(1)+'h'+((r.sundayDays||0)>0?', incl Sun ×1.69':' × '+cfg.otMult)+')',r.otPay):''}
+    ${r.daysPresent>0?L('Daily pay ('+r.daysPresent+'d)',r.dayPayAll):''}
+    ${(r.sundayDays||0)>0?L('Sunday premium (30% · '+r.sundayDays+' Sun)',r.sundayPremium):''}
+    ${r.otPayWeekday>0?L('OT ('+r.otHrsWeekday.toFixed(1)+'h × '+cfg.otMult+')',r.otPayWeekday):''}
+    ${(r.otPaySunday||0)>0?L('Sunday OT ×1.69 ('+r.otHrsSunday.toFixed(1)+'h)',r.otPaySunday):''}
     ${(Number(r.holPay)||0)>0?L('Holiday pay',r.holPay):''}
     ${(Number(r.leavePay)||0)>0?L('Leave pay ('+r.leavePaidDays+'d VL/SL)',r.leavePay):''}
     ${(Number(r.leaveUnpaidDays)||0)>0?`<div class="mini-l" style="font-size:11px;color:#888"><span>Excused unpaid</span><span>${r.leaveUnpaidDays}d</span></div>`:''}
