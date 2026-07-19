@@ -198,8 +198,7 @@
         <input id="bw-vessel" class="search" style="margin-bottom:0" placeholder="Type or tap to choose a vessel…" autocomplete="off" oninput="vesselSuggest()" onfocus="vesselSuggest()" onblur="hideVsug()"/>
         <div id="bw-vsug" class="vsug" style="display:none"></div>
       </div>
-      <label class="lbl">Issued by</label>
-      <input id="bw-by" class="search" placeholder="Warehouse staff name"/>
+      <div class="lbl">Issued by: <span id="bw-by-disp"></span></div>
     </div>
     <div class="sec">
       <div class="sec-h"><div class="sec-n">3</div><div><div class="sec-t">Tools to borrow</div><div class="sec-s">Add each tool and its unit</div></div></div>
@@ -234,8 +233,7 @@
     <div class="card">
       <label class="lbl">Date</label>
       <input id="rp-date" class="search" type="date"/>
-      <label class="lbl">Transmitted by</label>
-      <input id="rp-by" class="search" placeholder="Who is sending it to repair"/>
+      <div class="lbl">Transmitted by: <span id="rp-by-disp"></span></div>
       <label class="lbl">Expected ready (ETA)</label>
       <input id="rp-eta" class="search" type="date"/>
     </div>
@@ -314,8 +312,7 @@
       <input id="tf-date" class="search" type="date"/>
       <label class="lbl">Send to site</label>
       <select id="tf-dest" class="search"></select>
-      <label class="lbl">Sent by</label>
-      <input id="tf-by" class="search" placeholder="Warehouse staff name"/>
+      <div class="lbl">Sent by: <span id="tf-by-disp"></span></div>
     </div>
     <div class="card">
       <label class="lbl">Add tools to transfer</label>
@@ -372,8 +369,7 @@
     <div id="rback-name" style="font-size:17px;font-weight:800;margin:4px 0 12px">—</div>
     <label class="lbl" style="text-align:left">Return to site</label>
     <select id="rback-site" class="search" onchange="onRbackSite()"></select>
-    <label class="lbl" id="rback-bylbl" style="text-align:left">Received back by</label>
-    <input id="rback-by" class="search" placeholder="Warehouse staff name"/>
+    <div class="lbl" style="text-align:left"><span id="rback-bylbl">Received back by</span>: <span id="rback-by-disp"></span></div>
     <button class="lbtn" style="background:var(--ok)" onclick="confirmRepaired()">Confirm repaired</button>
     <button class="lbtn" style="background:#fff;color:var(--tx2);border:1px solid var(--line);margin-top:8px" onclick="document.getElementById('rback-modal').style.display='none'">Cancel</button>
   </div>
@@ -584,7 +580,7 @@ async function goBorrow(){
   await loadVessels();
   document.getElementById('bw-vessel').value='';
   const vb=document.getElementById('bw-vsug'); if(vb){vb.style.display='none';vb.innerHTML='';}
-  document.getElementById('bw-by').value='';
+  document.getElementById('bw-by-disp').textContent=sessionIssuer?sessionIssuer.name:'';
   pendingSlip=null; reservedSlipNo='';
   await loadAvail();
 }
@@ -645,12 +641,11 @@ async function reviewBorrow(){
   const emp=employees.find(e=>e.id===empId);
   const bdate=document.getElementById('bw-date').value;
   const vessel=document.getElementById('bw-vessel').value.trim();
-  const by=document.getElementById('bw-by').value.trim();
+  const by=sessionIssuer?sessionIssuer.name:'';
   if(!empId||!emp){toast('Select a borrower from the list');return;}
   if(!bdate){toast('Pick a date');return;}
   if(bdate<todayYmd2()){toast('No back-dating allowed');return;}
   if(!vessel){toast('Select or enter a project/vessel');return;}
-  if(!by){toast('Enter who issued the tools');return;}
   if(!cart.length){toast('Add at least one tool');return;}
   if(!reservedSlipNo){
     // Slip numbers MUST come from the server (next_no allocates atomically via
@@ -757,7 +752,7 @@ async function goReturn(){
   document.getElementById('rt-list').innerHTML='<div class="empty">Loading…</div>';
   try{
     const{data}=await sb.from('borrow_issuance')
-      .select('id,unit_id,employee_id,slip_no,borrowed_at,project_vessel,items(name),employees(name),item_units(unit_code)')
+      .select('id,unit_id,employee_id,slip_no,borrowed_at,project_vessel,issued_by,items(name),employees(name),item_units(unit_code)')
       .eq('status','out').eq('site_id',curSite).order('borrowed_at',{ascending:false});
     retRows=data||[];
   }catch(e){retRows=[];toast('Load failed: '+e.message);}
@@ -772,7 +767,7 @@ function renderReturn(){
     <div class="tool-name">${g.name}</div>
     ${g.items.map(r=>`<label style="display:flex;align-items:center;gap:8px;padding:7px 0">
       <input type="checkbox" class="rt-chk" data-emp="${k}" value="${r.id}" checked/>
-      <span>${(r.items&&r.items.name)||'—'} <span class="chip borrowed">${(r.item_units&&r.item_units.unit_code)||''}</span>${r.project_vessel?'<span class="tool-meta"> · '+r.project_vessel+'</span>':''}${r.slip_no?'<span class="tool-meta"> · '+r.slip_no+'</span>':''}</span></label>`).join('')}
+      <span>${(r.items&&r.items.name)||'—'} <span class="chip borrowed">${(r.item_units&&r.item_units.unit_code)||''}</span>${r.project_vessel?'<span class="tool-meta"> · '+r.project_vessel+'</span>':''}${r.slip_no?'<span class="tool-meta"> · '+r.slip_no+'</span>':''}<span class="tool-meta"> · issued by ${r.issued_by||'—'}</span></span></label>`).join('')}
     <input class="search" id="rt-by-${k}" placeholder="Received by (warehouse staff)" style="margin-top:8px"/>
     <input class="search" id="rt-pin-${k}" type="password" inputmode="numeric" placeholder="Borrower passcode" style="margin-top:8px"/>
     <button class="lbtn" style="background:var(--ok)" onclick="returnPerson('${k}')">Return selected</button>
@@ -801,7 +796,7 @@ async function goRepair(){
   showScreen('s-repair');
   document.getElementById('rp-site-sub').textContent=siteName();
   repairCart=[]; pendingRepair=null; reservedRepairNo='';
-  document.getElementById('rp-by').value='';
+  document.getElementById('rp-by-disp').textContent=sessionIssuer?sessionIssuer.name:'';
   const rd=document.getElementById('rp-date'); rd.min=todayYmd2(); rd.value=todayYmd2();
   document.getElementById('rp-eta').value='';
   document.getElementById('rp-eta').min=todayYmd2();
@@ -810,10 +805,12 @@ async function goRepair(){
   const units=ures.data||[];
   const bres=await sb.from('borrow_issuance').select('unit_id').eq('status','out').eq('site_id',curSite);
   const outSet=new Set((bres.data||[]).map(b=>b.unit_id));
+  const rlres=await sb.from('repair_log').select('unit_id,transmitted_by').eq('status','in_repair').eq('site_id',curSite);
+  const byMap={}; (rlres.data||[]).forEach(r=>{byMap[r.unit_id]=r.transmitted_by;});
   const map={};
   units.filter(u=>u.status==='available'&&!outSet.has(u.id)).forEach(u=>{const k=u.item_id;if(!map[k])map[k]={itemId:k,name:(u.items&&u.items.name)||'—',units:[]};map[k].units.push({id:u.id,code:u.unit_code});});
   repairTools=Object.values(map).sort((a,b)=>a.name.localeCompare(b.name));
-  repairList=units.filter(u=>u.status==='repair').map(u=>({id:u.id,itemId:u.item_id,code:u.unit_code,name:(u.items&&u.items.name)||'—'}));
+  repairList=units.filter(u=>u.status==='repair').map(u=>({id:u.id,itemId:u.item_id,code:u.unit_code,name:(u.items&&u.items.name)||'—',transmittedBy:byMap[u.id]||''}));
   renderRepairTool(); renderRepairCart(); renderRepairList();
 }
 function renderRepairTool(){
@@ -822,7 +819,7 @@ function renderRepairTool(){
 }
 function renderRepairList(){
   const el=document.getElementById('rp-list');
-  el.innerHTML=repairList.length?repairList.map(u=>`<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center"><div><div class="tool-name">${u.name}</div><div class="tool-meta"><span class="chip repair">${u.code}</span></div></div><button class="back" style="color:var(--ok)" onclick="askRepaired('${u.id}','${u.itemId}','${(u.name||'').replace(/'/g,"\\'")} · ${u.code}')">Mark repaired</button></div>`).join(''):'<div class="empty">Nothing in repair.</div>';
+  el.innerHTML=repairList.length?repairList.map(u=>`<div class="tool-row" style="display:flex;justify-content:space-between;align-items:center"><div><div class="tool-name">${u.name}</div><div class="tool-meta"><span class="chip repair">${u.code}</span> · transmitted by ${u.transmittedBy||'—'}</div></div><button class="back" style="color:var(--ok)" onclick="askRepaired('${u.id}','${u.itemId}','${(u.name||'').replace(/'/g,"\\'")} · ${u.code}')">Mark repaired</button></div>`).join(''):'<div class="empty">Nothing in repair.</div>';
 }
 function onRepairTool(){
   const t=repairTools.find(x=>x.itemId===document.getElementById('rp-tool').value);
@@ -852,12 +849,11 @@ function renderRepairCart(){
   btn.textContent='Send to repair ('+repairCart.length+')';
 }
 async function reviewRepair(){
-  const by=document.getElementById('rp-by').value.trim();
+  const by=sessionIssuer?sessionIssuer.name:'';
   const rdate=document.getElementById('rp-date').value;
   const eta=document.getElementById('rp-eta').value||'';
   if(!rdate){toast('Pick a date');return;}
   if(rdate<todayYmd2()){toast('No back-dating allowed');return;}
-  if(!by){toast('Enter who is transmitting it');return;}
   if(!repairCart.length){toast('Add at least one tool');return;}
   if(!reservedRepairNo){
     // Server-only slip number (next_no allocates atomically). REFUSE on failure — no device-clock
@@ -910,7 +906,7 @@ let repairBackUid='', repairBackItemId='';
 function askRepaired(uid,itemId,label){
   repairBackUid=uid; repairBackItemId=itemId;
   document.getElementById('rback-name').textContent=label;
-  document.getElementById('rback-by').value='';
+  document.getElementById('rback-by-disp').textContent=sessionIssuer?sessionIssuer.name:'';
   document.getElementById('rback-site').innerHTML=sites.map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
   document.getElementById('rback-site').value=curSite;
   onRbackSite();
@@ -921,9 +917,8 @@ function onRbackSite(){
   document.getElementById('rback-bylbl').textContent = site===curSite ? 'Received back by' : 'Sent by (ships to other site)';
 }
 async function confirmRepaired(){
-  const by=document.getElementById('rback-by').value.trim();
+  const by=sessionIssuer?sessionIssuer.name:'';
   const dest=document.getElementById('rback-site').value;
-  if(!by){toast('Enter a name');return;}
   const uid=repairBackUid, itemId=repairBackItemId;
   // Shipping a repaired tool to another site needs a server transfer number. Reserve it BEFORE any
   // write so a numbering failure refuses cleanly — no half-done "repaired but not shipped" state.
@@ -959,7 +954,7 @@ async function goRecords(){
   document.getElementById('rc-list').innerHTML='<div class="empty">Loading…</div>';
   try{
     const{data}=await sb.from('borrow_issuance')
-      .select('id,status,slip_no,borrowed_at,returned_at,received_by,project_vessel,items(name),employees(name),item_units(unit_code)')
+      .select('id,status,slip_no,borrowed_at,returned_at,received_by,project_vessel,issued_by,items(name),employees(name),item_units(unit_code)')
       .eq('txn_type','borrow').eq('site_id',curSite).order('borrowed_at',{ascending:false}).limit(300);
     recRows=data||[];
   }catch(e){recRows=[];toast('Load failed: '+e.message);}
@@ -975,7 +970,7 @@ function setRecFilter(f){
     const ret=r.status==='returned'&&r.returned_at;
     const d=new Date(ret?r.returned_at:r.borrowed_at);
     return `<div class="tool-row"><div class="tool-name">${(r.items&&r.items.name)||'—'} <span class="chip ${r.status==='out'?'borrowed':'available'}">${(r.item_units&&r.item_units.unit_code)||''}</span></div>
-      <div class="tool-meta">${r.slip_no?`<b style="font-family:ui-monospace,monospace;color:var(--p)">${r.slip_no}</b> · `:''}${(r.employees&&r.employees.name)||'—'}${r.project_vessel?' · '+r.project_vessel:''}</div><div class="tool-meta">Out ${new Date(r.borrowed_at).toLocaleDateString()}${ret?` · Returned ${new Date(r.returned_at).toLocaleDateString()}${r.received_by?' · recv by '+r.received_by:''}`:' · still out'}</div></div>`;
+      <div class="tool-meta">${r.slip_no?`<b style="font-family:ui-monospace,monospace;color:var(--p)">${r.slip_no}</b> · `:''}${(r.employees&&r.employees.name)||'—'}${r.project_vessel?' · '+r.project_vessel:''} · issued by ${r.issued_by||'—'}</div><div class="tool-meta">Out ${new Date(r.borrowed_at).toLocaleDateString()}${ret?` · Returned ${new Date(r.returned_at).toLocaleDateString()}${r.received_by?' · recv by '+r.received_by:''}`:' · still out'}</div></div>`;
   }).join('')+'</div>';
 }
 
@@ -1036,7 +1031,7 @@ async function goTransfer(){
   xferCart=[]; renderXfer();
   pendingXfer=null; reservedXferNo='';
   const td=document.getElementById('tf-date'); td.min=todayYmd2(); td.value=todayYmd2();
-  document.getElementById('tf-by').value='';
+  document.getElementById('tf-by-disp').textContent=sessionIssuer?sessionIssuer.name:'';
   document.getElementById('tf-dest').innerHTML=sites.filter(s=>s.id!==curSite).map(s=>`<option value="${s.id}">${s.name}</option>`).join('');
   const ures=await sb.from('item_units').select('id,unit_code,status,item_id,items(name)').eq('active',true).eq('site_id',curSite);
   const units=ures.data||[];
@@ -1078,12 +1073,11 @@ function renderXfer(){
 }
 async function reviewTransfer(){
   const dest=document.getElementById('tf-dest').value;
-  const by=document.getElementById('tf-by').value.trim();
+  const by=sessionIssuer?sessionIssuer.name:'';
   const tdate=document.getElementById('tf-date').value;
   if(!tdate){toast('Pick a date');return;}
   if(tdate<todayYmd2()){toast('No back-dating allowed');return;}
   if(!dest){toast('Pick a destination site');return;}
-  if(!by){toast('Enter who is sending the tools');return;}
   if(!xferCart.length){toast('Add at least one tool');return;}
   if(!reservedXferNo){
     // Server-only slip number. REFUSE on failure — no device-clock fallback ('TR-'+site+HHMMSS),
