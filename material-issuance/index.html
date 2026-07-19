@@ -66,16 +66,15 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
   <div class="lw"><div class="lb">
     <div class="lav">📋</div>
     <div style="font-size:21px;font-weight:700">Material Issuance</div>
-    <div style="font-size:13px;color:var(--tx2);margin:4px 0 18px">Carmen · enter passcode</div>
-    <input id="login-pin" class="fi" type="password" inputmode="numeric" placeholder="Passcode" style="text-align:center;letter-spacing:4px" onkeydown="if(event.key==='Enter')doLogin()"/>
+    <div style="font-size:13px;color:var(--tx2);margin:4px 0 18px">Carmen · enter your PIN</div>
+    <input id="login-pin" class="fi" type="password" inputmode="numeric" placeholder="PIN" style="text-align:center;letter-spacing:4px" onkeydown="if(event.key==='Enter')doLogin()"/>
     <button class="lbtn" onclick="doLogin()">Sign in</button>
-    <div style="font-size:12px;color:var(--tx3);margin-top:12px">Default: 1111</div>
   </div></div>
 </div>
 
 <!-- HOME -->
 <div id="s-home" class="screen">
-  <div class="tb"><div><div class="ttitle">RSR Materials</div><div class="tsub">Carmen</div></div>
+  <div class="tb"><div><div class="ttitle">RSR Materials <span style="font-size:11px;font-weight:600;opacity:.6">v2026-07-19a</span></div><div class="tsub">Carmen</div><div class="tsub" id="hdr-issuer" style="font-weight:700"></div></div>
     <button class="bk" onclick="logout()" title="Sign out">⎋</button></div>
   <div class="pc">
     <div class="hcard" onclick="openIssue()"><div class="ico" style="background:var(--pl);color:var(--p)">📤</div><div><div class="ht">Issue Materials</div><div class="hs">Issue to a vessel · crew confirms by passcode</div></div></div>
@@ -105,8 +104,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
       </div>
       <label class="fl">Date <span class="req">*</span></label>
       <input id="i-date" class="fi" type="date"/>
-      <label class="fl">Issued by <span class="req">*</span></label>
-      <input id="i-by" class="fi" placeholder="Storekeeper name"/>
     </div>
     <div class="sec">
       <div class="sec-h"><div class="sec-n">3</div><div><div class="sec-t">Materials to issue</div><div class="sec-s">Add all items being issued</div></div></div>
@@ -248,7 +245,7 @@ const ITEMS=[
 function gu(n){return (ITEMS.find(i=>i.n===n)||{u:'pcs'}).u;}
 function giv(n){return (ITEMS.find(i=>i.n===n)||{iv:0}).iv;}
 
-let issuancePin='1111', employees=[], vessels=[], stockMap={}, empLast={}, selEmp=null, rc=0, pending=null, reservedNo='';
+let sessionIssuer=null, employees=[], vessels=[], stockMap={}, empLast={}, selEmp=null, rc=0, pending=null, reservedNo='';
 
 function toast(m){const t=document.createElement('div');t.className='toast';t.textContent=m;document.body.appendChild(t);setTimeout(()=>t.remove(),2600);}
 function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.remove('active'));document.getElementById(id).classList.add('active');window.scrollTo(0,0);}
@@ -256,25 +253,32 @@ function todayYmd(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${
 function fmtNice(y){if(!y)return '';return new Date(y+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'2-digit'});}
 function fmtDT(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleString('en-PH',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});}
 
-(async function boot(){
-  try{const{data}=await sb.from('settings').select('value').eq('key','issuance_pin').single();if(data&&data.value)issuancePin=String(data.value);}catch(e){}
-})();
-
-function doLogin(){
+async function doLogin(){
   const pin=document.getElementById('login-pin').value.trim();
-  if(pin!==issuancePin){toast('Wrong passcode');return;}
   document.getElementById('login-pin').value='';
+  let issuer=null;
+  try{ const{data,error}=await sb.rpc('issuer_for_pin',{pin_input:pin}); if(!error && data && data.length) issuer=data[0]; }catch(e){}
+  if(!issuer){ toast('Not an authorized issuer'); return; }
+  sessionIssuer=issuer;
+  document.getElementById('hdr-issuer').textContent='Issuer: '+issuer.name;
+  startIdle();
   showScreen('s-home');
   autoRequestCheck();
 }
-function logout(){showScreen('s-login');}
+function logout(){ sessionIssuer=null; stopIdle(); showScreen('s-login'); }
+
+/* ── idle auto-lock ── */
+const IDLE_MS=10*60*1000; let _idleT=null;
+function startIdle(){resetIdle(); ['click','keydown','touchstart'].forEach(ev=>document.addEventListener(ev,resetIdle,true));}
+function stopIdle(){if(_idleT)clearTimeout(_idleT); ['click','keydown','touchstart'].forEach(ev=>document.removeEventListener(ev,resetIdle,true));}
+function resetIdle(){if(_idleT)clearTimeout(_idleT); _idleT=setTimeout(()=>{logout();}, IDLE_MS);}
 
 /* ── data ── */
 async function loadStock(){
   stockMap={};
   try{const{data}=await sb.from('site_stock').select('item_name,qty').eq('site_key',SITE);(data||[]).forEach(r=>stockMap[r.item_name]=Number(r.qty)||0);}catch(e){}
 }
-async function loadEmployees(){const{data}=await sb.from('employees').select('id,code,name,position,pin').order('name');employees=data||[];}
+async function loadEmployees(){const{data}=await sb.from('employees').select('id,code,name,position').order('name');employees=data||[];}
 async function loadVessels(){
   try{
     const{data}=await sb.from('voyages').select('*').order('vessel_name');
@@ -299,7 +303,6 @@ async function openIssue(){
   document.getElementById('i-emp').value='';
   document.getElementById('i-emp-sug').innerHTML='';
   const d=document.getElementById('i-date');d.min=todayYmd();d.value=todayYmd();
-  document.getElementById('i-by').value='';
   document.getElementById('i-rows').innerHTML='';rc=0;addRow();
   document.getElementById('i-warn').innerHTML='';
   showScreen('s-issue');
@@ -371,7 +374,7 @@ async function reviewIssue(){
     if(m){selEmp=m;await loadEmpLast();}
   }
   if(!selEmp){toast('Choose the crew member from the list');return;}
-  const by=document.getElementById('i-by').value.trim();
+  const by=sessionIssuer?sessionIssuer.name:'';
   const date=document.getElementById('i-date').value;
   if(!date){toast('Pick a date');return;}
   if(date<todayYmd()){toast('No back-dating allowed');return;}
