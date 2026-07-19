@@ -95,8 +95,8 @@
   <div class="lw"><div class="lb">
     <div class="lav">🧰</div>
     <div style="font-size:21px;font-weight:800">RSR Tools</div>
-    <div style="font-size:14px;color:var(--tx2);margin-bottom:6px">Enter PIN to continue</div>
-    <div class="pin-dots"><div class="pindot" id="pd0"></div><div class="pindot" id="pd1"></div><div class="pindot" id="pd2"></div><div class="pindot" id="pd3"></div></div>
+    <div style="font-size:14px;color:var(--tx2);margin-bottom:6px">Enter your PIN</div>
+    <div class="pin-dots"><div class="pindot" id="pd0"></div><div class="pindot" id="pd1"></div><div class="pindot" id="pd2"></div><div class="pindot" id="pd3"></div><div class="pindot" id="pd4"></div><div class="pindot" id="pd5"></div></div>
     <div class="num-grid">
       <button class="nb" onclick="pinTap('1')">1</button><button class="nb" onclick="pinTap('2')">2</button><button class="nb" onclick="pinTap('3')">3</button>
       <button class="nb" onclick="pinTap('4')">4</button><button class="nb" onclick="pinTap('5')">5</button><button class="nb" onclick="pinTap('6')">6</button>
@@ -106,8 +106,7 @@
       <button class="nb" onclick="pinBack()" style="font-size:18px">&#x232B;</button>
     </div>
     <button class="lbtn" onclick="doLogin()">Sign in</button>
-    <div id="pin-err" style="font-size:13px;color:var(--r);margin-top:10px;display:none">Incorrect PIN.</div>
-    <div style="font-size:12px;color:var(--tx3);margin-top:10px">Default PIN: 1111</div>
+    <div id="pin-err" style="font-size:13px;color:var(--r);margin-top:10px;display:none">Not an authorized issuer.</div>
   </div></div>
 </div>
 
@@ -115,7 +114,7 @@
 <div id="s-home" class="screen">
   <div class="app-header">
     <div class="hdr-avatar">R</div>
-    <div class="hdr-info"><div class="hdr-site">RSR Tools <span style="font-size:11px;font-weight:600;opacity:.6">v2026-07-19a</span></div><div class="hdr-sub" id="home-site-sub">—</div></div>
+    <div class="hdr-info"><div class="hdr-site">RSR Tools <span style="font-size:11px;font-weight:600;opacity:.6">v2026-07-19b</span></div><div class="hdr-sub" id="home-site-sub">—</div><div class="hdr-sub" id="hdr-issuer" style="font-weight:700"></div></div>
     <button class="hdr-btn" onclick="doLogout()" title="Sign out">&#9211;</button>
     <a href="../" style="text-decoration:none"><button class="hdr-btn">&#8962;</button></a>
   </div>
@@ -404,26 +403,31 @@
 /* ══ CONFIG ══ */
 const KIOSK_URL='https://wpmcbjrisuyjvobvzaus.supabase.co';
 const KIOSK_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
-const PIN_KEY='rsr_tools_pin', DEFAULT_PIN='1111', SITE_KEY='rsr_tools_site';
+const SITE_KEY='rsr_tools_site';
 let sb=null, sites=[], curSite='', invData=[];
 
-/* ══ PIN ══ */
-let pinVal='';
-function pinTap(d){if(pinVal.length>=4)return;pinVal+=d;dots();}
+/* ══ PIN / ISSUER AUTH ══ */
+let pinVal='', sessionIssuer=null;
+function pinTap(d){if(pinVal.length>=6)return;pinVal+=d;dots();if(pinVal.length===6)doLogin();}
 function pinClear(){pinVal='';dots();}
 function pinBack(){pinVal=pinVal.slice(0,-1);dots();}
-function dots(){for(let i=0;i<4;i++){const e=document.getElementById('pd'+i);if(e)e.className='pindot'+(i<pinVal.length?' on':'');}}
-async function savedPin(){
-  try{const{data}=await sb.from('settings').select('value').eq('key','issuance_pin').maybeSingle();return (data&&data.value)?data.value:DEFAULT_PIN;}
-  catch(e){return DEFAULT_PIN;}
-}
+function dots(){for(let i=0;i<6;i++){const e=document.getElementById('pd'+i);if(e)e.className='pindot'+(i<pinVal.length?' on':'');}}
 async function doLogin(){
-  const want=await savedPin();
-  if(pinVal!==want){document.getElementById('pin-err').style.display='block';pinVal='';dots();return;}
-  document.getElementById('pin-err').style.display='none';pinVal='';dots();
+  const pin=pinVal; pinVal=''; dots();
+  let issuer=null;
+  try{ const{data,error}=await sb.rpc('issuer_for_pin',{pin_input:pin}); if(!error && data && data.length) issuer=data[0]; }catch(e){}
+  if(!issuer){ document.getElementById('pin-err').style.display='block'; return; }
+  document.getElementById('pin-err').style.display='none';
+  sessionIssuer=issuer;
   await boot();
 }
-function doLogout(){showScreen('s-login');}
+function doLogout(){ sessionIssuer=null; stopIdle(); showScreen('s-login'); }
+
+/* ══ IDLE LOCK ══ */
+const IDLE_MS=10*60*1000; let _idleT=null;
+function startIdle(){ resetIdle(); ['click','keydown','touchstart'].forEach(ev=>document.addEventListener(ev,resetIdle,true)); }
+function stopIdle(){ if(_idleT)clearTimeout(_idleT); ['click','keydown','touchstart'].forEach(ev=>document.removeEventListener(ev,resetIdle,true)); }
+function resetIdle(){ if(_idleT)clearTimeout(_idleT); _idleT=setTimeout(()=>{ doLogout(); }, IDLE_MS); }
 
 /* ══ SCREENS ══ */
 function showScreen(id){
@@ -448,6 +452,8 @@ async function boot(){
   if(curSite)sel.value=curSite;
   updateSiteLabels();
   showScreen('s-home');
+  document.getElementById('hdr-issuer').textContent = sessionIssuer ? 'Issuer: '+sessionIssuer.name : '';
+  startIdle();
 }
 function onSiteChange(){
   curSite=document.getElementById('site-select').value;
@@ -509,7 +515,7 @@ let employees=[], availTools=[], cart=[], retRows=[], vessels=[], selEmpId='', p
 function todayYmd2(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;}
 function fmtNice(ymd){if(!ymd)return '';const d=new Date(ymd+'T00:00:00');return d.toLocaleDateString('en-US',{year:'numeric',month:'long',day:'2-digit'});}
 async function loadEmployees(){
-  const{data}=await sb.from('employees').select('id,code,name,pin').order('name');
+  const{data}=await sb.from('employees').select('id,code,name').order('name');
   employees=data||[];
 }
 function onEmpInput(){ selEmpId=''; empSuggest(); }
