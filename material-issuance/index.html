@@ -14,6 +14,12 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .lw{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;background:var(--pl)}
 .lb{background:var(--bg);border-radius:var(--radx);padding:32px 24px;width:100%;max-width:340px;text-align:center;box-shadow:0 4px 24px rgba(0,0,0,.1)}
 .lav{width:72px;height:72px;border-radius:50%;background:var(--pl);border:3px solid var(--pm);display:flex;align-items:center;justify-content:center;font-size:30px;margin:0 auto 14px}
+.pin-dots{display:flex;gap:12px;justify-content:center;margin:18px 0}
+.pindot{width:13px;height:13px;border-radius:50%;background:var(--bd2)}
+.pindot.on{background:var(--p)}
+.num-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px}
+.nb{padding:16px 0;font-size:20px;font-weight:600;border:1px solid var(--bd);background:var(--bg);border-radius:12px;cursor:pointer;color:var(--tx)}
+.nb:active{background:var(--bg2)}
 .fi{width:100%;padding:13px 14px;border:1.5px solid var(--bd2);border-radius:12px;font-size:16px;background:var(--bg);color:var(--tx);outline:none}
 .fi:focus{border-color:var(--pm)}
 .fl{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--tx3);margin:14px 0 6px;display:block}
@@ -66,15 +72,24 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
   <div class="lw"><div class="lb">
     <div class="lav">📋</div>
     <div style="font-size:21px;font-weight:700">Material Issuance</div>
-    <div style="font-size:13px;color:var(--tx2);margin:4px 0 18px">Carmen · enter your PIN</div>
-    <input id="login-pin" class="fi" type="password" inputmode="numeric" placeholder="PIN" style="text-align:center;letter-spacing:4px" onkeydown="if(event.key==='Enter')doLogin()"/>
+    <div style="font-size:13px;color:var(--tx2);margin:4px 0 6px">Carmen · enter your PIN</div>
+    <div class="pin-dots"><div class="pindot" id="pd0"></div><div class="pindot" id="pd1"></div><div class="pindot" id="pd2"></div><div class="pindot" id="pd3"></div><div class="pindot" id="pd4"></div><div class="pindot" id="pd5"></div></div>
+    <div class="num-grid">
+      <button class="nb" onclick="pinTap('1')">1</button><button class="nb" onclick="pinTap('2')">2</button><button class="nb" onclick="pinTap('3')">3</button>
+      <button class="nb" onclick="pinTap('4')">4</button><button class="nb" onclick="pinTap('5')">5</button><button class="nb" onclick="pinTap('6')">6</button>
+      <button class="nb" onclick="pinTap('7')">7</button><button class="nb" onclick="pinTap('8')">8</button><button class="nb" onclick="pinTap('9')">9</button>
+      <button class="nb" onclick="pinClear()" style="font-size:13px">Clear</button>
+      <button class="nb" onclick="pinTap('0')">0</button>
+      <button class="nb" onclick="pinBack()" style="font-size:18px">&#x232B;</button>
+    </div>
     <button class="lbtn" onclick="doLogin()">Sign in</button>
+    <div id="pin-err" style="font-size:13px;color:var(--r);margin-top:10px;display:none">Not an authorized issuer.</div>
   </div></div>
 </div>
 
 <!-- HOME -->
 <div id="s-home" class="screen">
-  <div class="tb"><div><div class="ttitle">RSR Materials <span style="font-size:11px;font-weight:600;opacity:.6">v2026-07-19a</span></div><div class="tsub">Carmen</div><div class="tsub" id="hdr-issuer" style="font-weight:700"></div></div>
+  <div class="tb"><div><div class="ttitle">RSR Materials <span style="font-size:11px;font-weight:600;opacity:.6">v2026-07-19b</span></div><div class="tsub">Carmen</div><div class="tsub" id="hdr-issuer" style="font-weight:700"></div></div>
     <button class="bk" onclick="logout()" title="Sign out">⎋</button></div>
   <div class="pc">
     <div class="hcard" onclick="openIssue()"><div class="ico" style="background:var(--pl);color:var(--p)">📤</div><div><div class="ht">Issue Materials</div><div class="hs">Issue to a vessel · crew confirms by passcode</div></div></div>
@@ -253,12 +268,17 @@ function todayYmd(){const d=new Date(),z=n=>String(n).padStart(2,'0');return `${
 function fmtNice(y){if(!y)return '';return new Date(y+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'2-digit'});}
 function fmtDT(s){if(!s)return '';const d=new Date(s);return isNaN(d)?s:d.toLocaleString('en-PH',{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'});}
 
+let pinVal='';
+function pinTap(d){if(pinVal.length>=6)return;pinVal+=d;dots();if(pinVal.length===6)doLogin();}
+function pinClear(){pinVal='';dots();}
+function pinBack(){pinVal=pinVal.slice(0,-1);dots();}
+function dots(){for(let i=0;i<6;i++){const e=document.getElementById('pd'+i);if(e)e.className='pindot'+(i<pinVal.length?' on':'');}}
 async function doLogin(){
-  const pin=document.getElementById('login-pin').value.trim();
-  document.getElementById('login-pin').value='';
+  const pin=pinVal; pinVal=''; dots();
   let issuer=null;
   try{ const{data,error}=await sb.rpc('issuer_for_pin',{pin_input:pin}); if(!error && data && data.length) issuer=data[0]; }catch(e){}
-  if(!issuer){ toast('Not an authorized issuer'); return; }
+  if(!issuer){ document.getElementById('pin-err').style.display='block'; return; }
+  document.getElementById('pin-err').style.display='none';
   sessionIssuer=issuer;
   document.getElementById('hdr-issuer').textContent='Issuer: '+issuer.name;
   startIdle();
