@@ -37,8 +37,9 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // pages are same-origin siblings under payroll/ and kiosk/). Bump these each deploy.
 const EXPECT = { 'payroll/index.html':'v2026-07-18a', 'kiosk/index.html':'v2026-07-18a',
                  'monitoring/roll-call.html':'v2026-07-18a', 'monitoring/borrow.html':'v2026-07-16c',
-                 'tools/index.html':'v2026-07-19a', 'monitoring/index.html':'v2026-07-16c',
-                 'monitoring/job-order.html':'v2026-07-18a', 'monitoring/efficiency.html':'v2026-07-18a' };
+                 'tools/index.html':'v2026-07-19b', 'monitoring/index.html':'v2026-07-16c',
+                 'monitoring/job-order.html':'v2026-07-18a', 'monitoring/efficiency.html':'v2026-07-18a',
+                 'material-issuance/index.html':'v2026-07-19a' };
 
 // Stored punch-slot values that are NOT real clock times (known, not data errors).
 const MARKERS = ['(skipped)','(missing)','(auto-deducted)','(auto-skipped)','(straight duty)'];
