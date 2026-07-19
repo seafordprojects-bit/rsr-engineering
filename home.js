@@ -27,7 +27,7 @@ async function countRows(table, build) {
 }
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate, home_site').order('name').limit(2000);
+    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate, home_site, is_issuer').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
@@ -692,7 +692,6 @@ function App() {
   const [empSite, setEmpSite] = useState('');
   const [siteList, setSiteList] = useState([]); // (site rename) data-driven yard list from settings.attendance_sites
   const [coordPin, setCoordPin] = useState('');
-  const [sitePin, setSitePin] = useState('');
   const [ownerPin, setOwnerPin] = useState('');
   const [rollPin, setRollPin] = useState('');
   const [rollDevs, setRollDevs] = useState(null); // per-yard device tokens: { yard: token|'' } (null=loading)
@@ -734,11 +733,6 @@ function App() {
   const saveCoordPin = async () => {
     if (!coordPin.trim()) { flash('Enter a passcode'); return; }
     try { await setSetting('coordinator_pin', coordPin.trim()); setCoordPin(''); flash('Assistant passcode set'); }
-    catch (e) { flash('Error: ' + e.message); }
-  };
-  const saveSitePin = async () => {
-    if (!sitePin.trim()) { flash('Enter a passcode'); return; }
-    try { await setSetting('issuance_pin', sitePin.trim()); setSitePin(''); flash('Issuance passcode set'); }
     catch (e) { flash('Error: ' + e.message); }
   };
   const saveRollPin = async () => {
@@ -843,6 +837,10 @@ function App() {
       });
       flash('Saved'); loadEmps();
     } catch (e) { flash('Error: ' + e.message); }
+  };
+  const setIssuer = async (id, on) => {
+    try { await updateEmployee(id, { is_issuer: on }); loadEmps(); }
+    catch (e) { flash('Error: ' + e.message); }
   };
 
   useEffect(() => {
@@ -1517,15 +1515,6 @@ function App() {
         </div>
 
         <div class="card">
-          <div class="sectlabel" style="margin-top:0">Issuance (site) passcode</div>
-          <p class="note" style="margin:0 0 12px">The passcode site personnel use to open the borrow/issue app.</p>
-          <${Field} label="Set / change issuance passcode">
-            <input type="password" inputmode="numeric" value=${sitePin} onInput=${e => setSitePin(e.target.value)} placeholder="e.g. 7777" />
-          <//>
-          <button class="btn" onClick=${saveSitePin}>Save issuance passcode</button>
-        </div>
-
-        <div class="card">
           <div class="sectlabel" style="margin-top:0">Roll-call phones</div>
           <p class="note" style="margin:0 0 12px">One shared passcode for all roll-call phones, plus a per-yard one-device lock. Each yard has its OWN registered phone: the first phone to open that yard's shortcut and enter the passcode becomes that yard's device; other phones (and phones registered to another yard) are refused with a "see admin" note.</p>
           <${Field} label="Set / change roll-call passcode (shared)">
@@ -1595,6 +1584,31 @@ function App() {
           <//>
           <button class="btn" onClick=${saveTg}>Save Telegram settings</button>
           <p class="note" style="margin-top:10px">Tip: group IDs are negative numbers. After saving, hard-refresh the kiosk (or tap "Reload Telegram from Admin" on it) to pull the new values.</p>
+        </div>
+
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Issuers (who can release tools & materials)</div>
+          <p class="note" style="margin:0 0 12px">Authorized issuers unlock the Tools and Material Issuance pages with their OWN employee PIN, and every slip is stamped with their name. Add or remove issuers anytime — no code change.</p>
+          ${(() => {
+            const issuers = [...emps].filter(e => e.is_issuer).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+            const nonIssuers = [...emps].filter(e => !e.is_issuer && e.pin).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+            return html`
+              <div style="margin-bottom:12px">
+                ${issuers.length===0
+                  ? html`<p class="note" style="margin:0">No issuers yet — add one below.</p>`
+                  : issuers.map(e => html`<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
+                      <div><strong>${e.name}</strong> <span class="mono" style="color:var(--ink-dim)">· ${e.code || '—'}</span></div>
+                      <button class="btn" style="background:#fbf3e8;color:#b4540a;border-color:#f0d9bf" onClick=${() => setIssuer(e.id, false)}>Remove</button>
+                    </div>`)}
+              </div>
+              <${Field} label="Add an issuer">
+                <select value="" onChange=${e => { if (e.target.value) setIssuer(e.target.value, true); }}>
+                  <option value="">Select an employee…</option>
+                  ${nonIssuers.map(e => html`<option value=${e.id}>${e.name} (${e.code || '—'})</option>`)}
+                </select>
+              <//>
+            `;
+          })()}
         </div>
 
         <div class="card">
