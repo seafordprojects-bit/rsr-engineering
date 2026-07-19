@@ -64,7 +64,7 @@
 <body>
   <div class="wrap">
     <header class="top">
-      <div><h1>Job Order</h1><div class="sub">Estimate from the tariff &middot; v2026-07-18a</div></div>
+      <div><h1>Job Order</h1><div class="sub">Estimate from the tariff &middot; v2026-07-19a</div></div>
       <a class="back" href="index.html">&larr; Menu</a>
     </header>
     <div id="app"><div class="loading">Loading&hellip;</div></div>
@@ -107,6 +107,26 @@
       const [msg,setMsg]=useState(null);
 
       useEffect(()=>{ refresh(); },[]);
+
+      // Re-read tariff rates/factors whenever this page regains focus, so an edit
+      // made in Work Tariff (another tab) shows up without a full page reload.
+      // Only the tariff data is replaced — the user's current category/item/factor
+      // picks and typed quantity are kept, since selection is tracked by id.
+      useEffect(()=>{
+        const onWake=()=>{ if(document.visibilityState==="visible") reloadTariff(); };
+        window.addEventListener("focus",onWake);
+        document.addEventListener("visibilitychange",onWake);
+        return ()=>{ window.removeEventListener("focus",onWake); document.removeEventListener("visibilitychange",onWake); };
+      },[]);
+      async function reloadTariff(){
+        const [ir,fr]=await Promise.all([
+          sb.from("work_tariff").select("id,name,unit,manhours_per_unit,use_factors,category").eq("active",true).order("category").order("name"),
+          sb.from("correction_factor").select("id,grp,label,factor").eq("active",true).order("grp").order("sort").order("label"),
+        ]);
+        if(ir.data) setItems(ir.data);
+        if(fr.data) setFactors(fr.data);
+      }
+
       async function refresh(){
         const iq=sb.from("work_tariff").select("id,name,unit,manhours_per_unit,use_factors,category").eq("active",true).order("category").order("name");
         const fq=sb.from("correction_factor").select("id,grp,label,factor").eq("active",true).order("grp").order("sort").order("label");
