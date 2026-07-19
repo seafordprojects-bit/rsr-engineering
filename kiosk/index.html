@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-18a</span>
+        <span id="version-stamp">v2026-07-19c</span>
       </div>
     </div>
   </div>
@@ -592,6 +592,11 @@ textarea.field-input{resize:none;height:65px}
       <input type="number" id="s-ot-min-hrs" value="3" min="1" max="12" step="0.5" class="field-input" placeholder="e.g. 3" />
       <button onclick="saveSiteSettings()" class="btn-primary btn-green">Save site settings</button>
       <div id="site-settings-msg" style="font-size:12px;margin-top:6px;min-height:14px;color:#085041"></div>
+    </div>
+    <div class="card">
+      <h4>⚠ Stuck punches (need manual recovery)</h4>
+      <p style="font-size:12px;color:#888;margin-bottom:12px">Punches this tablet could not sync to the server after 5 tries. They are still saved here and will NOT be lost — fix the cause, then press <b>Retry now</b>. This list is per-tablet.</p>
+      <div id="stuck-punches"></div>
     </div>
     <div class="card">
       <h4>SMS — Semaphore</h4>
@@ -4385,7 +4390,7 @@ function switchTab(t,el){
   document.querySelectorAll('.section').forEach(e=>e.classList.remove('active'));
   el.classList.add('active');document.getElementById('tab-'+t).classList.add('active');
   if(t==='log')renderLog();if(t==='staff')renderRoster();if(t==='photos')renderPhotos();
-  if(t==='admin'&&adminLoggedIn)renderAdminPanel();if(t==='settings')renderNotifLog();
+  if(t==='admin'&&adminLoggedIn)renderAdminPanel();if(t==='settings'){renderNotifLog();renderStuckPunches();}
   if(t==='asst-leave'){renderAsstLeaveList();renderStraightDutyList();if(assistantLoggedIn)resetAssistantTimer();}
   if(t==='asst-status'){renderLeaveStatus();if(assistantLoggedIn)resetAssistantTimer();}
   if(t==='mytime'){mtPin='';mtUpdDots();if(mtEmp)renderMyTimeSheet(mtEmp);}
@@ -5057,47 +5062,116 @@ setInterval(function(){ if (navigator.onLine) { loadApprovedStraightDuties(); lo
 //  Here we track which employee_code+date still need to reach
 //  Supabase, retry them, and show a status indicator.
 // ============================================================
-let syncPending = {};           // { 'CODE_MM/DD/YYYY': true } awaiting sync
+// Each queue entry is { attempts, seq, dead, reason, sig }:
+//  • seq    — bumped whenever the record's punches CHANGE. syncFlush deletes an entry only if its
+//             seq is UNCHANGED across the upload await, so a punch that lands mid-sync is never
+//             dropped by the completing older upload (fixes the lost-update race).
+//  • attempts/dead — a row REJECTED by the server (a permanent 4xx) is counted; after DEAD_MAX it is
+//             dead-lettered (kept, never discarded) so ONE poison row can't block the whole queue.
+//  • sig    — signature of the punches, so a blanket re-queue with identical data is a no-op
+//             (doesn't bump seq, and doesn't resurrect a dead-lettered row).
+const DEAD_MAX = 5;             // reject this many times → dead-letter (surface to admin, stop retrying)
+let syncPending = {};           // { 'CODE_MM/DD/YYYY': {attempts,seq,dead,reason,sig} }
 let syncing = false;
 try { syncPending = JSON.parse(localStorage.getItem('rsr_sync_pending') || '{}'); } catch(e) { syncPending = {}; }
+// Migrate legacy boolean entries ({key:true}) written by older builds to the object form.
+for (const k in syncPending) if (syncPending[k] === true) syncPending[k] = { attempts:0, seq:1, dead:false, reason:'', sig:'' };
 function savePending(){ try { localStorage.setItem('rsr_sync_pending', JSON.stringify(syncPending)); } catch(e){} }
-function queueRecord(empCode, date){ syncPending[empCode + '_' + date] = true; savePending(); updateSyncBadge(); }
-function pendingCount(){ return Object.keys(syncPending).length; }
+function recSig(empCode, date){ const r = records[empCode + '_' + date]; return r ? JSON.stringify(r.punches || {}) : ''; }
+function queueRecord(empCode, date){
+  const k = empCode + '_' + date, sig = recSig(empCode, date), cur = syncPending[k];
+  if (cur && cur.sig === sig) return;                 // unchanged data already queued → no seq bump, don't revive a dead row
+  syncPending[k] = { attempts:0, seq:((cur && cur.seq) || 0) + 1, dead:false, reason:'', sig };  // new data → fresh retries + new seq
+  savePending(); updateSyncBadge();
+}
+function pendingCount(){ return Object.keys(syncPending).filter(k => !syncPending[k].dead).length; }
+function deadCount(){ return Object.keys(syncPending).filter(k => syncPending[k].dead).length; }
 
 function updateSyncBadge(){
   const el = document.getElementById('sync-badge');
-  if (!el) return;
-  const n = pendingCount();
+  if (!el) { renderStuckPunches(); return; }
+  const n = pendingCount(), dead = deadCount();
   const offline = !navigator.onLine;
-  if (n === 0 && !offline) { el.style.display='none'; return; }
+  if (n === 0 && dead === 0 && !offline) { el.style.display='none'; renderStuckPunches(); return; }
   el.style.display='flex';
-  if (offline) { el.style.background='#FCEBEB'; el.style.color='#A32D2D'; el.textContent = '⚠ Offline · ' + n + ' punch' + (n===1?'':'es') + ' waiting'; }
+  if (dead > 0) { el.style.background='#FCEBEB'; el.style.color='#A32D2D'; el.textContent = '⚠ ' + dead + ' punch' + (dead===1?'':'es') + ' rejected — see Admin ▸ Settings'; }
+  else if (offline) { el.style.background='#FCEBEB'; el.style.color='#A32D2D'; el.textContent = '⚠ Offline · ' + n + ' punch' + (n===1?'':'es') + ' waiting'; }
   else if (n > 0) { el.style.background='#FFF3CD'; el.style.color='#633806'; el.textContent = '↻ Syncing ' + n + ' punch' + (n===1?'':'es') + '…'; }
+  renderStuckPunches();
 }
 
-// push every queued record to Supabase; clear ones that succeed
+// push every queued record to Supabase. Classify each result ok/net/rejected:
+//  • ok       → dequeue (UNLESS a newer punch arrived mid-sync — then keep for the next pass)
+//  • net      → transient (offline / fetch failure); stop the pass and retry later, no penalty
+//  • rejected → permanent server refusal; count toward dead-letter, but CONTINUE (never block others)
 async function syncFlush(){
   if (syncing || !navigator.onLine) { updateSyncBadge(); return; }
   syncing = true;
   try {
-    const keys = Object.keys(syncPending);
-    for (const k of keys) {
+    for (const k of Object.keys(syncPending)) {
+      const meta = syncPending[k];
+      if (!meta || meta.dead) continue;               // skip dead-lettered rows (they wait for admin recovery)
+      const seqAtFlush = meta.seq;
       const idx = k.lastIndexOf('_');
       const empCode = k.slice(0, idx), date = k.slice(idx + 1);
-      const ok = await pushRecord(empCode, date);
-      if (ok) { delete syncPending[k]; savePending(); updateSyncBadge(); }
-      else { break; } // network likely down again; stop, retry later
+      const result = await pushRecord(empCode, date); // 'ok' | 'net' | 'rejected'
+      const now = syncPending[k];
+      if (result === 'net') break;                    // network down → nothing else will succeed this pass
+      if (result === 'ok') {
+        if (now && now.seq === seqAtFlush) delete syncPending[k]; // else a newer punch landed mid-sync → keep, re-sync next pass
+      } else {                                        // 'rejected'
+        if (now) {
+          now.attempts = (now.attempts || 0) + 1;
+          now.reason = pushRecord._lastReason || 'server rejected';
+          if (now.attempts >= DEAD_MAX) now.dead = true;  // dead-letter: kept in queue + records, never discarded
+        }
+      }
+      savePending(); updateSyncBadge();
     }
   } finally { syncing = false; updateSyncBadge(); }
+}
+
+// ── Stuck-punch (dead-letter) admin surface ───────────────────────────────────────────────────────
+// Dead-lettered punches stay in localStorage (both the queue marker AND `records`) so they are never
+// lost; an admin recovers each from Admin ▸ Settings after fixing the cause. NOTE (future): also
+// report deadCount() to Supabase so a REMOTE admin can see stuck punches without visiting each tablet.
+// esc(): HTML-entity-escape any dynamic value before it goes into innerHTML. Notably `reason`
+// carries the raw Supabase/PostgREST error text (server-controlled), and `emp.name` is admin-set
+// roster data — both are untrusted here, so escape every interpolated field. The Retry button uses
+// a data-k attribute + a bound listener (NOT an inline onclick with an interpolated string), because
+// an interpolated value inside inline-handler JS can't be made safe by entity-escaping alone (the
+// browser decodes entities before the JS parses).
+function renderStuckPunches(){
+  const host = document.getElementById('stuck-punches'); if (!host) return;
+  const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const dead = Object.keys(syncPending).filter(k => syncPending[k].dead);
+  if (!dead.length) { host.innerHTML = '<div style="font-size:12px;color:#888">No stuck punches — all attendance is syncing.</div>'; return; }
+  host.innerHTML = dead.map(k => {
+    const m = syncPending[k], i = k.lastIndexOf('_'), code = k.slice(0, i), date = k.slice(i + 1);
+    const emp = employees.find(e => e.code === code), rec = records[k] || {}, p = rec.punches || {};
+    const times = PUNCHES.filter(x => p[x]).map(x => PLABELS[x] + ' ' + p[x]).join(' · ') || '(no punches recorded)';
+    return `<div style="border:1px solid #F3C6C6;background:#FDF3F3;border-radius:10px;padding:10px;margin-bottom:8px">
+      <div style="font-weight:600">${esc(emp ? emp.name : code)} <span style="font-size:11px;color:#888;font-weight:400">· ${esc(code)} · ${esc(date)}</span></div>
+      <div style="font-size:12px;color:#555;margin:4px 0">${esc(times)}</div>
+      <span class="pill pill-rejected">rejected ×${esc(m.attempts)}${m.reason ? ': ' + esc(m.reason) : ''}</span>
+      <button class="btn-sm" style="margin-left:8px" data-k="${esc(k)}">Retry now</button>
+    </div>`;
+  }).join('');
+  host.querySelectorAll('button[data-k]').forEach(b => b.onclick = () => recoverStuckPunch(b.dataset.k));
+}
+function recoverStuckPunch(k){   // manual recovery: clear the dead flag + attempt count, then re-sync
+  if (syncPending[k]) { syncPending[k].dead = false; syncPending[k].attempts = 0; savePending(); }
+  updateSyncBadge();
+  syncFlush();
 }
 
 // one record -> Supabase; returns true on success, false on failure
 async function pushRecord(empCode, date){
   try {
     const rec = records[empCode + '_' + date];
-    if (!rec) return true; // nothing to send; treat as done
+    if (!rec) return 'ok'; // nothing to send; treat as done
     const emp = employees.find(e => e.code === empCode);
-    if (!emp) return true;
+    if (!emp) return 'ok';
     const p = rec.punches || {};
     const workedMs = calcWorked(rec) || 0;
     const otMs = workedMs ? Math.max(0, workedMs - (emp.shift * 3600000)) : 0;
@@ -5121,20 +5195,28 @@ async function pushRecord(empCode, date){
     const { error } = await sbClient.from('attendance_records')
       .upsert(payload, { onConflict: 'employee_code,date' });
     if (error) throw error;
-    return true;
+    return 'ok';
   } catch(e) {
-    // A duplicate-key rejection (Postgres 23505 / HTTP 409) means this punch is ALREADY in
-    // Supabase — the goal is met, so treat it as success and let the caller dequeue it.
-    // Without this, a row that landed during an outage retries forever ("Syncing N…" stuck).
-    // Genuine failures (network down, 5xx) fall through and stay queued for the 30s retry.
+    // Classify the failure so the caller can retry, defer, or dead-letter appropriately.
     const code = e && (e.code != null ? String(e.code) : (e.status != null ? String(e.status) : ''));
     const msg = e && e.message ? String(e.message) : '';
+    // 'ok' — duplicate-key (Postgres 23505 / HTTP 409): this punch is ALREADY in Supabase, goal met.
+    // Without this, a row that landed during an outage would retry forever ("Syncing N…" stuck).
     if (code === '23505' || code === '409' || /duplicate key|already exists/i.test(msg)) {
       console.warn('Sync: row already present — treated as done:', msg || code);
-      return true;
+      return 'ok';
     }
-    console.warn('Sync failed (will retry):', msg || e);
-    return false;
+    // 'net' — transient: offline, or a fetch-level failure with no structured server code. Retry
+    // later with NO penalty (it isn't this record's fault), and stop the current pass.
+    if (!navigator.onLine || (!code && /failed to fetch|network ?error|load failed|timeout/i.test(msg))) {
+      console.warn('Sync deferred (network):', msg || e);
+      return 'net';
+    }
+    // 'rejected' — a structured server refusal (bad column / constraint / other 4xx). Permanent-ish:
+    // it counts toward the dead-letter threshold so one poison row can't block the queue forever.
+    pushRecord._lastReason = (msg || code || 'server rejected').slice(0, 120);
+    console.warn('Sync rejected (permanent):', pushRecord._lastReason);
+    return 'rejected';
   }
 }
 
