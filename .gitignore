@@ -1,3 +1,6 @@
 
 # Superpowers SDD scratch/ledger
 .superpowers/
+
+# Dev-only test tooling deps (the app itself has no npm/build)
+node_modules/

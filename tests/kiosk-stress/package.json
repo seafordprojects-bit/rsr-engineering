@@ -1,0 +1,13 @@
+{
+  "name": "rsr-kiosk-stress",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Standing regression harness for the pay-critical kiosk punch/sync path. Separate from the app (the app itself has no build step / no npm).",
+  "scripts": {
+    "test": "node kiosk-stress.mjs"
+  },
+  "devDependencies": {
+    "playwright": "1.61.1"
+  }
+}
