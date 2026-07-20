@@ -13,7 +13,6 @@ const siteNorm = v => { const t = String(v == null ? '' : v).trim(); return _SIT
 
 const SESSION_KEY = 'rsr_admin';
 const onAdminPage = location.pathname.includes('/admin');  // admin lives on its own page
-const PIN_KEY = 'rsr_admin_pin';          // changeable PIN (default 1234)
 
 // count helper — returns a number, or null if the table/column isn't ready
 async function countRows(table, build) {
@@ -260,25 +259,50 @@ function Field({ label, children }) {
   return html`<div class="field"><label>${label}</label>${children}</div>`;
 }
 
-function Lock({ onUnlock, onBack, toast }) {
+// Server-side admin gate — same credential as the kiosk (admin_verify_passcode RPC). 6-digit keypad,
+// 5-try lockout, fail-closed offline. No client-side password, no localStorage PIN.
+const ADMIN_MAX_TRIES = 5, ADMIN_LOCK_MS = 5 * 60 * 1000;
+function Lock({ onUnlock }) {
   const [pin, setPin] = useState('');
-  const tryUnlock = () => {
-    const admin = localStorage.getItem(PIN_KEY) || '1234';
-    if (pin === admin) { sessionStorage.setItem(SESSION_KEY, '1'); onUnlock(); }
-    else toast('Wrong PIN');
+  const [fails, setFails] = useState(0);
+  const [lockedUntil, setLockedUntil] = useState(0);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const locked = Date.now() < lockedUntil;
+
+  const verify = async (val) => {
+    if (!navigator.onLine) { setPin(''); setErr('No internet — admin needs a connection to verify.'); return; }
+    setBusy(true);
+    try {
+      const { data, error } = await supabase.rpc('admin_verify_passcode', { p_input: val });
+      if (error) throw error;
+      if (data === true) { setFails(0); sessionStorage.setItem(SESSION_KEY, '1'); onUnlock(); return; }
+      const f = fails + 1; setPin('');
+      if (f >= ADMIN_MAX_TRIES) { setFails(0); setLockedUntil(Date.now() + ADMIN_LOCK_MS); setErr('Too many wrong tries. Locked for 5 minutes.'); }
+      else { setFails(f); setErr(`Wrong PIN. ${ADMIN_MAX_TRIES - f} tr${ADMIN_MAX_TRIES - f === 1 ? 'y' : 'ies'} left.`); }
+    } catch (e) { setPin(''); setErr('Could not verify — check the connection and try again.'); }
+    finally { setBusy(false); }
   };
+  const press = (d) => { if (busy || locked) return; setErr(''); const n = (pin + d).slice(0, 6); setPin(n); if (n.length === 6) verify(n); };
+  const del = () => { if (busy || locked) return; setErr(''); setPin(p => p.slice(0, -1)); };
+  const clr = () => { if (busy || locked) return; setErr(''); setPin(''); };
+  const keyStyle = 'padding:16px;font-size:20px';
+
   return html`
     <div class="wrap">
       <div class="card lock">
         <div class="brand" style="justify-content:center;margin-bottom:6px"><b>RSR</b><span class="tag">ADMIN</span></div>
-        <p class="note" style="margin:0 0 14px">Admin login</p>
-        <${Field} label="Enter admin PIN">
-          <input type="password" inputmode="numeric" value=${pin}
-            onInput=${e => setPin(e.target.value)} placeholder="default 1234"
-            onKeyDown=${e => { if (e.key === 'Enter') tryUnlock(); }} />
-        <//>
-        <button class="btn" onClick=${tryUnlock}>Unlock</button>
-        ${onBack && html`<button class="btn ghost" style="margin-top:8px" onClick=${onBack}>← Back</button>`}
+        <p class="note" style="margin:0 0 14px">Enter the 6-digit admin PIN</p>
+        <div style="display:flex;justify-content:center;gap:12px;margin-bottom:16px">
+          ${[0,1,2,3,4,5].map(i => html`<div style=${`width:14px;height:14px;border-radius:50%;border:2px solid var(--line);background:${i < pin.length ? 'var(--hivis)' : 'transparent'}`}></div>`)}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px">
+          ${['1','2','3','4','5','6','7','8','9'].map(d => html`<button class="btn ghost" style=${keyStyle} disabled=${busy || locked} onClick=${() => press(d)}>${d}</button>`)}
+          <button class="btn ghost" style=${keyStyle} disabled=${busy || locked} onClick=${del}>⌫</button>
+          <button class="btn ghost" style=${keyStyle} disabled=${busy || locked} onClick=${() => press('0')}>0</button>
+          <button class="btn ghost" style="padding:16px;font-size:13px" disabled=${busy || locked} onClick=${clr}>CLR</button>
+        </div>
+        <p class="note" style="min-height:16px;margin-top:12px;color:var(--warn)">${busy ? 'Checking…' : err}</p>
       </div>
     </div>`;
 }
@@ -722,12 +746,18 @@ function App() {
   const [toast, setToast] = useState(null);
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
 
-  const changePin = () => {
-    const admin = localStorage.getItem(PIN_KEY) || '1234';
-    if (curPin !== admin) { flash('Current PIN is wrong'); return; }
-    if (!newPin.trim()) { flash('Enter a new PIN'); return; }
-    localStorage.setItem(PIN_KEY, newPin.trim());
-    setCurPin(''); setNewPin(''); flash('Admin PIN changed');
+  // Change the shared server-side admin PIN (same credential as the kiosk) via admin_change_passcode.
+  const changePin = async () => {
+    const cur = curPin.trim(), np = newPin.trim();
+    if (!/^[0-9]{6}$/.test(cur)) { flash('Enter your current 6-digit PIN'); return; }
+    if (!/^[0-9]{6}$/.test(np)) { flash('New PIN must be exactly 6 digits'); return; }
+    if (!navigator.onLine) { flash('No internet — cannot change the PIN'); return; }
+    try {
+      const { data, error } = await supabase.rpc('admin_change_passcode', { p_current: cur, p_new: np });
+      if (error) throw error;
+      if (data === true) { setCurPin(''); setNewPin(''); flash('Admin PIN changed'); }
+      else flash('Current PIN is wrong');
+    } catch (e) { flash('Could not change PIN — try again'); }
   };
 
   const saveCoordPin = async () => {
@@ -1499,10 +1529,10 @@ function App() {
       ${showSet && html`
         <div class="card">
           <div class="sectlabel" style="margin-top:0">Change admin PIN</div>
-          <${Field} label="Current PIN"><input type="password" inputmode="numeric" value=${curPin} onInput=${e => setCurPin(e.target.value)} /><//>
-          <${Field} label="New PIN"><input type="password" inputmode="numeric" value=${newPin} onInput=${e => setNewPin(e.target.value)} /><//>
+          <${Field} label="Current 6-digit PIN"><input type="password" inputmode="numeric" maxlength="6" value=${curPin} onInput=${e => setCurPin(e.target.value)} /><//>
+          <${Field} label="New 6-digit PIN"><input type="password" inputmode="numeric" maxlength="6" value=${newPin} onInput=${e => setNewPin(e.target.value)} /><//>
           <button class="btn" onClick=${changePin}>Save new PIN</button>
-          <p class="note" style="margin-top:10px">This is the single admin password (dashboard + coordinator). Stored on this device.</p>
+          <p class="note" style="margin-top:10px">One shared admin PIN, verified on the server — the SAME PIN as the kiosk admin. Changing it here changes it everywhere.</p>
         </div>
 
         <div class="card">
