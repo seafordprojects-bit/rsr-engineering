@@ -58,7 +58,7 @@ begin
     raise exception 'PIN must be exactly 6 digits (0-9)';
   end if;
   insert into public.kiosk_admin_credential (id, passcode_hash)
-  values (true, extensions.crypt(p_new, extensions.gen_salt('bf')));
+  values (true, extensions.crypt(p_new, extensions.gen_salt('bf', 10)));  -- bcrypt cost 10 (not the weak default 6)
   return 'ok — admin PIN set';
 end;
 $$;
@@ -81,17 +81,21 @@ begin
     raise exception 'new PIN must be exactly 6 digits (0-9)';
   end if;
   update public.kiosk_admin_credential
-     set passcode_hash = extensions.crypt(p_new, extensions.gen_salt('bf')), updated_at = now()
+     set passcode_hash = extensions.crypt(p_new, extensions.gen_salt('bf', 10)), updated_at = now()  -- bcrypt cost 10
    where id;
   return true;
 end;
 $$;
 
--- The kiosk calls these with the public anon key. security definer keeps the table locked while
--- these specific entry points work.
-grant execute on function public.admin_verify_passcode(text)        to anon, authenticated;
-grant execute on function public.admin_bootstrap_passcode(text)     to anon, authenticated;
-grant execute on function public.admin_change_passcode(text, text)  to anon, authenticated;
+-- The kiosk calls verify + change with the public anon key. security definer keeps the table locked
+-- while these specific entry points work.
+grant  execute on function public.admin_verify_passcode(text)        to anon, authenticated;
+grant  execute on function public.admin_change_passcode(text, text)  to anon, authenticated;
+-- Bootstrap is OWNER-RUN-ONLY (run once in the SQL editor, which executes as a privileged role — it
+-- does NOT need the anon grant). CREATE FUNCTION grants EXECUTE to PUBLIC by default, so revoke from
+-- PUBLIC too: otherwise any anon caller could seize Admin by setting the first PIN whenever the
+-- credential row is empty (privilege-escalation vector). The kiosk client never calls bootstrap.
+revoke execute on function public.admin_bootstrap_passcode(text)     from public, anon, authenticated;
 
 -- ─────────────────────────────────────────────────────────────────────────────────────────────
 -- SET THE FIRST PIN — replace the placeholder with your chosen 6-digit PIN, then run.
