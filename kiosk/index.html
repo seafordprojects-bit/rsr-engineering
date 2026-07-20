@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-19c</span>
+        <span id="version-stamp">v2026-07-20e</span>
       </div>
     </div>
   </div>
@@ -245,6 +245,7 @@ textarea.field-input{resize:none;height:65px}
   <div class="tabs" id="tab-bar">
     <button class="tab active" id="tab-btn-clock" onclick="switchTab('clock',this)">Clock</button>
     <button class="tab" id="tab-btn-mytime" onclick="switchTab('mytime',this)">My Time</button>
+    <button class="tab hidden" id="tab-btn-admin" onclick="switchTab('admin',this)">Admin</button>
 
 
     <button class="tab hidden" id="tab-btn-log" onclick="switchTab('log',this)">Log</button>
@@ -389,11 +390,21 @@ textarea.field-input{resize:none;height:65px}
   <div id="tab-admin" class="section">
     <div class="admin-lock" id="admin-lock">
       <h3>Admin access</h3>
-      <p>Enter your password to unlock admin features.</p>
-      <input type="password" id="admin-pw" placeholder="Password" onkeydown="if(event.key==='Enter')adminLogin()" />
-      <button onclick="adminLogin()" class="btn-primary" style="margin-top:0">Login</button>
-      
-      <div id="admin-err" style="font-size:12px;color:#A32D2D;margin-top:8px;min-height:14px"></div>
+      <p>Enter the 6-digit admin passcode.</p>
+      <div style="display:flex;justify-content:center;gap:14px;margin-bottom:14px">
+        <div class="pin-dot" id="ad-d0"></div><div class="pin-dot" id="ad-d1"></div>
+        <div class="pin-dot" id="ad-d2"></div><div class="pin-dot" id="ad-d3"></div>
+        <div class="pin-dot" id="ad-d4"></div><div class="pin-dot" id="ad-d5"></div>
+      </div>
+      <div class="keypad">
+        <button class="key" onclick="adKp('1')">1</button><button class="key" onclick="adKp('2')">2</button><button class="key" onclick="adKp('3')">3</button>
+        <button class="key" onclick="adKp('4')">4</button><button class="key" onclick="adKp('5')">5</button><button class="key" onclick="adKp('6')">6</button>
+        <button class="key" onclick="adKp('7')">7</button><button class="key" onclick="adKp('8')">8</button><button class="key" onclick="adKp('9')">9</button>
+        <button class="key del" onclick="adKpDel()">&#9003;</button>
+        <button class="key zero" onclick="adKp('0')">0</button>
+        <button class="key del" onclick="adKpClr()" style="font-size:12px">CLR</button>
+      </div>
+      <div id="admin-err" style="font-size:12px;color:#A32D2D;margin-top:8px;min-height:14px;text-align:center"></div>
     </div>
     <div class="admin-content" id="admin-content">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
@@ -405,29 +416,16 @@ textarea.field-input{resize:none;height:65px}
         <div class="timer-track"><div class="timer-fill" id="timer-fill" style="width:100%"></div></div>
         <span class="timer-lbl" id="timer-lbl">30s</span>
       </div>
-      <div class="sec-title">Pending leave requests</div>
-      <div id="admin-pending"></div>
-      <div class="sec-title">All leave requests</div>
-      <div id="admin-all"></div>
-      <div class="sec-title">Leave balance editor</div>
-      <div id="admin-balances"></div>
-      <button onclick="saveBalances()" class="btn-primary btn-green">Save all balances</button>
-      <div id="bal-msg" style="font-size:12px;margin-top:6px;min-height:14px;color:#085041;text-align:center"></div>
-      <div class="sec-title" style="margin-top:16px">Monthly Records Export</div>
-      <p style="font-size:12px;color:#888;margin-bottom:8px">Exports all permanent records (leaves, violations, undertime, SMS log) as a JSON backup file. Auto-runs on the 1st of every month.</p>
-      <button onclick="monthlyAutoExport();localStorage.removeItem('rsr_last_monthly_export');" class="btn-primary" style="margin-top:0">📁 Export Monthly Records Now</button>
-      <div class="sec-title" style="margin-top:16px">Change admin password</div>
-      <div style="display:flex;gap:8px">
-        <input type="password" id="new-pw" placeholder="New password" class="field-input" style="flex:1" />
-        <button onclick="changePassword()" class="btn-sm">Update</button>
+      <!-- The Admin tab body is ONLY stuck-punch recovery. On unlock the whole tab row is hidden;
+           "More" reveals it (Log, Allowance, Undertime, Photos, Staff, Settings, SMS Log) for normal
+           navigation. Leave requests/balances live in Staff; site/SMS/timing/export/passcode in
+           Settings. Nothing removed, just relocated. -->
+      <div class="card">
+        <h4>⚠ Stuck punches (need manual recovery)</h4>
+        <p style="font-size:12px;color:#888;margin-bottom:12px">Punches this tablet could not sync to the server after 5 tries. They are still saved here and will NOT be lost — fix the cause, then press <b>Retry now</b>. This list is per-tablet.</p>
+        <div id="stuck-punches"></div>
       </div>
-      <div id="pw-msg" style="font-size:12px;margin-top:6px;min-height:14px;color:#085041"></div>
-      <div class="sec-title" style="margin-top:16px">Change assistant password</div>
-      <div style="display:flex;gap:8px">
-        <input type="password" id="new-asst-pw" placeholder="Assistant password" class="field-input" style="flex:1" />
-        <button onclick="changeAsstPassword()" class="btn-sm">Update</button>
-      </div>
-      <div id="asst-pw-msg" style="font-size:12px;margin-top:6px;min-height:14px;color:#085041"></div>
+      <button onclick="toggleAdminTabRow()" id="admin-more-btn" class="btn-sm" style="width:100%;margin-top:8px">&#9776; More</button>
     </div>
   </div>
 
@@ -574,6 +572,19 @@ textarea.field-input{resize:none;height:65px}
         <div id="emp-roster"></div>
       </div>
     </div>
+
+    <!-- Leave management (relocated from the old first-build Admin page). Populated by renderAdminPanel(). -->
+    <div class="card" style="margin-top:12px">
+      <h4>Leave management</h4>
+      <div class="sec-title">Pending leave requests</div>
+      <div id="admin-pending"></div>
+      <div class="sec-title">All leave requests</div>
+      <div id="admin-all"></div>
+      <div class="sec-title">Leave balance editor</div>
+      <div id="admin-balances"></div>
+      <button onclick="saveBalances()" class="btn-primary btn-green">Save all balances</button>
+      <div id="bal-msg" style="font-size:12px;margin-top:6px;min-height:14px;color:#085041;text-align:center"></div>
+    </div>
   </div>
 
   <!-- SETTINGS TAB (admin only) -->
@@ -592,11 +603,6 @@ textarea.field-input{resize:none;height:65px}
       <input type="number" id="s-ot-min-hrs" value="3" min="1" max="12" step="0.5" class="field-input" placeholder="e.g. 3" />
       <button onclick="saveSiteSettings()" class="btn-primary btn-green">Save site settings</button>
       <div id="site-settings-msg" style="font-size:12px;margin-top:6px;min-height:14px;color:#085041"></div>
-    </div>
-    <div class="card">
-      <h4>⚠ Stuck punches (need manual recovery)</h4>
-      <p style="font-size:12px;color:#888;margin-bottom:12px">Punches this tablet could not sync to the server after 5 tries. They are still saved here and will NOT be lost — fix the cause, then press <b>Retry now</b>. This list is per-tablet.</p>
-      <div id="stuck-punches"></div>
     </div>
     <div class="card">
       <h4>SMS — Semaphore</h4>
@@ -630,6 +636,27 @@ textarea.field-input{resize:none;height:65px}
       </div>
       <button onclick="saveSettings()" class="btn-primary btn-green">Save settings</button>
       <div id="settings-msg" style="font-size:12px;margin-top:8px;min-height:14px;color:#085041"></div>
+    </div>
+    <!-- Admin maintenance (relocated from the old first-build Admin page). -->
+    <div class="card">
+      <h4>Admin passcode & maintenance</h4>
+      <div class="sec-title">Change admin passcode</div>
+      <p style="font-size:12px;color:#888;margin-bottom:8px">Passcodes are 6 digits and verified on the server. Requires your current passcode.</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input type="password" id="cur-pw" inputmode="numeric" maxlength="6" placeholder="Current passcode" class="field-input" style="flex:1;min-width:130px" />
+        <input type="password" id="new-pw" inputmode="numeric" maxlength="6" placeholder="New 6-digit passcode" class="field-input" style="flex:1;min-width:130px" />
+        <button onclick="changePassword()" class="btn-sm">Update</button>
+      </div>
+      <div id="pw-msg" style="font-size:12px;margin-top:6px;min-height:14px;color:#085041"></div>
+      <div class="sec-title" style="margin-top:16px">Change assistant password</div>
+      <div style="display:flex;gap:8px">
+        <input type="password" id="new-asst-pw" placeholder="Assistant password" class="field-input" style="flex:1" />
+        <button onclick="changeAsstPassword()" class="btn-sm">Update</button>
+      </div>
+      <div id="asst-pw-msg" style="font-size:12px;margin-top:6px;min-height:14px;color:#085041"></div>
+      <div class="sec-title" style="margin-top:16px">Monthly Records Export</div>
+      <p style="font-size:12px;color:#888;margin-bottom:8px">Exports all permanent records (leaves, violations, undertime, SMS log) as a JSON backup file. Auto-runs on the 1st of every month.</p>
+      <button onclick="monthlyAutoExport();localStorage.removeItem('rsr_last_monthly_export');" class="btn-primary" style="margin-top:0">📁 Export Monthly Records Now</button>
     </div>
     <div class="card">
       <h4>Notification log</h4>
@@ -1023,7 +1050,7 @@ const WMSGS={
 let employees=[];
 let records={},leaveRequests=[],undertimeRequests=[],punchPhotos=[],notifLog=[];
 let allowanceOverrides={};
-let adminPassword='admin123',adminLoggedIn=false;
+let adminLoggedIn=false;
 let assistantPassword='assist123',assistantLoggedIn=false;
 let assistantTimer=null,assistantSecs=30;
 const ASST_TO=30;
@@ -2838,13 +2865,142 @@ function lookupLeave(){
   panel.style.display='block';
 }
 
-function adminLogin(){return; // disabled in kiosk-only mode
-  //
-  const pw=document.getElementById('admin-pw').value;
-  if(pw===adminPassword){adminLoggedIn=true;document.getElementById('admin-lock').style.display='none';document.getElementById('admin-content').classList.add('show');document.getElementById('admin-pw').value='';showATabs();renderAdminPanel();startAdminTimer();}
-  else{document.getElementById('admin-err').textContent='Incorrect password.';setTimeout(()=>document.getElementById('admin-err').textContent='',2000);}
+// ── Server-side Admin passcode gate ──────────────────────────────────────────────────────────
+// Verified against Supabase (admin_verify_passcode RPC) — no client-side password. Reached by a
+// ~2s long-press on the app title (hidden entry). Fail-closed offline. 5 wrong tries locks the
+// gate for 5 min (punching is unaffected — this never blocks the Clock tab). 10s idle on the PIN
+// screen returns to Clock so an accidental long-press can't strand a worker.
+let adminPin='';
+let adminFailCount=0,adminGateLockedUntil=0,adminGateIdleTimer=null;
+const ADMIN_MAX_ATTEMPTS=5;
+const ADMIN_GATE_LOCK_MS=5*60*1000;
+function isAdminGateLocked(){return Date.now()<adminGateLockedUntil;}
+function setAdminErr(t){const el=document.getElementById('admin-err');if(el)el.textContent=t;}
+function adUpdDots(){for(let i=0;i<6;i++){const d=document.getElementById('ad-d'+i);if(d)d.className='pin-dot'+(i<adminPin.length?' filled':'');}}
+
+function openAdminGate(){
+  // Show the Admin section with the lock screen visible and the panel hidden.
+  document.querySelectorAll('.tab').forEach(e=>e.classList.remove('active'));
+  document.querySelectorAll('.section').forEach(e=>e.classList.remove('active'));
+  document.getElementById('tab-admin').classList.add('active');
+  document.getElementById('admin-lock').style.display='block';
+  document.getElementById('admin-content').classList.remove('show');
+  adminPin='';adUpdDots();
+  setAdminErr(isAdminGateLocked()?'Admin locked. Try again later.':'');
+  startAdminGateIdle();
 }
-function adminLogout(){stopAdminTimer();adminLoggedIn=false;document.getElementById('admin-lock').style.display='block';document.getElementById('admin-content').classList.remove('show');hideATabs();const clk=document.getElementById('tab-btn-clock');if(clk)clk.style.display='';const myt=document.getElementById('tab-btn-mytime');if(myt)myt.style.display='';switchTab('clock',document.getElementById('tab-btn-clock'));}
+function closeAdminGate(){
+  clearAdminGateIdle();adminPin='';adUpdDots();setAdminErr('');
+  if(!adminLoggedIn){const clk=document.getElementById('tab-btn-clock');if(clk)switchTab('clock',clk);}
+}
+function startAdminGateIdle(){clearAdminGateIdle();adminGateIdleTimer=setTimeout(closeAdminGate,10000);}
+function resetAdminGateIdle(){if(!adminLoggedIn)startAdminGateIdle();}
+function clearAdminGateIdle(){if(adminGateIdleTimer){clearTimeout(adminGateIdleTimer);adminGateIdleTimer=null;}}
+
+function adKp(n){
+  if(isAdminGateLocked()){setAdminErr('Admin locked. Try again later.');return;}
+  resetAdminGateIdle();
+  if(adminPin.length>=6)return;
+  adminPin+=n;adUpdDots();
+  if(adminPin.length===6)verifyAdminPin();
+}
+function adKpDel(){resetAdminGateIdle();adminPin=adminPin.slice(0,-1);adUpdDots();setAdminErr('');}
+function adKpClr(){resetAdminGateIdle();adminPin='';adUpdDots();setAdminErr('');}
+
+async function verifyAdminPin(){
+  if(isAdminGateLocked()){setAdminErr('Admin locked. Try again later.');return;}
+  const pin=adminPin;
+  // Fail-closed: no server reachability → do NOT unlock.
+  if(!navigator.onLine){adminPin='';adUpdDots();setAdminErr('Admin needs internet to verify — cannot unlock offline.');return;}
+  setAdminErr('Checking…');
+  try{
+    const {data,error}=await sbClient.rpc('admin_verify_passcode',{p_input:pin});
+    if(error)throw error;
+    if(data===true){adminFailCount=0;adminPin='';adUpdDots();setAdminErr('');adminUnlock();}
+    else adminGateFail();
+  }catch(e){
+    adminPin='';adUpdDots();
+    setAdminErr('Could not verify — check the connection and try again.');
+  }
+}
+function adminGateFail(){
+  adminFailCount++;adminPin='';adUpdDots();
+  if(adminFailCount>=ADMIN_MAX_ATTEMPTS){
+    adminGateLockedUntil=Date.now()+ADMIN_GATE_LOCK_MS;adminFailCount=0;
+    setAdminErr('Too many wrong attempts. Admin locked for 5 minutes.');
+    try{logNotif('Admin locked — 5 failed passcode attempts','late-n',false);}catch(e){}
+    setTimeout(()=>{if(!adminLoggedIn)closeAdminGate();},2500);
+    return;
+  }
+  const rem=ADMIN_MAX_ATTEMPTS-adminFailCount;
+  setAdminErr('Incorrect passcode.'+(rem<=2?` ${rem} attempt${rem===1?'':'s'} left.`:''));
+}
+// ── Admin tab-row visibility ──────────────────────────────────────────────────────────────────
+// On unlock the ENTIRE tab row is hidden and only the stuck-punches card shows. "More" reveals the
+// row (Log/Allowance/Undertime/Photos/Staff/Settings/SMS-Log + Admin) for normal tab navigation.
+function hideAdminTabRow(){const bar=document.getElementById('tab-bar');if(bar)bar.style.display='none';}
+function showAdminTabRow(){
+  const bar=document.getElementById('tab-bar');if(bar)bar.style.display='';
+  showATabs();  // reveal admin tabs, hide Clock/My Time
+  const atab=document.getElementById('tab-btn-admin');if(atab)atab.classList.remove('hidden');
+}
+// Land on the stuck-punches-only view (tab-admin active), tab row collapsed, button reset to "More".
+function showAdminStuckOnly(){
+  document.querySelectorAll('.tab').forEach(e=>e.classList.remove('active'));
+  document.querySelectorAll('.section').forEach(e=>e.classList.remove('active'));
+  const sec=document.getElementById('tab-admin');if(sec)sec.classList.add('active');
+  const mbtn=document.getElementById('admin-more-btn');if(mbtn)mbtn.textContent='☰ More';
+  renderStuckPunches();
+}
+function toggleAdminTabRow(){
+  if(adminLoggedIn)resetAdminTimer();
+  const bar=document.getElementById('tab-bar');
+  const mbtn=document.getElementById('admin-more-btn');
+  const hidden=!bar||getComputedStyle(bar).display==='none';
+  if(hidden){ showAdminTabRow(); if(mbtn)mbtn.textContent='▾ Less'; }
+  else { hideAdminTabRow(); showAdminStuckOnly(); }  // showAdminStuckOnly resets the button to "More"
+}
+function adminUnlock(){
+  clearAdminGateIdle();
+  adminLoggedIn=true;
+  document.getElementById('admin-lock').style.display='none';
+  document.getElementById('admin-content').classList.add('show');
+  // Fresh unlock ALWAYS starts collapsed: tab row hidden, only the stuck-punches card + "More".
+  hideAdminTabRow();
+  showAdminStuckOnly();
+  startAdminTimer();
+}
+
+// Hidden entry: long-press (~2s) the app title.
+(function wireAdminLongPress(){
+  const t=document.getElementById('app-title-el');if(!t)return;
+  t.style.userSelect='none';t.style.webkitUserSelect='none';
+  let lp=null;
+  const start=()=>{if(lp)clearTimeout(lp);lp=setTimeout(()=>{lp=null;openAdminGate();},2000);};
+  const cancel=()=>{if(lp){clearTimeout(lp);lp=null;}};
+  t.addEventListener('touchstart',start,{passive:true});
+  t.addEventListener('touchend',cancel);t.addEventListener('touchcancel',cancel);
+  t.addEventListener('mousedown',start);t.addEventListener('mouseup',cancel);t.addEventListener('mouseleave',cancel);
+})();
+
+function adminLogout(){stopAdminTimer();adminLoggedIn=false;document.getElementById('admin-lock').style.display='block';document.getElementById('admin-content').classList.remove('show');const bar=document.getElementById('tab-bar');if(bar)bar.style.display='';hideATabs();const atab=document.getElementById('tab-btn-admin');if(atab)atab.classList.add('hidden');const clk=document.getElementById('tab-btn-clock');if(clk)clk.style.display='';const myt=document.getElementById('tab-btn-mytime');if(myt)myt.style.display='';switchTab('clock',document.getElementById('tab-btn-clock'));}
+
+// Enforce the LOCKED admin state on boot. Admin is already locked by default (adminLoggedIn=false,
+// admin-content has no .show, admin tabs carry .hidden), but this makes it explicit and defensive:
+// nothing renders the Admin panel until adminUnlock() runs after a successful admin_verify_passcode.
+// Called once at startup; safe/idempotent.
+function enforceAdminLocked(){
+  adminLoggedIn=false;
+  try{stopAdminTimer();}catch(e){}
+  clearAdminGateIdle();
+  const ac=document.getElementById('admin-content');if(ac)ac.classList.remove('show');
+  const al=document.getElementById('admin-lock');if(al)al.style.display='block';
+  const bar=document.getElementById('tab-bar');if(bar)bar.style.display='';
+  hideATabs();
+  const atab=document.getElementById('tab-btn-admin');if(atab)atab.classList.add('hidden');
+  const clk=document.getElementById('tab-btn-clock');if(clk)clk.style.display='';
+  const myt=document.getElementById('tab-btn-mytime');if(myt)myt.style.display='';
+}
 
 function loginAssistant(){return; // disabled in kiosk-only mode
   //
@@ -2974,7 +3130,22 @@ function renderLeaveStatus(){
     </div>`;
   }).join('');
 }
-function changePassword(){const np=document.getElementById('new-pw').value.trim();if(!np)return;adminPassword=np;saveData();document.getElementById('new-pw').value='';document.getElementById('pw-msg').textContent='Password updated.';setTimeout(()=>document.getElementById('pw-msg').textContent='',2000);}
+async function changePassword(){
+  const cur=(document.getElementById('cur-pw').value||'').trim();
+  const np=(document.getElementById('new-pw').value||'').trim();
+  const msg=document.getElementById('pw-msg');
+  const bad=t=>{msg.style.color='#A32D2D';msg.textContent=t;};
+  if(!/^[0-9]{6}$/.test(cur))return bad('Enter your current 6-digit passcode.');
+  if(!/^[0-9]{6}$/.test(np))return bad('New passcode must be exactly 6 digits.');
+  if(!navigator.onLine)return bad('Needs internet to change the passcode.');
+  try{
+    const {data,error}=await sbClient.rpc('admin_change_passcode',{p_current:cur,p_new:np});
+    if(error)throw error;
+    if(data===true){msg.style.color='#085041';msg.textContent='Passcode updated.';document.getElementById('cur-pw').value='';document.getElementById('new-pw').value='';}
+    else bad('Current passcode is wrong.');
+  }catch(e){bad('Could not update — try again.');}
+  setTimeout(()=>{msg.textContent='';},3000);
+}
 function changeAsstPassword(){const np=document.getElementById('new-asst-pw').value.trim();if(!np)return;assistantPassword=np;saveData();document.getElementById('new-asst-pw').value='';document.getElementById('asst-pw-msg').textContent='Assistant password updated.';setTimeout(()=>document.getElementById('asst-pw-msg').textContent='',2000);}
 
 function renderAdminPanel(){
@@ -3880,7 +4051,7 @@ function saveData(){
     localStorage.setItem('rsr_timeout_adj',JSON.stringify(timeoutAdjustments));
     localStorage.setItem('rsr_employees',JSON.stringify(employees));
     localStorage.setItem('rsr_undertime',JSON.stringify(undertimeRequests));
-    localStorage.setItem('rsr_settings',JSON.stringify({shiftH,shiftM,graceMins,endH,endM,company,lunchInEarliestH,lunchInEarliestM,pmInEarliestH,pmInEarliestM,lunchOutEarlyH,lunchOutEarlyM,lunchOutLatestH,lunchOutLatestM,pmOutEarlyH,pmOutEarlyM,pmOutLatestH,pmOutLatestM,dismissalH,dismissalM,activeSite,awayAllow,otAllowanceAmt,otAllowanceMinHrs,adminPassword,assistantPassword,tgToken,tgGroup,tgPosGroup,tgPhotoGroup,tgBackupGroup,mgrIds,semaphoreKey,semaphoreSender}));
+    localStorage.setItem('rsr_settings',JSON.stringify({shiftH,shiftM,graceMins,endH,endM,company,lunchInEarliestH,lunchInEarliestM,pmInEarliestH,pmInEarliestM,lunchOutEarlyH,lunchOutEarlyM,lunchOutLatestH,lunchOutLatestM,pmOutEarlyH,pmOutEarlyM,pmOutLatestH,pmOutLatestM,dismissalH,dismissalM,activeSite,awayAllow,otAllowanceAmt,otAllowanceMinHrs,assistantPassword,tgToken,tgGroup,tgPosGroup,tgPhotoGroup,tgBackupGroup,mgrIds,semaphoreKey,semaphoreSender}));
     localStorage.setItem('rsr_smslog',JSON.stringify(smsLog.slice(0,200)));
     localStorage.setItem('rsr_straightduty',JSON.stringify(straightDutyRequests));
     localStorage.setItem('rsr_violations',JSON.stringify(absenceViolations));
@@ -4011,7 +4182,6 @@ function loadData(){
       activeSite=siteNorm(s.activeSite)||activeSite;
       awayAllow=50; // policy ₱50/day, flat — payroll cfg governs pay; kiosk display uses this
       otAllowanceAmt=s.otAllowanceAmt??50;otAllowanceMinHrs=s.otAllowanceMinHrs??3;
-      if(s.adminPassword)adminPassword=s.adminPassword;
       if(s.assistantPassword)assistantPassword=s.assistantPassword;
       if(s.semaphoreKey){semaphoreKey=s.semaphoreKey;const sk=document.getElementById('semaphore-key');if(sk)sk.value=semaphoreKey;}
       if(s.semaphoreSender){semaphoreSender=s.semaphoreSender;const ss=document.getElementById('semaphore-sender');if(ss)ss.value=semaphoreSender;}
@@ -4389,8 +4559,8 @@ function switchTab(t,el){
   document.querySelectorAll('.tab').forEach(e=>e.classList.remove('active'));
   document.querySelectorAll('.section').forEach(e=>e.classList.remove('active'));
   el.classList.add('active');document.getElementById('tab-'+t).classList.add('active');
-  if(t==='log')renderLog();if(t==='staff')renderRoster();if(t==='photos')renderPhotos();
-  if(t==='admin'&&adminLoggedIn)renderAdminPanel();if(t==='settings'){renderNotifLog();renderStuckPunches();}
+  if(t==='log')renderLog();if(t==='staff'){renderRoster();renderAdminPanel();}if(t==='photos')renderPhotos();
+  if(t==='admin'&&adminLoggedIn)renderStuckPunches();if(t==='settings'){renderNotifLog();}
   if(t==='asst-leave'){renderAsstLeaveList();renderStraightDutyList();if(assistantLoggedIn)resetAssistantTimer();}
   if(t==='asst-status'){renderLeaveStatus();if(assistantLoggedIn)resetAssistantTimer();}
   if(t==='mytime'){mtPin='';mtUpdDots();if(mtEmp)renderMyTimeSheet(mtEmp);}
@@ -4635,7 +4805,7 @@ function exportUndertimeCSV(){
   downloadFile('undertime_'+todayKey().replace(/\//g,'-')+'.csv',csv,'text/csv');
 }
 
-loadData();repairPhantomTimeouts();updateStats();renderRoster();updatePhotoFilter();populateSiteSelects();updateSiteBadge();initCamera();requestWakeLock();resetDimTimer();scheduleMidnightReset();cleanupOldData();scheduleMonthlyExport();
+enforceAdminLocked();loadData();repairPhantomTimeouts();updateStats();renderRoster();updatePhotoFilter();populateSiteSelects();updateSiteBadge();initCamera();requestWakeLock();resetDimTimer();scheduleMidnightReset();cleanupOldData();scheduleMonthlyExport();
 // Run absence check on load and schedule daily at midnight
 setTimeout(()=>{
   checkAllAbsences();
