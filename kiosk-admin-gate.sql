@@ -29,17 +29,75 @@ create table if not exists public.kiosk_admin_credential (
 -- definer functions below still read/write it because they run as the table owner.
 revoke all on public.kiosk_admin_credential from anon, authenticated;
 
--- Verify a typed PIN. Returns true/false ONLY — never the hash. security definer so it can read
--- the locked-down table regardless of caller.
+-- Single-row GLOBAL throttle for admin_verify_passcode. There is one shared credential and no
+-- trustworthy per-caller identity (x-forwarded-for is client-rotatable; inet_client_addr() is the
+-- Supabase pooler, the same for everyone), so we rate-limit the CREDENTIAL globally. REST-locked so
+-- anon cannot read or reset the counters; the security-definer verify below writes it as the owner.
+create table if not exists public.admin_verify_throttle (
+  id            boolean     primary key default true check (id),
+  fails         integer     not null default 0,
+  window_start  timestamptz not null default now(),
+  locked_until  timestamptz,
+  updated_at    timestamptz not null default now()
+);
+insert into public.admin_verify_throttle (id) values (true) on conflict (id) do nothing;
+revoke all on public.admin_verify_throttle from anon, authenticated;
+
+-- Verify a typed PIN. Returns true/false ONLY — never the hash. security definer so it can read the
+-- locked-down tables regardless of caller. GLOBAL fail-closed rate limit: after MAX_FAILS wrong tries
+-- within a rolling window, ALL verification is denied for COOLDOWN (a locked state is indistinguishable
+-- from a wrong PIN — no oracle leak). Trade-off: an attacker can deliberately lock the gate for the
+-- cooldown (DoS), acceptable because the gate guards payroll VIEWING + settings, not punching.
 create or replace function public.admin_verify_passcode(p_input text)
 returns boolean
-language sql stable security definer
+language plpgsql volatile security definer
 set search_path = public
 as $$
+declare
+  v_now timestamptz := now();
+  v_row public.admin_verify_throttle%rowtype;
+  v_ok  boolean;
+  MAX_FAILS constant int      := 10;                 -- wrong tries (global) before lockout
+  COOLDOWN  constant interval := interval '15 minutes';
+begin
+  -- Lock the single throttle row: serializes ALL verifies globally (also throttles concurrency).
+  insert into public.admin_verify_throttle (id) values (true) on conflict (id) do nothing;
+  select * into v_row from public.admin_verify_throttle where id for update;
+
+  -- FAIL-CLOSED: while globally locked, deny WITHOUT checking the PIN.
+  if v_row.locked_until is not null and v_row.locked_until > v_now then
+    update public.admin_verify_throttle set updated_at = v_now where id;
+    return false;
+  end if;
+
+  -- Roll the counting window over once the cooldown has elapsed.
+  if v_now - v_row.window_start > COOLDOWN then
+    v_row.fails := 0;
+    v_row.window_start := v_now;
+  end if;
+
+  -- The actual passcode check (unchanged bcrypt compare).
   select exists (
     select 1 from public.kiosk_admin_credential
     where passcode_hash = extensions.crypt(p_input, passcode_hash)
-  );
+  ) into v_ok;
+
+  if v_ok then
+    update public.admin_verify_throttle
+       set fails = 0, window_start = v_now, locked_until = null, updated_at = v_now
+     where id;
+    return true;
+  else
+    v_row.fails := v_row.fails + 1;
+    update public.admin_verify_throttle
+       set fails        = v_row.fails,
+           window_start = v_row.window_start,
+           locked_until = case when v_row.fails >= MAX_FAILS then v_now + COOLDOWN else v_row.locked_until end,
+           updated_at   = v_now
+     where id;
+    return false;
+  end if;
+end;
 $$;
 
 -- One-time bootstrap: set the FIRST PIN. Fails if one already exists, so it can NEVER silently
