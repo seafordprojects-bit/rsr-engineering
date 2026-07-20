@@ -715,6 +715,7 @@ function App() {
   const [empVac, setEmpVac] = useState('');
   const [empSite, setEmpSite] = useState('');
   const [siteList, setSiteList] = useState([]); // (site rename) data-driven yard list from settings.attendance_sites
+  const [health, setHealth] = useState(null);   // kiosk_health rows for the stuck-punch banner (null = loading)
   const [coordPin, setCoordPin] = useState('');
   const [ownerPin, setOwnerPin] = useState('');
   const [rollPin, setRollPin] = useState('');
@@ -764,6 +765,44 @@ function App() {
     if (!coordPin.trim()) { flash('Enter a passcode'); return; }
     try { await setSetting('coordinator_pin', coordPin.trim()); setCoordPin(''); flash('Assistant passcode set'); }
     catch (e) { flash('Error: ' + e.message); }
+  };
+
+  // Two-tier stuck-punch banner. RED = real (stuck punches, or a yard that WAS reporting and went
+  // silent >30min). GREY = a yard that never sent a heartbeat (tablet on the old build; expected
+  // during rollout until it's reset on-site) — NOT an alarm. Both hidden when every yard is fresh & clean.
+  const healthBanner = () => {
+    if (!health) return '';                       // still loading
+    const STALE_MS = 30 * 60 * 1000, now = Date.now();
+    const bySite = {};
+    for (const r of health) {
+      const s = siteNorm(r.site) || '(unknown site)';
+      const seen = r.last_seen ? new Date(r.last_seen).getTime() : 0;
+      const b = bySite[s] || (bySite[s] = { stuck: 0, newest: 0 });
+      b.stuck += (r.stuck_count || 0);
+      if (seen > b.newest) b.newest = seen;
+    }
+    const alarms = [], pending = [];
+    for (const s in bySite) {
+      const b = bySite[s];
+      if (b.stuck > 0) alarms.push(`${s}: ${b.stuck} stuck punch${b.stuck === 1 ? '' : 'es'}`);
+      else if (b.newest && (now - b.newest) > STALE_MS) alarms.push(`${s}: was reporting, silent ${Math.round((now - b.newest) / 60000)} min`);
+    }
+    for (const y of siteList) { if (!bySite[siteNorm(y)]) pending.push(siteNorm(y)); }
+    // Build an ARRAY of only the cards that apply, each with a stable key. Returning [redCard, greyCard]
+    // (rather than `${cond?html:''}` siblings) means the two are keyed independently — so when the red
+    // card appears on a live poll update, Preact keeps the grey card instead of clobbering it.
+    const cards = [];
+    if (alarms.length) cards.push(html`
+      <div key="hb-alarm" class="card" style="border-color:var(--warn);background:rgba(255,107,94,.08)">
+        <div style="font-weight:800;color:var(--warn)">⚠ Stuck punches / offline tablets</div>
+        <p class="note" style="margin:4px 0 0;color:var(--ink)">${alarms.join(' · ')}</p>
+      </div>`);
+    if (pending.length) cards.push(html`
+      <div key="hb-pending" class="card">
+        <div style="font-weight:700;color:var(--ink-dim)">⏳ No heartbeat yet: ${pending.join(', ')}</div>
+        <p class="note" style="margin:4px 0 0">Still on the old build (or not reporting since deploy) — they'll start reporting after a reset on your next site visit. Not an alarm.</p>
+      </div>`);
+    return cards;   // [] renders nothing
   };
   const saveRollPin = async () => {
     if (!rollPin.trim()) { flash('Enter a passcode'); return; }
@@ -951,6 +990,22 @@ function App() {
         if (Array.isArray(arr)) setSiteList(arr.map(x => String(x).trim()).filter(Boolean));
       } catch (_) {}
     })();
+  }, [authed]);
+
+  // Stuck-punch banner: poll kiosk_health (read-only). Resilient to the table not existing yet.
+  useEffect(() => {
+    if (!(authed && onAdminPage)) return;
+    let stop = false;
+    const load = async () => {
+      try {
+        const { data, error } = await supabase.from('kiosk_health')
+          .select('device_id,site,stuck_count,queue_length,last_seen');
+        if (!stop) setHealth(error ? [] : (data || []));
+      } catch (_) { if (!stop) setHealth([]); }
+    };
+    load();
+    const t = setInterval(load, 60000);
+    return () => { stop = true; clearInterval(t); };
   }, [authed]);
 
   useEffect(() => {
@@ -1517,6 +1572,7 @@ function App() {
       </div></div>
     </header>
     <div class="wrap">
+      ${healthBanner()}
       ${(() => {
         const needs = emps.filter(e => !e.pin).length;
         return needs > 0 ? html`

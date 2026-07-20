@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-20g</span>
+        <span id="version-stamp">v2026-07-21b</span>
       </div>
     </div>
   </div>
@@ -5337,12 +5337,12 @@ async function syncFlush(){
         if (now) {
           now.attempts = (now.attempts || 0) + 1;
           now.reason = pushRecord._lastReason || 'server rejected';
-          if (now.attempts >= DEAD_MAX) now.dead = true;  // dead-letter: kept in queue + records, never discarded
+          if (now.attempts >= DEAD_MAX && !now.dead) { now.dead = true; pendingHeartbeat = true; }  // dead-letter: kept in queue + records, never discarded (+ flag a heartbeat)
         }
       }
       savePending(); updateSyncBadge();
     }
-  } finally { syncing = false; updateSyncBadge(); }
+  } finally { syncing = false; updateSyncBadge(); if (pendingHeartbeat) { pendingHeartbeat = false; sendHeartbeat(); } }
 }
 
 // ── Stuck-punch (dead-letter) admin surface ───────────────────────────────────────────────────────
@@ -5375,6 +5375,7 @@ function renderStuckPunches(){
 }
 function recoverStuckPunch(k){   // manual recovery: clear the dead flag + attempt count, then re-sync
   if (syncPending[k]) { syncPending[k].dead = false; syncPending[k].attempts = 0; savePending(); }
+  sendHeartbeat();               // reflect the reduced stuck-count on the dashboard promptly (fire-and-forget)
   updateSyncBadge();
   syncFlush();
 }
@@ -5466,6 +5467,34 @@ try{
   }
   if(_rq)syncFlush();
 }catch(e){ console.warn('phantom-timeout re-sync queue failed:', e&&e.message?e.message:e); }
+
+// ── Kiosk health heartbeat (stuck-punch notifications, Part 1) ──────────────────────────────────
+// Fire-and-forget health report so the RSR Admin dashboard can see stuck punches remotely without
+// visiting the tablet. NEVER interferes with punch sync: skipped while a sync is in flight, wrapped
+// in try/catch, never queued or retried. A failed heartbeat is silently dropped. DB trigger stamps
+// last_seen/updated_at server-side, so a skewed tablet clock never affects "went silent" detection.
+let pendingHeartbeat = false;
+function getDeviceId(){
+  let id = localStorage.getItem('rsr_device_id');
+  if (!id) {
+    id = (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+       : 'dev-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+    try { localStorage.setItem('rsr_device_id', id); } catch(e){}
+  }
+  return id;
+}
+const IS_LOCALHOST = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '::1');
+async function sendHeartbeat(){
+  if (IS_LOCALHOST) return;                    // never pollute prod kiosk_health from a local walkthrough/test
+  if (syncing || !navigator.onLine) return;    // punches take priority; nothing to send offline
+  try {
+    await sbClient.from('kiosk_health').upsert(
+      { device_id: getDeviceId(), site: activeSite || null, stuck_count: deadCount(), queue_length: pendingCount() },
+      { onConflict: 'device_id' });
+  } catch(e){ /* silently dropped — never blocks or queues punches */ }
+}
+setInterval(sendHeartbeat, 5 * 60 * 1000);   // every 5 min
+setTimeout(sendHeartbeat, 8000);             // once shortly after boot
 
 // retry every 30s, and immediately when the browser regains connection
 setInterval(syncFlush, 30000);

@@ -62,15 +62,28 @@ No grants/revokes needed (PostgREST exposes it to the anon role by default; that
 - **When it fires:** a `setInterval` every **5 min**; once shortly after boot; and immediately (still
   fire-and-forget) right after a punch dead-letters and after a successful "Retry now" recovery, so the
   dashboard reflects changes promptly.
+- **Localhost guard:** `sendHeartbeat()` no-ops when `location.hostname` is `localhost`/`127.0.0.1`/`::1`,
+  so local walkthroughs and the stress harness never write a phantom device row to prod `kiosk_health`
+  (which would later go "silent" and false-alarm). The deployed GitHub Pages host reports normally.
 
 ### Dashboard side (`home.js` / `admin/index.html`)
 - Fetch `kiosk_health` on load and on a refresh interval (align with the dashboard's existing refresh;
   ~60 s). Group rows by `site`, summing `stuck_count` / `queue_length`, and taking the newest
   `last_seen` per site.
-- **Banner (red, top of dashboard)** shown when ANY site has `stuck_count > 0` OR its newest `last_seen`
-  is older than **30 min**. Content lists offending yards, e.g.
-  `⚠ Carmen: 3 stuck punches · Mandaue: tablet quiet 42 min`. Hidden entirely when all healthy.
-- Read-only display; no writes from the dashboard.
+- **Two-tier banner** — critically, distinguish a tablet that has NEVER reported (still on the old
+  build; won't reload until the owner's next site visit) from one that WAS reporting and went silent:
+  - **RED alarm** when any site has `stuck_count > 0` (`⚠ Carmen: 3 stuck punches`) OR a site that HAS
+    at least one `kiosk_health` row whose newest `last_seen` is older than **30 min**
+    (`⚠ Mandaue: tablet was reporting, silent 42 min`). This is the real stuck/offline state.
+  - **GREY/info note** for a yard (from the `attendance_sites` list) with **no `kiosk_health` row at
+    all** — never sent a heartbeat: `⏳ Carmen: no heartbeat yet (tablet on old build — reset on next
+    visit)`. NOT a red alarm; it's expected during rollout.
+  - Both hidden when every yard has a fresh row with `stuck_count = 0`.
+- Rationale: after this ships, every tablet is on the old build until physically reset on-site, so
+  "no row yet" is the normal rollout state and must not fire the red alarm. Once a tablet has reported
+  even once, a later silence IS a real signal.
+- Resilient to the `kiosk_health` table not existing yet (query error → treat as "no rows", show only
+  the rollout-pending note). Read-only display; no writes from the dashboard.
 
 ## Part 2 — Telegram alert on first dead-letter
 
