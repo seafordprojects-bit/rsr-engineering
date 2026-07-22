@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-21d</span>
+        <span id="version-stamp">v2026-07-22a</span>
       </div>
     </div>
   </div>
@@ -1371,16 +1371,67 @@ async function initCamera(){
   if(txt)txt.textContent='Camera unavailable: '+(lastErr?lastErr.name:'unknown');
 }
 
+let camRecovering=false;
+// Stop any frozen/stale tracks and re-acquire the camera. Guarded so overlapping punches or
+// wake events don't spawn parallel getUserMedia calls.
+async function tryRecoverCamera(){
+  if(camRecovering)return;
+  camRecovering=true;
+  try{
+    if(camStream){try{camStream.getTracks().forEach(t=>{try{t.stop();}catch(_){}});}catch(_){}}
+    camStream=null;camReady=false;
+    await initCamera();
+  }catch(e){console.warn('camera recovery failed (non-fatal):',e&&e.message);}
+  finally{camRecovering=false;}
+}
+// Called on wake/visibility: re-init if the stream is missing, inactive, OR frozen-but-active —
+// the last case is what the old visibilitychange check missed (active===true yet no new frames).
+async function ensureCameraLive(){
+  try{
+    const v=document.getElementById('cam-video');
+    if(!camReady||!camStream||!camStream.active||(v&&!v.videoWidth)){await tryRecoverCamera();return;}
+    const live=await verifyLiveFrame(v);
+    if(!live)await tryRecoverCamera();
+  }catch(e){console.warn('ensureCameraLive failed (non-fatal):',e&&e.message);}
+}
+// A frozen camera stream (screen-off/backgrounded on a kiosk tablet) keeps the LAST painted frame
+// while camReady/videoWidth stay truthy — so a naive capture silently reuses the previous person's
+// face for every punch (the 2026-07-21 "everyone shows Raffy" incident). verifyLiveFrame proves a
+// NEW frame is actually being painted before we trust the pixels.
+function verifyLiveFrame(v){
+  return new Promise(res=>{
+    try{
+      const track=camStream&&camStream.getVideoTracks?camStream.getVideoTracks()[0]:null;
+      if(track&&track.readyState==='ended'){res(false);return;}
+      if(v.paused||v.ended){res(false);return;}
+      // Preferred signal: requestVideoFrameCallback fires when the next frame is presented.
+      if(typeof v.requestVideoFrameCallback==='function'){
+        let settled=false;
+        const id=v.requestVideoFrameCallback(()=>{if(!settled){settled=true;res(true);}});
+        setTimeout(()=>{if(!settled){settled=true;try{v.cancelVideoFrameCallback&&v.cancelVideoFrameCallback(id);}catch(_){}res(false);}},700);
+        return;
+      }
+      // Fallback (no rVFC): a live stream advances currentTime; a frozen one does not.
+      const t0=v.currentTime;
+      setTimeout(()=>res(v.currentTime>t0+0.02),350);
+    }catch(e){res(false);}
+  });
+}
 function capturePhoto(){
   return new Promise(res=>{
     try{
       if(!camReady){res(null);return;}
       const v=document.getElementById('cam-video'),c=document.getElementById('cam-canvas');
       if(!v||!c||!v.videoWidth){res(null);return;}
-      c.width=400;c.height=400;
-      const ctx=c.getContext('2d');
-      ctx.save();ctx.translate(400,0);ctx.scale(-1,1);ctx.drawImage(v,0,0,400,400);ctx.restore();
-      res(c.toDataURL('image/jpeg',0.75));
+      verifyLiveFrame(v).then(live=>{
+        // Stale/frozen frame → NEVER reuse it. Mark no-photo (null) so the punch is stored and
+        // Telegram-notified as "No Photo Captured", and kick a recovery so the next punch is live.
+        if(!live){camReady=false;tryRecoverCamera();res(null);return;}
+        c.width=400;c.height=400;
+        const ctx=c.getContext('2d');
+        ctx.save();ctx.translate(400,0);ctx.scale(-1,1);ctx.drawImage(v,0,0,400,400);ctx.restore();
+        res(c.toDataURL('image/jpeg',0.75));
+      }).catch(()=>{res(null);});
     }catch(e){console.warn('capturePhoto failed (non-fatal):',e&&e.message);res(null);}
   });
 }
@@ -1848,12 +1899,9 @@ async function requestWakeLock(){
 document.addEventListener('visibilitychange',async()=>{
   if(document.visibilityState==='visible'){
     if(!wakeLock)await requestWakeLock();
-    // Camera stream can die while the screen is off; re-acquire it on wake
-    // so punch photos keep working. Re-init if the stream is missing or stale.
-    const v=document.getElementById('cam-video');
-    if(!camReady||!camStream||!camStream.active||(v&&!v.videoWidth)){
-      try{await initCamera();}catch(e){console.warn('camera re-init on wake failed:',e&&e.message);}
-    }
+    // Camera stream can die (or silently FREEZE) while the screen is off; re-acquire it on wake
+    // so punch photos keep working. ensureCameraLive also catches the frozen-but-active case.
+    await ensureCameraLive();
   }
 });
 
@@ -1882,6 +1930,9 @@ function wakeScreen(){
   document.getElementById('screen-dim-overlay').classList.remove('show');
   if(blackTimer){clearTimeout(blackTimer);blackTimer=null;}
   requestWakeLock();
+  // The screen-off is an in-page overlay, so visibilitychange never fires here — the camera can
+  // freeze during screen-off and only this wake path can catch it. Re-verify + recover if stale.
+  ensureCameraLive();
   resetDimTimer();
 }
 
