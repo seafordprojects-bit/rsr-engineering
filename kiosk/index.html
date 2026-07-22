@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-22a</span>
+        <span id="version-stamp">v2026-07-22b</span>
       </div>
     </div>
   </div>
@@ -1939,7 +1939,11 @@ function wakeScreen(){
 function resetDimTimer(){
   if(dimTimer)clearTimeout(dimTimer);
   if(blackTimer){clearTimeout(blackTimer);blackTimer=null;}
-  document.getElementById('screen-dim-overlay').classList.remove('show');
+  // Null-guard: this is called from the boot sequence (bottom of the first <script>), which runs
+  // BEFORE the #screen-dim-overlay div — parsed further down the HTML — exists. Without the guard
+  // the throw aborts the rest of the boot line (scheduleMidnightReset/cleanupOldData/monthly export).
+  const _dim=document.getElementById('screen-dim-overlay');
+  if(_dim)_dim.classList.remove('show');
   dimTimer=setTimeout(dimScreen,DIM_AFTER_MS);
 }
 
@@ -2456,6 +2460,16 @@ function updBtns(rec){
       const _otWin=_now>=_wAt(pmOutEarlyH,pmOutEarlyM)&&_now<=_wAt(dismissalH,dismissalM);
       if(_otWin&&_lunchDone&&(!rec.punches.timeout||rec.pmOutAutoClosed))_open('timeout',true);
     }
+  }
+  // (v2026-07-22b) DISPLAY-ONLY next-punch gate. Everything above already marks each VALID next step
+  // with `highlight-next` (including the intentional 5 PM two-choice: PM Break Out OR Time Out). The
+  // only enabled-but-NOT-highlighted buttons left are the forward-skip extras (e.g. PM Break Out
+  // sitting pressable beside Lunch In at 1:01 PM) and the cross-midnight Time In. Disable those so a
+  // worker sees ONLY their real next punch. Pure UI: it never ENABLES a button and does not touch how
+  // any press is recorded/classified — when >1 step is legitimately valid, both stay highlighted+on.
+  {
+    const _hi=PUNCHES.filter(k=>{const b=document.getElementById(BIDS[k]);return b&&b.classList.contains('highlight-next');});
+    if(_hi.length){ PUNCHES.forEach(k=>{ if(_hi.indexOf(k)<0){ const b=document.getElementById(BIDS[k]); if(b)b.disabled=true; } }); }
   }
   if(!rec){
     document.getElementById('btn-leave').disabled=true;
@@ -4145,6 +4159,11 @@ Rejected by: ${cb.from.first_name}`;
 }
 
 function startTgPolling(){
+  // Telegram getUpdates is SINGLE-CONSUMER per bot token: a localhost walkthrough (or any non-prod
+  // host) sharing the live token would 409-conflict against the production kiosk tablets and steal
+  // their callback updates. Only the deployed GitHub Pages kiosks poll. (Guarded, not removed — the
+  // whole polling path stays intact for production.)
+  if(location.hostname!=='seafordprojects-bit.github.io'){stopTgPolling();return;}
   if(tgPolling)clearInterval(tgPolling);
   if(!tgToken||tgToken.length<20)return;
   tgPolling=setInterval(processTgCallbacks,5000);
