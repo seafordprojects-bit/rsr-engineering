@@ -1645,15 +1645,15 @@ function App() {
 
         <div class="card">
           <div class="sectlabel" style="margin-top:0">Attendance times (kiosk override)</div>
-          <p class="note" style="margin:0 0 12px">Sets the morning clock-in and evening clock-out used by the kiosk. The kiosk pulls these automatically. Example: set 07:00 and a 7:00 AM time-in with a 12:00 NN lunch-out computes as 5 hours.</p>
+          <p class="note" style="margin:0 0 12px"><b>Morning clock-in</b> = the shift-start time the kiosk uses. <b>Evening OT cut-off</b> = the LATEST time the kiosk still accepts a Time Out for overtime (the OT window's upper bound). It does NOT move the 5:00 PM end-of-day — a normal day still closes when the worker punches PM Break Out at 5 PM; OT workers punch PM Break In, then Time Out by this cut-off.</p>
           <${Field} label="Morning clock-in">
             <input type="time" value=${shiftStartV} onInput=${e => setShiftStartV(e.target.value)} />
           <//>
-          <${Field} label="Evening clock-out">
+          <${Field} label="Evening OT cut-off (latest Time Out)">
             <input type="time" value=${dismissalV} onInput=${e => setDismissalV(e.target.value)} />
           <//>
           <button class="btn" onClick=${saveTimes}>Save attendance times</button>
-          <p class="note" style="margin-top:10px">After saving, the kiosk applies these on its next refresh (or hard-refresh the tablet).</p>
+          <p class="note" style="margin-top:10px">The kiosk picks these up automatically within about a minute -- no tablet reload needed.</p>
         </div>
 
         <div class="card">

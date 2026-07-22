@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-21b</span>
+        <span id="version-stamp">v2026-07-21d</span>
       </div>
     </div>
   </div>
@@ -272,6 +272,7 @@ textarea.field-input{resize:none;height:65px}
       <div class="big-date" id="live-date"></div>
       <div><span class="shift-pill" id="shift-pill">Shift: 8:00 AM · Grace: until 8:10 AM</span></div>
     </div>
+    <div id="ot-reminder" style="display:none;margin-bottom:10px;background:#FFF3CD;border:1px solid #FAC775;border-radius:10px;padding:9px 12px;font-size:12.5px;color:#633806;text-align:center;font-weight:600"></div>
     <div class="cam-status">
       <div class="cam-dot" id="cam-dot"></div>
       <span id="cam-status-txt">Initializing camera...</span>
@@ -1688,6 +1689,17 @@ function updateClock(){
   document.getElementById('live-time').textContent=now.toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',second:'2-digit',hour12:true});
   document.getElementById('live-date').textContent=now.toLocaleDateString('en-PH',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
   const hd=document.getElementById('hdr-date');if(hd)hd.textContent=now.toLocaleDateString('en-PH',{month:'short',day:'numeric',year:'numeric'});
+  // OT-crew reminder: from 5 PM (PM Break Out window) until the OT cut-off (dismissal), remind
+  // workers to punch PM Break In so their day isn't auto-closed at 5 PM. Reading dismissalH live means
+  // an admin cut-off change (picked up by loadShiftFromCloud) updates this text without a reload.
+  const _otEl=document.getElementById('ot-reminder');
+  if(_otEl){
+    const _mins=now.getHours()*60+now.getMinutes(), _from=pmOutEarlyH*60+pmOutEarlyM, _to=dismissalH*60+dismissalM;
+    if(_mins>=_from&&_mins<_to){
+      _otEl.textContent='Working overtime? Punch PM Break In to keep going — Time Out by '+fmt12(dismissalH,dismissalM)+'. (PM Break Out ends your day at 5 PM.)';
+      _otEl.style.display='block';
+    }else{_otEl.style.display='none';}
+  }
 }
 
 
@@ -5268,7 +5280,11 @@ async function initSupabaseSync() {
 setTimeout(initSupabaseSync, 2000);
 // Re-check approved straight duties + late breaks periodically (so an approval
 // made during the day is applied without restarting the kiosk).
-setInterval(function(){ if (navigator.onLine) { loadApprovedStraightDuties(); loadApprovedLateBreaks(); } }, 60000);
+setInterval(function(){ if (navigator.onLine) { loadApprovedStraightDuties(); loadApprovedLateBreaks(); loadShiftFromCloud(); } }, 60000);
+// Also refresh the shift/dismissal settings when the tablet regains focus, so an admin change to the
+// evening OT cut-off (dismissal) or shift start reflects WITHOUT a kiosk reload (same class as the
+// tariff cache bug). loadShiftFromCloud is idempotent — it re-reads settings and re-applies.
+document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'visible' && navigator.onLine) loadShiftFromCloud(); });
 
 // ============================================================
 //  OFFLINE QUEUE + AUTO-SYNC
@@ -5342,7 +5358,7 @@ async function syncFlush(){
       }
       savePending(); updateSyncBadge();
     }
-  } finally { syncing = false; updateSyncBadge(); if (pendingHeartbeat) { pendingHeartbeat = false; sendHeartbeat(); } }
+  } finally { syncing = false; updateSyncBadge(); if (pendingHeartbeat) { pendingHeartbeat = false; sendHeartbeat().then(pingAlertWatcher); } }
 }
 
 // ── Stuck-punch (dead-letter) admin surface ───────────────────────────────────────────────────────
@@ -5375,7 +5391,7 @@ function renderStuckPunches(){
 }
 function recoverStuckPunch(k){   // manual recovery: clear the dead flag + attempt count, then re-sync
   if (syncPending[k]) { syncPending[k].dead = false; syncPending[k].attempts = 0; savePending(); }
-  sendHeartbeat();               // reflect the reduced stuck-count on the dashboard promptly (fire-and-forget)
+  sendHeartbeat().then(pingAlertWatcher);   // reflect the reduced stuck-count + trigger a resolved-check (fire-and-forget)
   updateSyncBadge();
   syncFlush();
 }
@@ -5484,14 +5500,38 @@ function getDeviceId(){
   return id;
 }
 const IS_LOCALHOST = (location.hostname === 'localhost' || location.hostname === '127.0.0.1' || location.hostname === '::1');
+// Part 2: names + punch times for each currently dead-lettered punch, written into kiosk_health so the
+// server-side alert watcher (kiosk_alert_tick) can send a rich Telegram alert. The kiosk itself sends
+// no Telegram — all alerting is server-side (bot token stays in a REST-locked table).
+function buildStuckDetails(){
+  const order = ['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'];
+  const label = { timein:'in', lunch_out:'lunch out', lunch_in:'lunch in', pm_out:'pm out', pm_in:'pm in', timeout:'out' };
+  const out = [];
+  for (const k in syncPending){
+    const meta = syncPending[k];
+    if (!meta || !meta.dead) continue;
+    const i = k.lastIndexOf('_'), code = k.slice(0, i), date = k.slice(i + 1);
+    const emp = employees.find(e => e.code === code);
+    const p = (records[k] && records[k].punches) || {};
+    const times = order.filter(s => p[s]).map(s => `${label[s]} ${p[s]}`).join(', ');
+    out.push({ code, name: emp ? emp.name : code, date, times: times || '(no punches)', reason: meta.reason || 'server rejected' });
+  }
+  return out;
+}
 async function sendHeartbeat(){
   if (IS_LOCALHOST) return;                    // never pollute prod kiosk_health from a local walkthrough/test
   if (syncing || !navigator.onLine) return;    // punches take priority; nothing to send offline
   try {
     await sbClient.from('kiosk_health').upsert(
-      { device_id: getDeviceId(), site: activeSite || null, stuck_count: deadCount(), queue_length: pendingCount() },
+      { device_id: getDeviceId(), site: activeSite || null, stuck_count: deadCount(), queue_length: pendingCount(), stuck_details: buildStuckDetails() },
       { onConflict: 'device_id' });
   } catch(e){ /* silently dropped — never blocks or queues punches */ }
+}
+// Ping the server-side alert watcher for a near-immediate check (idempotent + state-guarded on the
+// server, so this can't spam). Fire-and-forget, localhost-guarded, never blocks punch sync.
+function pingAlertWatcher(){
+  if (IS_LOCALHOST) return;
+  try { sbClient.rpc('kiosk_alert_tick').then(() => {}, () => {}); } catch(e){}
 }
 setInterval(sendHeartbeat, 5 * 60 * 1000);   // every 5 min
 setTimeout(sendHeartbeat, 8000);             // once shortly after boot
