@@ -588,6 +588,50 @@ await scenario('D6 · two employees punch in the same second', manila(2026,7,18,
   report('D6 · two employees, same second, no collision', pass, `RSR0100=${r1.punches.timein} · PEM9001=${r2.punches.timein} · both synced=${sent1&&sent2}`, sends());
 });
 
+console.log('\n── E. PM BREAK-IN 7 PM CAP (v2026-07-22c) ────────────────────');
+// pm_in reaches the 7 PM cap only when it is the genuine next punch. After lunch_in, getNext is
+// pm_out; pressing pm_in forward-skips pm_out (marks it missing) and lands in the pm_in block, where
+// the cap (punch() ~2692, hard reject after 7:00 PM) applies. Capture is mocked to null (no camera),
+// so these prove the cap enforcer independent of camera/photo. Clock is the harness's fake Manila clock.
+
+// E1 — 6:32 PM (before the cap) → pm_in is ACCEPTED and recorded.
+await scenario('E1 · PM Break In @ 6:32 PM accepted', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await fullMorning(page, 'RSR0100', 2026,7,15);                 // timein, lunch_out, lunch_in
+  await setNow(page, manila(2026,7,15,18,32));                   // 6:32 PM (5:40 < now < 7:00)
+  await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'pm_in');  // forward-skips pm_out, records
+  const r = await recAt(page, 'RSR0100', k);
+  const rec = !!(r && r.punches.pm_in && !/missing|skip|auto/i.test(r.punches.pm_in));
+  report('E1 · PM Break In @ 6:32 accepted', rec, `pm_in=${r?.punches.pm_in||'(none)'}`, sends());
+});
+
+// E2 — 7:15 PM (after the cap) → pm_in is REJECTED; nothing recorded, nothing synced.
+await scenario('E2 · PM Break In @ 7:15 PM rejected by cap', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await fullMorning(page, 'RSR0100', 2026,7,15);
+  await setNow(page, manila(2026,7,15,19,15));                   // 7:15 PM (> 7:00 cap)
+  const before = mock.writes.length;
+  await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'pm_in');  // cap must refuse
+  const r = await recAt(page, 'RSR0100', k);
+  const refused = !!(r && !r.punches.pm_in) && (mock.writes.length - before === 0);
+  report('E2 · PM Break In @ 7:15 rejected by cap', refused, `pm_in=${r?.punches.pm_in||'(none — refused)'}; extra syncs=${mock.writes.length-before}`, sends());
+});
+
+// E3 — 6:59 vs 7:01 boundary (defense against off-by-one on the cap).
+await scenario('E3 · cap boundary 6:59 accept / 7:01 reject', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await fullMorning(page, 'RSR0100', 2026,7,15);
+  await setNow(page, manila(2026,7,15,18,59));                   // 6:59 PM → accept
+  await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'pm_in');
+  const rAcc = await recAt(page, 'RSR0100', k);
+  await fullMorning(page, 'PEM9001', 2026,7,15);
+  await setNow(page, manila(2026,7,15,19,1));                    // 7:01 PM → reject
+  await enterPin(page, pinOf('PEM9001')); await doPunch(page, 'pm_in');
+  const rRej = await recAt(page, 'PEM9001', k);
+  const pass = !!(rAcc && rAcc.punches.pm_in) && !!(rRej && !rRej.punches.pm_in);
+  report('E3 · cap boundary 6:59 accept / 7:01 reject', pass, `6:59 pm_in=${rAcc?.punches.pm_in||'(none)'} · 7:01 pm_in=${rRej?.punches.pm_in||'(none)'}`, sends());
+});
+
 // ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================

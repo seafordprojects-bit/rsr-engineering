@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-22b</span>
+        <span id="version-stamp">v2026-07-22c</span>
       </div>
     </div>
   </div>
@@ -1071,7 +1071,7 @@ let assistantPassword='assist123',assistantLoggedIn=false;
 let assistantTimer=null,assistantSecs=30;
 const ASST_TO=30;
 let shiftH=8,shiftM=0,graceMins=10,endH=17,endM=0,company='RSR Engineering';
-let lunchInEarliestH=12,lunchInEarliestM=40,pmInEarliestH=17,pmInEarliestM=40;
+let lunchInEarliestH=12,lunchInEarliestM=40,pmInEarliestH=17,pmInEarliestM=40,pmInLatestH=19,pmInLatestM=0;
 let lunchOutEarlyH=12,lunchOutEarlyM=0,pmOutEarlyH=17,pmOutEarlyM=0;
 let lunchOutLatestH=12,lunchOutLatestM=30,pmOutLatestH=17,pmOutLatestM=30;
 // ── STRICT PUNCH WINDOWS (v2026-07-07b, early-punch update v2026-07-07c) ──
@@ -1745,8 +1745,12 @@ function updateClock(){
   // an admin cut-off change (picked up by loadShiftFromCloud) updates this text without a reload.
   const _otEl=document.getElementById('ot-reminder');
   if(_otEl){
+    // (2026-07-22) OT-crew reminder banner HIDDEN (kept, not deleted). The display-gate button
+    // highlighting already shows the next valid punch, and "punch PM Break In / Time Out by <dismissal>"
+    // conflicts with the 7 PM PM-Break-In cap. Flip SHOW_OT_BANNER back to true to re-enable.
+    const SHOW_OT_BANNER=false;
     const _mins=now.getHours()*60+now.getMinutes(), _from=pmOutEarlyH*60+pmOutEarlyM, _to=dismissalH*60+dismissalM;
-    if(_mins>=_from&&_mins<_to){
+    if(SHOW_OT_BANNER&&_mins>=_from&&_mins<_to){
       _otEl.textContent='Working overtime? Punch PM Break In to keep going — Time Out by '+fmt12(dismissalH,dismissalM)+'. (PM Break Out ends your day at 5 PM.)';
       _otEl.style.display='block';
     }else{_otEl.style.display='none';}
@@ -2411,7 +2415,7 @@ function updBtns(rec){
     // PM Break In: 5:40 PM until dismissal (= approved OT end). Punching it REOPENS a
     // day that was auto-closed at PM Break Out.
     if(!rec.punches.pm_in){
-      const piOk=_now>=_wAt(pmInEarliestH,pmInEarliestM)&&_now<=_wAt(dismissalH,dismissalM);
+      const piOk=_now>=_wAt(pmInEarliestH,pmInEarliestM)&&_now<=_wAt(pmInLatestH,pmInLatestM);
       if(!piOk)_lock('pm_in');
       else if(rec.pmOutAutoClosed&&rec.punches.pm_out&&!isPunchMarker(rec.punches.pm_out))_open('pm_in',true);
     }
@@ -2685,10 +2689,13 @@ async function punch(type){
       const lbl=fmt12(pmInEarliestH,pmInEarliestM);
       showMsg('err','Too early for PM Break In','You can only punch PM Break In at '+lbl+' or later.',4000);return;
     }
-    // (v2026-07-07b) PM Break In closes at dismissal (= approved OT end).
-    const piClose=new Date(now);piClose.setHours(dismissalH,dismissalM,0,0);
+    // (2026-07-22) PM Break In HARD-CLOSES at 7:00 PM (pmInLatest): the evening OT crew must be back
+    // and punched by 7. Later returns go through Admin correction, not the kiosk. Fixed rule — NOT the
+    // admin dismissal (which still bounds the Time Out OT window, so a worker back by 7 can Time Out at
+    // their real finish up to dismissal).
+    const piClose=new Date(now);piClose.setHours(pmInLatestH,pmInLatestM,0,0);
     if(now>piClose){
-      showBisayaModal('⚠ Sirado na ang PM Break In (lapas na sa '+fmt12(dismissalH,dismissalM)+'). Ang imong adlaw na-close na sa oras sa imong PM Break Out. Palihug adto sa Admin kung naa kay overtime nga dapat marekord.');
+      showBisayaModal('⚠ Sirado na ang PM Break In human sa '+fmt12(pmInLatestH,pmInLatestM)+'. Kung ni-balik ka og ulahi, adto sa Admin aron ma-rekord ang imong overtime — dili na madawat sa kiosk.');
       return;
     }
     // Returning for OT: clear the auto Time Out that was written at PM Break Out — the day reopens.
