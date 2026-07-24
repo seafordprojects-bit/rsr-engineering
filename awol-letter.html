@@ -93,7 +93,8 @@
   const pd=g('pdate'); if(pd) set('f-pdate', pretty(pd));
   const ds=g('dates');
   if(ds){ const list=ds.split(/[,|]/).map(s=>s.trim()).filter(Boolean);
-    if(list.length) document.getElementById('f-dates').innerHTML=list.map(x=>'<li>'+pretty(x)+'</li>').join(''); }
+    if(list.length){ const ul=document.getElementById('f-dates'); ul.textContent='';
+      list.forEach(x=>{ const li=document.createElement('li'); li.textContent=pretty(x); ul.appendChild(li); }); } }
 })();
 </script>
 </body>
