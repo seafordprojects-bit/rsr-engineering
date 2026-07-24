@@ -22,25 +22,24 @@ create table if not exists public.employee_suspensions (
 );
 grant select, insert, update on public.employee_suspensions to anon, authenticated;
 
+-- NOTE: table + RPCs are granted to anon per the project's RLS-disabled convention (app-layer auth: Telegram mgr_ids + kiosk admin PIN). Callers MUST use these RPCs, not direct table writes, to preserve dedup.
 -- ── STEP 2 — atomic dedup RPCs (security definer) ─────────────────────────────
 -- Returns TRUE only when THIS call newly activates the suspension → exactly one alert
 -- even if two kiosks detect the same AWOL in the same run.
 create or replace function public.awol_set_suspended(p_code text, p_reason text, p_dates jsonb, p_on text)
 returns boolean language plpgsql security definer set search_path = public as $$
-declare v_was_active boolean;
+declare v_newly boolean;
 begin
-  select active into v_was_active from employee_suspensions where employee_code = p_code;
-  if v_was_active is true then
-    return false;
-  end if;
   insert into employee_suspensions(employee_code, active, reason, suspended_on, absent_dates, updated_at)
     values (p_code, true, p_reason, p_on, p_dates, now())
     on conflict (employee_code) do update
       set active = true, reason = excluded.reason, suspended_on = excluded.suspended_on,
           absent_dates = excluded.absent_dates,
           awol_group_msg_id = null, awol_group_chat = null,
-          reinstated_by = null, reinstated_on = null, updated_at = now();
-  return true;
+          reinstated_by = null, reinstated_on = null, updated_at = now()
+      where employee_suspensions.active is distinct from true
+  returning true into v_newly;
+  return coalesce(v_newly, false);
 end $$;
 grant execute on function public.awol_set_suspended(text, text, jsonb, text) to anon, authenticated;
 
@@ -48,16 +47,15 @@ grant execute on function public.awol_set_suspended(text, text, jsonb, text) to 
 -- the original alert to RESOLVED. {newly:false} when nothing was active (dedup).
 create or replace function public.awol_reinstate(p_code text, p_by text, p_on text)
 returns jsonb language plpgsql security definer set search_path = public as $$
-declare v_active boolean; v_msg text; v_chat text;
+declare v_msg text; v_chat text;
 begin
-  select active, awol_group_msg_id, awol_group_chat into v_active, v_msg, v_chat
-    from employee_suspensions where employee_code = p_code;
-  if v_active is not true then
-    return jsonb_build_object('newly', false);
-  end if;
   update employee_suspensions
      set active = false, reinstated_by = p_by, reinstated_on = p_on, updated_at = now()
-   where employee_code = p_code;
+   where employee_code = p_code and active is true
+  returning awol_group_msg_id, awol_group_chat into v_msg, v_chat;
+  if not found then
+    return jsonb_build_object('newly', false);
+  end if;
   return jsonb_build_object('newly', true, 'awol_group_msg_id', v_msg, 'awol_group_chat', v_chat);
 end $$;
 grant execute on function public.awol_reinstate(text, text, text) to anon, authenticated;
