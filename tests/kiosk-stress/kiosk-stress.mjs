@@ -904,6 +904,13 @@ await scenario('F9 · swept-day PIN entry → heads-up modal, nothing recorded',
     `modal=${modalShown} toEnabled=${toEnabled} timeout=${r.punches.timeout}`, sends());
 });
 
+await scenario('G0 · AWOL group id loads from settings', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1001112223334';
+  await page.evaluate(() => loadTgFromCloud());
+  const g = await page.evaluate(() => tgAwolGroup);
+  report('G0 · tg_awol_group loaded', g === '-1001112223334', `tgAwolGroup=${g}`);
+});
+
 // ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================

@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-24a</span>
+        <span id="version-stamp">v2026-07-24b</span>
       </div>
     </div>
   </div>
@@ -1123,7 +1123,7 @@ let activeSite='',sites=[],awayAllow=50; // (site rename) activeSite = active ya
 let otAllowanceAmt=50,otAllowanceMinHrs=3;
 let pin='',curEmp=null,msgTimer=null;
 let adminSecs=ADMIN_TO,adminTick=null;
-let tgToken='',tgGroup='',tgPosGroup='',tgPhotoGroup='',tgBackupGroup='',mgrIds=[];
+let tgToken='',tgGroup='',tgPosGroup='',tgPhotoGroup='',tgBackupGroup='',tgAwolGroup='',mgrIds=[];
 let semaphoreKey='',semaphoreSender='RSR ENGRG';
 let smsLog=[];
 let straightDutyRequests={}; // pending straight duty approvals
@@ -5041,7 +5041,7 @@ const sbClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // Pull them on startup; cache locally so punch notifications still work offline.
 async function loadTgFromCloud(showStatus){
   const setMsg=(t,ok)=>{const el=document.getElementById('tg-msg');if(el){el.textContent=t;el.style.color=ok?'#085041':'#633806';if(showStatus)setTimeout(()=>{el.textContent='';},4000);}};
-  const keys=['tg_token','tg_group','tg_backup_group','tg_pos_group','tg_photo_group','mgr_ids'];
+  const keys=['tg_token','tg_group','tg_backup_group','tg_pos_group','tg_photo_group','tg_awol_group','mgr_ids'];
   try{
     const { data, error } = await sbClient.from('settings').select('key,value').in('key',keys);
     if(error) throw error;
@@ -5052,8 +5052,9 @@ async function loadTgFromCloud(showStatus){
       tgBackupGroup=(map.tg_backup_group||'').trim();
       tgPosGroup=(map.tg_pos_group||'').trim();
       tgPhotoGroup=(map.tg_photo_group||'').trim();
+      tgAwolGroup=(map.tg_awol_group||'').trim();
       mgrIds=(map.mgr_ids||'').split(/[\n,]/).map(x=>x.trim()).filter(Boolean);
-      try{localStorage.setItem('rsr_tg',JSON.stringify({tgToken,tgGroup,tgBackupGroup,tgPosGroup,tgPhotoGroup,mgrIds}));}catch(e){}
+      try{localStorage.setItem('rsr_tg',JSON.stringify({tgToken,tgGroup,tgBackupGroup,tgPosGroup,tgPhotoGroup,tgAwolGroup,mgrIds}));}catch(e){}
       setMsg('✅ Telegram loaded from Admin.',true);
       return true;
     }
@@ -5067,12 +5068,15 @@ async function loadTgFromCloud(showStatus){
     const c=JSON.parse(localStorage.getItem('rsr_tg')||'null');
     if(c&&c.tgToken){
       tgToken=c.tgToken||'';tgGroup=c.tgGroup||'';tgBackupGroup=c.tgBackupGroup||'';
-      tgPosGroup=c.tgPosGroup||'';tgPhotoGroup=c.tgPhotoGroup||'';mgrIds=c.mgrIds||[];
+      tgPosGroup=c.tgPosGroup||'';tgPhotoGroup=c.tgPhotoGroup||'';
+      tgAwolGroup=c.tgAwolGroup||'';mgrIds=c.mgrIds||[];
       return true;
     }
   }catch(e){}
   return false;
 }
+// AWOL alerts go to the dedicated group; fall back to manager DMs while the group id is unset.
+function awolTarget(){ return tgAwolGroup || (mgrIds && mgrIds[0]) || tgGroup || ''; }
 loadTgFromCloud();
 
 // ── SHIFT TIMES FROM ADMIN (Supabase `settings`) — morning clock-in + evening clock-out ──
