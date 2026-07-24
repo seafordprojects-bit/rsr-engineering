@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-22c</span>
+        <span id="version-stamp">v2026-07-24a</span>
       </div>
     </div>
   </div>
@@ -999,8 +999,28 @@ function bisayaDate(d){
   if(isNaN(d)) return '';
   return BIS_MON[d.getMonth()]+' '+d.getDate()+', '+d.getFullYear()+' — '+BIS_DOW[d.getDay()];
 }
-function showBisayaModal(text){ const el=document.getElementById('bisaya-text'); if(el)el.textContent=text; document.getElementById('bisaya-modal').classList.add('show'); }
-function closeBisayaModal(){ document.getElementById('bisaya-modal').classList.remove('show'); kpClr(); }
+let bisayaKeepPin=false; // when true, dismissing the Bisaya modal KEEPS the PIN/preview (so the worker can
+                         // still press a button afterwards, e.g. the swept-close "press Time Out" heads-up)
+function showBisayaModal(text){ bisayaKeepPin=false; const el=document.getElementById('bisaya-text'); if(el)el.textContent=text; document.getElementById('bisaya-modal').classList.add('show'); }
+function showBisayaModalKeep(text){ showBisayaModal(text); bisayaKeepPin=true; } // dismiss leaves the preview + buttons up
+function closeBisayaModal(){ document.getElementById('bisaya-modal').classList.remove('show'); if(bisayaKeepPin){bisayaKeepPin=false;} else {kpClr();} }
+// (2026-07-23) Time-In dead windows for a DAY worker — the two refusal windows with no cross-midnight
+// ambiguity: late-morning (10:00–12:40) and PM-close (3:00–5:00 PM). Returns {modal, hint} for an
+// INFORMATIONAL notice, or null if Time In is allowed. Purely informational — the caller shows it and
+// NOTHING is recorded (no punch, no timestamp). Mirrors the punch() refusals so the identification-time
+// heads-up matches the on-press modal. Deliberately skips the 1–7 AM dead zone (overlaps cross-midnight).
+function deadWindowInfo(now){
+  const at=(h,m)=>{const d=new Date(now);d.setHours(h,m,0,0);return d;};
+  const morningCutoff=at(lunchOutEarlyH-2,lunchOutEarlyM), afternoonOpen=at(lunchInEarliestH,lunchInEarliestM);
+  if(now>morningCutoff&&now<afternoonOpen)
+    return {modal:'⚠ Dili na pwede mo-Time In karon — lapas na sa 10:00 AM. Balik ug punch og Time In sa 12:40 PM para sa hapon nga shift. Ang imong sweldo magsugod sa hapon.',
+            hint:'⏰ Sirado ang Time In karon — balik sa '+fmt12(lunchInEarliestH,lunchInEarliestM)+' para sa hapon.'};
+  const pmTiClose=at(timeInPmCloseH,timeInPmCloseM), shiftEndW=at(endH,endM);
+  if(now>=pmTiClose&&now<shiftEndW)
+    return {modal:'⚠ Lapas na sa '+fmt12(timeInPmCloseH,timeInPmCloseM)+' — sirado na ang Time In para sa hapon nga shift. Palihug adto sa Admin kung kinahanglan pa nimo mo-duty karon.',
+            hint:'⏰ Sirado ang Time In karon — adto sa Admin.'};
+  return null;
+}
 // (v2026-07-07c) Two-button Bisaya confirm for EARLY Lunch Out / PM Break Out with deduction.
 // Padayon → sets earlyBreakConfirmed and re-runs the punch. Kanselahon → aborts, nothing recorded.
 let _bisayaConfirmType=null;
@@ -1085,6 +1105,14 @@ let lunchOutLatestH=12,lunchOutLatestM=30,pmOutLatestH=17,pmOutLatestM=30;
 let timeInAmOpenH=7,timeInAmOpenM=0;    // Time In (AM) opens
 let timeInPmCloseH=15,timeInPmCloseM=0; // Time In (PM-only) closes (3:00 PM)
 let dismissalH=21,dismissalM=0; // Admin-set dismissal time (9PM default)
+// (2026-07-23 sweep) The instant PM-Break-Out day-close is RETIRED (kept, not deleted): pm_out no
+// longer closes the day, so it stays OPEN 5–7 PM for the OT crew to punch PM Break In. The abandoned-
+// PM-break close is KEPT and re-timed 7:30 → 7:00 PM. It MUST stay CLIENT-side: the kiosk pushes its
+// full local record (incl. null timeout) on every save, so the local record must be closed here for
+// the DB close to be durable — a server-side WRITE would be clobbered by the next re-sync. The server
+// side is READ-ONLY: it audits the close and sends the loud "Swept N of M" / anomaly alert.
+const PMOUT_INSTANT_CLOSE=false;      // pm_out no longer writes timeout/pmOutAutoClosed
+const CLIENT_PMBREAK_AUTOCLOSE=true;  // client closes unreturned pm_out days at 7 PM (durable); lunch path also on
 // Within 1hr after dismissal → auto-snap to dismissal time
 // More than 1hr after dismissal → punch proceeds + Telegram notification
 let nightShiftH=22,nightShiftM=0,nightEndH=8,nightEndM=0;   // config- S / E, overridden by Supabase
@@ -2010,7 +2038,23 @@ function kp(n){
   const hint=document.getElementById('pin-hint');
   if(pin.length===PIN_LEN){
     const emp=findEmp(pin);
-    if(emp){pinFailCount=0;curEmp=emp;hint.textContent='';hint.style.color='';showEmpPreview(emp);clearMsg();}
+    if(emp){pinFailCount=0;curEmp=emp;hint.textContent='';hint.style.color='';showEmpPreview(emp);clearMsg();
+      // (2026-07-23) Informational dead-window heads-up at identification time — NO punch, NO record. A
+      // day worker who keys in during a Time-In refusal window (empty day) is told when to come back;
+      // the button stays disabled and nothing is written. Dismissing it (closeBisayaModal→kpClr) clears
+      // the PIN so they walk away.
+      const _r=getRec(emp.code);
+      // (2026-07-24) Evening twin: a day auto-closed at 7 PM for a missing PM Break In (sweptClose) gets
+      // an informational heads-up at identification time — display-only, records nothing. Uses the
+      // KEEP variant so dismissing leaves the preview + enabled Time Out button up (worker can still
+      // Time Out; their real time supersedes). Otherwise fall through to the empty-day dead-window heads-up.
+      if(_r&&_r.sweptClose){
+        showBisayaModalKeep('⚠ Na-auto-close na ang imong adlaw sa 7:00 PM kay wala ka naka-punch og PM Break In. Palihug pahibalo sa imong coordinator. Kung mopauli ka na karon, i-punch lang ang TIME OUT — marekord ang imong tinuod nga oras. Salamat!');
+      } else {
+        const _dw=(_r&&_r.punches&&!_r.punches.timein&&!_r.nightShift)?deadWindowInfo(new Date()):null;
+        if(_dw)showBisayaModal(_dw.modal);
+      }
+    }
     else{
       pinFailCount++;pin='';updDots();
       const rem=PIN_MAX_ATTEMPTS-pinFailCount;
@@ -2311,7 +2355,11 @@ function showEmpPreview(emp){
   ];
   const lateTag=rec.isLate?`<span class="pill pill-late" style="margin-left:6px;font-size:10px">Late ${msToHM(rec.lateMs)}</span>`:'';
   if(!p.timein){
-    document.getElementById('prev-punches').innerHTML='<div style="grid-column:1/-1;color:#aaa;font-size:13px;padding:6px 0">No punches yet — press <strong>Time In</strong>.</div>';
+    // (2026-07-23) Window-aware: in a Time-In refusal window, "press Time In" is misleading (the button
+    // is disabled), so show the dead-window hint instead.
+    const _dw=(!rec.nightShift)?deadWindowInfo(new Date()):null;
+    const _txt=_dw?_dw.hint:'No punches yet — press <strong>Time In</strong>.';
+    document.getElementById('prev-punches').innerHTML='<div style="grid-column:1/-1;color:#aaa;font-size:13px;padding:6px 0">'+_txt+'</div>';
   } else {
     document.getElementById('prev-punches').innerHTML=punchDefs.map(({key,lbl})=>{
       const val=p[key];
@@ -2370,7 +2418,7 @@ function updBtns(rec){
     if(_n>=_poCut&&!rec.punches.pm_out){const b=document.getElementById(BIDS['pm_out']);if(b){b.disabled=true;b.classList.remove('highlight-next');}const pi=document.getElementById(BIDS['pm_in']);if(pi&&!pi.disabled)pi.classList.add('highlight-next');}
   }
   // ── (v2026-07-07b) STRICT WINDOW LOCKS — applied on top of sequence gating ──
-  if(rec&&(!rec.punches.timeout||rec.pmOutAutoClosed)){
+  if(rec&&(!rec.punches.timeout||rec.pmOutAutoClosed||rec.sweptClose)){
     const _now=new Date();
     const _wAt=(h,m)=>{const d=new Date(_now);d.setHours(h,m,0,0);return d;};
     const _lock=(k)=>{const b=document.getElementById(BIDS[k]);if(b){b.disabled=true;b.classList.remove('highlight-next');}};
@@ -2462,7 +2510,7 @@ function updBtns(rec){
     if(!rec.nightShift&&rec.punches.timein){
       const _lunchDone=rec.straightDutyLunch||rec.afternoonStart||(rec.punches.lunch_in&&!isPunchMarker(rec.punches.lunch_in));
       const _otWin=_now>=_wAt(pmOutEarlyH,pmOutEarlyM)&&_now<=_wAt(dismissalH,dismissalM);
-      if(_otWin&&_lunchDone&&(!rec.punches.timeout||rec.pmOutAutoClosed))_open('timeout',true);
+      if(_otWin&&_lunchDone&&(!rec.punches.timeout||rec.pmOutAutoClosed||rec.sweptClose))_open('timeout',true);
     }
   }
   // (v2026-07-22b) DISPLAY-ONLY next-punch gate. Everything above already marks each VALID next step
@@ -2537,6 +2585,19 @@ async function punch(type){
       delete rec.punches.pm_out;delete rec.msMap.pm_out;rec.earlyPmOut=false;
     }
     next=getNext(rec);
+  }
+  // (2026-07-23 sweep, Req D) Late Time Out SUPERSEDES the 7 PM client auto-close. If the day was
+  // auto-closed at 7 PM for a missing PM Break In (sweptClose), a later Time Out drops the swept 5 PM
+  // close and records the REAL finish time + photo (proof of work). pm_out is KEPT (Req 7) so pm_in
+  // stays empty and the evening computes ZERO until the coordinator fills pm_in via correction. The
+  // forward-skip + OT-window guard below then let the Time Out through; a Bisaya modal explains it.
+  let _supersededSweep=false;
+  if(type==='timeout'&&rec.sweptClose&&!rec.nightShift){
+    delete rec.punches.timeout;delete rec.msMap.timeout;
+    rec.autoTimeout=false;rec.autoTimeoutReason='';rec.sweptClose=false;
+    autoClosedBreaks.delete(emp.code+'_'+todayKey());
+    next=getNext(rec);
+    _supersededSweep=true;
   }
   // Allow Time Out at the PM-break decision point (employee leaving at 5 PM, skipping the 5–6 break).
   const pmDecisionTimeout=(type==='timeout'&&next==='pm_out'&&rec.punches&&!rec.punches.timeout);
@@ -2639,7 +2700,7 @@ async function punch(type){
     const projWorked=calcSessions(_probe).worked;
     const fullMs=emp.shift*3600000;
     const shortMs=Math.max(0,fullMs-projWorked);
-    if(shortMs>60000&&!undertimeConfirmed&&!_crossMidnight){
+    if(shortMs>60000&&!undertimeConfirmed&&!_crossMidnight&&!_supersededSweep){
       openUndertimeConfirmModal(emp,nowShort(),shortMs);
       return;
     }
@@ -2785,14 +2846,19 @@ async function punch(type){
   // Flag early break outs
   if(type==='lunch_out'){const t=new Date();const thr=new Date(t);thr.setHours(lunchOutEarlyH,lunchOutEarlyM,0,0);if(t<thr)rec.earlyLunchOut=true;}
   if(type==='pm_out'){const t=new Date();const thr=new Date(t);thr.setHours(pmOutEarlyH,pmOutEarlyM,0,0);if(t<thr)rec.earlyPmOut=true;}
-  // (v2026-07-07b) PM BREAK OUT doubles as TIME OUT: write the day-close immediately so
-  // payroll always sees a complete day (no payroll changes needed). A PM Break In inside
-  // its window clears this and reopens the day for overtime.
+  // (2026-07-23 sweep) PM Break Out NO LONGER instant-closes the day. The day stays OPEN so the OT
+  // crew can punch PM Break In until 7 PM; the server-side 7 PM sweep fills timeout=pm_out for anyone
+  // who never returned. The old "doubles as Time Out" instant-close is kept behind PMOUT_INSTANT_CLOSE
+  // (=false) — not deleted — so it can be restored if the sweep is rolled back. Because pmOutAutoClosed
+  // is now never set, the reopen (pm_in) and pm_out-deletion (timeout) blocks go inert automatically,
+  // which is exactly what we want: pm_in records normally, and Time Out keeps pm_out (Req 7).
   if(type==='pm_out'){
-    rec.punches.timeout=recordStr;rec.msMap.timeout=recordMs;
-    rec.autoTimeout=true;rec.autoTimeoutReason='Left at PM Break Out — auto day-close (PM Break In reopens)';
-    rec.pmOutAutoClosed=true;
-    // (v2026-07-07c) Early departures: surface the shortfall in the Undertime tab (loud flag).
+    if(PMOUT_INSTANT_CLOSE){
+      rec.punches.timeout=recordStr;rec.msMap.timeout=recordMs;
+      rec.autoTimeout=true;rec.autoTimeoutReason='Left at PM Break Out — auto day-close (PM Break In reopens)';
+      rec.pmOutAutoClosed=true;
+    }
+    // Early departures: surface the shortfall in the Undertime tab (loud flag).
     try{detectUndertime(emp,rec);}catch(e){}
   }
 
@@ -2839,7 +2905,11 @@ async function punch(type){
     const otBase=new Date(timeoutDate);otBase.setHours(pmInEarliestH,pmInEarliestM,0,0);
     const otFromPmIn=(nowMs-otBase.getTime())/3600000;
     const requiredOtHrs=rec.isLate?otAllowanceMinHrs+1:otAllowanceMinHrs;
-    rec.hasOTAllowance=otFromPmIn>=requiredOtHrs&&otFromPmIn>0;
+    // (2026-07-23) Base the OT allowance on ACTUAL OT hours (worked − shift), matching payroll — the
+    // old `otFromPmIn` clock proxy (time past 5:40 PM) over-fired on a late Time Out with no real OT,
+    // e.g. a swept/superseded day (pm_in absent → evening 0 → ot 0 showed ₱50). otFromPmIn kept above
+    // for reference. Payroll recomputes from actual ot anyway, so this only aligns the on-screen banner.
+    rec.hasOTAllowance=(ot/3600000)>=requiredOtHrs&&ot>0;
     rec.otAllowanceAmt=rec.hasOTAllowance?otAllowanceAmt:0;
     let sub='Worked: '+msToHM(worked);if(brk>0)sub+=' · Break: '+msToHM(brk);if(ot>0)sub+=' · OT: '+msToHM(ot);if(rec.hasAllowance)sub+=' · 💰 ₱'+rec.allowanceAmt.toLocaleString();
     if(rec.hasOTAllowance)sub+=' · ⭐ OT Allowance: ₱'+rec.otAllowanceAmt.toLocaleString();
@@ -2864,14 +2934,16 @@ async function punch(type){
   maybeAlertHardFlag(emp, rec); // same-day ₱0-flag alert (fire-and-forget, deduped per code+date)
   updateStats();
   if(_crossMidnight){ queueRecord(emp.code, _crossKey); syncFlush(); }
-  if(_missedKeys && _missedKeys.length){
+  if(_supersededSweep){
+    showBisayaModal('⚠ Na-auto-close na ang imong adlaw sa 7:00 PM kay wala ka naka-punch og PM Break In. Kini nga Time Out na-rekord isip pruweba nga nagtrabaho ka — apan ang imong OVERTIME magbayad og ZERO hangtod nga i-correct kini sa Admin. Palihug adto sa imong coordinator aron ma-rekord ang imong PM Break In ug mabayran ang imong overtime. Salamat!');
+  } else if(_missedKeys && _missedKeys.length){
     showBisayaModal(bisayaMissedText(_missedKeys, bisayaDate(_crossMidnight?_crossKey:todayKey())));
   } else if(_crossMidnight){
     showBisayaModal('✅ Na-rekord na ang imong Time Out para sa imong shift sa '+bisayaDate(_crossKey)+'. Naapil na ang imong overtime. Salamat sa imong trabaho!');
   } else if(type==='timein' && isLate){
     showBisayaModal('⚠ Na-late ka og '+bisayaHM(lateMs)+' karon. Ang imong sweldo karon nga adlaw maihap gikan sa imong pag-abot. Palihug og sayo og abot ugma. Salamat!');
   } else if(type==='pm_out'){
-    showBisayaModal('✅ Na-rekord ang imong PM Break Out. Kung DILI ka mobalik, kini na ang imong TIME OUT — kompleto na ang imong adlaw. Kung magpabilin ka para sa OVERTIME: i-punch lang ang TIME OUT inig human sa imong trabaho. (Kung mopahulay usa ka ug mobalik, i-punch ang PM BREAK IN sugod sa '+fmt12(pmInEarliestH,pmInEarliestM)+'.) Salamat!');
+    showBisayaModal('✅ Na-rekord ang imong PM Break Out. Kung DILI ka mobalik, i-close automatic ang imong adlaw sa oras sa imong PM Break Out — dili na kinahanglan mag-Time Out. Kung magpabilin ka para sa OVERTIME: i-punch ang PM BREAK IN pagbalik nimo (sugod sa '+fmt12(pmInEarliestH,pmInEarliestM)+', kinahanglan naka-punch ka sa dili pa '+fmt12(pmInLatestH,pmInLatestM)+'), dayon i-punch ang TIME OUT inig human sa imong trabaho. Salamat!');
   } else if(type==='pm_in' && rec.pmInReopened){
     rec.pmInReopened=false;
     showBisayaModal('✅ Nakabalik ka para sa overtime — na-abli pag-usab ang imong adlaw. AYAW KALIMOT i-punch ang TIME OUT inig human sa imong overtime. Salamat!');
@@ -5081,7 +5153,7 @@ const autoClosedBreaks=new Set();
 function autoCloseAbandonedBreaks(){
   const now=new Date();
   const lunchTrigger=new Date(now);lunchTrigger.setHours(pmOutEarlyH,pmOutEarlyM,0,0); // 5:00 PM — Lunch In closes here (v2026-07-07b)
-  const pmTrigger=new Date(now);pmTrigger.setHours(19,30,0,0);       // 7:30 PM
+  const pmTrigger=new Date(now);pmTrigger.setHours(19,0,0,0);        // 7:00 PM (re-timed from 7:30 for the sweep)
   const pastLunch=now>=lunchTrigger, pastPm=now>=pmTrigger;
   if(!pastLunch&&!pastPm)return;
   const today=todayKey();
@@ -5090,11 +5162,14 @@ function autoCloseAbandonedBreaks(){
     const rec=records[key];
     if(!rec||!rec.punches||!rec.msMap||rec.punches.timeout)return;
     if(autoClosedBreaks.has(key))return;
-    // Abandoned PM break: PM Out, no PM In → close at PM Out time (from 7:30 PM)
-    if(pastPm&&rec.punches.pm_out&&rec.msMap.pm_out>0&&!rec.punches.pm_in){
+    // Abandoned PM break: PM Out, no PM In → close at PM Out time, at 7:00 PM (CLIENT_PMBREAK_AUTOCLOSE).
+    // CLIENT-side by design: the kiosk pushes its local record on every save, so the local timeout must
+    // be written here for the DB close to stick. The server-side reporter only reads + alerts (a server
+    // write would be clobbered by a re-sync). Lunch-abandoned path below stays ON.
+    if(CLIENT_PMBREAK_AUTOCLOSE&&pastPm&&rec.punches.pm_out&&rec.msMap.pm_out>0&&!rec.punches.pm_in){
       autoClosedBreaks.add(key);
       rec.punches.timeout=rec.punches.pm_out;rec.msMap.timeout=rec.msMap.pm_out;
-      rec.autoTimeout=true;rec.autoTimeoutReason='No return from PM break — auto-closed at 7:30 PM';
+      rec.autoTimeout=true;rec.autoTimeoutReason='No return from PM break — auto-closed at 7:00 PM';rec.sweptClose=true;
       try{detectUndertime(emp,rec);}catch(e){}
       try{saveData();queueRecord(emp.code,today);syncFlush();}catch(e){}
       try{logNotif(emp.name+' — auto Time Out at PM Out time (no return from PM break)','late-n',true);}catch(e){}
@@ -5600,7 +5675,9 @@ async function sendHeartbeat(){
   if (syncing || !navigator.onLine) return;    // punches take priority; nothing to send offline
   try {
     await sbClient.from('kiosk_health').upsert(
-      { device_id: getDeviceId(), site: activeSite || null, stuck_count: deadCount(), queue_length: pendingCount(), stuck_details: buildStuckDetails() },
+      // today_key: the kiosk's OWN todayKey() string — the 7 PM sweep matches "today" against this exact
+      // value (no second date implementation server-side; see the sweep design + Req 2).
+      { device_id: getDeviceId(), site: activeSite || null, stuck_count: deadCount(), queue_length: pendingCount(), stuck_details: buildStuckDetails(), today_key: todayKey() },
       { onConflict: 'device_id' });
   } catch(e){ /* silently dropped — never blocks or queues punches */ }
 }

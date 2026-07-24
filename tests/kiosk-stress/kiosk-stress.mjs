@@ -335,14 +335,54 @@ await scenario('A5 · Lunch Out @ 12:01 (grace → credited to 12:00)', manila(2
 });
 
 // A6 — 17:00 PM Break Out doubles as Time Out (auto day-close).
-await scenario('A6 · PM Break Out @ 17:00 → auto Time Out', manila(2026,7,15,8,0), async (page) => {
+// A6 — (2026-07-23 sweep) PM Break Out NO LONGER instant-closes the day. It leaves the day OPEN
+//      (timeout null) so the OT crew can punch PM Break In until 7 PM; the server-side 7 PM sweep
+//      closes unreturned pm_out days. So pm_out records but timeout stays empty here.
+await scenario('A6 · PM Break Out @ 17:00 leaves day OPEN (sweep closes it)', manila(2026,7,15,8,0), async (page) => {
   const k = await dateKeyFor(page);
   await fullMorning(page, 'RSR0100', 2026,7,15);
   await setNow(page, manila(2026,7,15,17,0));
   await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'pm_out');
   const r = await recAt(page, 'RSR0100', k);
-  const pass = !!r.punches.pm_out && !!r.punches.timeout && r.autoTimeout;
-  report('A6 · PM Break Out @ 17:00 auto-closes day', pass, `pm_out=${r.punches.pm_out} timeout=${r.punches.timeout} auto=${r.autoTimeout}`, sends());
+  const pass = !!r.punches.pm_out && !r.punches.timeout && !r.autoTimeout;
+  report('A6 · PM Break Out @ 17:00 leaves day open', pass, `pm_out=${r.punches.pm_out} timeout=${r.punches.timeout||'(open — sweep closes)'} auto=${r.autoTimeout||false}`, sends());
+});
+
+// A6b — pm_out early-confirm BOUNDARY (walkthrough report): at EXACTLY 5:00:00 (and later) there is NO
+//       "Sayo pa" early confirm — PM Break Out records directly.
+await scenario('A6b · pm_out @ 5:00:00 — no early confirm', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await fullMorning(page, 'RSR0100', 2026,7,15);
+  await setNow(page, manila(2026,7,15,17,0,0));
+  await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'pm_out');
+  const r = await recAt(page, 'RSR0100', k);
+  const confirm = await page.evaluate(() => document.getElementById('bisaya-confirm-modal').classList.contains('show'));
+  const pass = !!r.punches.pm_out && !confirm;
+  report('A6b · pm_out @ 5:00:00 no early confirm', pass, `pm_out=${r.punches.pm_out||'(held by confirm!)'} confirmModal=${confirm}`, sends());
+});
+
+// A6c — the same boundary from below: at 4:59:59 the early confirm DOES open (pm_out held for Padayon).
+await scenario('A6c · pm_out @ 4:59:59 — early confirm fires', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await fullMorning(page, 'RSR0207', 2026,7,15);
+  await setNow(page, manila(2026,7,15,16,59,59));
+  await enterPin(page, pinOf('RSR0207')); await doPunch(page, 'pm_out');
+  const r = await recAt(page, 'RSR0207', k);
+  const confirm = await page.evaluate(() => document.getElementById('bisaya-confirm-modal').classList.contains('show'));
+  const pass = !r.punches.pm_out && confirm;
+  report('A6c · pm_out @ 4:59:59 early confirm fires', pass, `pm_out=${r.punches.pm_out||'(held — correct)'} confirmModal=${confirm}`, sends());
+});
+
+// A6d — dead-window PIN entry: identifying (empty day) during a Time-In refusal window (10:15) shows an
+//       INFORMATIONAL Bisaya modal + window-aware preview text, and records NOTHING.
+await scenario('A6d · dead-window PIN entry → info modal, no record', manila(2026,7,15,10,15), async (page) => {
+  const k = await dateKeyFor(page);
+  await enterPin(page, pinOf('RSR0100'));                                              // identify at 10:15 (dead window), empty day
+  const modalShown = await page.evaluate(() => document.getElementById('bisaya-modal').classList.contains('show'));
+  const preview    = await page.evaluate(() => document.getElementById('prev-punches').textContent);
+  const r = await recAt(page, 'RSR0100', k);
+  const pass = modalShown && (!r || !r.punches.timein) && /Sirado ang Time In/.test(preview);
+  report('A6d · dead-window PIN info modal + window-aware preview', pass, `modal=${modalShown} timein=${r?.punches.timein||'(none)'} preview="${(preview||'').trim().slice(0,34)}"`, sends());
 });
 
 // A7 — 21:00 OT Time Out at dismissal via the OT window (5PM→dismissal enables Time Out
@@ -357,21 +397,18 @@ await scenario('A7 · OT Time Out @ 21:00 (dismissal window)', manila(2026,7,15,
   report('A7 · OT Time Out @ 21:00', pass, `timeout=${r.punches.timeout} worked=${worked.toFixed(2)}h (OT)`, sends());
 });
 
-// A7b — DOCUMENTS the known quirk: PM Break In cannot reopen a PM-Break-Out auto-closed
-//       day (getNext returns null once timeout is set), so the pm_out→pm_in OT flow is broken.
-await scenario('A7b · PM Break In reopen after auto-close (known quirk)', manila(2026,7,15,8,0), async (page) => {
+// A7b — the old PM-Out reopen quirk is now FIXED by the sweep change: with no instant auto-close,
+//       getNext after pm_out is pm_in, so PM Break In records normally (before the 7 PM cap) and the
+//       pm_out→pm_in OT flow works. This scenario is the regression guard for that fix.
+await scenario('A7b · PM Break In records after PM Break Out (reopen quirk fixed)', manila(2026,7,15,8,0), async (page) => {
   const k = await dateKeyFor(page);
   await fullMorning(page, 'RSR0207', 2026,7,15);
-  await setNow(page, manila(2026,7,15,17,0)); await enterPin(page, pinOf('RSR0207')); await doPunch(page, 'pm_out'); // auto-close
-  await setNow(page, manila(2026,7,15,18,0)); await enterPin(page, pinOf('RSR0207')); await doPunch(page, 'pm_in');  // should reopen — but is refused
+  await setNow(page, manila(2026,7,15,17,0)); await enterPin(page, pinOf('RSR0207')); await doPunch(page, 'pm_out'); // day stays OPEN now
+  await setNow(page, manila(2026,7,15,18,0)); await enterPin(page, pinOf('RSR0207')); await doPunch(page, 'pm_in');  // 6 PM (before cap) → records
   const r = await recAt(page, 'RSR0207', k);
-  const reopened = !!r.punches.pm_in && !r.punches.timeout;
-  // Characterisation test: the documented quirk is that pm_in is REFUSED after auto-close.
-  // pass = quirk reproduced (refused). If a future fix makes pm_in reopen, this flips to FAIL to flag the change.
-  const quirkReproduced = !reopened;
-  report('A7b · PM Break In refused after auto-close (known quirk reproduced)', quirkReproduced,
-    `pm_in=${r.punches.pm_in || 'REFUSED (day stays auto-closed)'} timeout=${r.punches.timeout || '—'}`, sends());
-  if (!reopened) bugs.push({ sev: 'MED', text: 'PM Break In cannot reopen a PM-Break-Out auto-closed day: getNext() returns null once the auto Time Out is written, so punch() rejects pm_in before the reopen code runs. A worker who takes a 5PM break and returns for OT cannot record it via the break flow — OT is only captured if they instead press Time Out directly in the 5PM–dismissal window. Matches the known "kiosk PM-Out reopen quirk".' });
+  const pass = !!r.punches.pm_in && !r.punches.timeout;   // pm_in recorded; day still open, awaits Time Out
+  report('A7b · PM Break In records after PM Break Out (quirk fixed)', pass,
+    `pm_in=${r.punches.pm_in || '(none)'} timeout=${r.punches.timeout || '(open)'}`, sends());
 });
 
 // A8 — 23:59 Time Out for a day worker is (correctly) REFUSED: past the 21:00 dismissal
@@ -444,7 +481,7 @@ for (const emp of ROSTER.filter(e => e.code !== 'RSR0303')) {
     await doPunch(page, 'timein'); await drainSync(page);
     await setNow(page, manila(2026,7,17,12,0));  await enterPin(page, emp.pin); await doPunch(page, 'lunch_out'); await drainSync(page);
     await setNow(page, manila(2026,7,17,12,40)); await enterPin(page, emp.pin); await doPunch(page, 'lunch_in');  await drainSync(page);
-    await setNow(page, manila(2026,7,17,17,0));  await enterPin(page, emp.pin); await doPunch(page, 'pm_out');    await drainSync(page); // auto Time Out
+    await setNow(page, manila(2026,7,17,17,0));  await enterPin(page, emp.pin); await doPunch(page, 'timeout');    await drainSync(page); // 5 PM close via OT window (pm_out no longer auto-closes; sweep or explicit Time Out closes the day)
     const r = await recAt(page, emp.code, k);
     const sent = mock.writes.some(w => w.payload && w.payload.employee_code === emp.code && w.payload.status === 'out' && w.payload.timeout);
     const leading = emp.pin[0] === '0' ? ' [leading-zero PIN]' : (emp.pin[0] === '9' ? ' [PEM 9xxxxx band]' : '');
@@ -630,6 +667,159 @@ await scenario('E3 · cap boundary 6:59 accept / 7:01 reject', manila(2026,7,15,
   const rRej = await recAt(page, 'PEM9001', k);
   const pass = !!(rAcc && rAcc.punches.pm_in) && !!(rRej && !rRej.punches.pm_in);
   report('E3 · cap boundary 6:59 accept / 7:01 reject', pass, `6:59 pm_in=${rAcc?.punches.pm_in||'(none)'} · 7:01 pm_in=${rRej?.punches.pm_in||'(none)'}`, sends());
+});
+
+console.log('\n── F. 7 PM CLIENT CLOSE + SWEEP TRIPWIRE (2026-07-23) ────────');
+// The instant PM-Break-Out close is retired; an unreturned pm_out day is now closed at 7:00 PM by the
+// CLIENT (autoCloseAbandonedBreaks, durable) at timeout=pm_out. The server-side reporter is read-only
+// and not exercised here. Capture is mocked to null throughout.
+
+// F1 — an unreturned open pm_out day is closed at 7:01 PM with timeout = pm_out.
+await scenario('F1 · 7 PM client close of unreturned pm_out day', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await fullMorning(page, 'RSR0100', 2026,7,15);
+  await setNow(page, manila(2026,7,15,17,0)); await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'pm_out'); // day stays open
+  const mid = await recAt(page, 'RSR0100', k);
+  await setNow(page, manila(2026,7,15,19,1));
+  await page.evaluate(() => autoCloseAbandonedBreaks());
+  const r = await recAt(page, 'RSR0100', k);
+  const pass = !mid.punches.timeout && r.punches.timeout === r.punches.pm_out && r.autoTimeout;
+  report('F1 · 7 PM client close (timeout=pm_out)', pass, `before=${mid.punches.timeout||'(open)'} → timeout=${r.punches.timeout} (pm_out=${r.punches.pm_out})`, sends());
+});
+
+// F2 — TRIPWIRE (Req 4): an OT worker with PM Break In set is NOT closed by the 7 PM sweep — zero fields
+//      touched. This is the permanent guard against any future edit widening the close condition.
+await scenario('F2 · sweep tripwire — pm_in day untouched', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await fullMorning(page, 'RSR0207', 2026,7,15);
+  await setNow(page, manila(2026,7,15,17,0)); await enterPin(page, pinOf('RSR0207')); await doPunch(page, 'pm_out');
+  await setNow(page, manila(2026,7,15,18,0)); await enterPin(page, pinOf('RSR0207')); await doPunch(page, 'pm_in'); // OT worker returned
+  const before = await recAt(page, 'RSR0207', k);
+  await setNow(page, manila(2026,7,15,19,1));
+  await page.evaluate(() => autoCloseAbandonedBreaks());
+  const r = await recAt(page, 'RSR0207', k);
+  const pass = !r.punches.timeout && r.punches.pm_in === before.punches.pm_in && r.punches.pm_out === before.punches.pm_out;
+  report('F2 · sweep tripwire (pm_in day untouched)', pass, `pm_in=${r.punches.pm_in} timeout=${r.punches.timeout||'(still open — correct)'}`, sends());
+});
+
+// F3 — before 7 PM the client close does NOT fire (day stays open for the OT window).
+await scenario('F3 · no client close before 7 PM (6:59)', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await fullMorning(page, 'RSR0100', 2026,7,15);
+  await setNow(page, manila(2026,7,15,17,0)); await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'pm_out');
+  await setNow(page, manila(2026,7,15,18,59));
+  await page.evaluate(() => autoCloseAbandonedBreaks());
+  const r = await recAt(page, 'RSR0100', k);
+  const pass = !r.punches.timeout;
+  report('F3 · no client close before 7 PM', pass, `timeout=${r.punches.timeout||'(open — correct)'}`, sends());
+});
+
+// F4 — Req D: a late Time Out SUPERSEDES the 7 PM swept close — it records the REAL finish time,
+//      KEEPS pm_out, and leaves pm_in absent (evening still computes 0 until coordinator correction).
+await scenario('F4 · late Time Out supersedes 7 PM swept close', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await fullMorning(page, 'RSR0100', 2026,7,15);
+  await setNow(page, manila(2026,7,15,17,0)); await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'pm_out'); // day open
+  await setNow(page, manila(2026,7,15,19,1));
+  await page.evaluate(() => autoCloseAbandonedBreaks());                                     // 7 PM client close → timeout = pm_out (5:00)
+  const swept = await recAt(page, 'RSR0100', k);
+  await setNow(page, manila(2026,7,15,20,0)); await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'timeout'); // 8 PM real finish
+  const r = await recAt(page, 'RSR0100', k);
+  const wasSwept   = swept.punches.timeout === swept.punches.pm_out;                          // 7 PM close wrote 5:00
+  const realTimeout = !!r.punches.timeout && /08:00/.test(r.punches.timeout) && /PM/.test(r.punches.timeout);
+  const pmOutKept  = r.punches.pm_out === swept.punches.pm_out;                               // Req 7 — pm_out unchanged
+  const noPmIn     = !r.punches.pm_in || /missing/i.test(r.punches.pm_in);                    // pm_in absent → evening 0
+  const modalShown = await page.evaluate(() => document.getElementById('bisaya-modal').classList.contains('show')); // supersede modal actually rendered
+  const pass = wasSwept && realTimeout && pmOutKept && noPmIn && modalShown;
+  report('F4 · late Time Out supersedes swept close', pass,
+    `swept→${swept.punches.timeout} superseded→${r.punches.timeout} pm_out=${r.punches.pm_out} pm_in=${r.punches.pm_in||'(none)'} modal=${modalShown}`, sends());
+});
+
+// F5 — 7 PM close writes timeout=pm_out even on a manually-injected record (punches + msMap set
+//      directly, no real punch) — the walkthrough-injection path, so the close never half-completes.
+await scenario('F5 · manual-inject 7 PM close writes timeout', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await setNow(page, manila(2026,7,15,19,1));
+  const out = await page.evaluate((k) => {
+    const rec = getRec('RSR0100');
+    const base = new Date();
+    const mk = (h,m) => { const d = new Date(base); d.setHours(h,m,0,0); return d.getTime(); };
+    rec.punches = { timein:'08:00:00 AM', lunch_out:'12:00:00 PM', lunch_in:'01:00:00 PM', pm_out:'05:17:00 PM' };
+    rec.msMap  = { timein:mk(8,0), lunch_out:mk(12,0), lunch_in:mk(13,0), pm_out:mk(17,17) };
+    autoCloseAbandonedBreaks();
+    const r = records['RSR0100_'+k];
+    return { timeout:r.punches.timeout, sweptClose:r.sweptClose, pm_out:r.punches.pm_out, inRoster: !!employees.find(e=>e.code==='RSR0100') };
+  }, k);
+  const pass = out.timeout === out.pm_out && out.sweptClose === true;
+  report('F5 · manual-inject close writes timeout', pass, JSON.stringify(out), sends());
+});
+
+// F6 — supersede on a SHORT (under-8h) day: the undertime confirm must NOT pre-empt the supersede.
+//      A worker who left early (pm_out 3 PM), was swept-closed at 7 PM, and returns to record proof of
+//      work must land in the supersede path (not the undertime modal). Guards the _supersededSweep gate.
+await scenario('F6 · supersede on short day skips undertime confirm', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await fullMorning(page, 'RSR0100', 2026,7,15);
+  await setNow(page, manila(2026,7,15,15,0));   // 3:00 PM early PM Break Out → short day
+  await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'pm_out');            // early → Bisaya confirm
+  await page.evaluate(async () => { await bisayaConfirmProceed(); });                // Padayon → records pm_out 3:00
+  await setNow(page, manila(2026,7,15,19,1));
+  await page.evaluate(() => autoCloseAbandonedBreaks());                             // 7 PM close: timeout=3:00, sweptClose
+  await setNow(page, manila(2026,7,15,20,0));
+  await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'timeout');            // supersede (must not be blocked by undertime)
+  const r = await recAt(page, 'RSR0100', k);
+  const superseded = !!r.punches.timeout && /08:00/.test(r.punches.timeout) && /PM/.test(r.punches.timeout);
+  const pmOutKept  = !!r.punches.pm_out && /03:00/.test(r.punches.pm_out);
+  const pass = superseded && pmOutKept;
+  report('F6 · supersede on short day (no undertime block)', pass, `timeout=${r.punches.timeout||'(BLOCKED by undertime)'} pm_out=${r.punches.pm_out}`, sends());
+});
+
+// F7 — OT-allowance fix: on a superseded (zero-OT) day the OT allowance must NOT fire even with a late
+//      Time Out. hasOTAllowance is now based on ACTUAL OT (=0 here); the old clock proxy over-fired.
+await scenario('F7 · superseded zero-OT day → no OT allowance', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await fullMorning(page, 'RSR0100', 2026,7,15);
+  await setNow(page, manila(2026,7,15,17,0)); await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'pm_out');
+  await setNow(page, manila(2026,7,15,19,1));
+  await page.evaluate(() => autoCloseAbandonedBreaks());                              // 7 PM close (timeout=pm_out, sweptClose)
+  await setNow(page, manila(2026,7,15,20,50)); await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'timeout'); // 8:50 PM supersede — otFromPmIn≈3.17h (old clock proxy would fire ₱50)
+  const out = await page.evaluate((k) => { const x=records['RSR0100_'+k]; return { timeout:x.punches.timeout, ha:x.hasOTAllowance, amt:x.otAllowanceAmt }; }, k);
+  const pass = /08:50/.test(out.timeout||'') && out.ha === false && out.amt === 0;
+  report('F7 · superseded zero-OT day → no OT allowance', pass, `timeout=${out.timeout} hasOTAllowance=${out.ha} amt=${out.amt}`, sends());
+});
+
+// F8 — the supersede must be reachable IN THE UI: after the 7 PM close, re-identifying leaves the Time
+//      Out BUTTON enabled (OT window). doPunch() bypasses the button, so F4/F6/F7 alone missed the outer
+//      strict-window-locks condition needing sweptClose. This checks the actual button.disabled state.
+await scenario('F8 · swept day → Time Out button enabled (supersede reachable)', manila(2026,7,15,8,0), async (page) => {
+  await fullMorning(page, 'RSR0100', 2026,7,15);
+  await setNow(page, manila(2026,7,15,17,0)); await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'pm_out');
+  await setNow(page, manila(2026,7,15,19,1));
+  await page.evaluate(() => autoCloseAbandonedBreaks());                              // 7 PM close → sweptClose
+  await setNow(page, manila(2026,7,15,20,30));
+  await enterPin(page, pinOf('RSR0100'));                                             // re-identify at 8:30 → updBtns runs
+  const disabled = await page.evaluate(() => document.getElementById('btn-timeout').disabled);
+  report('F8 · swept day Time Out button enabled', disabled === false, `btn-timeout.disabled=${disabled}`, sends());
+});
+
+// F9 — evening twin: PIN-in on a swept-closed day shows the informational heads-up modal (display-only),
+//      records NOTHING, and leaves the Time Out button reachable (dismiss keeps the PIN).
+await scenario('F9 · swept-day PIN entry → heads-up modal, nothing recorded', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await fullMorning(page, 'RSR0100', 2026,7,15);
+  await setNow(page, manila(2026,7,15,17,0)); await enterPin(page, pinOf('RSR0100')); await doPunch(page, 'pm_out');
+  await setNow(page, manila(2026,7,15,19,1));
+  await page.evaluate(() => autoCloseAbandonedBreaks());               // sweptClose, timeout = 5:00
+  await setNow(page, manila(2026,7,15,20,30));
+  await enterPin(page, pinOf('RSR0100'));                              // re-identify → swept heads-up modal
+  const modalShown = await page.evaluate(() => document.getElementById('bisaya-modal').classList.contains('show'));
+  const modalText  = await page.evaluate(() => document.getElementById('bisaya-text').textContent);
+  const toEnabled  = await page.evaluate(() => document.getElementById('btn-timeout').disabled === false);
+  const r = await recAt(page, 'RSR0100', k);
+  const pass = modalShown && /auto-close na ang imong adlaw sa 7:00 PM/.test(modalText) && toEnabled
+            && r.punches.timeout === '05:00:00 PM';                    // PIN entry changed nothing — still the swept 5:00
+  report('F9 · swept-day PIN heads-up modal (display-only)', pass,
+    `modal=${modalShown} toEnabled=${toEnabled} timeout=${r.punches.timeout}`, sends());
 });
 
 // ==============================================================================
