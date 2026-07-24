@@ -63,8 +63,13 @@ const mock = {
   externalHits: {},    // host → count of external requests intercepted (all mocked)
   escaped: [],         // requests that reached an UNRECOGNISED external host (must stay empty)
   forbiddenHits: [],   // any contact with the live/abandoned Supabase refs (must stay empty)
+  suspensions: {},     // employee_code → row {employee_code,active,reason,suspended_on,absent_dates,awol_group_msg_id,awol_group_chat}
+  telegram: [],        // captured Telegram sends: {method, chat_id, text, hasButtons}
+  tgConfigured: false, // when true, /settings returns a live tg_token + tg_awol_group
+  awolGroupId: '',     // the mocked AWOL group chat id
+  tgMsgSeq: 1000,      // incrementing message_id source
 };
-const resetCapture = () => { mock.writes = []; };
+const resetCapture = () => { mock.writes = []; mock.telegram = []; };
 
 // ==============================================================================
 //  Tiny static file server (serves the repo over http://localhost so the kiosk
@@ -159,13 +164,64 @@ async function newKioskContext(browser, base, initMs) {
           return json(409, { code: '23505', message: 'duplicate key value violates unique constraint', details: '', hint: '' });
         return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(Array.isArray(payload) ? payload : [payload]) });
       }
+      // AWOL: shared suspension table (read + msg-id patch)
+      if (p.endsWith('/rest/v1/employee_suspensions')) {
+        if (method === 'GET') {
+          const active = Object.values(mock.suspensions).filter(r => r.active);
+          return json(200, active);
+        }
+        if (method === 'PATCH') {
+          let body = null; try { body = JSON.parse(req.postData() || 'null'); } catch {}
+          const codeMatch = /employee_code=eq\.([^&]+)/.exec(new URL(url).search || '');
+          const code = codeMatch ? decodeURIComponent(codeMatch[1]) : null;
+          if (code && mock.suspensions[code] && body) Object.assign(mock.suspensions[code], body);
+          return json(200, code && mock.suspensions[code] ? [mock.suspensions[code]] : []);
+        }
+      }
+      // AWOL: dedup RPCs
+      if (p.endsWith('/rest/v1/rpc/awol_set_suspended')) {
+        let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+        const ex = mock.suspensions[b.p_code];
+        if (ex && ex.active) return json(200, false);
+        mock.suspensions[b.p_code] = { employee_code: b.p_code, active: true, reason: b.p_reason,
+          suspended_on: b.p_on, absent_dates: b.p_dates, awol_group_msg_id: null, awol_group_chat: null };
+        return json(200, true);
+      }
+      if (p.endsWith('/rest/v1/rpc/awol_reinstate')) {
+        let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+        const r = mock.suspensions[b.p_code];
+        if (!r || !r.active) return json(200, { newly: false });
+        r.active = false; r.reinstated_by = b.p_by; r.reinstated_on = b.p_on;
+        return json(200, { newly: true, awol_group_msg_id: r.awol_group_msg_id, awol_group_chat: r.awol_group_chat });
+      }
+      // settings: tg config only when a scenario opts in (keeps existing scenarios' settings=[] behaviour)
+      if (p.endsWith('/rest/v1/settings') && method === 'GET') {
+        if (!mock.tgConfigured) return json(200, []);
+        return json(200, [
+          { key: 'tg_token', value: 'TESTTOKEN0000000000000000000000000000' },
+          { key: 'tg_awol_group', value: mock.awolGroupId || '' },
+          { key: 'mgr_ids', value: '111,222' },
+        ]);
+      }
       // every other table read (settings, leaves, approvals, late breaks, pending_approvals…)
       if (method === 'GET') return json(200, []);
       return route.fulfill({ status: 201, contentType: 'application/json', body: '[]' });
     }
 
-    // Telegram — should never be hit (no token configured) but stub defensively.
-    if (host === 'api.telegram.org') return json(200, { ok: true, result: {} });
+    // Telegram — mocked capture: sendMessage/editMessageText are recorded to mock.telegram.
+    if (host === 'api.telegram.org') {
+      const p = new URL(url).pathname;
+      let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+      if (p.endsWith('/sendMessage')) {
+        mock.telegram.push({ method: 'sendMessage', chat_id: String(b.chat_id), text: String(b.text || ''), hasButtons: !!b.reply_markup });
+        return json(200, { ok: true, result: { message_id: ++mock.tgMsgSeq } });
+      }
+      if (p.endsWith('/editMessageText')) {
+        mock.telegram.push({ method: 'editMessageText', chat_id: String(b.chat_id), text: String(b.text || ''), hasButtons: false });
+        return json(200, { ok: true, result: { message_id: b.message_id } });
+      }
+      return json(200, { ok: true, result: {} });
+    }
 
     // Anything else is an UNEXPECTED escape → record and hard-block it.
     mock.escaped.push(url);
@@ -193,7 +249,27 @@ async function bootstrap(page, activeSite = 'Carmen') {
   }, activeSite);
 }
 const setNow = (page, ms) => page.evaluate(ms => window.__setNow(ms), ms);
-const enterPin = (page, pin) => page.evaluate((p) => { kpClr(); for (const d of p) kp(d); return curEmp ? curEmp.code : null; }, pin);
+// enterPin is dual-signature (existing call sites everywhere pass (page, pin); AWOL scenarios
+// from later tasks call the single-arg enterPin(code) form — see currentPage below):
+//   enterPin(page, pin)  — legacy: drives the keypad on an explicit page, by PIN.
+//   enterPin(code)       — new: drives the keypad on the ACTIVE scenario page, by employee code.
+let currentPage = null; // set by scenario() to the in-flight page, for the single-arg enterPin(code) form
+async function enterPin(a, b) {
+  if (a && typeof a.evaluate === 'function') {
+    // legacy: enterPin(page, pin)
+    return a.evaluate((p) => { kpClr(); for (const d of p) kp(d); return curEmp ? curEmp.code : null; }, b);
+  }
+  // new: enterPin(code) — drive the REAL keypad so the kp() PIN-entry hooks (modal, preview) run.
+  const pin = pinOf(a);
+  return currentPage.evaluate((pn) => { kpClr(); for (const d of pn) kp(d); }, pin);
+}
+// Read whether the Bisaya modal is showing + its text.
+async function bisayaState() {
+  return await currentPage.evaluate(() => ({
+    show: document.getElementById('bisaya-modal').classList.contains('show'),
+    text: (document.getElementById('bisaya-text') || {}).textContent || '',
+  }));
+}
 const doPunch = (page, type) => page.evaluate(async (t) => { await punch(t); }, type);
 const recAt = (page, code, dateKey) => page.evaluate(([c, k]) => {
   const r = records[c + '_' + k];
@@ -256,6 +332,7 @@ async function scenario(name, initMs, fn) {
   mock.attendanceMode = 'ok'; mock.attendanceDelayMs = 0; mock.poisonCodes = new Set();
   const context = await newKioskContext(browser, base, initMs);
   const page = await context.newPage();
+  currentPage = page; // active page for the single-arg enterPin(code)/bisayaState() helpers
   page.on('pageerror', e => { if (!/classList/.test(e.message)) console.log(`        \x1b[33m[pageerror] ${e.message}\x1b[0m`); });
   try {
     await page.goto(kioskURL, { waitUntil: 'domcontentloaded' });
