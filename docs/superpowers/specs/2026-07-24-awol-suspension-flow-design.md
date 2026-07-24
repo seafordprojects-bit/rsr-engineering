@@ -13,6 +13,10 @@ Worker-facing **and** punch-blocking → **full localhost walkthrough gate befor
    — except as the graceful fallback while the group chat ID is unset (see Rollout).
 3. **Reinstatement UI stays as-is** — kiosk Admin ▸ Staff roster button + Telegram buttons. No new
    control on the RSR Admin dashboard page.
+4. **Suspension state is DB-shared, not per-device.** A worker who hits AWOL at Carmen is blocked at
+   Mandaue too (and vice versa); reinstatement from any surface clears the block on **both** kiosks. A new
+   `employee_suspensions` Supabase table is the source of truth; each kiosk keeps its local
+   `suspendedEmployees` object only as a **read-cache** refreshed from the table.
 
 ## Goal
 Turn the existing (already-working) AWOL suspension **detection** into a complete, humane, auditable flow:
@@ -24,8 +28,10 @@ that reads as a running log of open vs resolved.
 - **Detection** — `checkAllAbsences()` (kiosk) runs on the midnight/boot schedule. `getConsecutiveAbsences`
   counts backward from yesterday; `isAbsentOnDate` = *no Time-In AND no Approved leave* that date. Suspends
   at `>= 3`. Client-side, off cloud-synced records + `leaveRequests`.
-- **Suspension state** — `suspendedEmployees{code:{reason,suspendedOn,tgMsgIds,notified}}`, persisted to
-  `localStorage.rsr_suspended` (per-device; see Known constraints).
+- **Suspension state** — TODAY `suspendedEmployees{code:{reason,suspendedOn,tgMsgIds,notified}}` in
+  `localStorage.rsr_suspended` (per-device). **This build makes it DB-shared** (see the new
+  "DB-shared suspension state" section); the local object is kept as a read-cache so downstream code
+  (badges, block, modal) changes minimally.
 - **Current block** — `punch()` ~2645: a *toast* (`showMsg`) only when a suspended worker taps Time In.
 - **Current alert** — `sendAbsenceSuspensionAlert` → **manager DMs** (`mgr_ids`) with inline
   ✅ Reinstate / ❌ Keep buttons; callback handler at ~4218 (auth: `mgrIds.includes(fromId)` ~3952).
@@ -37,6 +43,31 @@ that reads as a running log of open vs resolved.
 - **No letter infrastructure exists** — new.
 
 ## Design
+
+### DB-shared suspension state (source of truth) — foundational
+- **New table `public.employee_suspensions`** (RLS disabled, per project convention; anon read/write via
+  PostgREST). One row per employee, reused across suspend/reinstate cycles:
+  `employee_code text primary key`, `active boolean not null default true`, `reason text`,
+  `suspended_on text`, `absent_dates jsonb` (the triggering run), `awol_group_msg_id text`,
+  `awol_group_chat text`, `reinstated_by text`, `reinstated_on text`, `updated_at timestamptz default now()`.
+  Unique key on `employee_code` gives cross-kiosk race safety.
+- **Two atomic RPCs (security definer) for cross-device dedup:**
+  - `awol_set_suspended(p_code, p_reason, p_dates jsonb, p_on) → boolean` — insert the row or flip an
+    inactive row to `active`; returns **true only when it newly activated** (was not already active).
+    Two kiosks detecting the same AWOL in the same run: exactly one gets `true` → exactly one alert.
+  - `awol_reinstate(p_code, p_by, p_on) → jsonb` — flip an active row to inactive; returns
+    `{newly:true, awol_group_msg_id, awol_group_chat}` when it newly reinstated, else `{newly:false}`.
+    The returned msg id lets **any** device edit the original group alert to RESOLVED (reliable now).
+- **Kiosk read path:** a poller (reuse the ~30–60 s cadence family already in the kiosk) refreshes the
+  local `suspendedEmployees` cache from `employee_suspensions where active=true`. The PIN-entry modal,
+  the punch block, and the Staff badges read that cache. **Best-effort live point-check at PIN entry:**
+  if online, a fast single-row lookup by `employee_code` confirms freshness before showing the block;
+  offline falls back to the cache. Net effect: cross-kiosk block within one poll interval (seconds), and
+  immediate at the moment of a punch attempt when online.
+- **Offline / transition:** writes go through the RPCs with a short retry; if a device is offline it uses
+  the last cache and reconciles on reconnect. **One-time migration on first boot of this build:** upsert
+  any existing `localStorage.rsr_suspended` entries into the table via `awol_set_suspended` (no alert
+  re-fire — see below), so nobody currently suspended slips through the cutover.
 
 ### PART 1 — PIN-entry blocking modal
 - **Hook:** `kp()`, immediately after identification (`showEmpPreview(emp)`), same spot as the sweep's
@@ -65,8 +96,10 @@ on Approved leave today:
   - **No pending overlap → SUSPEND** (below).
 
 ### SUSPEND + PART 2/3 alert
-On suspend: set `suspendedEmployees[emp.code] = {reason, suspendedOn, absentDates, tgMsgIds:{}, notified:false}`,
-`saveData()`, then `sendAwolAlert(emp)`:
+On suspend: call `awol_set_suspended(code, reason, absentDates, todayKey())`. **Only if it returns `true`
+(this device newly activated the suspension)** proceed to alert — this is the cross-kiosk dedup guard.
+Refresh the local cache, then `sendAwolAlert(emp)`. *(The one-time cutover migration calls the same RPC
+but skips `sendAwolAlert` — it is a state import, not a new event.)*
 - **Build the letter URL** (PART 2):
   `<PAGES_BASE>/awol-letter.html?name=<Name>&code=<Code>&yard=<Yard>&dates=<iso,iso,...>&pdate=<todayISO>`
   (URL-encoded). `dates` = `absentDates`; `pdate` = suspension date.
@@ -76,9 +109,11 @@ On suspend: set `suspendedEmployees[emp.code] = {reason, suspendedOn, absentDate
   > 📅 Absent: [dates] · Suspended: [date]
   > 📄 Printable letter: [letter URL]
   > [ ✅ Reinstate ] [ ❌ Keep Suspended ]
-- Store the returned `message_id` in `suspendedEmployees[emp.code].tgMsgIds[<awolGroupId>]` so it can be
-  edited to RESOLVED on reinstatement. Button callbacks reuse the existing `approve_reinstate_*` /
-  `reject_reinstate_*` handler + `mgrIds` auth (only authorized IDs can action; anyone can read the log).
+- After the send, persist the returned `message_id` + the group chat id onto the DB row
+  (`update employee_suspensions set awol_group_msg_id=…, awol_group_chat=… where employee_code=…`) so any
+  kiosk can later edit that exact message to RESOLVED. Button callbacks reuse the existing
+  `approve_reinstate_*` / `reject_reinstate_*` handler + `mgrIds` auth (only authorized IDs can action;
+  anyone can read the log).
 
 ### PART 2 — the printable letter page (`awol-letter.html`)
 - **New standalone file at repo root**, served by GitHub Pages; no kiosk chrome, no dependency on Supabase
@@ -98,14 +133,16 @@ On suspend: set `suspendedEmployees[emp.code] = {reason, suspendedOn, absentDate
 ### PART 3 — dedicated AWOL group + reinstatement log
 - **New settings key `tg_awol_group`.** Add to `loadTgFromCloud`'s key list + a `tgAwolGroup` var + the
   `rsr_tg` localStorage cache. Owner sets its value after capturing the chat ID (below).
-- **Closing message on EVERY reinstatement path.** Wrap the shared `reinstateEmployee(code)` (and the
-  Telegram-callback reinstate at ~4224, and leave-approval auto-reinstate at ~3995) so that on reinstate:
+- **Closing message on EVERY reinstatement path.** The shared `reinstateEmployee(code)` (and the
+  Telegram-callback reinstate at ~4224, and leave-approval auto-reinstate at ~3995) now call
+  `awol_reinstate(code, who, todayKey())` **first**. Only when it returns `{newly:true}` (dedup guard, so a
+  double-tap or a race between two kiosks posts the closing message once):
   1. **Post** to the AWOL group: `✅ <b>Reinstated</b> 👤 [Name] ([Code]) — by [who] on [date].`
-     (Always sends — needs only group id + token, which every device has → reliable.)
-  2. **Best-effort edit** the original alert to `✅ RESOLVED — [Name] reinstated [date]` if this device
-     holds the stored `message_id` (per-device; degrades cleanly if not).
-  “by [who]” = the Telegram actor's first name for TG reinstatements, or `Admin (kiosk)` for the Staff-tab
-  button, or `leave approved` for the auto path.
+  2. **Edit** the original alert to `✅ RESOLVED — [Name] reinstated [date]` using the
+     `awol_group_msg_id` / `awol_group_chat` returned by the RPC — **reliable from any device now** (the
+     ids live on the DB row, not per-device state).
+  Then refresh the local cache so the block lifts. `who` = the Telegram actor's first name for TG
+  reinstatements, `Admin (kiosk)` for the Staff-tab button, or `leave approved` for the auto path.
 - **Chat ID capture (owner-side, non-disruptive):** create the group (e.g. "RSR AWOL Cases"); add the
   existing RSR bot; add **@RawDataBot** (or @getidsbot) — it posts JSON; read `chat.id` (negative;
   supergroups start `-100…`); remove @RawDataBot; set `settings.tg_awol_group` to that id (one-line SQL /
@@ -119,10 +156,16 @@ On the kiosk: **(1)** long-press (~2s) the **app title** → 6-digit admin passc
 (authorized manager IDs only). Both post the closing message.
 
 ## Data / state model
-`suspendedEmployees[code]` gains: `absentDates:[iso,...]` (the triggering run) and `tgMsgIds` now keyed by
-the AWOL group id. New per-employee marker `awolPendingFlagged` (in `suspendedEmployees` shadow or a small
-`awolPending{}` map) to make the HOLD note one-time. All persist through the existing `saveData` /
-`rsr_suspended` path — no schema change to attendance.
+- **Source of truth = `employee_suspensions`** (DB). Fields per the DB-shared section. No change to the
+  `attendance_records` schema.
+- **Local `suspendedEmployees`** is now a **read-cache** of `active=true` rows, refreshed by the poller and
+  after every RPC call; kept in `localStorage.rsr_suspended` for offline reads. Each cached entry carries
+  `absentDates` for anything that needs the triggering run.
+- **HOLD marker** (`awolPendingFlagged`) stays lightweight: a small `awolPending{code:true}` map persisted
+  in localStorage keyed to make the "please decide" note one-time; cleared when the overlapping Pending
+  leave resolves. (Pure notification bookkeeping — not authoritative state, so it need not be DB-shared;
+  worst case a rare duplicate note if two kiosks flag the same held case, acceptable. If we want it exact,
+  a nullable `pending_flagged_on` column on the row + a third tiny RPC — noted as an optional tightening.)
 
 ## Harness scenarios (permanent, `tests/kiosk-stress`)
 1. Suspended employee keys PIN → blocking modal shown (`modal=true`), punch blocked, PIN cleared.
@@ -132,14 +175,23 @@ the AWOL group id. New per-employee marker `awolPendingFlagged` (in `suspendedEm
    once; a second scheduled run does **not** re-send (one-time marker holds).
 4. Pending leave then **Approved** → run clears, no suspension, marker cleared. Pending then **Rejected**
    → next run suspends.
-5. Reinstate via each path → closing message composed for the AWOL group; original edited to RESOLVED when
-   the msg id is present.
+5. Reinstate via each path → `awol_reinstate` returns `{newly:true}` once → closing message composed;
+   original edited to RESOLVED using the DB-stored msg id. A second reinstate call returns `{newly:false}`
+   → no duplicate post.
 6. `tg_awol_group` **unset** → alert falls back to manager DMs (no silent drop); set → routes to group.
-7. Regression: non-suspended workers punch normally, no modal; existing sweep/OT scenarios still pass.
+7. **Cross-device (two simulated kiosks A + B sharing the mocked DB):** A suspends → B's poll surfaces the
+   row and B blocks the worker at PIN entry; B reinstates → A's poll clears the block. And: A + B both
+   detect the same AWOL in one run → `awol_set_suspended` returns true to exactly one → exactly one alert.
+8. Regression: non-suspended workers punch normally, no modal; existing sweep/OT scenarios still pass.
 
 ## Migration + rollout
-- **SQL:** STEP 0 read the existing `settings` keys, then additive upsert of `tg_awol_group` (value set by
-  owner after chat-ID capture). No attendance-table change.
+- **SQL (new file `awol-suspensions.sql`):** STEP 0 census (existing `settings` keys; confirm no
+  `employee_suspensions` table yet). STEP 1 create `employee_suspensions` + unique key + anon grants
+  (RLS-disabled convention). STEP 2 the two RPCs (`awol_set_suspended`, `awol_reinstate`, security
+  definer) + grants. STEP 3 additive upsert of the `tg_awol_group` settings key (value set by owner after
+  chat-ID capture). STEP 4 re-query. No `attendance_records` change.
+- **One-time cutover:** on first boot of this build the kiosk imports any local `rsr_suspended` entries via
+  `awol_set_suspended` (alert suppressed), so current suspensions carry over to the shared table.
 - **Graceful fallback:** `const awolTarget = tgAwolGroup || mgrIds-first-or-tgGroup;` — AWOL alerts never
   drop while the key is empty.
 - **Version stamps:** bump `kiosk/index.html` to the next stamp + `preflight.html` EXPECT in lockstep; add
@@ -150,11 +202,12 @@ the AWOL group id. New per-employee marker `awolPendingFlagged` (in `suspendedEm
 
 ## Scope exclusions / known constraints
 - **Payroll untouched.** Suspension is attendance-gating only; no pay math changes.
-- **Per-device suspension state** (existing `localStorage` model) is **not** re-architected here. In
-  practice each worker punches at their home-yard tablet, so the block lands where it matters; a
-  DB-shared `suspended` table is a possible future hardening, out of scope for this build.
-- **Cross-device original-message edit** is best-effort (msg id is per-device); the *closing post* is
-  always reliable. Acceptable — the log still shows open→resolved.
+- **Suspension state is DB-shared** (`employee_suspensions`) — a worker is blocked at every kiosk and
+  reinstatement clears everywhere. Cross-kiosk block latency = one poll interval (seconds), plus an
+  immediate online point-check at the punch attempt; offline uses the last cache. Detection itself stays
+  **client-side** (as it exists today) with RPC-level dedup — a server-side (pg_cron) detector is a
+  possible future move, out of scope here.
+- **Cross-device original-message edit is now reliable** (msg id + chat id live on the DB row).
 - **Bot token is anon-readable** (parked security item, tracked separately) — this feature adds no new
   exposure; it reuses the existing token/helpers.
 - **No RSR Admin dashboard reinstate control** (owner chose keep-as-is).
