@@ -260,6 +260,8 @@ async function enterPin(a, b) {
     return a.evaluate((p) => { kpClr(); for (const d of p) kp(d); return curEmp ? curEmp.code : null; }, b);
   }
   // new: enterPin(code) — drive the REAL keypad so the kp() PIN-entry hooks (modal, preview) run.
+  // Drives currentPage (the scenario's PRIMARY page). For a multi-page scenario, drive the
+  // secondary page directly via page.evaluate(...) instead of this 1-arg helper.
   const pin = pinOf(a);
   return currentPage.evaluate((pn) => { kpClr(); for (const d of pn) kp(d); }, pin);
 }
@@ -330,6 +332,9 @@ console.log(`safety: all external traffic mocked; live host ${FORBIDDEN_HOST} is
 async function scenario(name, initMs, fn) {
   resetCapture();
   mock.attendanceMode = 'ok'; mock.attendanceDelayMs = 0; mock.poisonCodes = new Set();
+  mock.suspensions = {};
+  mock.tgConfigured = false;
+  mock.awolGroupId = '';
   const context = await newKioskContext(browser, base, initMs);
   const page = await context.newPage();
   currentPage = page; // active page for the single-arg enterPin(code)/bisayaState() helpers
