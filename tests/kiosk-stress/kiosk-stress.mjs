@@ -919,6 +919,22 @@ await scenario('G-load · poll surfaces a shared suspension', manila(2026,7,24,8
   report('G-load · shared suspension cached', has, `cached=${has}`);
 });
 
+// G1 — a suspended worker is fully blocked at PIN entry (identification time), on ANY punch
+// attempt, with the owner-approved Bisaya modal. No punch is recorded — dismiss (kpClr) clears
+// the PIN so the worker walks away; nothing writes to records/msMap.
+await scenario('G1 · suspended PIN → blocking modal, no punch', manila(2026,7,24,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL',
+    suspended_on:'07/24/2026', absent_dates:['2026-07-21','2026-07-22','2026-07-23'] };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  await enterPin('RSR0100');
+  const b = await bisayaState();
+  const r = await recAt(page, 'RSR0100', k);
+  const pass = b.show && /GI-SUSPEND/.test(b.text) && (!r || !r.punches.timein);
+  report('G1 · suspended PIN blocking modal', pass,
+    `modal=${b.show} text="${b.text.slice(0,22)}" timein=${r?.punches.timein||'(none)'}`, sends());
+});
+
 // ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================

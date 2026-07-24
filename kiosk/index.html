@@ -2039,6 +2039,13 @@ function kp(n){
   if(pin.length===PIN_LEN){
     const emp=findEmp(pin);
     if(emp){pinFailCount=0;curEmp=emp;hint.textContent='';hint.style.color='';showEmpPreview(emp);clearMsg();
+      // (2026-07-24) AWOL: a suspended worker is blocked at PIN entry on EVERY kiosk (DB-shared state).
+      // Fully blocks — a 3+-day-absent worker has no open shift to Time Out. Dismiss → kpClr clears PIN.
+      if(suspendedEmployees[emp.code]){
+        showBisayaModal('GI-SUSPEND ANG IMONG ACCOUNT\n\nAbsent ka og 3+ ka adlaw nga sunod-sunod nga walay approved nga leave.\n\nAdto sa admin/opisina aron ma-reinstate una ka maka-punch.');
+        loadSuspensionsFromCloud(); // opportunistic refresh so the next worker's state is fresh
+        return;
+      }
       // (2026-07-23) Informational dead-window heads-up at identification time — NO punch, NO record. A
       // day worker who keys in during a Time-In refusal window (empty day) is told when to come back;
       // the button stays disabled and nothing is written. Dismissing it (closeBisayaModal→kpClr) clears
