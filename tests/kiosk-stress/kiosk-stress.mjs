@@ -911,6 +911,14 @@ await scenario('G0 · AWOL group id loads from settings', manila(2026,7,24,8,0),
   report('G0 · tg_awol_group loaded', g === '-1001112223334', `tgAwolGroup=${g}`);
 });
 
+await scenario('G-load · poll surfaces a shared suspension', manila(2026,7,24,8,0), async (page) => {
+  mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'x', suspended_on:'07/24/2026',
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'] };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const has = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  report('G-load · shared suspension cached', has, `cached=${has}`);
+});
+
 // ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================

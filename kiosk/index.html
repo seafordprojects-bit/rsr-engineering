@@ -2271,6 +2271,37 @@ function reinstateEmployee(code){
   logNotif(`✅ ${employees.find(e=>e.code===code)?.name||code} reinstated`,'',true);
 }
 
+// ── AWOL: DB-shared suspension state (employee_suspensions is source of truth) ──
+let awolPending={}; // {code:true} — one-time "pending leave, please decide" flag bookkeeping (local)
+function saveAwolPending(){ try{localStorage.setItem('rsr_awol_pending',JSON.stringify(awolPending));}catch(e){} }
+function awolISO(s){ s=String(s||'').trim();
+  if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+  const m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  return m?m[3]+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0'):s; }
+async function loadSuspensionsFromCloud(){
+  try{
+    const { data, error } = await sbClient.from('employee_suspensions').select('*').eq('active',true);
+    if(error) throw error;
+    const next={};
+    (data||[]).forEach(r=>{ next[r.employee_code]={ reason:r.reason||'', suspendedOn:r.suspended_on||'',
+      absentDates:Array.isArray(r.absent_dates)?r.absent_dates:[], awolMsgId:r.awol_group_msg_id||'', awolChat:r.awol_group_chat||'' }; });
+    suspendedEmployees=next;
+    try{localStorage.setItem('rsr_suspended',JSON.stringify(suspendedEmployees));}catch(e){}
+    if(typeof renderRoster==='function')renderRoster();
+    return true;
+  }catch(e){ console.warn('loadSuspensionsFromCloud (using cache):',e&&e.message); return false; }
+}
+// One-time cutover: import any pre-existing local suspensions into the shared table (no alert re-fire).
+async function awolCutover(){
+  try{
+    if(localStorage.getItem('rsr_awol_cutover')==='done') return;
+    const local=JSON.parse(localStorage.getItem('rsr_suspended')||'{}')||{};
+    for(const code of Object.keys(local)){ const e=local[code]; if(!e)continue;
+      try{ await sbClient.rpc('awol_set_suspended',{p_code:code,p_reason:e.reason||'migrated',p_dates:(e.absentDates||[]).map(awolISO),p_on:e.suspendedOn||todayKey()}); }catch(_){}
+    }
+    localStorage.setItem('rsr_awol_cutover','done');
+  }catch(e){}
+}
 
 // ── TIMEOUT ADJUSTMENT NOTICE ──
 function showTimeoutNotice(emp){
@@ -4349,7 +4380,8 @@ function repairPhantomTimeouts(){
 function loadData(){
   try{
     const sus=localStorage.getItem('rsr_suspended');
-    if(sus){try{suspendedEmployees=JSON.parse(sus)||{};}catch(e){suspendedEmployees={};}}    
+    if(sus){try{suspendedEmployees=JSON.parse(sus)||{};}catch(e){suspendedEmployees={};}}
+    const ap=localStorage.getItem('rsr_awol_pending'); if(ap){try{awolPending=JSON.parse(ap)||{};}catch(e){awolPending={};}}
     const tadj=localStorage.getItem('rsr_timeout_adj');
     if(tadj){try{timeoutAdjustments=JSON.parse(tadj)||{};}catch(e){timeoutAdjustments={};}}    
     const emp=localStorage.getItem('rsr_employees');
@@ -5078,6 +5110,8 @@ async function loadTgFromCloud(showStatus){
 // AWOL alerts go to the dedicated group; fall back to manager DMs while the group id is unset.
 function awolTarget(){ return tgAwolGroup || (mgrIds && mgrIds[0]) || tgGroup || ''; }
 loadTgFromCloud();
+awolCutover().then(loadSuspensionsFromCloud);
+setInterval(loadSuspensionsFromCloud, 45000);
 
 // ── SHIFT TIMES FROM ADMIN (Supabase `settings`) — morning clock-in + evening clock-out ──
 // The dashboard sets `shift_start` and `dismissal` (HH:MM). The kiosk pulls them on startup
