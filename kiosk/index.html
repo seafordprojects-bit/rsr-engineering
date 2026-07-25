@@ -2308,6 +2308,7 @@ async function reinstateEmployee(code,by){
   catch(e){ res=null; }
   const newly = res ? (res.newly!==false) : true; // offline → assume newly so the local block clears
   delete suspendedEmployees[code];
+  delete awolUnsynced[code]; saveAwolUnsynced();
   saveData();renderRoster();updateStats();
   const nm=employees.find(e=>e.code===code)?.name||code;
   logNotif(`✅ ${nm} reinstated`,'',true);

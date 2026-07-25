@@ -1037,6 +1037,41 @@ await scenario('G6 · offline suspend survives poll + syncs on retry', manila(20
     `blockedOffline=${blockedOffline} notInDbYet=${notInDbYet} stillBlockedAfterPoll=${stillBlockedAfterPoll} syncedActive=${!!syncedActive} alerted=${alerted}`);
 });
 
+// G7 — resurrection-bug lock: an offline suspend (never reached the DB, only tracked in
+// awolUnsynced) that gets reinstated BEFORE connectivity returns must NOT come back from
+// the dead when retryAwolUnsynced() finally runs — reinstateEmployee must also clear the
+// employee's awolUnsynced entry, or the deferred retry re-suspends + re-alerts on a worker
+// the admin already cleared.
+await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurrection)', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007778889990';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {}; });
+
+  // Offline suspend: RPC fails → local block only, never reaches the DB.
+  mock.rpcSuspendFail = true;
+  await page.evaluate(() => checkAllAbsences());
+  const blockedOffline = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  const notInDbYet = mock.suspensions['RSR0100'] === undefined;
+
+  // Admin reinstates while still offline (awol_reinstate finds no active DB row → {newly:false}).
+  await page.evaluate(() => reinstateEmployee('RSR0100', 'Admin'));
+  const unsyncedCleared = await page.evaluate(() => !awolUnsynced['RSR0100']);
+  const localCleared = await page.evaluate(() => !suspendedEmployees['RSR0100']);
+
+  // Reconnect: retry must NOT resurrect the already-reinstated worker.
+  mock.rpcSuspendFail = false; mock.telegram = [];
+  await page.evaluate(async () => { await retryAwolUnsynced(); await loadSuspensionsFromCloud(); });
+  const notResurrectedInDb = !(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true);
+  // Scoped to RSR0100: other absent roster members legitimately sync+alert on this same retry
+  // (they were never reinstated), so a blanket "no AWOL alert at all" check would false-fail.
+  const noReAlert = !mock.telegram.some(m => m.method === 'sendMessage' && /AWOL — Account Suspended/.test(m.text) && /RSR0100/.test(m.text));
+  const stillClearedLocally = await page.evaluate(() => !suspendedEmployees['RSR0100']);
+
+  report('G7 · reinstate-before-reconnect: no resurrection',
+    blockedOffline && notInDbYet && unsyncedCleared && localCleared && notResurrectedInDb && noReAlert && stillClearedLocally,
+    `blockedOffline=${blockedOffline} notInDbYet=${notInDbYet} unsyncedCleared=${unsyncedCleared} localCleared=${localCleared} notResurrectedInDb=${notResurrectedInDb} noReAlert=${noReAlert} stillClearedLocally=${stillClearedLocally}`);
+});
+
 // ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================
