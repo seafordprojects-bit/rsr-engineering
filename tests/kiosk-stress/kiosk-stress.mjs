@@ -1073,30 +1073,66 @@ await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurre
 });
 
 // G8 — REST-DAY POLICY (owner 2026-07-25): a no-punch Sunday must be TRANSPARENT — not counted as
-// absent, and does not break the consecutive-absence chain. "Today" is pinned to a real 2026 Tuesday
-// so the back-scan (i=1, i=2, …) maps cleanly onto Mon/Sun/Sat/Fri/Thu; self-checked below via the
-// real dateKeyOffset()/isSundayKey() functions before either case runs.
-//   Case A (RSR0100) — absent Fri+Sat+Mon, no-punch Sunday: MUST suspend on exactly the 3 working-day
-//     absences, with the Sunday date excluded from the run.
-//   Case B (RSR0207) — same window but ALSO worked Monday: MUST NOT suspend (the worked day halts the
-//     chain outright, on top of Sunday being transparent) — the fixed false-positive.
-await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', manila(2026,7,21,8,0), async (page) => {
-  // Self-check: confirm the harness clock really is a Tuesday and the offsets line up as documented,
+// absent, and does not break the consecutive-absence chain. Self-checked below via the REAL
+// dateKeyOffset()/isSundayKey() functions before each case runs.
+//   Case C (PEM9001, "today" = a real Monday) — THE OWNER'S EXACT REPORTED BUG, reproduced and locked:
+//     worked Thursday, absent Fri+Sat, no-punch Sunday. Back-scan i=1→Sun(skip), i=2→Sat(absent #1),
+//     i=3→Fri(absent #2), i=4→Thu(worked→break) = 2 working-day absences. MUST NOT suspend, and
+//     collectAbsentDates must be exactly [Sat,Fri] (length 2) with the Sunday date absent from it.
+//     Pre-fix, this identical setup counted Sunday as a 3rd absence and wrongly suspended the worker —
+//     this is the false positive the owner reported, not a derivative of it.
+//   Case A (RSR0100, "today" = the following Tuesday) — absent Fri+Sat+Mon, no-punch Sunday: MUST
+//     suspend on exactly the 3 working-day absences, with the Sunday date excluded from the run.
+//   Case B (RSR0207, same Tuesday) — same window but ALSO worked Monday: MUST NOT suspend — but this
+//     case tests a DIFFERENT thing than Case C (a punched day halting the chain outright at i=1, chain
+//     length 0), not "2 absences correctly not padded to 3". Kept as its own guard, relabeled accurately.
+await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', manila(2026,7,20,8,0), async (page) => {
+  // Self-check: confirm the harness clock really is a Monday and the offsets line up as documented,
   // using the REAL kiosk functions (not a reimplementation) so this doubles as a function-level guard.
-  const dow = await page.evaluate(() => new Date().getDay()); // 2 = Tuesday
-  const keys = await page.evaluate(() => [1,2,3,4,5].map(i => dateKeyOffset(-i))); // [Mon,Sun,Sat,Fri,Thu]
-  const sundayFlags = await page.evaluate(ks => ks.map(k => isSundayKey(k)), keys);
-  const offsetsOk = dow === 2 && JSON.stringify(sundayFlags) === JSON.stringify([false, true, false, false, false]);
-  report('G8 · scenario clock is a real Tuesday; i=1..5 → Mon/Sun/Sat/Fri/Thu', offsetsOk,
-    `today.getDay()=${dow} keys(i=1..5)=${keys.join(', ')} isSunday=[${sundayFlags.join(', ')}]`);
-  const [monKey, sunKey, satKey, friKey, thuKey] = keys;
+  const dowMon = await page.evaluate(() => new Date().getDay()); // 1 = Monday
+  const keysMon = await page.evaluate(() => [1,2,3,4].map(i => dateKeyOffset(-i))); // [Sun,Sat,Fri,Thu]
+  const sundayFlagsMon = await page.evaluate(ks => ks.map(k => isSundayKey(k)), keysMon);
+  const offsetsOkMon = dowMon === 1 && JSON.stringify(sundayFlagsMon) === JSON.stringify([true, false, false, false]);
+  report('G8 · scenario clock is a real Monday; i=1..4 → Sun/Sat/Fri/Thu', offsetsOkMon,
+    `today.getDay()=${dowMon} keys(i=1..4)=${keysMon.join(', ')} isSunday=[${sundayFlagsMon.join(', ')}]`);
+  const [sunKey, satKey, friKey, thuKey] = keysMon;
 
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {}; });
   mock.tgConfigured = true; mock.awolGroupId = '-1008889990001';
   await page.evaluate(() => loadTgFromCloud());
-  // Scope detection to just the two test workers so the rest of the (unpunched) roster doesn't
-  // also trip AWOL in this scenario and muddy the assertions.
-  await page.evaluate(() => { employees = employees.filter(e => ['RSR0100','RSR0207'].includes(e.code)); });
+  // Snapshot the full roster once so each case can re-filter `employees` from the same starting
+  // point (filtering is destructive/reassigning, so re-filtering an already-filtered array would
+  // silently lose the other cases' codes).
+  await page.evaluate(() => { window.__g8Roster = employees.slice(); });
+
+  // ── Case C (PEM9001) — the owner's exact reported bug, on a real Monday ──────────────────────
+  await page.evaluate(() => { employees = window.__g8Roster.filter(e => e.code === 'PEM9001'); });
+  await page.evaluate(thu => {
+    records['PEM9001_' + thu] = { punches: { timein: '08:00:00 AM' } }; // worked Thursday → caps the chain
+    // Fri/Sat intentionally unseeded → isAbsentOnDate() defaults to absent (no timein, no leave)
+    // Sunday intentionally unseeded → moot either way, transparent regardless of a record
+  }, thuKey);
+  const chainC = await page.evaluate(code => collectAbsentDates(code), 'PEM9001');
+  await page.evaluate(() => checkAllAbsences());
+  const susC = mock.suspensions['PEM9001'] && mock.suspensions['PEM9001'].active === true;
+  const exactlyTwoC = chainC.length === 2;
+  const noSundayInC = !chainC.includes(sunKey);
+  const hasFriSatC = [friKey, satKey].every(k => chainC.includes(k));
+  report('G8c · Monday, 2 real absences (Fri+Sat) + rest-day Sunday → NOT suspended (owner-reported bug, locked)',
+    !susC && exactlyTwoC && noSundayInC && hasFriSatC,
+    `suspended=${!!susC} chain=[${chainC.join(', ')}] Sunday(${sunKey})excluded=${noSundayInC} — pre-fix this setup counted Sunday as a 3rd absence and wrongly suspended`);
+
+  // ── advance the clock one day, to the following Tuesday, for Cases A + B ─────────────────────
+  await setNow(page, manila(2026,7,21,8,0));
+  const dowTue = await page.evaluate(() => new Date().getDay()); // 2 = Tuesday
+  const keysTue = await page.evaluate(() => [1,2,3,4,5].map(i => dateKeyOffset(-i))); // [Mon,Sun,Sat,Fri,Thu]
+  const sundayFlagsTue = await page.evaluate(ks => ks.map(k => isSundayKey(k)), keysTue);
+  const offsetsOkTue = dowTue === 2 && JSON.stringify(sundayFlagsTue) === JSON.stringify([false, true, false, false, false]);
+  report('G8 · clock advanced to a real Tuesday; i=1..5 → Mon/Sun/Sat/Fri/Thu', offsetsOkTue,
+    `today.getDay()=${dowTue} keys(i=1..5)=${keysTue.join(', ')} isSunday=[${sundayFlagsTue.join(', ')}]`);
+  const [monKey, sunKey2, satKey2, friKey2, thuKey2] = keysTue;
+
+  await page.evaluate(() => { employees = window.__g8Roster.filter(e => ['RSR0100','RSR0207'].includes(e.code)); });
 
   // Seed BOTH workers' full history BEFORE running detection — checkAllAbsences() scans the whole
   // (now 2-employee) roster in one pass, so a partially-seeded worker would look falsely absent if
@@ -1107,7 +1143,7 @@ await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', mani
     records['RSR0207_' + thu] = { punches: { timein: '08:00:00 AM' } }; // Case B: worked Thursday
     records['RSR0207_' + mon] = { punches: { timein: '08:00:00 AM' } }; // Case B: worked Monday → halts the chain outright
     // Fri/Sat intentionally unseeded → absent; Sunday unseeded either way (transparent regardless)
-  }, [thuKey, monKey]);
+  }, [thuKey2, monKey]);
 
   const chainA = await page.evaluate(code => collectAbsentDates(code), 'RSR0100');
   const chainB = await page.evaluate(code => collectAbsentDates(code), 'RSR0207');
@@ -1115,15 +1151,15 @@ await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', mani
 
   const susA = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
   const exactlyThreeA = chainA.length === 3;
-  const noSundayInA = !chainA.includes(sunKey);
-  const hasFriSatMonA = [friKey, satKey, monKey].every(k => chainA.includes(k));
+  const noSundayInA = !chainA.includes(sunKey2);
+  const hasFriSatMonA = [friKey2, satKey2, monKey].every(k => chainA.includes(k));
   report('G8a · Fri+Sat+Mon absent, Sunday excluded → SUSPEND', !!susA && exactlyThreeA && noSundayInA && hasFriSatMonA,
-    `suspended=${!!susA} chain=[${chainA.join(', ')}] Sunday(${sunKey})excluded=${noSundayInA}`);
+    `suspended=${!!susA} chain=[${chainA.join(', ')}] Sunday(${sunKey2})excluded=${noSundayInA}`);
 
   const susB = mock.suspensions['RSR0207'] && mock.suspensions['RSR0207'].active === true;
-  const under3B = chainB.length < 3;
-  report('G8b · worked Monday (false-positive fixed) → NOT suspended', !susB && under3B,
-    `suspended=${!!susB} chain=[${chainB.join(', ')}] (worked Monday halts the chain; Fri+Sat never reached ${chainB.length} pushed)`);
+  const chainZeroB = chainB.length === 0;
+  report('G8b · a punched day (Monday) halts the chain outright → NOT suspended', !susB && chainZeroB,
+    `suspended=${!!susB} chain=[${chainB.join(', ')}] (worked Monday is i=1, the scan breaks before Fri/Sat are ever reached — distinct from G8c's real 2-absence run)`);
 });
 
 // ==============================================================================
