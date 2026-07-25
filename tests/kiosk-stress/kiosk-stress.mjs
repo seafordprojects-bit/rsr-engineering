@@ -1072,6 +1072,60 @@ await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurre
     `blockedOffline=${blockedOffline} notInDbYet=${notInDbYet} unsyncedCleared=${unsyncedCleared} localCleared=${localCleared} notResurrectedInDb=${notResurrectedInDb} noReAlert=${noReAlert} stillClearedLocally=${stillClearedLocally}`);
 });
 
+// G8 — REST-DAY POLICY (owner 2026-07-25): a no-punch Sunday must be TRANSPARENT — not counted as
+// absent, and does not break the consecutive-absence chain. "Today" is pinned to a real 2026 Tuesday
+// so the back-scan (i=1, i=2, …) maps cleanly onto Mon/Sun/Sat/Fri/Thu; self-checked below via the
+// real dateKeyOffset()/isSundayKey() functions before either case runs.
+//   Case A (RSR0100) — absent Fri+Sat+Mon, no-punch Sunday: MUST suspend on exactly the 3 working-day
+//     absences, with the Sunday date excluded from the run.
+//   Case B (RSR0207) — same window but ALSO worked Monday: MUST NOT suspend (the worked day halts the
+//     chain outright, on top of Sunday being transparent) — the fixed false-positive.
+await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', manila(2026,7,21,8,0), async (page) => {
+  // Self-check: confirm the harness clock really is a Tuesday and the offsets line up as documented,
+  // using the REAL kiosk functions (not a reimplementation) so this doubles as a function-level guard.
+  const dow = await page.evaluate(() => new Date().getDay()); // 2 = Tuesday
+  const keys = await page.evaluate(() => [1,2,3,4,5].map(i => dateKeyOffset(-i))); // [Mon,Sun,Sat,Fri,Thu]
+  const sundayFlags = await page.evaluate(ks => ks.map(k => isSundayKey(k)), keys);
+  const offsetsOk = dow === 2 && JSON.stringify(sundayFlags) === JSON.stringify([false, true, false, false, false]);
+  report('G8 · scenario clock is a real Tuesday; i=1..5 → Mon/Sun/Sat/Fri/Thu', offsetsOk,
+    `today.getDay()=${dow} keys(i=1..5)=${keys.join(', ')} isSunday=[${sundayFlags.join(', ')}]`);
+  const [monKey, sunKey, satKey, friKey, thuKey] = keys;
+
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {}; });
+  mock.tgConfigured = true; mock.awolGroupId = '-1008889990001';
+  await page.evaluate(() => loadTgFromCloud());
+  // Scope detection to just the two test workers so the rest of the (unpunched) roster doesn't
+  // also trip AWOL in this scenario and muddy the assertions.
+  await page.evaluate(() => { employees = employees.filter(e => ['RSR0100','RSR0207'].includes(e.code)); });
+
+  // Seed BOTH workers' full history BEFORE running detection — checkAllAbsences() scans the whole
+  // (now 2-employee) roster in one pass, so a partially-seeded worker would look falsely absent if
+  // detection ran mid-seed.
+  await page.evaluate(([thu, mon]) => {
+    records['RSR0100_' + thu] = { punches: { timein: '08:00:00 AM' } }; // Case A: worked Thursday → caps the chain
+    // Fri/Sat/Mon intentionally unseeded → isAbsentOnDate() defaults to absent (no timein, no leave)
+    records['RSR0207_' + thu] = { punches: { timein: '08:00:00 AM' } }; // Case B: worked Thursday
+    records['RSR0207_' + mon] = { punches: { timein: '08:00:00 AM' } }; // Case B: worked Monday → halts the chain outright
+    // Fri/Sat intentionally unseeded → absent; Sunday unseeded either way (transparent regardless)
+  }, [thuKey, monKey]);
+
+  const chainA = await page.evaluate(code => collectAbsentDates(code), 'RSR0100');
+  const chainB = await page.evaluate(code => collectAbsentDates(code), 'RSR0207');
+  await page.evaluate(() => checkAllAbsences());
+
+  const susA = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
+  const exactlyThreeA = chainA.length === 3;
+  const noSundayInA = !chainA.includes(sunKey);
+  const hasFriSatMonA = [friKey, satKey, monKey].every(k => chainA.includes(k));
+  report('G8a · Fri+Sat+Mon absent, Sunday excluded → SUSPEND', !!susA && exactlyThreeA && noSundayInA && hasFriSatMonA,
+    `suspended=${!!susA} chain=[${chainA.join(', ')}] Sunday(${sunKey})excluded=${noSundayInA}`);
+
+  const susB = mock.suspensions['RSR0207'] && mock.suspensions['RSR0207'].active === true;
+  const under3B = chainB.length < 3;
+  report('G8b · worked Monday (false-positive fixed) → NOT suspended', !susB && under3B,
+    `suspended=${!!susB} chain=[${chainB.join(', ')}] (worked Monday halts the chain; Fri+Sat never reached ${chainB.length} pushed)`);
+});
+
 // ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================

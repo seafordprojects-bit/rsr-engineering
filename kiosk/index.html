@@ -2226,22 +2226,29 @@ function isAbsentOnDate(empCode,dateStr){
   const hasLeave=leaveRequests.some(r=>r.code===empCode&&r.status==='Approved'&&r.startDate<=dateStr&&r.endDate>=dateStr);
   return !hasTimein&&!hasLeave;
 }
-function getConsecutiveAbsences(empCode){
-  let count=0;
-  // Check yesterday, day before, day before that (don't count today)
-  for(let i=1;i<=7;i++){
-    const d=dateKeyOffset(-i);
-    if(isAbsentOnDate(empCode,d))count++;
-    else break;
-  }
-  return count;
+// Sunday = the universal rest day (matches the Sunday-premium setup). dateStr is MM/DD/YYYY (en-PH).
+function isSundayKey(dateStr){
+  const m=/^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(String(dateStr||''));
+  return m ? new Date(+m[3], +m[1]-1, +m[2]).getDay()===0 : false;
 }
-// Collect the consecutive absent run (most-recent-first), as MM/DD/YYYY keys.
+// Consecutive absent WORKING-day run, most-recent-first (MM/DD/YYYY keys).
+// Rest-day policy (owner 2026-07-25): a no-punch Sunday is TRANSPARENT — not counted, does not break the
+// chain. A punched day breaks the chain (not AWOL); approved leave breaks the chain.
 function collectAbsentDates(empCode){
   const out=[];
-  for(let i=1;i<=7;i++){ const d=dateKeyOffset(-i); if(isAbsentOnDate(empCode,d))out.push(d); else break; }
+  for(let i=1;i<=21;i++){                 // widened lookback: skipped Sundays consume iterations
+    const d=dateKeyOffset(-i);
+    const rec=records[empCode+'_'+d];
+    const hasTimein=rec&&rec.punches&&rec.punches.timein&&rec.punches.timein!=='(auto-skipped)';
+    if(hasTimein) break;                  // showed up → chain ends
+    if(isSundayKey(d)) continue;          // rest day, no punch → transparent (skip)
+    if(!isAbsentOnDate(empCode,d)) break; // approved leave → chain ends
+    out.push(d);                          // absent working day → count
+    if(out.length>=10) break;             // safety cap for long absences
+  }
   return out;
 }
+function getConsecutiveAbsences(empCode){ return collectAbsentDates(empCode).length; }
 async function checkAllAbsences(){
   await retryAwolUnsynced();
   const today=todayKey();
