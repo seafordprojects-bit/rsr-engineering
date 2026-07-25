@@ -2293,10 +2293,24 @@ async function sendAwolPendingFlag(emp,iso){
   const t=awolTarget();
   if(t) await tgSendText(t,text); else for(const id of mgrIds)if(id)await tgSendText(id,text);
 }
-function reinstateEmployee(code){
+async function reinstateEmployee(code,by){
+  let res=null;
+  try{ const {data}=await sbClient.rpc('awol_reinstate',{p_code:code,p_by:by||'Admin (kiosk)',p_on:todayKey()}); res=data; }
+  catch(e){ res=null; }
+  const newly = res ? (res.newly!==false) : true; // offline → assume newly so the local block clears
   delete suspendedEmployees[code];
   saveData();renderRoster();updateStats();
-  logNotif(`✅ ${employees.find(e=>e.code===code)?.name||code} reinstated`,'',true);
+  const nm=employees.find(e=>e.code===code)?.name||code;
+  logNotif(`✅ ${nm} reinstated`,'',true);
+  if(newly) await sendAwolReinstatedMsg(code,nm,by||'Admin (kiosk)',res);
+  loadSuspensionsFromCloud();
+}
+async function sendAwolReinstatedMsg(code,name,by,res){
+  if(!tgToken||tgToken.length<20)return;
+  const t=awolTarget();
+  if(t) await tgSendText(t,`✅ <b>Reinstated</b>\n👤 ${name} (${code}) — by ${by} on ${todayKey()}`);
+  const chat=res&&res.awol_group_chat, mid=res&&res.awol_group_msg_id;
+  if(chat&&mid){ try{ await tgEditMessage(chat,mid,`✅ RESOLVED — ${name} reinstated ${todayKey()}`);}catch(e){} }
 }
 
 // ── AWOL: DB-shared suspension state (employee_suspensions is source of truth) ──
@@ -4052,7 +4066,7 @@ async function processTgCallbacks(){
           req.status='Approved';
           const e=findEmp(req.code);if(e){const k=lkey(req.type);e.balance[k]=Math.max(0,(e.balance[k]||0)-req.days);}
           // If employee was suspended, reinstate them
-          if(suspendedEmployees[req.code])reinstateEmployee(req.code);
+          if(suspendedEmployees[req.code])reinstateEmployee(req.code,'leave approved');
           await tgAnswerCallback(cb.id,'✅ Leave approved!');
           const done=`✅ <b>Leave APPROVED</b>
 👤 ${req.name} · ${req.type}
@@ -4280,16 +4294,12 @@ Rejected by: ${cb.from.first_name}`;
         const emp=employees.find(e=>e.code===empCode);
         if(!emp){await tgAnswerCallback(cb.id,'Employee not found.');continue;}
         if(action==='approve'){
-          delete suspendedEmployees[empCode];
-          saveData();renderRoster();updateStats();
+          await reinstateEmployee(empCode, cb.from.first_name||'Telegram');
           await tgAnswerCallback(cb.id,'✅ Employee reinstated!');
-          const done=`✅ <b>Employee Reinstated</b>\n👤 ${emp.name}\nReinstated by: ${cb.from.first_name}\n📅 ${todayKey()}`;
-          for(const [cid,mid] of Object.entries(suspendedEmployees[empCode]?.tgMsgIds||{}))await tgEditMessage(cid,mid,done);
-          showMsg('ok',emp.name+' reinstated','Employee can now punch in.',4000);
-          logNotif(`✅ ${emp.name} reinstated by ${cb.from.first_name} (via Telegram)`,'',true);
+          showMsg('ok',(employees.find(e=>e.code===empCode)?.name||empCode)+' reinstated','Employee can now punch in.',4000);
         } else {
           await tgAnswerCallback(cb.id,'Employee remains suspended.');
-          logNotif(`${emp.name} reinstatement denied by ${cb.from.first_name}`,'late-n',true);
+          logNotif(`${employees.find(e=>e.code===empCode)?.name||empCode} reinstatement denied by ${cb.from.first_name}`,'late-n',true);
         }
       }
     }

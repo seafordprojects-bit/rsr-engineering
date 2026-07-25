@@ -960,6 +960,21 @@ await scenario('G3 · pending leave → HOLD, flag once', manila(2026,7,24,8,0),
   report('G3 · hold + one-time flag', flags.length === 1 && notSuspended, `flags=${flags.length} suspended=${!notSuspended}`);
 });
 
+await scenario('G4 · reinstate → closing msg + RESOLVED edit, once', manila(2026,7,24,9,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1005554443332';
+  await page.evaluate(() => loadTgFromCloud());
+  mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'1234', awol_group_chat:'-1005554443332' };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator Bob'));
+  await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator Bob')); // second → {newly:false}, no dup
+  const posts = mock.telegram.filter(m => m.method === 'sendMessage' && /Reinstated/.test(m.text));
+  const edits = mock.telegram.filter(m => m.method === 'editMessageText' && /RESOLVED/.test(m.text));
+  const cleared = !(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  report('G4 · reinstate closing log once', posts.length === 1 && edits.length === 1 && cleared,
+    `posts=${posts.length} edits=${edits.length} cleared=${cleared}`);
+});
+
 // ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================
