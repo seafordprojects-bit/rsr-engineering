@@ -946,9 +946,11 @@ await scenario('G2 · 3 absences, no leave → suspend + letter alert', manila(2
   await page.evaluate(() => checkAllAbsences());
   const alert = mock.telegram.find(m => m.method === 'sendMessage' && m.chat_id === '-1009998887776' && /AWOL — Account Suspended/.test(m.text));
   const hasLetter = alert && /awol-letter\.html\?name=/.test(alert.text) && /dates=/.test(alert.text);
+  const noButtons = alert && alert.hasButtons === false; // owner request: AWOL group alert is notification-only (coordinators are members)
   const inDb = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
-  report('G2 · suspend alert to group w/ letter', !!alert && !!hasLetter && !!inDb,
-    `routed=${!!alert} letter=${!!hasLetter} db=${!!inDb} buttons=${alert&&alert.hasButtons}`);
+  const msgIdPersisted = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].awol_group_msg_id);
+  report('G2 · suspend alert to group w/ letter, no buttons, msg-id persisted', !!alert && !!hasLetter && noButtons && !!inDb && msgIdPersisted,
+    `routed=${!!alert} letter=${!!hasLetter} buttons=${alert&&alert.hasButtons} db=${!!inDb} msgId=${mock.suspensions['RSR0100']&&mock.suspensions['RSR0100'].awol_group_msg_id}`);
 });
 
 await scenario('G3 · pending leave → HOLD, flag once', manila(2026,7,24,8,0), async (page) => {

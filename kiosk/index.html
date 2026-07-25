@@ -1589,7 +1589,9 @@ async function maybeAlertHardFlag(emp, rec){
 async function tgSendWithButtons(chatId,text,buttons){
   if(!tgToken||!chatId)return null;
   try{
-    const r=await fetch(`https://api.telegram.org/bot${tgToken}/sendMessage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chat_id:chatId,text,parse_mode:'HTML',reply_markup:{inline_keyboard:[buttons]}})});
+    const body={chat_id:chatId,text,parse_mode:'HTML'};
+    if(buttons&&buttons.length)body.reply_markup={inline_keyboard:[buttons]}; // omit entirely when no buttons — notification-only send
+    const r=await fetch(`https://api.telegram.org/bot${tgToken}/sendMessage`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await r.json();return d.ok?d.result.message_id:null;
   }catch(e){return null;}
 }
@@ -2291,13 +2293,11 @@ async function sendAwolAlert(emp,iso){
   const base=location.origin+location.pathname.replace(/\/kiosk(\/.*)?$/,'');
   const letter=base+'/awol-letter.html?name='+encodeURIComponent(emp.name)+'&code='+encodeURIComponent(emp.code)+'&yard='+encodeURIComponent(yard)+'&dates='+encodeURIComponent(iso.join(','))+'&pdate='+encodeURIComponent(awolISO(todayKey()));
   const text=`🚨 <b>AWOL — Account Suspended</b>\n👤 ${emp.name} (${emp.code}) · 🏢 ${yard}\n📅 Absent: ${iso.join(', ')} · Suspended: ${todayKey()}\n📄 Printable letter: ${letter}`;
-  const buttons=[
-    {text:'✅ Reinstate',callback_data:`approve_reinstate_${emp.code}_${Date.now()}`},
-    {text:'❌ Keep Suspended',callback_data:`reject_reinstate_${emp.code}_${Date.now()}`}
-  ];
+  // Notification-only (owner request): no inline Reinstate/Keep-Suspended buttons — the AWOL
+  // group includes coordinators, and reinstatement must stay admin-only (kiosk Staff tab).
   let chat='',msgId=0;
-  if(tgAwolGroup){ chat=tgAwolGroup; msgId=await tgSendWithButtons(tgAwolGroup,text,buttons); }
-  else { for(const id of mgrIds){ if(!id)continue; const m=await tgSendWithButtons(id,text,buttons); if(m&&!msgId){chat=id;msgId=m;} } }
+  if(tgAwolGroup){ chat=tgAwolGroup; msgId=await tgSendWithButtons(tgAwolGroup,text,[]); }
+  else { for(const id of mgrIds){ if(!id)continue; const m=await tgSendWithButtons(id,text,[]); if(m&&!msgId){chat=id;msgId=m;} } }
   if(msgId){ try{ await sbClient.from('employee_suspensions').update({awol_group_msg_id:String(msgId),awol_group_chat:String(chat)}).eq('employee_code',emp.code); }catch(e){} }
 }
 // HOLD note (one-time) for a 3+-day absence covered by a still-Pending leave.
