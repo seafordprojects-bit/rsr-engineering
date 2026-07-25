@@ -935,6 +935,31 @@ await scenario('G1 · suspended PIN → blocking modal, no punch', manila(2026,7
     `modal=${b.show} text="${b.text.slice(0,22)}" timein=${r?.punches.timein||'(none)'}`, sends());
 });
 
+await scenario('G2 · 3 absences, no leave → suspend + letter alert', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1009998887776';
+  await page.evaluate(() => loadTgFromCloud());
+  // RSR0100 has no records for prior days → absent; ensure not already suspended.
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; });
+  await page.evaluate(() => checkAllAbsences());
+  const alert = mock.telegram.find(m => m.method === 'sendMessage' && m.chat_id === '-1009998887776' && /AWOL — Account Suspended/.test(m.text));
+  const hasLetter = alert && /awol-letter\.html\?name=/.test(alert.text) && /dates=/.test(alert.text);
+  const inDb = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
+  report('G2 · suspend alert to group w/ letter', !!alert && !!hasLetter && !!inDb,
+    `routed=${!!alert} letter=${!!hasLetter} db=${!!inDb} buttons=${alert&&alert.hasButtons}`);
+});
+
+await scenario('G3 · pending leave → HOLD, flag once', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1009998887776';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    leaveRequests = [{ code:'RSR0100', status:'Pending', startDate:'2026-07-21', endDate:'2026-07-24' }]; });
+  await page.evaluate(() => checkAllAbsences());
+  await page.evaluate(() => checkAllAbsences()); // second run must NOT re-flag
+  const flags = mock.telegram.filter(m => /Pending leave — please decide/.test(m.text));
+  const notSuspended = !(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  report('G3 · hold + one-time flag', flags.length === 1 && notSuspended, `flags=${flags.length} suspended=${!notSuspended}`);
+});
+
 // ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================

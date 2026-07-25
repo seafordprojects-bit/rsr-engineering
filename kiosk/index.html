@@ -2236,41 +2236,62 @@ function getConsecutiveAbsences(empCode){
   }
   return count;
 }
-function checkAllAbsences(){
-  const today=todayKey();
-  employees.forEach(emp=>{
-    if(suspendedEmployees[emp.code])return; // already suspended
-    if(onLeaveToday(emp.code))return;
-    const consecutive=getConsecutiveAbsences(emp.code);
-    if(consecutive>=3){
-      suspendedEmployees[emp.code]={
-        reason:`Absent for ${consecutive} consecutive day(s) without filed leave`,
-        suspendedOn:today,tgMsgIds:{},notified:false
-      };
-      saveData();
-      if(!suspendedEmployees[emp.code].notified){
-        sendAbsenceSuspensionAlert(emp,consecutive);
-        suspendedEmployees[emp.code].notified=true;
-      }
-    }
-  });
+// Collect the consecutive absent run (most-recent-first), as MM/DD/YYYY keys.
+function collectAbsentDates(empCode){
+  const out=[];
+  for(let i=1;i<=7;i++){ const d=dateKeyOffset(-i); if(isAbsentOnDate(empCode,d))out.push(d); else break; }
+  return out;
 }
-async function sendAbsenceSuspensionAlert(emp,days){
-  logNotif(`⚠️ ${emp.name} suspended — ${days} consecutive absences`,'late-n',true);
+async function checkAllAbsences(){
+  const today=todayKey();
+  for(const emp of employees){
+    if(suspendedEmployees[emp.code])continue;
+    if(onLeaveToday(emp.code))continue;
+    const dates=collectAbsentDates(emp.code);
+    if(dates.length<3){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; }
+    const iso=dates.map(awolISO);
+    // HOLD + flag if a PENDING leave overlaps any absent date (owner rule).
+    const hasPending=leaveRequests.some(r=>r.code===emp.code&&r.status==='Pending'&&iso.some(t=>awolISO(r.startDate)<=t&&awolISO(r.endDate)>=t));
+    if(hasPending){
+      if(!awolPending[emp.code]){ awolPending[emp.code]=true; saveAwolPending(); sendAwolPendingFlag(emp,iso); }
+      continue;
+    }
+    if(awolPending[emp.code]){ awolPending[emp.code]=false; saveAwolPending(); }
+    // SUSPEND with cross-kiosk dedup — only the device that newly activates alerts.
+    let newly=true;
+    try{ const {data}=await sbClient.rpc('awol_set_suspended',{p_code:emp.code,p_reason:`Absent ${dates.length} consecutive days without approved leave`,p_dates:iso,p_on:today}); newly=(data===true); }
+    catch(e){ newly=true; } // offline: mark locally so THIS kiosk blocks; a peer will have alerted
+    suspendedEmployees[emp.code]={reason:`Absent ${dates.length} consecutive days`,suspendedOn:today,absentDates:iso};
+    saveData();
+    if(newly) await sendAwolAlert(emp,iso);
+  }
+  loadSuspensionsFromCloud();
+}
+// PART 2/3 — AWOL alert to the dedicated group (or mgr-DM fallback) with the printable letter link.
+async function sendAwolAlert(emp,iso){
+  logNotif(`🚨 ${emp.name} AWOL-suspended`,'late-n',true);
   if(!tgToken||tgToken.length<20)return;
-  const text=`🚨 <b>Employee Suspended</b>\n👤 ${emp.name} (${emp.dept})\n📋 Absent for <b>${days} consecutive days</b> without filed leave.\n📅 Suspended on: ${todayKey()}\n🏢 ${company}\n\nThis employee is now blocked from punching in.\nApprove reinstatement?`;
+  const yard=siteNorm(emp.homeSite||activeSite||'');
+  const base=location.origin+location.pathname.replace(/\/kiosk\/index\.html.*$/,'');
+  const letter=base+'/awol-letter.html?name='+encodeURIComponent(emp.name)+'&code='+encodeURIComponent(emp.code)+'&yard='+encodeURIComponent(yard)+'&dates='+encodeURIComponent(iso.join(','))+'&pdate='+encodeURIComponent(awolISO(todayKey()));
+  const text=`🚨 <b>AWOL — Account Suspended</b>\n👤 ${emp.name} (${emp.code}) · 🏢 ${yard}\n📅 Absent: ${iso.join(', ')} · Suspended: ${todayKey()}\n📄 Printable letter: ${letter}`;
   const buttons=[
     {text:'✅ Reinstate',callback_data:`approve_reinstate_${emp.code}_${Date.now()}`},
     {text:'❌ Keep Suspended',callback_data:`reject_reinstate_${emp.code}_${Date.now()}`}
   ];
-  const msgIds={};
-  for(const id of mgrIds){
-    if(!id)continue;
-    const msgId=await tgSendWithButtons(id,text,buttons);
-    if(msgId)msgIds[id]=msgId;
-  }
-  suspendedEmployees[emp.code].tgMsgIds=msgIds;
-  saveData();
+  let chat='',msgId=0;
+  if(tgAwolGroup){ chat=tgAwolGroup; msgId=await tgSendWithButtons(tgAwolGroup,text,buttons); }
+  else { for(const id of mgrIds){ if(!id)continue; const m=await tgSendWithButtons(id,text,buttons); if(m&&!msgId){chat=id;msgId=m;} } }
+  if(msgId){ try{ await sbClient.from('employee_suspensions').update({awol_group_msg_id:String(msgId),awol_group_chat:String(chat)}).eq('employee_code',emp.code); }catch(e){} }
+}
+// HOLD note (one-time) for a 3+-day absence covered by a still-Pending leave.
+async function sendAwolPendingFlag(emp,iso){
+  logNotif(`⏸ ${emp.name} AWOL held (pending leave)`,'late-n',true);
+  if(!tgToken||tgToken.length<20)return;
+  const yard=siteNorm(emp.homeSite||activeSite||'');
+  const text=`⏸ <b>Pending leave — please decide</b>\n👤 ${emp.name} (${emp.code}) · 🏢 ${yard}\nAbsent 3+ days but has a PENDING leave for ${iso.join(', ')}. Approve or Reject para ma-clear.`;
+  const t=awolTarget();
+  if(t) await tgSendText(t,text); else for(const id of mgrIds)if(id)await tgSendText(id,text);
 }
 function reinstateEmployee(code){
   delete suspendedEmployees[code];
