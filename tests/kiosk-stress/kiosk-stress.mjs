@@ -68,6 +68,7 @@ const mock = {
   tgConfigured: false, // when true, /settings returns a live tg_token + tg_awol_group
   awolGroupId: '',     // the mocked AWOL group chat id
   tgMsgSeq: 1000,      // incrementing message_id source
+  rpcSuspendFail: false, // when true, /rpc/awol_set_suspended 500s (simulates offline for FIX 1 coverage)
 };
 const resetCapture = () => { mock.writes = []; mock.telegram = []; };
 
@@ -180,6 +181,7 @@ async function newKioskContext(browser, base, initMs) {
       }
       // AWOL: dedup RPCs
       if (p.endsWith('/rest/v1/rpc/awol_set_suspended')) {
+        if (mock.rpcSuspendFail) return json(500, { code: '500', message: 'injected failure (mock.rpcSuspendFail)', details: '', hint: '' });
         let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
         const ex = mock.suspensions[b.p_code];
         if (ex && ex.active) return json(200, false);
@@ -335,6 +337,7 @@ async function scenario(name, initMs, fn) {
   mock.suspensions = {};
   mock.tgConfigured = false;
   mock.awolGroupId = '';
+  mock.rpcSuspendFail = false;
   const context = await newKioskContext(browser, base, initMs);
   const page = await context.newPage();
   currentPage = page; // active page for the single-arg enterPin(code)/bisayaState() helpers
@@ -1008,6 +1011,30 @@ await scenario('G5 · cross-device block + clear', manila(2026,7,24,8,0), async 
 
   report('G5 · cross-device block then clear', inDb && blockedOnB && clearedOnB,
     `A_suspended=${inDb} B_blocked=${blockedOnB} B_cleared=${clearedOnB}`);
+});
+
+// G6 — FIX 1 lock: an offline suspend (RPC throws) must still block LOCALLY, survive a
+// loadSuspensionsFromCloud() poll (must NOT be wiped by the DB's empty active-rows set),
+// and sync + alert once connectivity returns via retryAwolUnsynced().
+await scenario('G6 · offline suspend survives poll + syncs on retry', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1002223334445'; mock.rpcSuspendFail = true;
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {}; });
+  await page.evaluate(() => checkAllAbsences());
+  const blockedOffline = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  const notInDbYet = mock.suspensions['RSR0100'] === undefined;
+
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const stillBlockedAfterPoll = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+
+  mock.rpcSuspendFail = false;
+  await page.evaluate(() => retryAwolUnsynced());
+  const syncedActive = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
+  const alerted = mock.telegram.some(m => m.method === 'sendMessage' && /AWOL — Account Suspended/.test(m.text) && /RSR0100/.test(m.text));
+
+  report('G6 · offline suspend survives poll, syncs+alerts on retry',
+    blockedOffline && notInDbYet && stillBlockedAfterPoll && syncedActive && alerted,
+    `blockedOffline=${blockedOffline} notInDbYet=${notInDbYet} stillBlockedAfterPoll=${stillBlockedAfterPoll} syncedActive=${!!syncedActive} alerted=${alerted}`);
 });
 
 // ==============================================================================

@@ -1131,7 +1131,7 @@ let straightDutyLog=[]; // approved/rejected straight duties // {empCode,empName
 let absenceViolations={}; // {empCode:{count,history:[{startDate,endDate,days}]}}
 let tgLastUpdateId=0,tgPolling=null;
 let lateLunchRequests={};
-let suspendedEmployees={}; // {empCode: {reason, suspendedOn, tgMsgIds}}
+let suspendedEmployees={}; // {empCode: {reason, suspendedOn, absentDates, awolMsgId, awolChat}} — cache of employee_suspensions active rows
 let absenceLog={}; // {empCode: [dateStr, dateStr, ...]} tracks consecutive absences
 let latePmOutRequests={};
 let lateTimeInRequests={};
@@ -2243,6 +2243,7 @@ function collectAbsentDates(empCode){
   return out;
 }
 async function checkAllAbsences(){
+  await retryAwolUnsynced();
   const today=todayKey();
   for(const emp of employees){
     if(suspendedEmployees[emp.code])continue;
@@ -2258,12 +2259,20 @@ async function checkAllAbsences(){
     }
     if(awolPending[emp.code]){ awolPending[emp.code]=false; saveAwolPending(); }
     // SUSPEND with cross-kiosk dedup — only the device that newly activates alerts.
-    let newly=true;
-    try{ const {data}=await sbClient.rpc('awol_set_suspended',{p_code:emp.code,p_reason:`Absent ${dates.length} consecutive days without approved leave`,p_dates:iso,p_on:today}); newly=(data===true); }
-    catch(e){ newly=true; } // offline: mark locally so THIS kiosk blocks; a peer will have alerted
-    suspendedEmployees[emp.code]={reason:`Absent ${dates.length} consecutive days`,suspendedOn:today,absentDates:iso};
-    saveData();
-    if(newly) await sendAwolAlert(emp,iso);
+    const reason=`Absent ${dates.length} consecutive days without approved leave`;
+    try{
+      const {data,error}=await sbClient.rpc('awol_set_suspended',{p_code:emp.code,p_reason:reason,p_dates:iso,p_on:today});
+      if(error)throw error;
+      suspendedEmployees[emp.code]={reason:`Absent ${dates.length} consecutive days`,suspendedOn:today,absentDates:iso};
+      saveData();
+      if(data===true) await sendAwolAlert(emp,iso);
+    }catch(e){
+      // offline: block locally, defer the alert to retryAwolUnsynced() when connectivity returns
+      suspendedEmployees[emp.code]={reason:`Absent ${dates.length} consecutive days`,suspendedOn:today,absentDates:iso};
+      awolUnsynced[emp.code]={reason,suspendedOn:today,absentDates:iso};
+      saveAwolUnsynced();
+      saveData();
+    }
   }
   loadSuspensionsFromCloud();
 }
@@ -2272,7 +2281,7 @@ async function sendAwolAlert(emp,iso){
   logNotif(`🚨 ${emp.name} AWOL-suspended`,'late-n',true);
   if(!tgToken||tgToken.length<20)return;
   const yard=siteNorm(emp.homeSite||activeSite||'');
-  const base=location.origin+location.pathname.replace(/\/kiosk\/index\.html.*$/,'');
+  const base=location.origin+location.pathname.replace(/\/kiosk(\/.*)?$/,'');
   const letter=base+'/awol-letter.html?name='+encodeURIComponent(emp.name)+'&code='+encodeURIComponent(emp.code)+'&yard='+encodeURIComponent(yard)+'&dates='+encodeURIComponent(iso.join(','))+'&pdate='+encodeURIComponent(awolISO(todayKey()));
   const text=`🚨 <b>AWOL — Account Suspended</b>\n👤 ${emp.name} (${emp.code}) · 🏢 ${yard}\n📅 Absent: ${iso.join(', ')} · Suspended: ${todayKey()}\n📄 Printable letter: ${letter}`;
   const buttons=[
@@ -2316,6 +2325,21 @@ async function sendAwolReinstatedMsg(code,name,by,res){
 // ── AWOL: DB-shared suspension state (employee_suspensions is source of truth) ──
 let awolPending={}; // {code:true} — one-time "pending leave, please decide" flag bookkeeping (local)
 function saveAwolPending(){ try{localStorage.setItem('rsr_awol_pending',JSON.stringify(awolPending));}catch(e){} }
+let awolUnsynced={}; // {code:{reason,suspendedOn,absentDates}} — suspensions set locally while offline, not yet in the DB
+function saveAwolUnsynced(){ try{localStorage.setItem('rsr_awol_unsynced',JSON.stringify(awolUnsynced));}catch(e){} }
+// Retry any offline-set suspensions: push to the DB and fire the alert once they land (skipped on the first offline attempt).
+async function retryAwolUnsynced(){
+  for(const code of Object.keys(awolUnsynced)){
+    const e=awolUnsynced[code];
+    const emp=employees.find(x=>x.code===code);
+    try{
+      const {data,error}=await sbClient.rpc('awol_set_suspended',{p_code:code,p_reason:e.reason||'Absent (retry)',p_dates:(e.absentDates||[]),p_on:e.suspendedOn||todayKey()});
+      if(error)throw error;
+      delete awolUnsynced[code]; saveAwolUnsynced();
+      if(data===true&&emp) await sendAwolAlert(emp,e.absentDates||[]);
+    }catch(_){ /* still offline */ }
+  }
+}
 function awolISO(s){ s=String(s||'').trim();
   if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
   const m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
@@ -2327,6 +2351,8 @@ async function loadSuspensionsFromCloud(){
     const next={};
     (data||[]).forEach(r=>{ next[r.employee_code]={ reason:r.reason||'', suspendedOn:r.suspended_on||'',
       absentDates:Array.isArray(r.absent_dates)?r.absent_dates:[], awolMsgId:r.awol_group_msg_id||'', awolChat:r.awol_group_chat||'' }; });
+    // Don't let a poll wipe a suspension this kiosk set locally but hasn't synced to the DB yet.
+    Object.keys(awolUnsynced).forEach(code=>{ if(!next[code]) next[code]={reason:awolUnsynced[code].reason||'',suspendedOn:awolUnsynced[code].suspendedOn||'',absentDates:awolUnsynced[code].absentDates||[],awolMsgId:'',awolChat:''}; });
     suspendedEmployees=next;
     try{localStorage.setItem('rsr_suspended',JSON.stringify(suspendedEmployees));}catch(e){}
     if(typeof renderRoster==='function')renderRoster();
@@ -2338,10 +2364,11 @@ async function awolCutover(){
   try{
     if(localStorage.getItem('rsr_awol_cutover')==='done') return;
     const local=JSON.parse(localStorage.getItem('rsr_suspended')||'{}')||{};
+    let ok=true;
     for(const code of Object.keys(local)){ const e=local[code]; if(!e)continue;
-      try{ await sbClient.rpc('awol_set_suspended',{p_code:code,p_reason:e.reason||'migrated',p_dates:(e.absentDates||[]).map(awolISO),p_on:e.suspendedOn||todayKey()}); }catch(_){}
+      try{ const {error}=await sbClient.rpc('awol_set_suspended',{p_code:code,p_reason:e.reason||'migrated',p_dates:(e.absentDates||[]).map(awolISO),p_on:e.suspendedOn||todayKey()}); if(error)throw error; }catch(_){ ok=false; }
     }
-    localStorage.setItem('rsr_awol_cutover','done');
+    if(ok) localStorage.setItem('rsr_awol_cutover','done');
   }catch(e){}
 }
 
@@ -4420,6 +4447,7 @@ function loadData(){
     const sus=localStorage.getItem('rsr_suspended');
     if(sus){try{suspendedEmployees=JSON.parse(sus)||{};}catch(e){suspendedEmployees={};}}
     const ap=localStorage.getItem('rsr_awol_pending'); if(ap){try{awolPending=JSON.parse(ap)||{};}catch(e){awolPending={};}}
+    const au=localStorage.getItem('rsr_awol_unsynced'); if(au){try{awolUnsynced=JSON.parse(au)||{};}catch(e){awolUnsynced={};}}
     const tadj=localStorage.getItem('rsr_timeout_adj');
     if(tadj){try{timeoutAdjustments=JSON.parse(tadj)||{};}catch(e){timeoutAdjustments={};}}    
     const emp=localStorage.getItem('rsr_employees');
