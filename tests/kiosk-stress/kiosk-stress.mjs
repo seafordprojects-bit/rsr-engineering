@@ -975,6 +975,41 @@ await scenario('G4 · reinstate → closing msg + RESOLVED edit, once', manila(2
     `posts=${posts.length} edits=${edits.length} cleared=${cleared}`);
 });
 
+// G5 — cross-device integration: a suspension made on simulated kiosk A (the scenario's
+// page) must be DB-SHARED — visible and blocking on a second simulated kiosk (its own
+// browser context/page, "kiosk B") — and a reinstate on A must clear the block on B's
+// next poll. Exercises already-built code only (Tasks 5–8); no kiosk changes.
+await scenario('G5 · cross-device block + clear', manila(2026,7,24,8,0), async (page) => {
+  // Kiosk A (the scenario's page) suspends the whole roster (no attendance records exist
+  // for the prior days in this fresh scenario) into the shared mocked store. Assert on
+  // RSR0100 specifically.
+  mock.tgConfigured = true; mock.awolGroupId = '-1006667778889';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; });
+  await page.evaluate(() => checkAllAbsences());
+  const inDb = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
+
+  // Kiosk B: a SEPARATE browser context/page against the same static server, sharing the
+  // same mocked "DB" (mock.suspensions) through the same intercepted Supabase endpoints.
+  // Driven directly via pageB.evaluate(...) — NOT the 1-arg enterPin() helper, which only
+  // drives the scenario's primary page (currentPage).
+  const ctxB = await newKioskContext(browser, base, manila(2026,7,24,8,5));
+  const pageB = await ctxB.newPage();
+  await pageB.goto(kioskURL, { waitUntil: 'domcontentloaded' });
+  await pageB.waitForFunction(() => typeof loadSuspensionsFromCloud === 'function' && typeof punch === 'function', null, { timeout: 8000 });
+  await pageB.evaluate(() => loadSuspensionsFromCloud());
+  const blockedOnB = await pageB.evaluate(() => !!suspendedEmployees['RSR0100']);
+
+  // Reinstate from A → B's next poll clears it.
+  await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator'));
+  await pageB.evaluate(() => loadSuspensionsFromCloud());
+  const clearedOnB = await pageB.evaluate(() => !suspendedEmployees['RSR0100']);
+  await ctxB.close();
+
+  report('G5 · cross-device block then clear', inDb && blockedOnB && clearedOnB,
+    `A_suspended=${inDb} B_blocked=${blockedOnB} B_cleared=${clearedOnB}`);
+});
+
 // ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================
