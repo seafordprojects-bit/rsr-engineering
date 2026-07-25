@@ -27,15 +27,19 @@
   .hand{ margin-top:8px; }
   .hand .rule{ border-bottom:1px solid #444; height:2.3rem; margin-top:.7rem; }
   .reminder{ margin-top:18px; font-size:13px; font-style:italic; color:#333; border-left:3px solid #999; padding:6px 0 6px 12px; }
-  .sigs{ margin-top:34px; }
-  .sig{ margin-top:40px; }
-  .sig .sigline{ border-bottom:1px solid #333; height:1px; width:75%; }
-  .sig .siglabel{ font-size:12.5px; color:#333; margin-top:5px; }
-  @page{ size:A4; margin:16mm; }
+  .sigs{ margin-top:40px; }
+  .sig{ margin-top:46px; page-break-inside:avoid; break-inside:avoid; }
+  .sig .sigline{ border-bottom:1px solid #333; width:70%; }
+  .sig .siglabel{ font-size:12.5px; color:#333; margin-top:7px; }
+  p, .meta, .dates li, .siglabel{ overflow-wrap:break-word; word-wrap:break-word; }
+  @page{ size:A4; margin:0; }
   @media print{
     html,body{ background:#fff; }
     .screen-bar{ display:none; }
-    .sheet{ width:auto; min-height:auto; margin:0; padding:0; box-shadow:none; }
+    /* Margins come from the sheet's OWN padding (reliable regardless of the print dialog's
+       margin setting) — NOT from @page, which the dialog can override and was clipping the
+       body text and cramping the signature blocks. ~20mm all round = ~2cm. */
+    .sheet{ width:auto; min-height:auto; margin:0; padding:20mm 20mm 18mm; box-shadow:none; }
   }
 </style>
 </head>
