@@ -4600,11 +4600,15 @@ async function sendAbsenceSMS(emp,consecutiveDays){
 
 async function checkAndSendAbsenceSMS(){
   // Run at end of day — check all employees for consecutive absences
+  // Rest-day policy (owner 2026-07-25, mirrors collectAbsentDates): a no-punch Sunday is
+  // transparent — today does NOT count as absent, so no SMS/violation fires for it.
+  const todaySunday=isSundayKey(todayKey());
   for(const emp of employees){
     if(onLeaveToday(emp.code))continue;
     const rec=records[emp.code+'_'+todayKey()];
     const hasTimein=rec&&rec.punches&&rec.punches.timein;
     if(hasTimein)continue; // present today
+    if(todaySunday)continue; // no-punch Sunday = rest day, not absent — don't SMS/log
     const consecutive=getConsecutiveAbsences(emp.code)+1; // +1 for today
     if(consecutive>=1&&consecutive<=3){
       await sendAbsenceSMS(emp,consecutive);

@@ -1162,6 +1162,51 @@ await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', mani
     `suspended=${!!susB} chain=[${chainB.join(', ')}] (worked Monday is i=1, the scan breaks before Fri/Sat are ever reached — distinct from G8c's real 2-absence run)`);
 });
 
+// G9 — SMS/VIOLATION PATH REST-DAY GUARD (this branch's Fix A): checkAndSendAbsenceSMS() must mirror
+// collectAbsentDates' Sunday-transparent rule. Before the fix, a no-punch SUNDAY was always counted
+// as "today absent" (the +1), firing a false AWOL-warning SMS + a bogus violation-history entry on
+// the worker's rest day. semaphoreKey is unset in this harness (no settings row supplies it), so
+// sendSMS() short-circuits before any network fetch — the path is safely drivable end-to-end without
+// extending the external-host mock.
+await scenario('G9 · absence SMS/violation path is Sunday-aware (mirrors collectAbsentDates)', manila(2026,7,19,20,0), async (page) => {
+  // Case 1: "today" IS a real no-punch Sunday → must NOT send SMS / log a violation.
+  const dow = await page.evaluate(() => new Date().getDay()); // 0 = Sunday
+  const todayIsSunday = await page.evaluate(() => isSundayKey(todayKey()));
+  report('G9 · scenario clock is a real Sunday', dow === 0 && todayIsSunday,
+    `getDay()=${dow} isSundayKey(todayKey())=${todayIsSunday}`);
+
+  await page.evaluate(() => {
+    employees = employees.filter(e => e.code === 'RSR0100');
+    employees[0].phone = '09171234567'; // fixture roster has no phone; sendAbsenceSMS no-ops without one
+    smsLog = []; absenceViolations = {};
+  });
+  await page.evaluate(() => checkAndSendAbsenceSMS());
+  const smsCountSunday = await page.evaluate(() => smsLog.length);
+  const violSunday = await page.evaluate(() => absenceViolations['RSR0100']);
+  report('G9a · no-punch Sunday today → NO SMS, NO violation logged', smsCountSunday === 0 && !violSunday,
+    `smsLog.length=${smsCountSunday} violation=${JSON.stringify(violSunday)}`);
+
+  // Case 2: advance to a real non-Sunday day, break the absence chain at i=1 (worked yesterday) so
+  // today is the worker's ONLY absence (consecutive=1) → non-Sunday behavior must stay byte-identical
+  // to before the fix: Day-1 SMS still sent.
+  await setNow(page, manila(2026,7,21,20,0));
+  const dow2 = await page.evaluate(() => new Date().getDay()); // 2 = Tuesday
+  const yesterdayKey = await page.evaluate(() => dateKeyOffset(-1));
+  const yesterdayNotSunday = await page.evaluate(k => !isSundayKey(k), yesterdayKey);
+  report('G9 · scenario clock advanced to a real Tuesday (non-Sunday)', dow2 === 2 && yesterdayNotSunday,
+    `getDay()=${dow2} yesterday=${yesterdayKey} isSunday=${!yesterdayNotSunday}`);
+
+  await page.evaluate(k => {
+    records['RSR0100_' + k] = { punches: { timein: '08:00:00 AM' } }; // worked yesterday → chain breaks at i=1
+    smsLog = []; absenceViolations = {};
+  }, yesterdayKey);
+  await page.evaluate(() => checkAndSendAbsenceSMS());
+  const smsCountTue = await page.evaluate(() => smsLog.length);
+  const dayLogged = await page.evaluate(() => smsLog[0] && smsLog[0].day);
+  report('G9b · no-punch NON-Sunday today (Day 1) → SMS still sent (unaffected by the fix)',
+    smsCountTue === 1 && dayLogged === 1, `smsLog.length=${smsCountTue} day=${dayLogged}`);
+});
+
 // ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================
