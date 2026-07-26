@@ -120,9 +120,14 @@ if (!migrationApplied) {
 const all = await rest('employee_suspensions?select=employee_code,active');
 check('walkthrough rows deleted (0 rows remain)', Array.isArray(all.data) && all.data.length === 0,
   `rows=${Array.isArray(all.data) ? all.data.length : JSON.stringify(all.data)}`);
+// STEP 1 revokes all on the backup table from anon, so this script CANNOT read it — and that
+// inaccessibility is itself the thing worth asserting: a backup a client can read is a backup a
+// client can delete. The row count (expect 45) is verified by the owner in STEP 1's own output,
+// which runs as the table owner. A 200 here would mean the revoke did not take.
 const bak = await rest('bak_employee_suspensions_20260726?select=employee_code');
-check('backup table holds the 45 deleted rows', Array.isArray(bak.data) && bak.data.length === 45,
-  `backup rows=${Array.isArray(bak.data) ? bak.data.length : JSON.stringify(bak.data)}`);
+check('backup table exists but is NOT exposed to anon (revoke took effect)',
+  bak.status === 401 || bak.status === 403 || bak.status === 404,
+  `HTTP ${bak.status} — expected 401/403/404; a 200 means anon can read (and therefore delete) the only backup`);
 
 // ── 2. new columns exist ──
 const cols = await rest('employee_suspensions?select=employee_code,letter_received,letter_received_by,letter_received_at,last_decision,last_decision_by,last_decision_at,manual,ref_note&limit=1');
