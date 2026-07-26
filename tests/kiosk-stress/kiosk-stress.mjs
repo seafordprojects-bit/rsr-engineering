@@ -183,6 +183,7 @@ async function newKioskContext(browser, base, initMs) {
       if (p.endsWith('/rest/v1/rpc/awol_set_suspended')) {
         if (mock.rpcSuspendFail) return json(500, { code: '500', message: 'injected failure (mock.rpcSuspendFail)', details: '', hint: '' });
         let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+        if (/^PEM/i.test(String(b.p_code || '').replace(/\s/g, ''))) return json(200, false);
         const ex = mock.suspensions[b.p_code];
         if (ex && ex.active) return json(200, false);
         mock.suspensions[b.p_code] = { employee_code: b.p_code, active: true, reason: b.p_reason,
@@ -197,6 +198,40 @@ async function newKioskContext(browser, base, initMs) {
         if (!r || !r.active) return json(200, { newly: false });
         r.active = false; r.reinstated_by = b.p_by; r.reinstated_on = b.p_on;
         return json(200, { newly: true, awol_group_msg_id: r.awol_group_msg_id, awol_group_chat: r.awol_group_chat });
+      }
+      // AWOL: dashboard two-step gate RPCs (Task 7 — mocked to mirror the real DB functions
+      // from Task 1: clerk ticks the letter, admin decides; approve is refused without the tick).
+      if (p.endsWith('/rest/v1/rpc/awol_letter_received')) {
+        let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+        const r = mock.suspensions[b.p_code];
+        if (!r || !r.active || r.letter_received) return json(200, { newly: false });
+        r.letter_received = true; r.letter_received_by = b.p_by;
+        return json(200, { newly: true });
+      }
+      if (p.endsWith('/rest/v1/rpc/awol_admin_decide')) {
+        let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+        const r = mock.suspensions[b.p_code];
+        if (!r || !r.active) return json(200, { newly: false, reason: 'not currently suspended' });
+        if (b.p_decision === 'approve') {
+          if (!r.letter_received) return json(200, { newly: false, reason: 'letter not yet confirmed' });
+          r.active = false; r.last_decision = 'approved'; r.reinstated_by = b.p_by;
+          return json(200, { newly: true, awol_group_msg_id: r.awol_group_msg_id, awol_group_chat: r.awol_group_chat });
+        }
+        r.letter_received = false; r.letter_received_by = null; r.last_decision = 'kept';
+        return json(200, { newly: true, kept: true });
+      }
+      if (p.endsWith('/rest/v1/rpc/awol_manual_suspend')) {
+        let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+        if (/^PEM/i.test(String(b.p_code || '').replace(/\s/g, '')))
+          return json(200, { newly: false, reason: 'PAKYAW/PEM workers are exempt from AWOL' });
+        if (!Array.isArray(b.p_dates) || !b.p_dates.length)
+          return json(200, { newly: false, reason: 'at least one absent date is required' });
+        const ex = mock.suspensions[b.p_code];
+        if (ex && ex.active) return json(200, { newly: false, reason: 'already suspended' });
+        mock.suspensions[b.p_code] = { employee_code: b.p_code, active: true, reason: b.p_reason,
+          suspended_on: '', absent_dates: b.p_dates, awol_group_msg_id: null, awol_group_chat: null,
+          letter_received: !!b.p_letter_on_file, manual: true, ref_note: b.p_ref_note || null };
+        return json(200, { newly: true });
       }
       // settings: tg config only when a scenario opts in (keeps existing scenarios' settings=[] behaviour)
       if (p.endsWith('/rest/v1/settings') && method === 'GET') {
@@ -1401,6 +1436,49 @@ await scenario('G9 · absence SMS/violation path is Sunday-aware (mirrors collec
   const dayLogged = await page.evaluate(() => smsLog[0] && smsLog[0].day);
   report('G9b · no-punch NON-Sunday today (Day 1) → SMS still sent (unaffected by the fix)',
     smsCountTue === 1 && dayLogged === 1, `smsLog.length=${smsCountTue} day=${dayLogged}`);
+});
+
+// G14 — THE GATE, CROSS-DEVICE: an approval on the dashboard must lift the block on the kiosks
+// via the existing poller, and an approve attempted without the letter tick must be refused.
+await scenario('G14 · two-step gate lifts the block on every kiosk', manila(2026, 7, 21, 8, 0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1004443332221';
+  await page.evaluate(() => loadTgFromCloud());
+  mock.suspensions['RSR0100'] = { employee_code: 'RSR0100', active: true, reason: 'AWOL',
+    suspended_on: '07/20/2026', absent_dates: ['2026-07-17','2026-07-18','2026-07-20'],
+    awol_group_msg_id: '9100', awol_group_chat: '-1004443332221', letter_received: false };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const blockedBefore = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+
+  // The dashboard's approve RPC, called without the letter tick, must be refused.
+  const refused = await page.evaluate(async () => {
+    const { data } = await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0100', p_by: 'Boss', p_decision: 'approve' });
+    return data;
+  });
+  report('G14a · approve refused before the letter is confirmed',
+    refused && refused.newly === false && /letter/i.test(refused.reason || ''),
+    `response=${JSON.stringify(refused)}`);
+  const stillBlocked = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  report('G14b · worker still blocked after the refused approval', blockedBefore && stillBlocked);
+
+  // Tick, then approve — the kiosk's own poller must clear the block with no kiosk-side action.
+  await page.evaluate(async () => { await sbClient.rpc('awol_letter_received', { p_code: 'RSR0100', p_by: 'Jamaica L. Batucan' }); });
+  await page.evaluate(async () => { await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0100', p_by: 'Boss', p_decision: 'approve' }); });
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const clearedAfter = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  report('G14c · after approval the poller clears the block on this kiosk',
+    !clearedAfter && mock.suspensions['RSR0100'].active === false,
+    `blockedLocally=${clearedAfter} activeInDb=${mock.suspensions['RSR0100'].active}`);
+
+  // Keep-suspended resets the tick and leaves the block in place.
+  mock.suspensions['RSR0207'] = { employee_code: 'RSR0207', active: true, reason: 'AWOL',
+    suspended_on: '07/20/2026', absent_dates: ['2026-07-17','2026-07-18','2026-07-20'],
+    awol_group_msg_id: '9101', awol_group_chat: '-1004443332221', letter_received: true };
+  await page.evaluate(async () => { await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0207', p_by: 'Boss', p_decision: 'keep' }); });
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const stillBlocked207 = await page.evaluate(() => !!suspendedEmployees['RSR0207']);
+  report('G14d · keep-suspended clears the tick and the worker stays blocked',
+    mock.suspensions['RSR0207'].active === true && mock.suspensions['RSR0207'].letter_received === false && stillBlocked207,
+    `activeInDb=${mock.suspensions['RSR0207'].active} letter=${mock.suspensions['RSR0207'].letter_received} blocked=${stillBlocked207}`);
 });
 
 // ==============================================================================
