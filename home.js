@@ -418,6 +418,18 @@ function AwolSuspensions({ emps, flash }) {
         if (!res || res.newly !== true) { setErr(res && res.reason ? res.reason : 'Could not save.'); return; }
         await notifyAwol(`⛔ <b>Kept suspended</b>\n👤 ${nm} (${code}) — decided by ${actor} on ${today} · letter step reset`);
         flash(nm + ' stays suspended');
+      } else if (ask.decision === 'manual') {
+        const dates = String(ask.dates || '').split(',').map(s => s.trim()).filter(Boolean);
+        if (!dates.length) { setErr('at least one absent date is required'); return; }
+        const { data: res } = await supabase.rpc('awol_manual_suspend', {
+          p_code: code, p_by: actor, p_reason: ask.reason || 'Manual suspension',
+          p_dates: dates, p_ref_note: ask.refNote || null, p_letter_on_file: !!ask.letterOnFile,
+        });
+        if (!res || res.newly !== true) { setErr(res && res.reason ? res.reason : 'Could not suspend.'); return; }
+        const kind = ask.letterOnFile ? 'Suspended (manual re-suspension)' : 'Suspended (manual)';
+        await notifyAwol(`🚨 <b>AWOL — ${kind}</b>\n👤 ${nm} (${code})\n📅 Absent: ${dates.join(', ')}\nReason: ${ask.reason || '—'}${ask.refNote ? `\n↩️ ${ask.refNote}` : ''}`);
+        setManual(null);
+        flash(nm + ' is suspended');
       }
       setAsk(null); setPin('');
       await load();
@@ -469,13 +481,50 @@ function AwolSuspensions({ emps, flash }) {
             <div class="name">${nameOf(e.employee_code)}</div>
             <div class="unit">${e.event === 'reinstated' ? 'Approved' : e.event === 'kept_suspended' ? 'Kept suspended' : 'Cancelled — leave approved'} · ${e.actor || '—'} · ${e.at ? new Date(e.at).toLocaleDateString('en-PH') : ''}</div>
           </div>
+          ${e.event !== 'cancelled_leave_approved' ? html`
+            <button class="btn ghost" onClick=${() => {
+              const prev = closedRows.find(r => r.employee_code === e.employee_code) || {};
+              setAsk({ code: e.employee_code, name: nameOf(e.employee_code), decision: 'manual',
+                reason: 'Re-suspended after an approval made in error',
+                dates: (Array.isArray(prev.absent_dates) ? prev.absent_dates : []).join(', '),
+                refNote: `manual re-suspension, ref: case of ${prev.suspended_on || (e.at ? new Date(e.at).toLocaleDateString('en-PH') : '—')} — letter already on file`,
+                letterOnFile: true });
+              setPin(''); setErr('');
+            }}>Re-suspend (letter on file)</button>` : ''}
         </div>`)
         : html`<div class="empty">No closed cases yet.</div>`}
+
+      <div class="sectlabel">Suspend someone manually</div>
+      ${manual == null
+        ? html`<button class="btn ghost" onClick=${() => setManual({ code: '', reason: '', dates: '' })}>Suspend someone manually</button>`
+        : html`
+          <div style="display:grid;gap:8px">
+            <select data-manual-emp value=${manual.code} onChange=${e => setManual(m => ({ ...m, code: e.target.value }))}>
+              <option value="">— choose a worker —</option>
+              ${(emps || []).filter(e => !/^PEM/i.test(String(e.code).replace(/\s/g, '').toUpperCase()))
+                .map(e => html`<option value=${e.code} key=${e.code}>${e.name} (${e.code})</option>`)}
+            </select>
+            <input data-manual-reason placeholder="Reason" value=${manual.reason} onInput=${e => setManual(m => ({ ...m, reason: e.target.value }))} />
+            <input data-manual-dates placeholder="Absent dates, comma separated (e.g. 2026-07-22, 2026-07-23)" value=${manual.dates} onInput=${e => setManual(m => ({ ...m, dates: e.target.value }))} />
+            <p class="note" style="margin:0">At least one date is required — the printable letter is built from these.</p>
+            <span style="display:flex;gap:8px">
+              <button class="btn" onClick=${() => {
+                if (!manual.code) { flash('Choose a worker'); return; }
+                setAsk({ code: manual.code, name: nameOf(manual.code), decision: 'manual',
+                  reason: manual.reason, dates: manual.dates, refNote: null, letterOnFile: false });
+                setPin(''); setErr('');
+              }}>Create suspension</button>
+              <button class="btn ghost" onClick=${() => setManual(null)}>Cancel</button>
+            </span>
+          </div>`}
     </div>
 
     ${ask && html`
       <div class="card" style="border-color:var(--hivis)">
-        <label>${ask.decision === 'approve' ? 'Approve ' + ask.name : ask.decision === 'keep' ? 'Keep ' + ask.name + ' suspended' : 'Confirm the letter for ' + ask.name}</label>
+        <label>${ask.decision === 'approve' ? 'Approve ' + ask.name
+          : ask.decision === 'keep' ? 'Keep ' + ask.name + ' suspended'
+          : ask.decision === 'manual' ? (ask.letterOnFile ? 'Re-suspend ' + ask.name : 'Suspend ' + ask.name)
+          : 'Confirm the letter for ' + ask.name}</label>
         <p class="note" style="margin:0 0 10px">Enter the 6-digit admin PIN to sign this decision.</p>
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:280px">
           ${['1','2','3','4','5','6','7','8','9','0'].map(d => html`

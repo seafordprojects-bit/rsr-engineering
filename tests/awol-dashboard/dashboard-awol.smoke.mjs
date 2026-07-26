@@ -203,6 +203,43 @@ await admin.waitForSelector('text=Nothing waiting on you.');   // proves the pos
 check('admin: no Approve button while the case is waiting for the letter',
   !(await admin.isVisible('button:has-text("Approve")')));
 
+// ── manual re-suspension (wrong-approval recovery) ──────────────────────────────
+state.suspensions['RSR 0006'].letter_received = true;
+state.events.push({ id: 1, employee_code: 'RSR 0006', event: 'reinstated', actor: 'Admin', at: '2026-07-26T02:00:00Z' });
+await admin.reload({ waitUntil: 'networkidle' });
+for (const d of '123456') await admin.click(`button:has-text("${d}")`);
+await admin.click('button:has-text("Approve")');
+for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
+await admin.waitForSelector('text=Baby Monterola can punch again');   // proves awol_admin_decide('approve') resolved
+check('admin: approve closes the case', state.suspensions['RSR 0006'].active === false);
+
+await admin.click('button:has-text("Re-suspend (letter on file)")');
+for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
+await admin.waitForSelector('text=Baby Monterola is suspended');   // proves awol_manual_suspend resolved
+check('admin: re-suspension carries the letter forward and lands at "needs decision"',
+  state.suspensions['RSR 0006'].active === true &&
+  state.suspensions['RSR 0006'].letter_received === true &&
+  /letter already on file/i.test(state.suspensions['RSR 0006'].ref_note || ''),
+  JSON.stringify(state.suspensions['RSR 0006']));
+
+// ── manual suspension: PEM workers must not be offered ──────────────────────────
+await admin.click('button:has-text("Suspend someone manually")');
+const options = await admin.$$eval('select[data-manual-emp] option', els => els.map(e => e.value));
+check('admin: PEM workers are not listed for manual suspension',
+  !options.some(v => /^PEM/i.test(String(v).replace(/\s/g, ''))) && options.some(v => /RSR/.test(v)),
+  `options=${JSON.stringify(options)}`);
+
+// ── manual suspension: at least one date is required ─────────────────────────────
+await admin.selectOption('select[data-manual-emp]', 'RSR 0025');
+await admin.fill('input[data-manual-reason]', 'no-show, no contact');
+await admin.fill('input[data-manual-dates]', '');
+await admin.click('button:has-text("Create suspension")');
+for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
+await admin.waitForSelector('text=at least one absent date');
+check('admin: manual suspension refused with no dates',
+  (!state.suspensions['RSR 0025'] || state.suspensions['RSR 0025'].active !== true) &&
+  !state.rpcCalls.some(c => c[0] === 'manual' && c[1] === 'RSR 0025'));
+
 await browser.close();
 server.close();
 console.log(`\n${pass} passed, ${fail} failed, ${pending} pending\n`);
