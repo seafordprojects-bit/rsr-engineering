@@ -20,12 +20,25 @@ const rest = async (path, init) => {
   return { status: r.status, data: await r.json().catch(() => null) };
 };
 
+// ── 0. migration probe — is awol-reinstate-flow.sql applied yet? ──
+// awol_is_pem() is created in STEP 5 of the migration and did not exist before it. Two of the RPCs
+// this script otherwise calls (awol_set_suspended, awol_reinstate) already existed in production
+// from an earlier build — running the mutating sections below against a pre-migration database
+// once wrote two real probe rows (TEST999, PEM TEST9) straight into live data. Detect that state up
+// front and keep this run to schema/read-only checks until the migration is confirmed present.
+const probe = await rpc('awol_is_pem', { p_code: 'PROBE' });
+const migrationApplied = typeof probe.data === 'boolean';
+if (!migrationApplied) {
+  console.log('\x1b[33mNOTICE\x1b[0m: migration not yet applied — awol_is_pem() was not found.');
+  console.log('Running schema/read-only checks only (rows, columns, clerk seed). No RPC that writes will be called.\n');
+}
+
 // ── 1. cleanup landed ──
 const all = await rest('employee_suspensions?select=employee_code,active');
 check('walkthrough rows deleted (0 rows remain)', Array.isArray(all.data) && all.data.length === 0,
   `rows=${Array.isArray(all.data) ? all.data.length : JSON.stringify(all.data)}`);
 const bak = await rest('bak_employee_suspensions_20260726?select=employee_code');
-check('backup table holds the 43 deleted rows', Array.isArray(bak.data) && bak.data.length === 43,
+check('backup table holds the 45 deleted rows', Array.isArray(bak.data) && bak.data.length === 45,
   `backup rows=${Array.isArray(bak.data) ? bak.data.length : JSON.stringify(bak.data)}`);
 
 // ── 2. new columns exist ──
@@ -39,71 +52,85 @@ check('exactly one AWOL clerk, and it is RSR 0025',
   clerks.data[0].code.replace(/\s/g, '').toUpperCase() === 'RSR0025',
   JSON.stringify(clerks.data));
 
-// ── 4. PEM guard ──
-check('awol_is_pem("PEM 0001") is true',  (await rpc('awol_is_pem', { p_code: 'PEM 0001' })).data === true);
-check('awol_is_pem("PEM9001") is true',   (await rpc('awol_is_pem', { p_code: 'PEM9001' })).data === true);
-check('awol_is_pem("RSR 0006") is false', (await rpc('awol_is_pem', { p_code: 'RSR 0006' })).data === false);
-const pemSet = await rpc('awol_set_suspended', { p_code: 'PEM TEST9', p_reason: 'probe', p_dates: ['2026-07-20'], p_on: '07/26/2026' });
-check('awol_set_suspended refuses a PEM code', pemSet.data === false, JSON.stringify(pemSet.data));
-const pemMan = await rpc('awol_manual_suspend', { p_code: 'PEM TEST9', p_by: 'probe', p_reason: 'probe', p_dates: ['2026-07-20'], p_ref_note: null, p_letter_on_file: false });
-check('awol_manual_suspend refuses a PEM code', pemMan.data && pemMan.data.newly === false, JSON.stringify(pemMan.data));
+if (!migrationApplied) {
+  console.log(`\n${pass} passed, ${fail} failed\n`);
+  console.log('Mutating sections (PEM guard writes, the two-step gate, manual suspension, clerk PIN, audit log)');
+  console.log('were SKIPPED and wrote nothing. Re-run this script after the owner applies awol-reinstate-flow.sql.');
+  process.exit(fail ? 1 : 0);
+}
 
-// ── 5. the two-step gate, end to end, on a throwaway code ──
-const s1 = await rpc('awol_set_suspended', { p_code: 'TEST999', p_reason: 'probe', p_dates: ['2026-07-20'], p_on: '07/26/2026' });
-check('probe suspension created (newly=true)', s1.data === true, JSON.stringify(s1.data));
-const early = await rpc('awol_admin_decide', { p_code: 'TEST999', p_by: 'probe', p_decision: 'approve' });
-check('approve REFUSED before the letter is confirmed',
-  early.data && early.data.newly === false && /letter/i.test(early.data.reason || ''), JSON.stringify(early.data));
-const tick = await rpc('awol_letter_received', { p_code: 'TEST999', p_by: 'probe-clerk' });
-check('letter tick accepted (newly=true)', tick.data && tick.data.newly === true, JSON.stringify(tick.data));
-const tick2 = await rpc('awol_letter_received', { p_code: 'TEST999', p_by: 'probe-clerk' });
-check('second letter tick is idempotent (newly=false)', tick2.data && tick2.data.newly === false, JSON.stringify(tick2.data));
-const keep = await rpc('awol_admin_decide', { p_code: 'TEST999', p_by: 'probe-admin', p_decision: 'keep' });
-check('keep-suspended accepted', keep.data && keep.data.newly === true && keep.data.kept === true, JSON.stringify(keep.data));
-const afterKeep = await rest('employee_suspensions?select=active,letter_received&employee_code=eq.TEST999');
-check('keep leaves the row ACTIVE and clears the tick',
-  afterKeep.data && afterKeep.data[0] && afterKeep.data[0].active === true && afterKeep.data[0].letter_received === false,
-  JSON.stringify(afterKeep.data));
-const early2 = await rpc('awol_admin_decide', { p_code: 'TEST999', p_by: 'probe', p_decision: 'approve' });
-check('approve refused again after keep reset the tick', early2.data && early2.data.newly === false, JSON.stringify(early2.data));
-await rpc('awol_letter_received', { p_code: 'TEST999', p_by: 'probe-clerk' });
-const appr = await rpc('awol_admin_decide', { p_code: 'TEST999', p_by: 'probe-admin', p_decision: 'approve' });
-check('approve accepted once the letter is confirmed', appr.data && appr.data.newly === true, JSON.stringify(appr.data));
-const afterAppr = await rest('employee_suspensions?select=active,last_decision&employee_code=eq.TEST999');
-check('approve sets active=false, last_decision=approved',
-  afterAppr.data && afterAppr.data[0] && afterAppr.data[0].active === false && afterAppr.data[0].last_decision === 'approved',
-  JSON.stringify(afterAppr.data));
+// From here on the migration is confirmed present, so it is safe to exercise the mutating RPCs.
+// Still wrapped in try/catch: an unexpected error here (a table that vanished mid-run, a network
+// blip) must be reported as a failed check, not a stack trace that skips the summary line below.
+try {
+  // ── 4. PEM guard ──
+  check('awol_is_pem("PEM 0001") is true',  (await rpc('awol_is_pem', { p_code: 'PEM 0001' })).data === true);
+  check('awol_is_pem("PEM9001") is true',   (await rpc('awol_is_pem', { p_code: 'PEM9001' })).data === true);
+  check('awol_is_pem("RSR 0006") is false', (await rpc('awol_is_pem', { p_code: 'RSR 0006' })).data === false);
+  const pemSet = await rpc('awol_set_suspended', { p_code: 'PEM TEST9', p_reason: 'probe', p_dates: ['2026-07-20'], p_on: '07/26/2026' });
+  check('awol_set_suspended refuses a PEM code', pemSet.data === false, JSON.stringify(pemSet.data));
+  const pemMan = await rpc('awol_manual_suspend', { p_code: 'PEM TEST9', p_by: 'probe', p_reason: 'probe', p_dates: ['2026-07-20'], p_ref_note: null, p_letter_on_file: false });
+  check('awol_manual_suspend refuses a PEM code', pemMan.data && pemMan.data.newly === false, JSON.stringify(pemMan.data));
 
-// ── 6. manual suspension + date requirement ──
-const noDates = await rpc('awol_manual_suspend', { p_code: 'TEST999', p_by: 'probe', p_reason: 'probe', p_dates: [], p_ref_note: null, p_letter_on_file: false });
-check('manual suspension refused with no absent dates',
-  noDates.data && noDates.data.newly === false && /date/i.test(noDates.data.reason || ''), JSON.stringify(noDates.data));
-const re = await rpc('awol_manual_suspend', { p_code: 'TEST999', p_by: 'probe-admin', p_reason: 'probe re-suspension', p_dates: ['2026-07-20'], p_ref_note: 'manual re-suspension, ref: case of 07/26/2026 — letter already on file', p_letter_on_file: true });
-check('manual re-suspension accepted', re.data && re.data.newly === true, JSON.stringify(re.data));
-const afterRe = await rest('employee_suspensions?select=active,letter_received,manual,ref_note&employee_code=eq.TEST999');
-check('re-suspension lands straight at "needs decision" (letter_received=true, manual=true)',
-  afterRe.data && afterRe.data[0] && afterRe.data[0].active === true &&
-  afterRe.data[0].letter_received === true && afterRe.data[0].manual === true && !!afterRe.data[0].ref_note,
-  JSON.stringify(afterRe.data));
+  // ── 5. the two-step gate, end to end, on a throwaway code ──
+  const s1 = await rpc('awol_set_suspended', { p_code: 'TEST999', p_reason: 'probe', p_dates: ['2026-07-20'], p_on: '07/26/2026' });
+  check('probe suspension created (newly=true)', s1.data === true, JSON.stringify(s1.data));
+  const early = await rpc('awol_admin_decide', { p_code: 'TEST999', p_by: 'probe', p_decision: 'approve' });
+  check('approve REFUSED before the letter is confirmed',
+    early.data && early.data.newly === false && /letter/i.test(early.data.reason || ''), JSON.stringify(early.data));
+  const tick = await rpc('awol_letter_received', { p_code: 'TEST999', p_by: 'probe-clerk' });
+  check('letter tick accepted (newly=true)', tick.data && tick.data.newly === true, JSON.stringify(tick.data));
+  const tick2 = await rpc('awol_letter_received', { p_code: 'TEST999', p_by: 'probe-clerk' });
+  check('second letter tick is idempotent (newly=false)', tick2.data && tick2.data.newly === false, JSON.stringify(tick2.data));
+  const keep = await rpc('awol_admin_decide', { p_code: 'TEST999', p_by: 'probe-admin', p_decision: 'keep' });
+  check('keep-suspended accepted', keep.data && keep.data.newly === true && keep.data.kept === true, JSON.stringify(keep.data));
+  const afterKeep = await rest('employee_suspensions?select=active,letter_received&employee_code=eq.TEST999');
+  check('keep leaves the row ACTIVE and clears the tick',
+    afterKeep.data && afterKeep.data[0] && afterKeep.data[0].active === true && afterKeep.data[0].letter_received === false,
+    JSON.stringify(afterKeep.data));
+  const early2 = await rpc('awol_admin_decide', { p_code: 'TEST999', p_by: 'probe', p_decision: 'approve' });
+  check('approve refused again after keep reset the tick', early2.data && early2.data.newly === false, JSON.stringify(early2.data));
+  await rpc('awol_letter_received', { p_code: 'TEST999', p_by: 'probe-clerk' });
+  const appr = await rpc('awol_admin_decide', { p_code: 'TEST999', p_by: 'probe-admin', p_decision: 'approve' });
+  check('approve accepted once the letter is confirmed', appr.data && appr.data.newly === true, JSON.stringify(appr.data));
+  const afterAppr = await rest('employee_suspensions?select=active,last_decision&employee_code=eq.TEST999');
+  check('approve sets active=false, last_decision=approved',
+    afterAppr.data && afterAppr.data[0] && afterAppr.data[0].active === false && afterAppr.data[0].last_decision === 'approved',
+    JSON.stringify(afterAppr.data));
 
-// ── 7. clerk PIN check ──
-const badPin = await rpc('awol_clerk_for_pin', { p_pin: '000000' });
-check('awol_clerk_for_pin rejects an unknown PIN and leaks nothing',
-  badPin.data && badPin.data.ok === false && !badPin.data.code && !badPin.data.name, JSON.stringify(badPin.data));
+  // ── 6. manual suspension + date requirement ──
+  const noDates = await rpc('awol_manual_suspend', { p_code: 'TEST999', p_by: 'probe', p_reason: 'probe', p_dates: [], p_ref_note: null, p_letter_on_file: false });
+  check('manual suspension refused with no absent dates',
+    noDates.data && noDates.data.newly === false && /date/i.test(noDates.data.reason || ''), JSON.stringify(noDates.data));
+  const re = await rpc('awol_manual_suspend', { p_code: 'TEST999', p_by: 'probe-admin', p_reason: 'probe re-suspension', p_dates: ['2026-07-20'], p_ref_note: 'manual re-suspension, ref: case of 07/26/2026 — letter already on file', p_letter_on_file: true });
+  check('manual re-suspension accepted', re.data && re.data.newly === true, JSON.stringify(re.data));
+  const afterRe = await rest('employee_suspensions?select=active,letter_received,manual,ref_note&employee_code=eq.TEST999');
+  check('re-suspension lands straight at "needs decision" (letter_received=true, manual=true)',
+    afterRe.data && afterRe.data[0] && afterRe.data[0].active === true &&
+    afterRe.data[0].letter_received === true && afterRe.data[0].manual === true && !!afterRe.data[0].ref_note,
+    JSON.stringify(afterRe.data));
 
-// ── 8. audit log ──
-const ev = await rest('awol_events?select=event,actor&employee_code=eq.TEST999&order=at.asc');
-const names = (ev.data || []).map(e => e.event);
-check('awol_events recorded the whole probe lifecycle',
-  ['suspended', 'letter_received', 'kept_suspended', 'reinstated', 'suspended_manual'].every(e => names.includes(e)),
-  `events=${names.join(', ')}`);
+  // ── 7. clerk PIN check ──
+  const badPin = await rpc('awol_clerk_for_pin', { p_pin: '000000' });
+  check('awol_clerk_for_pin rejects an unknown PIN and leaks nothing',
+    badPin.data && badPin.data.ok === false && !badPin.data.code && !badPin.data.name, JSON.stringify(badPin.data));
 
-// ── probe rows: report them, do NOT try to delete ──
-// anon holds select/insert/update on employee_suspensions and select/insert on awol_events — by
-// design, so a client can never erase an audit trail. The probe rows are removed by the OWNER via
-// STEP 14 of the SQL file. This script only reports what is left for them to clear.
-const leftover = await rest('employee_suspensions?select=employee_code&or=(employee_code.eq.TEST999,employee_code.eq.PEM%20TEST9)');
-console.log(`\nPROBE ROWS TO CLEAR (owner runs STEP 14): ${(leftover.data || []).map(r => r.employee_code).join(', ') || '(none)'}`);
+  // ── 8. audit log ──
+  const ev = await rest('awol_events?select=event,actor&employee_code=eq.TEST999&order=at.asc');
+  const names = Array.isArray(ev.data) ? ev.data.map(e => e.event) : [];
+  check('awol_events recorded the whole probe lifecycle',
+    Array.isArray(ev.data) && ['suspended', 'letter_received', 'kept_suspended', 'reinstated', 'suspended_manual'].every(e => names.includes(e)),
+    `events=${names.join(', ')}${Array.isArray(ev.data) ? '' : ` (unexpected response: ${JSON.stringify(ev.data)})`}`);
+
+  // ── probe rows: report them, do NOT try to delete ──
+  // anon holds select/insert/update on employee_suspensions and select/insert on awol_events — by
+  // design, so a client can never erase an audit trail. The probe rows are removed by the OWNER via
+  // STEP 14 of the SQL file. This script only reports what is left for them to clear.
+  const leftover = await rest('employee_suspensions?select=employee_code&or=(employee_code.eq.TEST999,employee_code.eq.PEM%20TEST9)');
+  console.log(`\nPROBE ROWS TO CLEAR (owner runs STEP 14): ${(Array.isArray(leftover.data) ? leftover.data : []).map(r => r.employee_code).join(', ') || '(none)'}`);
+} catch (err) {
+  check('mutating RPC checks completed without throwing', false, `threw: ${err && err.stack || err}`);
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

@@ -10,13 +10,17 @@ select count(*) as total,
        count(*) filter (where active)     as active_now,
        count(*) filter (where not active) as inactive
   from public.employee_suspensions;
--- EXPECT (owner-confirmed 2026-07-26): total = 43, active_now = 0, inactive = 43.
+-- EXPECT (owner-confirmed 2026-07-26): total = 45, active_now = 0, inactive = 45.
+-- Of the 45: 43 are the original walkthrough rows, and 2 (TEST999, PEM TEST9) are inactive probe
+-- rows written by the pre-migration verification run (it called two RPCs that already existed in
+-- production from an earlier build). Both are already inactive, so all 45 are removed by STEP 2
+-- below, which deletes inactive rows only.
 -- If active_now > 0 someone is REALLY suspended right now — STOP and re-check before step 2.
 
 -- ── STEP 1 — BACKUP everything before deleting ───────────────────────────────
 create table if not exists public.bak_employee_suspensions_20260726 as
   select * from public.employee_suspensions;
-select count(*) as backed_up from public.bak_employee_suspensions_20260726;   -- expect 43
+select count(*) as backed_up from public.bak_employee_suspensions_20260726;   -- expect 45
 
 -- ── STEP 2 — delete the walkthrough residue (INACTIVE rows only) ─────────────
 -- The `active is not true` guard means this can never delete a live suspension.

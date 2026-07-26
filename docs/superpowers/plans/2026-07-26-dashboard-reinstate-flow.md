@@ -103,12 +103,25 @@ const rest = async (path, init) => {
   return { status: r.status, data: await r.json().catch(() => null) };
 };
 
+// ── 0. migration probe — is awol-reinstate-flow.sql applied yet? ──
+// awol_is_pem() is created in STEP 5 of the migration and did not exist before it. Two of the RPCs
+// this script otherwise calls (awol_set_suspended, awol_reinstate) already existed in production
+// from an earlier build — running the mutating sections below against a pre-migration database
+// once wrote two real probe rows (TEST999, PEM TEST9) straight into live data. Detect that state up
+// front and keep this run to schema/read-only checks until the migration is confirmed present.
+const probe = await rpc('awol_is_pem', { p_code: 'PROBE' });
+const migrationApplied = typeof probe.data === 'boolean';
+if (!migrationApplied) {
+  console.log('\x1b[33mNOTICE\x1b[0m: migration not yet applied — awol_is_pem() was not found.');
+  console.log('Running schema/read-only checks only (rows, columns, clerk seed). No RPC that writes will be called.\n');
+}
+
 // ── 1. cleanup landed ──
 const all = await rest('employee_suspensions?select=employee_code,active');
 check('walkthrough rows deleted (0 rows remain)', Array.isArray(all.data) && all.data.length === 0,
   `rows=${Array.isArray(all.data) ? all.data.length : JSON.stringify(all.data)}`);
 const bak = await rest('bak_employee_suspensions_20260726?select=employee_code');
-check('backup table holds the 43 deleted rows', Array.isArray(bak.data) && bak.data.length === 43,
+check('backup table holds the 45 deleted rows', Array.isArray(bak.data) && bak.data.length === 45,
   `backup rows=${Array.isArray(bak.data) ? bak.data.length : JSON.stringify(bak.data)}`);
 
 // ── 2. new columns exist ──
@@ -122,6 +135,17 @@ check('exactly one AWOL clerk, and it is RSR 0025',
   clerks.data[0].code.replace(/\s/g, '').toUpperCase() === 'RSR0025',
   JSON.stringify(clerks.data));
 
+if (!migrationApplied) {
+  console.log(`\n${pass} passed, ${fail} failed\n`);
+  console.log('Mutating sections (PEM guard writes, the two-step gate, manual suspension, clerk PIN, audit log)');
+  console.log('were SKIPPED and wrote nothing. Re-run this script after the owner applies awol-reinstate-flow.sql.');
+  process.exit(fail ? 1 : 0);
+}
+
+// From here on the migration is confirmed present, so it is safe to exercise the mutating RPCs.
+// Still wrapped in try/catch: an unexpected error here (a table that vanished mid-run, a network
+// blip) must be reported as a failed check, not a stack trace that skips the summary line below.
+try {
 // ── 4. PEM guard ──
 check('awol_is_pem("PEM 0001") is true',  (await rpc('awol_is_pem', { p_code: 'PEM 0001' })).data === true);
 check('awol_is_pem("PEM9001") is true',   (await rpc('awol_is_pem', { p_code: 'PEM9001' })).data === true);
@@ -176,17 +200,20 @@ check('awol_clerk_for_pin rejects an unknown PIN and leaks nothing',
 
 // ── 8. audit log ──
 const ev = await rest('awol_events?select=event,actor&employee_code=eq.TEST999&order=at.asc');
-const names = (ev.data || []).map(e => e.event);
+const names = Array.isArray(ev.data) ? ev.data.map(e => e.event) : [];
 check('awol_events recorded the whole probe lifecycle',
-  ['suspended', 'letter_received', 'kept_suspended', 'reinstated', 'suspended_manual'].every(e => names.includes(e)),
-  `events=${names.join(', ')}`);
+  Array.isArray(ev.data) && ['suspended', 'letter_received', 'kept_suspended', 'reinstated', 'suspended_manual'].every(e => names.includes(e)),
+  `events=${names.join(', ')}${Array.isArray(ev.data) ? '' : ` (unexpected response: ${JSON.stringify(ev.data)})`}`);
 
 // ── probe rows: report them, do NOT try to delete ──
 // anon holds select/insert/update on employee_suspensions and select/insert on awol_events — by
 // design, so a client can never erase an audit trail. The probe rows are removed by the OWNER via
 // STEP 14 of the SQL file. This script only reports what is left for them to clear.
 const leftover = await rest('employee_suspensions?select=employee_code&or=(employee_code.eq.TEST999,employee_code.eq.PEM%20TEST9)');
-console.log(`\nPROBE ROWS TO CLEAR (owner runs STEP 14): ${(leftover.data || []).map(r => r.employee_code).join(', ') || '(none)'}`);
+console.log(`\nPROBE ROWS TO CLEAR (owner runs STEP 14): ${(Array.isArray(leftover.data) ? leftover.data : []).map(r => r.employee_code).join(', ') || '(none)'}`);
+} catch (err) {
+  check('mutating RPC checks completed without throwing', false, `threw: ${err && err.stack || err}`);
+}
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
@@ -200,7 +227,9 @@ process.exit(fail ? 1 : 0);
 RSR_ANON_KEY="$(grep -o "eyJ[A-Za-z0-9._-]*" supabase.js | head -1)" node tests/awol-reinstate-flow/verify-sql.mjs
 ```
 
-Expected: FAIL on nearly every check — `bak_employee_suspensions_20260726` does not exist, the gate columns 404, `awol_is_pem` / `awol_clerk_for_pin` / `awol_letter_received` / `awol_admin_decide` / `awol_manual_suspend` are all "function does not exist", and 43 rows still remain.
+Expected: FAIL on nearly every check — `bak_employee_suspensions_20260726` does not exist, the gate columns 404, `awol_is_pem` is not found, and 45 rows still remain.
+
+**Note:** because the migration is not yet applied, `awol_is_pem` is not found, so the guard at the top of the script now detects this and runs schema checks ONLY (rows, columns, clerk seed) — it exits before reaching any RPC that writes (`awol_set_suspended`, `awol_admin_decide`, `awol_letter_received`, `awol_manual_suspend`). A pre-migration run therefore writes nothing; the earlier version of this script did not have that guard, which is how a pre-migration run once wrote two real probe rows (TEST999, PEM TEST9) into production.
 
 - [ ] **Step 3: Write `awol-reinstate-flow.sql`**
 
@@ -217,13 +246,17 @@ select count(*) as total,
        count(*) filter (where active)     as active_now,
        count(*) filter (where not active) as inactive
   from public.employee_suspensions;
--- EXPECT (owner-confirmed 2026-07-26): total = 43, active_now = 0, inactive = 43.
+-- EXPECT (owner-confirmed 2026-07-26): total = 45, active_now = 0, inactive = 45.
+-- Of the 45: 43 are the original walkthrough rows, and 2 (TEST999, PEM TEST9) are inactive probe
+-- rows written by the pre-migration verification run (it called two RPCs that already existed in
+-- production from an earlier build). Both are already inactive, so all 45 are removed by STEP 2
+-- below, which deletes inactive rows only.
 -- If active_now > 0 someone is REALLY suspended right now — STOP and re-check before step 2.
 
 -- ── STEP 1 — BACKUP everything before deleting ───────────────────────────────
 create table if not exists public.bak_employee_suspensions_20260726 as
   select * from public.employee_suspensions;
-select count(*) as backed_up from public.bak_employee_suspensions_20260726;   -- expect 43
+select count(*) as backed_up from public.bak_employee_suspensions_20260726;   -- expect 45
 
 -- ── STEP 2 — delete the walkthrough residue (INACTIVE rows only) ─────────────
 -- The `active is not true` guard means this can never delete a live suspension.
