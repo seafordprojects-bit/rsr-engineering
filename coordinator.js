@@ -287,14 +287,31 @@ function Personnel({ employees, onReload, toast }) {
   const [saving, setSaving] = useState(false);
 
   // next code in a series, e.g. "RSR 0001" → "RSR 0002"
+  // Canonical employee-code form: upper-cased with ALL whitespace stripped.
+  // 'rsr 0025' / 'RSR0025' / 'RSR 0025' all collapse to 'RSR0025'. This mirrors normCode in the
+  // kiosk and payroll, and the SQL idiom upper(regexp_replace(code,'\s','','g')) used in the
+  // migrations — the system treats those spellings as the SAME person everywhere else.
+  const normCode = (c) => String(c == null ? '' : c).replace(/\s/g, '').toUpperCase();
+
+  // (2026-07-27) BUG FIX. This is the ONLY function that mints a new employee code, so a mistake
+  // here creates a second worker who is indistinguishable from an existing one.
+  // It previously scanned with `c.startsWith(prefix + ' ')` — requiring a literal space and exact
+  // case. Any existing code stored WITHOUT the space (or lower-cased) was therefore invisible to
+  // the scan, so `max` came out too low and this function could hand a new hire a code that
+  // normalizes to one already in use. Nothing downstream would object: attendance, payroll, leave
+  // and AWOL all match on the NORMALIZED code, so two people would silently share one identity —
+  // one man's punches paying the other. No error, no warning.
+  // Fixed by scanning the normalized form, so every spelling is seen.
   const nextCode = (prefix) => {
+    const p = normCode(prefix);
     let max = 0;
     (employees || []).forEach(e => {
-      const c = e.code || '';
-      if (c.startsWith(prefix + ' ')) {
-        const n = parseInt(c.slice(prefix.length + 1), 10);
-        if (!isNaN(n) && n > max) max = n;
-      }
+      const k = normCode(e.code);
+      if (!k.startsWith(p)) return;
+      const tail = k.slice(p.length);
+      if (!/^\d+$/.test(tail)) return;          // only pure-numeric tails are part of the series
+      const n = parseInt(tail, 10);
+      if (n > max) max = n;
     });
     return prefix + ' ' + String(max + 1).padStart(4, '0');
   };
@@ -311,6 +328,16 @@ function Personnel({ employees, onReload, toast }) {
         await updateEmployee(editKey, { name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null });
         toast('Employee updated');
       } else {
+        // Belt-and-braces collision guard. nextCode is now normalization-aware, but this is the
+        // last point before a duplicate identity becomes permanent, so refuse rather than risk it:
+        // two employees sharing a normalized code would silently share attendance and pay.
+        // Fails CLOSED on purpose — creating the wrong worker is far worse than refusing to create
+        // one, and the coordinator can simply call it in.
+        const clash = (employees || []).find(e => normCode(e.code) === normCode(autoCode));
+        if (clash) {
+          toast(`Cannot add — code ${autoCode} already belongs to ${clash.name} (${clash.code}). Tell the admin.`, true);
+          return;
+        }
         await addEmployee({ id: crypto.randomUUID(), code: autoCode, name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null, sl_balance: 0, vl_balance: 0 });
         toast('Employee added · ' + autoCode);
       }
