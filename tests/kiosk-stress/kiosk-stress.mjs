@@ -48,6 +48,9 @@ const ROSTER = [
   { code: 'PEM9001', pin: '900001', name: 'PEM Niner Pedro',     dept: 'Electrical', home_site: 'Mandaue', shift: 8, daily_rate: 700 },
   { code: 'PEM9042', pin: '987654', name: 'PEM Band Bella',      dept: 'Instrument', home_site: 'Carmen',  shift: 8, daily_rate: 680 },
   { code: 'RSR0303', pin: '333333', name: 'Night-Owl Nardo',     dept: 'Blasting',   home_site: 'Mandaue', shift: 8, daily_rate: 560 },
+  // G15 fixtures (never-punched/30-day safety net + inactive skip):
+  { code: 'RSR0404', pin: '404040', name: 'Old-Punch Ofelia',    dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 510 },
+  { code: 'RSR0500', pin: '500500', name: 'Inactive Ising',      dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 510, is_active: false },
 ];
 const pinOf = (code) => ROSTER.find(r => r.code === code).pin;
 
@@ -990,8 +993,13 @@ await scenario('G1 · suspended PIN → blocking modal, no punch', manila(2026,7
 await scenario('G2 · 3 absences, no leave → suspend + letter alert', manila(2026,7,24,8,0), async (page) => {
   mock.tgConfigured = true; mock.awolGroupId = '-1009998887776';
   await page.evaluate(() => loadTgFromCloud());
-  // RSR0100 has no records for prior days → absent; ensure not already suspended.
-  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; });
+  // RSR0100 has no records for the recent absent window → absent; ensure not already suspended.
+  // Seeded a real timein 25 days back (outside collectAbsentDates' 21-day lookback, so it plays no
+  // part in the absence chain itself) so hasRecentPunchHistory() sees a worker WITH history who has
+  // since gone quiet — the G15 safety net is scoped to workers with NO punch in 30 days, and this
+  // worker must still be judged absent/suspended, unlike G15's never-punched Mandaue case.
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; });
   await page.evaluate(() => checkAllAbsences());
   const alert = mock.telegram.find(m => m.method === 'sendMessage' && m.chat_id === '-1009998887776' && /AWOL — Account Suspended/.test(m.text));
   const hasLetter = alert && /awol-letter\.html\?name=/.test(alert.text) && /dates=/.test(alert.text);
@@ -1006,6 +1014,7 @@ await scenario('G3 · pending leave → HOLD, flag once', manila(2026,7,24,8,0),
   mock.tgConfigured = true; mock.awolGroupId = '-1009998887776';
   await page.evaluate(() => loadTgFromCloud());
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; // recent-enough history (see G2)
     leaveRequests = [{ code:'RSR0100', status:'Pending', startDate:'2026-07-21', endDate:'2026-07-24' }]; });
   await page.evaluate(() => checkAllAbsences());
   await page.evaluate(() => checkAllAbsences()); // second run must NOT re-flag
@@ -1046,7 +1055,8 @@ await scenario('G5 · cross-device block + clear', manila(2026,7,24,8,0), async 
   // RSR0100 specifically.
   mock.tgConfigured = true; mock.awolGroupId = '-1006667778889';
   await page.evaluate(() => loadTgFromCloud());
-  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; });
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // recent-enough history (see G2)
   await page.evaluate(() => checkAllAbsences());
   const inDb = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
 
@@ -1077,7 +1087,8 @@ await scenario('G5 · cross-device block + clear', manila(2026,7,24,8,0), async 
 await scenario('G6 · offline suspend survives poll + syncs on retry', manila(2026,7,24,8,0), async (page) => {
   mock.tgConfigured = true; mock.awolGroupId = '-1002223334445'; mock.rpcSuspendFail = true;
   await page.evaluate(() => loadTgFromCloud());
-  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {}; });
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {};
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // recent-enough history (see G2)
   await page.evaluate(() => checkAllAbsences());
   const blockedOffline = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
   const notInDbYet = mock.suspensions['RSR0100'] === undefined;
@@ -1103,7 +1114,8 @@ await scenario('G6 · offline suspend survives poll + syncs on retry', manila(20
 await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurrection)', manila(2026,7,24,8,0), async (page) => {
   mock.tgConfigured = true; mock.awolGroupId = '-1007778889990';
   await page.evaluate(() => loadTgFromCloud());
-  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {}; });
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {};
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // recent-enough history (see G2)
 
   // Offline suspend: RPC fails → local block only, never reaches the DB.
   mock.rpcSuspendFail = true;
@@ -1479,6 +1491,79 @@ await scenario('G14 · two-step gate lifts the block on every kiosk', manila(202
   report('G14d · keep-suspended clears the tick and the worker stays blocked',
     mock.suspensions['RSR0207'].active === true && mock.suspensions['RSR0207'].letter_received === false && stillBlocked207,
     `activeInDb=${mock.suspensions['RSR0207'].active} letter=${mock.suspensions['RSR0207'].letter_received} blocked=${stillBlocked207}`);
+});
+
+// G15 — NEVER-PUNCHED / 30-DAY SAFETY NET + INACTIVE SKIP (Task 9, owner 2026-07-26): the owner's
+// ship-gate test ("point AWOL detection at real attendance, prove it suspends nobody") FAILED,
+// flagging 10 workers. Root causes: (1) the Mandaue yard has never had a working kiosk (goes live
+// this Tue/Wed) — its workers have ZERO punches on file, tracked on paper instead, and must never be
+// judged AWOL for a data gap that isn't their fault; (2) two workers no longer work here at all.
+// hasRecentPunchHistory() (kiosk/index.html) must skip anyone with no real Time In in the last 30
+// days, and checkAllAbsences() must also skip anyone flagged is_active === false — but a worker who
+// DOES have recent history and then racks up 3+ real absences must STILL be suspended (Case 3: the
+// check that matters most — this rule must not silently disable detection wholesale).
+await scenario('G15 · never-punched/30-day safety net + inactive skip (owner 2026-07-26)', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1003332221110';
+  await page.evaluate(() => loadTgFromCloud());
+  // Snapshot the full roster once so each case can re-filter `employees` from the same starting
+  // point, same pattern as G8/G10 above (filtering is destructive/reassigning).
+  await page.evaluate(() => { window.__g15Roster = employees.slice(); });
+
+  // ── Case 1 (RSR0002, Mandaue) — NO punches at all, ever. The exact Mandaue situation. ──────────
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    employees = window.__g15Roster.filter(e => e.code === 'RSR0002'); });
+  // Proves the OLD chain logic (collectAbsentDates, untouched by this fix) still sees a long
+  // absence run here — the ONLY thing standing between this worker and a wrongful suspension is the
+  // new hasRecentPunchHistory() skip inside checkAllAbsences.
+  const chain1 = await page.evaluate(() => collectAbsentDates('RSR0002'));
+  await page.evaluate(() => checkAllAbsences());
+  const susNever = !!(mock.suspensions['RSR0002'] && mock.suspensions['RSR0002'].active);
+  const alertedNever = mock.telegram.some(m => /RSR0002/.test(m.text));
+  report('G15a · never-punched worker (Mandaue case) → NOT suspended, no alert', !susNever && !alertedNever && chain1.length >= 3,
+    `chain=${chain1.length} suspended=${susNever} alerted=${alertedNever}`);
+
+  // ── Case 2 (RSR0404) — only punch on file is 40 days ago, nothing since. Too stale to judge. ───
+  mock.telegram = [];
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    employees = window.__g15Roster.filter(e => e.code === 'RSR0404');
+    records['RSR0404_06/14/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // 40 days before 07/24/2026
+  const historyStale = await page.evaluate(() => hasRecentPunchHistory('RSR0404'));
+  await page.evaluate(() => checkAllAbsences());
+  const susStale = !!(mock.suspensions['RSR0404'] && mock.suspensions['RSR0404'].active);
+  const alertedStale = mock.telegram.some(m => /RSR0404/.test(m.text));
+  report('G15b · only punch on file is 40+ days old → NOT suspended', !historyStale && !susStale && !alertedStale,
+    `hasRecentPunchHistory=${historyStale} suspended=${susStale} alerted=${alertedStale}`);
+
+  // ── Case 3 (RSR0100) — punched 10 days ago (inside the 30-day window), then went quiet and racked
+  // up 3+ real absences. THE CHECK THAT MATTERS MOST: proves the safety net does not disable
+  // detection wholesale — a worker with real recent history who is genuinely absent still suspends.
+  mock.telegram = [];
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    employees = window.__g15Roster.filter(e => e.code === 'RSR0100');
+    records['RSR0100_07/14/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // 10 days before 07/24/2026
+  const historyRecent = await page.evaluate(() => hasRecentPunchHistory('RSR0100'));
+  const chain3 = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  await page.evaluate(() => checkAllAbsences());
+  const susRecent = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alertedRecent = mock.telegram.some(m => /RSR0100/.test(m.text));
+  report('G15c · recent punch (10 days ago) + 3+ absences → STILL suspended (rule is not a blanket disable)',
+    historyRecent && chain3.length >= 3 && susRecent && alertedRecent,
+    `hasRecentPunchHistory=${historyRecent} chain=${chain3.length} suspended=${susRecent} alerted=${alertedRecent}`);
+
+  // ── Case 4 (RSR0500) — is_active=false on the mocked roster, WITH the same 10-day-ago recent
+  // punch as Case 3, so the recency check alone would NOT protect it — proving it is genuinely the
+  // is_active skip, not the recency skip, blocking the suspension.
+  mock.telegram = [];
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    employees = window.__g15Roster.filter(e => e.code === 'RSR0500');
+    records['RSR0500_07/14/2026'] = { punches: { timein: '08:00:00 AM' } }; });
+  const isActiveFlag = await page.evaluate(() => employees.find(e => e.code === 'RSR0500').isActive);
+  await page.evaluate(() => checkAllAbsences());
+  const susInactive = !!(mock.suspensions['RSR0500'] && mock.suspensions['RSR0500'].active);
+  const alertedInactive = mock.telegram.some(m => /RSR0500/.test(m.text));
+  report('G15d · is_active=false worker with a long absence → NOT suspended (recency alone would not have protected it)',
+    isActiveFlag === false && !susInactive && !alertedInactive,
+    `isActive=${isActiveFlag} suspended=${susInactive} alerted=${alertedInactive}`);
 });
 
 // ==============================================================================

@@ -53,7 +53,7 @@ async function editAwolMsg(chat, msgId, text) {
 }
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate, home_site, is_issuer').order('name').limit(2000);
+    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate, home_site, is_issuer, is_active').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
@@ -515,7 +515,7 @@ function AwolSuspensions({ emps, flash }) {
           <div style="display:grid;gap:8px">
             <select data-manual-emp value=${manual.code} onChange=${e => setManual(m => ({ ...m, code: e.target.value }))}>
               <option value="">— choose a worker —</option>
-              ${(emps || []).filter(e => !/^PEM/i.test(String(e.code).replace(/\s/g, '').toUpperCase()))
+              ${(emps || []).filter(e => !/^PEM/i.test(String(e.code).replace(/\s/g, '').toUpperCase()) && e.is_active !== false)
                 .map(e => html`<option value=${e.code} key=${e.code}>${e.name} (${e.code})</option>`)}
             </select>
             <input data-manual-reason placeholder="Reason" value=${manual.reason} onInput=${e => setManual(m => ({ ...m, reason: e.target.value }))} />

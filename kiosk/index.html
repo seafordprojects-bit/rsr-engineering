@@ -2257,13 +2257,31 @@ function collectAbsentDates(empCode){
   return out;
 }
 function getConsecutiveAbsences(empCode){ return collectAbsentDates(empCode).length; }
+// Never-punched / 30-day safety net (owner 2026-07-26): the Mandaue yard has never had a working
+// kiosk (go-live this week) — its workers legitimately have ZERO punches on file (tracked on paper
+// instead) and must never be judged AWOL for it. More generally, a worker with no punch at all in
+// the last 30 days has no meaningful attendance history to judge an absence chain against — so
+// detection must never suspend them. This also makes the Mandaue go-live automatically safe: nobody
+// there can be suspended until they actually start using the kiosk and build up real punch history.
+// Same '(auto-skipped)' exclusion as isAbsentOnDate, so a phantom auto-skip entry never counts as
+// "punched". If in doubt this returns false (skip/no-suspend) — never suspending is the safe direction.
+function hasRecentPunchHistory(empCode){
+  for(let i=0;i<=30;i++){
+    const d=dateKeyOffset(-i);
+    const rec=records[empCode+'_'+d];
+    if(rec&&rec.punches&&rec.punches.timein&&rec.punches.timein!=='(auto-skipped)') return true;
+  }
+  return false;
+}
 async function checkAllAbsences(){
   await retryAwolUnsynced();
   const today=todayKey();
   for(const emp of employees){
     if(isPemCode(emp.code)){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; } // PAKYAW exempt — no suspension, no alert, no HOLD note; defensive clear so a pre-exemption flag can't strand
+    if(emp.isActive===false){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; } // inactive (owner 2026-07-26): no longer works here — never judge AWOL
     if(suspendedEmployees[emp.code])continue;
     if(onLeaveToday(emp.code))continue;
+    if(!hasRecentPunchHistory(emp.code)){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; } // never-punched / 30-day safety net — see helper above
     const dates=collectAbsentDates(emp.code);
     if(dates.length<3){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; }
     const iso=dates.map(awolISO);
@@ -5448,6 +5466,7 @@ async function loadEmployeesFromSupabase() {
           network: se.network || 'smart', homeSite: siteNorm(se.home_site) || '',
           shift: se.shift || 8, dailyRate: se.daily_rate || 500,
           pin: se.pin || '',
+          isActive: se.is_active !== false, // AWOL never-suspend-inactive skip (owner 2026-07-26); missing column/undefined defaults to active
           balance: { VL: se.vl_balance ?? 2, SL: se.sl_balance ?? 2 }
         };
         const existing = employees.find(e => normCode(e.code) === normCode(se.code));
