@@ -188,8 +188,14 @@ admin.setDefaultTimeout(4000);
 await admin.goto(`${base}/admin/`, { waitUntil: 'networkidle' });
 for (const d of '123456') await admin.click(`button:has-text("${d}")`);
 await admin.waitForSelector('text=AWOL — suspensions');
-check('admin: ticked case shows under "Needs your decision"',
-  await admin.isVisible('text=Needs your decision'));
+// The "Needs your decision" heading renders unconditionally (it's a static label with a live
+// count appended) — asserting just its text is vacuous, it'd pass even if the needsDecision
+// filter routed nothing there. Assert the live count AND the "✅ Approve" button, which Preact
+// only renders for rows inside the needsDecision bucket — both are genuinely conditional on the
+// filter having done its job.
+check('admin: ticked case shows under "Needs your decision" (live count + Approve button)',
+  await admin.isVisible('text=Needs your decision (1)') &&
+  await admin.isVisible('button:has-text("✅ Approve")'));
 await admin.click('button:has-text("Keep suspended")');
 for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
 // NOTE: the sectlabel "Waiting for the letter (N)" is always on screen (it's a static heading with
@@ -221,6 +227,24 @@ check('admin: re-suspension carries the letter forward and lands at "needs decis
   state.suspensions['RSR 0006'].letter_received === true &&
   /letter already on file/i.test(state.suspensions['RSR 0006'].ref_note || ''),
   JSON.stringify(state.suspensions['RSR 0006']));
+
+// ── admin: Approve is refused when server truth says the letter is unconfirmed ─────────────
+// The UI only ever offers "Approve" for rows where letter_received is already true — there's
+// normally no button path to attempt approving an unconfirmed case. But the button reflects the
+// client's last-loaded snapshot, not live truth: if the letter step flips back to unconfirmed
+// between the admin clicking Approve and finishing the PIN (e.g. a concurrent "Keep suspended"
+// elsewhere resets it), the RPC call still fires on stale assumptions. This is the one refusal
+// the whole two-role gate exists to guarantee, so simulate exactly that race and prove the
+// server-side reason — not just the UI's button visibility — is what actually blocks it.
+console.log('\n== admin: Approve refuses an unconfirmed letter (server-side gate, not just the UI) ==');
+await admin.click('button:has-text("Approve")');
+state.suspensions['RSR 0006'].letter_received = false;   // server truth changes mid-flow, after the button was already clicked
+for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
+await admin.waitForSelector('text=letter not yet confirmed');
+check('admin: Approve is refused server-side when the letter is unconfirmed, and the reason is shown',
+  await admin.isVisible('text=letter not yet confirmed') && state.suspensions['RSR 0006'].active === true,
+  JSON.stringify(state.suspensions['RSR 0006']));
+await admin.click('button:has-text("Cancel")');   // close the still-open PIN modal before continuing
 
 // ── manual suspension: PEM workers must not be offered ──────────────────────────
 await admin.click('button:has-text("Suspend someone manually")');

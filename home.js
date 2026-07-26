@@ -3,7 +3,7 @@
 //  PIN-gated. Shows live summaries; links into each module.
 // ============================================================
 import { html, render } from 'htm/preact';
-import { useState, useEffect } from 'preact/hooks';
+import { useState, useEffect, useRef } from 'preact/hooks';
 import { supabase } from './supabase.js';
 
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
@@ -350,6 +350,12 @@ function AwolSuspensions({ emps, flash }) {
   const [pin, setPin] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  // Synchronous guard for run() — `busy` (state) only takes effect on re-render, which cannot
+  // happen until the currently-scheduled run() has already started executing (see the comment
+  // on `run` below). A second tap in that window would read a still-false `busy` from its own
+  // stale closure and fire a duplicate decision. A ref is mutated immediately, in the same tick,
+  // so the second call's guard check sees the truth regardless of render timing.
+  const busyRef = useRef(false);
 
   const byCode = {};
   (emps || []).forEach(e => { byCode[String(e.code).replace(/\s/g, '').toUpperCase()] = e; });
@@ -389,7 +395,8 @@ function AwolSuspensions({ emps, flash }) {
   // closure (from the pre-6th-digit render) still sees the OLD `pin` value — state updates don't
   // land until the next render. Passing the freshly-built string in avoids sending a 5-digit PIN.
   const run = async (typed) => {
-    if (busy || !ask) return;
+    if (busyRef.current || !ask) return;
+    busyRef.current = true;
     setBusy(true); setErr('');
     try {
       const { data: ok, error: e1 } = await supabase.rpc('admin_verify_passcode', { p_input: typed });
@@ -402,11 +409,18 @@ function AwolSuspensions({ emps, flash }) {
       if (ask.decision === 'tick') {
         // The owner has no assigned clerk on hand — this is the fallback path, so the log always
         // shows "Admin — <name>" and never reads as if the real clerk confirmed it.
-        const { data: res } = await supabase.rpc('awol_letter_received', { p_code: code, p_by: 'Admin — ' + actor });
-        if (res && res.newly === true) {
+        const { data: res, error: e2 } = await supabase.rpc('awol_letter_received', { p_code: code, p_by: 'Admin — ' + actor });
+        // supabase-js RESOLVES (never rejects) on a PostgREST error, so `error` must be checked
+        // explicitly here — a silent falsy `res` must never fall through to the success flash.
+        // `newly:false` with no error is the OTHER, benign case (already ticked by someone else,
+        // e.g. the clerk beat the admin to it) — that is not a failure, just a no-op.
+        if (e2 || !res) { setErr('Could not confirm the letter — check the connection and try again.'); return; }
+        if (res.newly === true) {
           await notifyAwol(`📄 <b>Letter received</b>\n👤 ${nm} (${code})\nConfirmed by Admin — ${actor} · waiting for admin approval`);
+          flash('Letter confirmed');
+        } else {
+          flash('Already confirmed — no change made');
         }
-        flash('Letter confirmed');
       } else if (ask.decision === 'approve') {
         const { data: res } = await supabase.rpc('awol_admin_decide', { p_code: code, p_by: actor, p_decision: 'approve' });
         if (!res || res.newly !== true) { setErr(res && res.reason ? res.reason : 'Could not approve.'); return; }
@@ -434,7 +448,7 @@ function AwolSuspensions({ emps, flash }) {
       setAsk(null); setPin('');
       await load();
     } catch (_) { setErr('Could not save — check the connection and try again.'); }
-    finally { setBusy(false); }
+    finally { busyRef.current = false; setBusy(false); }
   };
 
   if (rows == null) return '';
@@ -460,8 +474,8 @@ function AwolSuspensions({ emps, flash }) {
         <div class="row" key=${r.employee_code} style="align-items:flex-start">
           ${line(r)}
           <span style="display:flex;gap:6px;flex-wrap:wrap">
-            <button class="btn" onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'approve' }); setPin(''); setErr(''); }}>✅ Approve — worker can punch</button>
-            <button class="btn ghost" onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'keep' }); setPin(''); setErr(''); }}>⛔ Keep suspended</button>
+            <button class="btn" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'approve' }); setPin(''); setErr(''); }}>✅ Approve — worker can punch</button>
+            <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'keep' }); setPin(''); setErr(''); }}>⛔ Keep suspended</button>
           </span>
         </div>`)
         : html`<div class="empty">Nothing waiting on you.</div>`}
@@ -470,7 +484,7 @@ function AwolSuspensions({ emps, flash }) {
       ${waitingLetter.length ? waitingLetter.map(r => html`
         <div class="row" key=${r.employee_code} style="align-items:flex-start">
           ${line(r)}
-          <button class="btn ghost" onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'tick' }); setPin(''); setErr(''); }}>Tick letter received (admin)</button>
+          <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'tick' }); setPin(''); setErr(''); }}>Tick letter received (admin)</button>
         </div>`)
         : html`<div class="empty">Nobody outstanding.</div>`}
 
@@ -482,7 +496,7 @@ function AwolSuspensions({ emps, flash }) {
             <div class="unit">${e.event === 'reinstated' ? 'Approved' : e.event === 'kept_suspended' ? 'Kept suspended' : 'Cancelled — leave approved'} · ${e.actor || '—'} · ${e.at ? new Date(e.at).toLocaleDateString('en-PH') : ''}</div>
           </div>
           ${e.event !== 'cancelled_leave_approved' ? html`
-            <button class="btn ghost" onClick=${() => {
+            <button class="btn ghost" disabled=${busy} onClick=${() => {
               const prev = closedRows.find(r => r.employee_code === e.employee_code) || {};
               setAsk({ code: e.employee_code, name: nameOf(e.employee_code), decision: 'manual',
                 reason: 'Re-suspended after an approval made in error',
@@ -508,13 +522,13 @@ function AwolSuspensions({ emps, flash }) {
             <input data-manual-dates placeholder="Absent dates, comma separated (e.g. 2026-07-22, 2026-07-23)" value=${manual.dates} onInput=${e => setManual(m => ({ ...m, dates: e.target.value }))} />
             <p class="note" style="margin:0">At least one date is required — the printable letter is built from these.</p>
             <span style="display:flex;gap:8px">
-              <button class="btn" onClick=${() => {
+              <button class="btn" disabled=${busy} onClick=${() => {
                 if (!manual.code) { flash('Choose a worker'); return; }
                 setAsk({ code: manual.code, name: nameOf(manual.code), decision: 'manual',
                   reason: manual.reason, dates: manual.dates, refNote: null, letterOnFile: false });
                 setPin(''); setErr('');
               }}>Create suspension</button>
-              <button class="btn ghost" onClick=${() => setManual(null)}>Cancel</button>
+              <button class="btn ghost" disabled=${busy} onClick=${() => setManual(null)}>Cancel</button>
             </span>
           </div>`}
     </div>
