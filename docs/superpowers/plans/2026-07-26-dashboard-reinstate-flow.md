@@ -237,11 +237,21 @@ Expected: FAIL on nearly every check — `bak_employee_suspensions_20260726` doe
 -- ═══════════════════════════════════════════════════════════════════════════════
 --  AWOL reinstate flow — walkthrough cleanup + two-role gate + PEM exemption
 --  Spec: docs/superpowers/specs/2026-07-26-dashboard-reinstate-flow-design.md
---  Additive + idempotent EXCEPT step 2 (a one-time DELETE, backed up in step 1).
---  Owner runs this ONCE in the Supabase SQL editor, top to bottom.
+--  Additive + idempotent EXCEPT step 2 (a one-time DELETE, backed up in step 1) — STEP 2 ships
+--  commented out; see its own "RUN ONCE" banner before ever uncommenting it.
+--
+--  HOW TO RUN THIS FILE — TWO SEPARATE PASTES, NOT ONE:
+--    PASTE 1 — STEP 0 ONLY. Select and run just the STEP 0 census below, by itself, and read the
+--              three numbers it returns against the EXPECT line before doing anything else. The
+--              Supabase SQL editor only shows the result of the LAST statement in a paste, so if
+--              STEP 0 is pasted together with anything below it, its numbers are never seen and
+--              this stop-and-eyeball gate cannot fire.
+--    PASTE 2 — everything from STEP 1 to the end of the file, run once STEP 0's numbers check out.
+--              STEP 2 and STEP 14 stay commented out inside this second paste — see their own
+--              banners before ever uncommenting either one.
 -- ═══════════════════════════════════════════════════════════════════════════════
 
--- ── STEP 0 — CENSUS (read-only; run and EYEBALL before going further) ─────────
+-- ── STEP 0 — CENSUS  ▓▓▓ PASTE 1 — RUN THIS STATEMENT ALONE, NOTHING ELSE ▓▓▓ ──
 select count(*) as total,
        count(*) filter (where active)     as active_now,
        count(*) filter (where not active) as inactive
@@ -253,17 +263,46 @@ select count(*) as total,
 -- below, which deletes inactive rows only.
 -- If active_now > 0 someone is REALLY suspended right now — STOP and re-check before step 2.
 
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- ▓▓▓  STOP.  Confirm the STEP 0 numbers above match EXPECT before going any further.  ▓▓▓
+-- ▓▓▓  PASTE 2 starts on the next line: select from STEP 1 to the end and run it separately.  ▓▓▓
+-- ═══════════════════════════════════════════════════════════════════════════════
+
 -- ── STEP 1 — BACKUP everything before deleting ───────────────────────────────
 create table if not exists public.bak_employee_suspensions_20260726 as
   select * from public.employee_suspensions;
+-- Mirrors STEP 8's treatment of the throttle table: a backup a client can erase with the anon key
+-- is not a backup. Supabase's default privileges can otherwise expose a freshly created table to
+-- anon, which would include DELETE on the only copy of the rows STEP 2 is about to destroy.
+revoke all on public.bak_employee_suspensions_20260726 from anon, authenticated;
 select count(*) as backed_up from public.bak_employee_suspensions_20260726;   -- expect 45
 
--- ── STEP 2 — delete the walkthrough residue (INACTIVE rows only) ─────────────
--- The `active is not true` guard means this can never delete a live suspension.
-delete from public.employee_suspensions where active is not true;
-select count(*) as remaining from public.employee_suspensions;                -- expect 0
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- ── STEP 2 — RUN ONCE — uncomment deliberately — delete the walkthrough residue ──
+-- STEP 1's `create table if not exists` is a no-op on every run after the first, so its backup is
+-- only written FRESH the very first time this file executes. If this file is ever re-pasted later,
+-- re-running this DELETE would remove every resolved suspension since then with NO fresh backup
+-- underneath it. The `active is not true` guard means it can never touch a LIVE suspension, but
+-- that does not make a second run of this delete safe. Uncomment the two lines below only the
+-- first time this file is run, then leave them commented out for good.
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- delete from public.employee_suspensions where active is not true;
+-- select count(*) as remaining from public.employee_suspensions;                -- expect 0
 
--- ── STEP 3 — two-role gate columns ───────────────────────────────────────────
+-- ── STEP 3 — PAKYAW/PEM exemption helper ─────────────────────────────────────
+-- Moved ahead of the gate columns (was STEP 5) so the PEM guard constraint added in STEP 4 below
+-- has something to reference — a check constraint cannot call a function that does not exist yet.
+-- Owner rule 2026-07-26: PAKYAW/PEM workers are exempt from AWOL entirely — piece-rate/casual,
+-- irregular attendance is normal. The employee CODE PREFIX is the marker (coordinator.js sets it
+-- at creation: empType 'RSR' = regular, 'PEM' = pakyaw). Normalized like the client normCode —
+-- upper-cased with whitespace stripped — so 'PEM 0001' and 'PEM9001' both match.
+create or replace function public.awol_is_pem(p_code text)
+returns boolean language sql immutable as $$
+  select upper(regexp_replace(coalesce(p_code, ''), '\s', '', 'g')) like 'PEM%';
+$$;
+grant execute on function public.awol_is_pem(text) to anon, authenticated;
+
+-- ── STEP 4 — two-role gate columns + PEM exemption constraint ────────────────
 alter table public.employee_suspensions
   add column if not exists letter_received    boolean not null default false,
   add column if not exists letter_received_by text,
@@ -274,7 +313,20 @@ alter table public.employee_suspensions
   add column if not exists manual             boolean not null default false,
   add column if not exists ref_note           text;
 
--- ── STEP 4 — append-only audit log ───────────────────────────────────────────
+-- Belt-and-braces at the schema level: the PEM guard inside awol_set_suspended/awol_manual_suspend
+-- refuses a PEM code, but employee_suspensions still grants insert to anon, so a raw REST insert
+-- could otherwise create a suspension for a pakyaw worker straight past the RPCs. This closes that
+-- path. STEP 2 empties the table first, so the constraint has nothing pre-existing to violate.
+-- Guarded via pg_constraint so re-running this file is a no-op instead of an error.
+do $$
+begin
+  if not exists (select 1 from pg_constraint where conname = 'employee_suspensions_no_pem') then
+    alter table public.employee_suspensions
+      add constraint employee_suspensions_no_pem check (not public.awol_is_pem(employee_code));
+  end if;
+end $$;
+
+-- ── STEP 5 — append-only audit log ───────────────────────────────────────────
 -- The suspension row is REUSED on every cycle, so without this a repeat offender's
 -- history is overwritten. This is the permanent trail behind "Recently closed".
 create table if not exists public.awol_events (
@@ -287,21 +339,13 @@ create table if not exists public.awol_events (
   at            timestamptz not null default now()
 );
 create index if not exists awol_events_code_at_idx on public.awol_events (employee_code, at desc);
--- NO delete grant: an append-only audit log that anon can delete is not append-only. Probe rows from
--- the verification script are removed by the owner in STEP 14 below, not by the client.
-grant select, insert on public.awol_events to anon, authenticated;
-grant usage, select on sequence public.awol_events_id_seq to anon, authenticated;
-
--- ── STEP 5 — PAKYAW/PEM exemption helper ─────────────────────────────────────
--- Owner rule 2026-07-26: PAKYAW/PEM workers are exempt from AWOL entirely — piece-rate/casual,
--- irregular attendance is normal. The employee CODE PREFIX is the marker (coordinator.js sets it
--- at creation: empType 'RSR' = regular, 'PEM' = pakyaw). Normalized like the client normCode —
--- upper-cased with whitespace stripped — so 'PEM 0001' and 'PEM9001' both match.
-create or replace function public.awol_is_pem(p_code text)
-returns boolean language sql immutable as $$
-  select upper(regexp_replace(coalesce(p_code, ''), '\s', '', 'g')) like 'PEM%';
-$$;
-grant execute on function public.awol_is_pem(text) to anon, authenticated;
+-- SELECT only: every event insert happens inside a security definer RPC, which runs as the
+-- function owner and needs no table grant to write. Granting anon INSERT (plus sequence usage)
+-- would let anyone holding the public anon key forge audit entries directly — e.g. a fake
+-- letter_received event attributed to a named person. No delete grant either: an append-only log
+-- a client can delete is not append-only. Probe rows from the verification script are removed by
+-- the owner in STEP 14 below, not by the client.
+grant select on public.awol_events to anon, authenticated;
 
 -- ── STEP 6 — detection RPC: PEM guard + reset the gate on a NEW suspension ───
 -- Replaces the 07-24 version. Two changes: a PEM refusal, and clearing the gate/decision
@@ -336,7 +380,12 @@ grant execute on function public.awol_set_suspended(text, text, jsonb, text) to 
 -- Owner decision: an absence later covered by an APPROVED leave means the suspension was issued
 -- in error. It clears with no letter and no two-step, and is logged as CANCELLED — never as a
 -- reinstatement, so the two are always distinguishable.
-create or replace function public.awol_reinstate(p_code text, p_by text, p_on text)
+-- Renamed from awol_reinstate (2026-07-26 review): the old name un-suspended unconditionally and
+-- stamped the permanent audit log with "absence covered by an approved leave" regardless of why it
+-- was actually called — so any legacy or raw caller bypassed the two-role gate AND wrote a false
+-- statement into awol_events. A caller that still expects awol_reinstate now fails loudly (function
+-- not found) instead of silently mislabelling the record.
+create or replace function public.awol_cancel_leave_approved(p_code text, p_by text, p_on text)
 returns jsonb language plpgsql security definer set search_path = public as $$
 declare v_msg text; v_chat text;
 begin
@@ -353,7 +402,13 @@ begin
     values (p_code, 'cancelled_leave_approved', p_by, 'absence covered by an approved leave');
   return jsonb_build_object('newly', true, 'awol_group_msg_id', v_msg, 'awol_group_chat', v_chat);
 end $$;
-grant execute on function public.awol_reinstate(text, text, text) to anon, authenticated;
+grant execute on function public.awol_cancel_leave_approved(text, text, text) to anon, authenticated;
+
+-- Drop the old ungated entry point now that the renamed function above exists. The only legitimate
+-- caller of the old name was the kiosk's leave-approval path (now switched to
+-- awol_cancel_leave_approved), so this was renamed specifically so a stale cached build or a raw
+-- REST rpc call can no longer reach the old ungated entry point.
+drop function if exists public.awol_reinstate(text, text, text);
 
 -- ── STEP 8 — the AWOL clerk (Jamaica only) + its throttle ────────────────────
 alter table public.employees add column if not exists is_awol_clerk boolean not null default false;
@@ -720,7 +775,7 @@ git commit -m "feat(kiosk): PAKYAW/PEM workers exempt from AWOL; re-point G8c of
 - Modify: `preflight.html:38-44`
 
 **Interfaces:**
-- Consumes: `isPemCode` (Task 2); `awol_reinstate` returning `last_decision='cancelled_leave_approved'` (Task 1).
+- Consumes: `isPemCode` (Task 2); `awol_cancel_leave_approved` returning `last_decision='cancelled_leave_approved'` (Task 1).
 - Produces: `reinstateEmployee(code, by)` remains defined but is reachable **only** from the leave-approval path; `sendAwolCancelledMsg(code, name, by, res)` replaces `sendAwolReinstatedMsg`.
 
 - [ ] **Step 1: Write the failing harness scenarios**
@@ -823,7 +878,7 @@ Replace `reinstateEmployee` and `sendAwolReinstatedMsg` (~2312–2331) with:
 // now goes through the dashboard gate (awol_letter_received → awol_admin_decide).
 async function reinstateEmployee(code,by){
   let res=null;
-  try{ const {data}=await sbClient.rpc('awol_reinstate',{p_code:code,p_by:by||'leave approved',p_on:todayKey()}); res=data; }
+  try{ const {data}=await sbClient.rpc('awol_cancel_leave_approved',{p_code:code,p_by:by||'leave approved',p_on:todayKey()}); res=data; }
   catch(e){ res=null; }
   const newly = res ? (res.newly!==false) : true; // offline → assume newly so the local block clears
   delete suspendedEmployees[code];
