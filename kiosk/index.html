@@ -1338,8 +1338,11 @@ function nightArrivalHint(nowMs){
   }
   return '';
 }
-function onLeaveToday(code){const t=todayKey();return leaveRequests.some(r=>r.code===code&&r.status==='Approved'&&r.startDate<=t&&r.endDate>=t);}
-function onLWPToday(code){const t=todayKey();return leaveRequests.some(r=>r.code===code&&r.status==='Approved'&&r.type==='Leave Without Pay'&&r.startDate<=t&&r.endDate>=t);}
+// BUG FIX (2026-07-26): same defect family as isAbsentOnDate below — leave dates from Supabase are
+// YYYY-MM-DD while todayKey() is MM/DD/YYYY (en-PH), and codes drift by spacing across sources.
+// Normalize both sides with awolISO()/normCode() (awolISO is defined further down but hoisted).
+function onLeaveToday(code){const t=awolISO(todayKey()),n=normCode(code);return leaveRequests.some(r=>normCode(r.code)===n&&r.status==='Approved'&&awolISO(r.startDate)<=t&&awolISO(r.endDate)>=t);}
+function onLWPToday(code){const t=awolISO(todayKey()),n=normCode(code);return leaveRequests.some(r=>normCode(r.code)===n&&r.status==='Approved'&&r.type==='Leave Without Pay'&&awolISO(r.startDate)<=t&&awolISO(r.endDate)>=t);}
 
 function isAwayDeployment(emp){return siteNorm(emp.homeSite)!==siteNorm(activeSite);}
 function getAllowanceAmt(emp){
@@ -2213,7 +2216,11 @@ function renderMyTimeSheet(emp){
 }
 
 function onLeaveToday_date(code,dateStr){
-  return leaveRequests.some(r=>r.code===code&&r.status==='Approved'&&r.startDate<=dateStr&&r.endDate>=dateStr);
+  // BUG FIX (2026-07-26): same fix as isAbsentOnDate — normalize dates (Supabase YYYY-MM-DD vs
+  // kiosk MM/DD/YYYY) and codes (spacing) before comparing, else a DB-sourced approved leave
+  // never matches.
+  const dISO=awolISO(dateStr),n=normCode(code);
+  return leaveRequests.some(r=>normCode(r.code)===n&&r.status==='Approved'&&awolISO(r.startDate)<=dISO&&awolISO(r.endDate)>=dISO);
 }
 
 // ── ABSENCE & SUSPENSION SYSTEM ──
@@ -2231,7 +2238,15 @@ function isAbsentOnDate(empCode,dateStr){
   // Absent = no timein punch AND no approved leave on that date
   const rec=records[empCode+'_'+dateStr];
   const hasTimein=rec&&rec.punches&&rec.punches.timein&&rec.punches.timein!=='(auto-skipped)';
-  const hasLeave=leaveRequests.some(r=>r.code===empCode&&r.status==='Approved'&&r.startDate<=dateStr&&r.endDate>=dateStr);
+  // BUG FIX (2026-07-26): dateStr is a kiosk date key (MM/DD/YYYY, from dateKeyOffset/todayKey), but
+  // leave rows loaded from Supabase carry start_date/end_date as YYYY-MM-DD (PostgREST DATE columns).
+  // Comparing the raw strings is lexicographic, not chronological — "2026-07-20" <= "07/20/2026" is
+  // ALWAYS false ('2' > '0') — so a real, DB-sourced Approved leave could never break the absence
+  // chain, and a properly-approved worker got suspended. Normalize both sides to ISO with awolISO()
+  // before comparing. Employee codes also drift by spacing across sources (RSR 0025 vs RSR0025), so
+  // normCode() both sides too — see loadLeavesFromSupabase's own dedup check for the same pattern.
+  const dISO=awolISO(dateStr),nCode=normCode(empCode);
+  const hasLeave=leaveRequests.some(r=>normCode(r.code)===nCode&&r.status==='Approved'&&awolISO(r.startDate)<=dISO&&awolISO(r.endDate)>=dISO);
   return !hasTimein&&!hasLeave;
 }
 // Sunday = the universal rest day (matches the Sunday-premium setup). dateStr is MM/DD/YYYY (en-PH).
@@ -2286,7 +2301,10 @@ async function checkAllAbsences(){
     if(dates.length<3){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; }
     const iso=dates.map(awolISO);
     // HOLD + flag if a PENDING leave overlaps any absent date (owner rule).
-    const hasPending=leaveRequests.some(r=>r.code===emp.code&&r.status==='Pending'&&iso.some(t=>awolISO(r.startDate)<=t&&awolISO(r.endDate)>=t));
+    // Date handling here was already correct (both sides wrapped in awolISO()). Code comparison
+    // normalized too (BUG FIX 2026-07-26): codes drift by spacing across sources (RSR 0025 vs
+    // RSR0025) — an exact === match could silently miss a matching leave row.
+    const hasPending=leaveRequests.some(r=>normCode(r.code)===normCode(emp.code)&&r.status==='Pending'&&iso.some(t=>awolISO(r.startDate)<=t&&awolISO(r.endDate)>=t));
     if(hasPending){
       if(!awolPending[emp.code]){ awolPending[emp.code]=true; saveAwolPending(); sendAwolPendingFlag(emp,iso); }
       continue;
@@ -3617,7 +3635,8 @@ function renderLog(){
     const sm={working:'pill-in',late:'pill-late',break:'pill-break',out:'pill-out',absent:'pill-absent'};
     const sl={working:'Working',late:'Late',break:'On break',out:'Timed out',absent:'Absent'};
     const incomplete=isIncomplete(rec)&&status!=='out';
-    const isLWP=onLeaveToday_date&&onLeaveToday_date(emp.code,todayKey())&&leaveRequests.some(r=>r.code===emp.code&&r.status==='Approved'&&r.type==='Leave Without Pay'&&r.startDate<=todayKey()&&r.endDate>=todayKey());
+    // BUG FIX (2026-07-26): same date/code normalization as isAbsentOnDate/onLeaveToday above.
+    const isLWP=onLeaveToday_date&&onLeaveToday_date(emp.code,todayKey())&&leaveRequests.some(r=>normCode(r.code)===normCode(emp.code)&&r.status==='Approved'&&r.type==='Leave Without Pay'&&awolISO(r.startDate)<=awolISO(todayKey())&&awolISO(r.endDate)>=awolISO(todayKey()));
     const lc=rec.isLate?`<span style="color:#A32D2D;font-weight:600">${msToHM(rec.lateMs)}</span>`:'—';
     const ps=rec.photos&&rec.photos.timein?`<img src="${rec.photos.timein}" class="photo-thumb" />`:'<div class="no-photo">No</div>';
     const homePill=`<span class="pill pill-home" style="font-size:9px">${siteName(emp.homeSite)}</span>`;

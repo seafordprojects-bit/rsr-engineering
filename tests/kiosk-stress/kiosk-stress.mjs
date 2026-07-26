@@ -1566,6 +1566,107 @@ await scenario('G15 · never-punched/30-day safety net + inactive skip (owner 20
     `isActive=${isActiveFlag} suspended=${susInactive} alerted=${alertedInactive}`);
 });
 
+// G16 — APPROVED-LEAVE FORMAT/CODE MISMATCH (owner-reported near-miss, 2026-07-26): isAbsentOnDate()
+// compared a leave's startDate/endDate against the kiosk's dateStr as RAW STRINGS. Leave rows loaded
+// from Supabase carry start_date/end_date as YYYY-MM-DD (PostgREST DATE columns), but the kiosk's own
+// date keys (dateKeyOffset/todayKey) are MM/DD/YYYY (en-PH). "2026-07-21" <= "07/23/2026" is a
+// lexicographic compare of '2' vs '0' and is ALWAYS false, so a real, DB-sourced Approved leave could
+// never break the absence chain — a worker who filed and was approved got suspended anyway. Same
+// function also matched employee codes with exact ===, but codes drift by spacing across sources
+// (RSR0100 vs RSR 0100). Fix: normalize both sides with awolISO()/normCode() before comparing.
+// All four days below are real weekdays (Mon 07/20 .. Fri 07/24/2026), so no Sunday-transparency
+// (G8) or PEM-exemption (G10) rule is in play — this isolates ONLY the format/code bug.
+await scenario('G16a · Approved leave (Supabase YYYY-MM-DD) covers the absent run → chain broken, NOT suspended', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1006661112223';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => {
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; // recent-enough history (see G2)
+    // Approved leave stored exactly as PostgREST returns a DATE column: YYYY-MM-DD.
+    leaveRequests = [{ code: 'RSR0100', status: 'Approved', startDate: '2026-07-21', endDate: '2026-07-23' }];
+  });
+  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  await page.evaluate(() => checkAllAbsences());
+  const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  report('G16a · ISO-format approved leave breaks the chain, no suspension', chain.length === 0 && !sus && !alerted,
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+});
+
+await scenario('G16b · Approved leave (kiosk MM/DD/YYYY) also covers the absent run → chain broken, NOT suspended', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1006661112223';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => {
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } };
+    // Same leave, but stored as non-zero-padded M/D/YYYY (awolISO's own regex is \d{1,2} for month/day,
+    // i.e. it's explicitly built to handle this shape too — e.g. legacy/admin-entered rows). This is
+    // NOT a coincidental pass: a raw string compare of "7/21/2026" vs the zero-padded kiosk key
+    // "07/23/2026" is WRONG ('7' > '0' lexicographically), so this only passes once dates are run
+    // through awolISO() — unlike a same-length, same-month zero-padded MM/DD/YYYY pair, which can
+    // accidentally sort correctly as raw strings and would not prove anything.
+    leaveRequests = [{ code: 'RSR0100', status: 'Approved', startDate: '7/21/2026', endDate: '7/23/2026' }];
+  });
+  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  await page.evaluate(() => checkAllAbsences());
+  const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  report('G16b · MM/DD/YYYY-format approved leave breaks the chain, no suspension', chain.length === 0 && !sus && !alerted,
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+});
+
+await scenario('G16c · Approved leave covers only PART of the absent run → chain stops AT the leave', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1006661112223';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => {
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } };
+    // Leave covers ONLY Wed 07/22 — Thu 07/23 (closer to today) is a genuine unexcused absence, and
+    // Mon 07/20 / Tue 07/21 (further back) are ALSO unpunched. If the leave were ignored entirely
+    // (the old bug), the scan would run straight through 07/22 and keep collecting 07/21 and 07/20
+    // too — a 3+ day chain that gets suspended. Fixed, the scan must stop the instant it reaches the
+    // leave-covered day, so the chain is exactly the ONE real absence in front of it.
+    leaveRequests = [{ code: 'RSR0100', status: 'Approved', startDate: '2026-07-22', endDate: '2026-07-22' }];
+  });
+  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  await page.evaluate(() => checkAllAbsences());
+  const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  report('G16c · partial-coverage leave stops the chain at exactly 1 day, no suspension',
+    chain.length === 1 && chain[0] === '07/23/2026' && !sus && !alerted,
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+});
+
+await scenario('G16d · Approved leave code differs only by spacing (RSR 0100 vs RSR0100) → still recognized', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1006661112223';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => {
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } };
+    // Employee's real code is 'RSR0100' (no space); the leave row (as some Supabase/legacy paths do)
+    // stores it with a space. Must still match via normCode().
+    leaveRequests = [{ code: 'RSR 0100', status: 'Approved', startDate: '2026-07-21', endDate: '2026-07-23' }];
+  });
+  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  await page.evaluate(() => checkAllAbsences());
+  const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  report('G16d · spacing-mismatched code still recognized, chain broken, no suspension', chain.length === 0 && !sus && !alerted,
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+});
+
+await scenario('G16e · regression: worker with NO leave and 3+ absences → STILL suspended', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1006661112223';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => {
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } };
+    leaveRequests = []; // no leave at all — the fix must not have disabled detection wholesale
+  });
+  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  await page.evaluate(() => checkAllAbsences());
+  const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  report('G16e · no leave + 3+ absences still suspends (detection not disabled)',
+    chain.length >= 3 && sus && alerted,
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+});
+
 // ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================
