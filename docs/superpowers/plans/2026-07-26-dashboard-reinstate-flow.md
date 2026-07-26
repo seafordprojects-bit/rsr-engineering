@@ -1733,9 +1733,9 @@ Also make the PEM guard real in the `awol_set_suspended` mock — add as its fir
 - [ ] **Step 2: Add the cross-device gate scenario**
 
 ```js
-// G12 — THE GATE, CROSS-DEVICE: an approval on the dashboard must lift the block on the kiosks
+// G14 — THE GATE, CROSS-DEVICE: an approval on the dashboard must lift the block on the kiosks
 // via the existing poller, and an approve attempted without the letter tick must be refused.
-await scenario('G12 · two-step gate lifts the block on every kiosk', manila(2026, 7, 21, 8, 0), async (page) => {
+await scenario('G14 · two-step gate lifts the block on every kiosk', manila(2026, 7, 21, 8, 0), async (page) => {
   mock.tgConfigured = true; mock.awolGroupId = '-1004443332221';
   await page.evaluate(() => loadTgFromCloud());
   mock.suspensions['RSR0100'] = { employee_code: 'RSR0100', active: true, reason: 'AWOL',
@@ -1749,18 +1749,18 @@ await scenario('G12 · two-step gate lifts the block on every kiosk', manila(202
     const { data } = await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0100', p_by: 'Boss', p_decision: 'approve' });
     return data;
   });
-  report('G12a · approve refused before the letter is confirmed',
+  report('G14a · approve refused before the letter is confirmed',
     refused && refused.newly === false && /letter/i.test(refused.reason || ''),
     `response=${JSON.stringify(refused)}`);
   const stillBlocked = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
-  report('G12b · worker still blocked after the refused approval', blockedBefore && stillBlocked);
+  report('G14b · worker still blocked after the refused approval', blockedBefore && stillBlocked);
 
   // Tick, then approve — the kiosk's own poller must clear the block with no kiosk-side action.
   await page.evaluate(async () => { await sbClient.rpc('awol_letter_received', { p_code: 'RSR0100', p_by: 'Jamaica L. Batucan' }); });
   await page.evaluate(async () => { await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0100', p_by: 'Boss', p_decision: 'approve' }); });
   await page.evaluate(() => loadSuspensionsFromCloud());
   const clearedAfter = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
-  report('G12c · after approval the poller clears the block on this kiosk',
+  report('G14c · after approval the poller clears the block on this kiosk',
     !clearedAfter && mock.suspensions['RSR0100'].active === false,
     `blockedLocally=${clearedAfter} activeInDb=${mock.suspensions['RSR0100'].active}`);
 
@@ -1771,7 +1771,7 @@ await scenario('G12 · two-step gate lifts the block on every kiosk', manila(202
   await page.evaluate(async () => { await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0207', p_by: 'Boss', p_decision: 'keep' }); });
   await page.evaluate(() => loadSuspensionsFromCloud());
   const stillBlocked207 = await page.evaluate(() => !!suspendedEmployees['RSR0207']);
-  report('G12d · keep-suspended clears the tick and the worker stays blocked',
+  report('G14d · keep-suspended clears the tick and the worker stays blocked',
     mock.suspensions['RSR0207'].active === true && mock.suspensions['RSR0207'].letter_received === false && stillBlocked207,
     `activeInDb=${mock.suspensions['RSR0207'].active} letter=${mock.suspensions['RSR0207'].letter_received} blocked=${stillBlocked207}`);
 });
@@ -1783,7 +1783,7 @@ await scenario('G12 · two-step gate lifts the block on every kiosk', manila(202
 node tests/kiosk-stress/kiosk-stress.mjs
 ```
 
-Expected: `G12a`–`G12d` PASS and every earlier scenario still passes.
+Expected: `G14a`–`G14d` PASS and every earlier scenario still passes.
 
 - [ ] **Step 4: Commit**
 
