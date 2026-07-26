@@ -52,6 +52,12 @@ select count(*) as backed_up from public.bak_employee_suspensions_20260726;   --
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- delete from public.employee_suspensions where active is not true;
 -- select count(*) as remaining from public.employee_suspensions;                -- expect 0
+-- Promotes the STEP 4 constraint from NOT VALID to fully validated. Safe ONLY once the delete two
+-- lines above has cleared the stale PEM rows — validating against a table that still has PEM rows
+-- would fail the same way an un-guarded ADD CONSTRAINT would. Skipping this line leaves the
+-- constraint enforcing on all new writes but unvalidated against history, which is acceptable, not
+-- an error — it is exactly the state PASTE 2 leaves things in when STEP 2 stays commented out.
+-- alter table public.employee_suspensions validate constraint employee_suspensions_no_pem;
 
 -- ── STEP 3 — PAKYAW/PEM exemption helper ─────────────────────────────────────
 -- Moved ahead of the gate columns (was STEP 5) so the PEM guard constraint added in STEP 4 below
@@ -80,13 +86,18 @@ alter table public.employee_suspensions
 -- Belt-and-braces at the schema level: the PEM guard inside awol_set_suspended/awol_manual_suspend
 -- refuses a PEM code, but employee_suspensions still grants insert to anon, so a raw REST insert
 -- could otherwise create a suspension for a pakyaw worker straight past the RPCs. This closes that
--- path. STEP 2 empties the table first, so the constraint has nothing pre-existing to violate.
+-- path. Added NOT VALID: Postgres skips scanning existing rows for a NOT VALID constraint, but it
+-- still enforces the check on every INSERT and UPDATE from this moment on — so the raw-REST hole is
+-- closed immediately whether or not STEP 2 below has ever been run. The table currently holds SIX
+-- inactive PEM rows left over from the walkthrough (PEM 0001..0005, PEM TEST9); they are harmless
+-- because they are inactive, and STEP 2 is what removes them. Without NOT VALID, adding this
+-- constraint while those rows exist would abort the whole paste with a check-violation.
 -- Guarded via pg_constraint so re-running this file is a no-op instead of an error.
 do $$
 begin
   if not exists (select 1 from pg_constraint where conname = 'employee_suspensions_no_pem') then
     alter table public.employee_suspensions
-      add constraint employee_suspensions_no_pem check (not public.awol_is_pem(employee_code));
+      add constraint employee_suspensions_no_pem check (not public.awol_is_pem(employee_code)) not valid;
   end if;
 end $$;
 
@@ -387,6 +398,9 @@ select column_name from information_schema.columns
 -- Confirms the STEP 1 revoke actually landed: relacl should show no grant to anon/authenticated —
 -- a null/owner-only relacl here means the backup table still carries only default privileges.
 select relacl from pg_class where relname = 'bak_employee_suspensions_20260726';
+-- convalidated = f means new writes are protected but the old rows were never scanned (STEP 2 not
+-- run yet); convalidated = t means the constraint is fully validated against history.
+select conname, convalidated from pg_constraint where conname = 'employee_suspensions_no_pem';
 
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- ── STEP 14 — RUN THIS SEPARATELY, *AFTER* the verification script has been run ──
