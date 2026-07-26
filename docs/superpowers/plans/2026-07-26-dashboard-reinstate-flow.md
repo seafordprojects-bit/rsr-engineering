@@ -181,19 +181,18 @@ check('awol_events recorded the whole probe lifecycle',
   ['suspended', 'letter_received', 'kept_suspended', 'reinstated', 'suspended_manual'].every(e => names.includes(e)),
   `events=${names.join(', ')}`);
 
-// ── cleanup: remove every probe artefact ──
-await rest('employee_suspensions?employee_code=eq.TEST999', { method: 'DELETE' });
-await rest('employee_suspensions?employee_code=eq.PEM%20TEST9', { method: 'DELETE' });
-await rest('awol_events?employee_code=eq.TEST999', { method: 'DELETE' });
-await rest('awol_events?employee_code=eq.PEM%20TEST9', { method: 'DELETE' });
+// ── probe rows: report them, do NOT try to delete ──
+// anon holds select/insert/update on employee_suspensions and select/insert on awol_events — by
+// design, so a client can never erase an audit trail. The probe rows are removed by the OWNER via
+// STEP 14 of the SQL file. This script only reports what is left for them to clear.
 const leftover = await rest('employee_suspensions?select=employee_code&or=(employee_code.eq.TEST999,employee_code.eq.PEM%20TEST9)');
-check('probe rows cleaned up', Array.isArray(leftover.data) && leftover.data.length === 0, JSON.stringify(leftover.data));
+console.log(`\nPROBE ROWS TO CLEAR (owner runs STEP 14): ${(leftover.data || []).map(r => r.employee_code).join(', ') || '(none)'}`);
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
 ```
 
-Note: `awol_events` needs a `delete` grant for the cleanup above — it is included in the SQL below.
+**Why the script does not clean up after itself:** `anon` deliberately has no `delete` on either table — that is what makes the audit trail trustworthy, and the prior build already confirmed `employee_suspensions` grants only select/insert/update. A `DELETE` from the client would fail silently and leave the probe rows behind while the check reported success. The owner clears them with STEP 14, and the run above tells them exactly what to clear.
 
 - [ ] **Step 2: Run it to confirm it fails**
 
@@ -255,7 +254,9 @@ create table if not exists public.awol_events (
   at            timestamptz not null default now()
 );
 create index if not exists awol_events_code_at_idx on public.awol_events (employee_code, at desc);
-grant select, insert, delete on public.awol_events to anon, authenticated;
+-- NO delete grant: an append-only audit log that anon can delete is not append-only. Probe rows from
+-- the verification script are removed by the owner in STEP 14 below, not by the client.
+grant select, insert on public.awol_events to anon, authenticated;
 grant usage, select on sequence public.awol_events_id_seq to anon, authenticated;
 
 -- ── STEP 5 — PAKYAW/PEM exemption helper ─────────────────────────────────────
@@ -510,7 +511,20 @@ select count(*) as events from public.awol_events;                            --
 select column_name from information_schema.columns
  where table_schema = 'public' and table_name = 'employee_suspensions'
  order by ordinal_position;
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- ── STEP 14 — RUN THIS SEPARATELY, *AFTER* the verification script has been run ──
+-- The verification script exercises the RPCs against two throwaway codes, TEST999 and 'PEM TEST9'.
+-- It cannot delete them itself: anon holds no delete on either table, deliberately, so that no
+-- client can erase an audit trail. Clear the probes here once verification has passed.
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- delete from public.employee_suspensions where employee_code in ('TEST999', 'PEM TEST9');
+-- delete from public.awol_events          where employee_code in ('TEST999', 'PEM TEST9');
+-- select count(*) as suspensions_remaining from public.employee_suspensions;   -- expect 0
+-- select count(*) as events_remaining      from public.awol_events;            -- expect 0
 ```
+
+**STEP 14 is commented out on purpose.** It must not run in the same pass as STEP 0–13, because the probe rows it clears do not exist until the verification script has run. The owner uncomments and runs it as a second, separate paste once verification is green.
 
 - [ ] **Step 4: Hygiene + ask the owner to run it, then verify**
 
@@ -1770,11 +1784,14 @@ const page = await context.newPage();
 await page.goto(`${base}/kiosk/`, { waitUntil: 'networkidle' });
 await page.waitForFunction(() => typeof checkAllAbsences === 'function' && Array.isArray(employees) && employees.length > 0);
 
+// DELIBERATELY does NOT call checkAllAbsences(). On 2026-07-26 an unscoped checkAllAbsences() run
+// against the live roster suspended 42 real workers and fired ~20 group alerts. collectAbsentDates()
+// is a PURE READ over `records` — it computes the identical absence chain that checkAllAbsences would
+// act on, with no code path that can write, alert, or suspend. The route interception below is the
+// second layer; not calling the mutating function at all is the first.
 const perWorker = await page.evaluate(() => employees.map(e => ({
   code: e.code, name: e.name, pem: isPemCode(e.code), chain: collectAbsentDates(e.code),
 })));
-await page.evaluate(() => checkAllAbsences());
-const suspendedNow = await page.evaluate(() => Object.keys(suspendedEmployees));
 
 const wouldSuspend = perWorker.filter(w => !w.pem && w.chain.length >= 3);
 console.log(`\nPEM workers skipped: ${perWorker.filter(w => w.pem).map(w => w.code).join(', ') || '(none)'}`);
@@ -1783,9 +1800,9 @@ if (wouldSuspend.length) {
   wouldSuspend.forEach(w => console.log(`  ${w.code} ${w.name} — ${w.chain.length} absences: ${w.chain.join(', ')}`));
 }
 
-const ok = suspendedNow.length === 0 && wouldSuspend.length === 0 && writes.length === 0;
+const ok = wouldSuspend.length === 0 && writes.length === 0;
 console.log(`\n${ok ? '\x1b[32mPASS\x1b[0m' : '\x1b[31mFAIL\x1b[0m'}  real-data detection over 2026-07-19 → 2026-07-25`);
-console.log(`      suspended=${suspendedNow.length} wouldSuspend=${wouldSuspend.length} writesAttempted=${writes.length}`);
+console.log(`      wouldSuspend=${wouldSuspend.length} writesAttempted=${writes.length} (must both be 0)`);
 if (writes.length) writes.forEach(w => console.log(`      \x1b[33mWRITE ATTEMPT: ${w}\x1b[0m`));
 
 await browser.close(); server.close();
