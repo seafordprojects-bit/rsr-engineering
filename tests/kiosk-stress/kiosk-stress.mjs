@@ -189,7 +189,9 @@ async function newKioskContext(browser, base, initMs) {
           suspended_on: b.p_on, absent_dates: b.p_dates, awol_group_msg_id: null, awol_group_chat: null };
         return json(200, true);
       }
-      if (p.endsWith('/rest/v1/rpc/awol_reinstate')) {
+      if (p.endsWith('/rest/v1/rpc/awol_cancel_leave_approved')) {
+        // (2026-07-26) awol_reinstate was renamed to awol_cancel_leave_approved — this is now the
+        // ONLY kiosk-side un-suspension path (leave-approval auto-cancel); same shape, new name.
         let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
         const r = mock.suspensions[b.p_code];
         if (!r || !r.active) return json(200, { newly: false });
@@ -221,6 +223,11 @@ async function newKioskContext(browser, base, initMs) {
       if (p.endsWith('/editMessageText')) {
         mock.telegram.push({ method: 'editMessageText', chat_id: String(b.chat_id), text: String(b.text || ''), hasButtons: false });
         return json(200, { ok: true, result: { message_id: b.message_id } });
+      }
+      if (p.includes('/getUpdates')) {
+        const cbs = mock.tgCallbacks || [];
+        mock.tgCallbacks = [];
+        return json(200, { ok: true, result: cbs.map((c, i) => ({ update_id: i + 1, callback_query: c })) });
       }
       return json(200, { ok: true, result: {} });
     }
@@ -335,6 +342,7 @@ async function scenario(name, initMs, fn) {
   resetCapture();
   mock.attendanceMode = 'ok'; mock.attendanceDelayMs = 0; mock.poisonCodes = new Set();
   mock.suspensions = {};
+  mock.tgCallbacks = [];
   mock.tgConfigured = false;
   mock.awolGroupId = '';
   mock.rpcSuspendFail = false;
@@ -965,7 +973,9 @@ await scenario('G3 · pending leave → HOLD, flag once', manila(2026,7,24,8,0),
   report('G3 · hold + one-time flag', flags.length === 1 && notSuspended, `flags=${flags.length} suspended=${!notSuspended}`);
 });
 
-await scenario('G4 · reinstate → closing msg + RESOLVED edit, once', manila(2026,7,24,9,0), async (page) => {
+// (2026-07-26) reinstateEmployee is now the leave-approval auto-cancel ONLY (dashboard owns every
+// other reinstatement path) — it posts/edits "CANCELLED", never "Reinstated"/"RESOLVED".
+await scenario('G4 · leave-approval cancel → closing msg + CANCELLED edit, once', manila(2026,7,24,9,0), async (page) => {
   mock.tgConfigured = true; mock.awolGroupId = '-1005554443332';
   await page.evaluate(() => loadTgFromCloud());
   mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
@@ -973,8 +983,8 @@ await scenario('G4 · reinstate → closing msg + RESOLVED edit, once', manila(2
   await page.evaluate(() => loadSuspensionsFromCloud());
   await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator Bob'));
   await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator Bob')); // second → {newly:false}, no dup
-  const posts = mock.telegram.filter(m => m.method === 'sendMessage' && /Reinstated/.test(m.text));
-  const edits = mock.telegram.filter(m => m.method === 'editMessageText' && /RESOLVED/.test(m.text));
+  const posts = mock.telegram.filter(m => m.method === 'sendMessage' && /CANCELLED/.test(m.text));
+  const edits = mock.telegram.filter(m => m.method === 'editMessageText' && /CANCELLED/.test(m.text));
   const cleared = !(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   report('G4 · reinstate closing log once', posts.length === 1 && edits.length === 1 && cleared,
     `posts=${posts.length} edits=${edits.length} cleared=${cleared}`);
@@ -1055,7 +1065,7 @@ await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurre
   const blockedOffline = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
   const notInDbYet = mock.suspensions['RSR0100'] === undefined;
 
-  // Admin reinstates while still offline (awol_reinstate finds no active DB row → {newly:false}).
+  // Admin reinstates while still offline (awol_cancel_leave_approved finds no active DB row → {newly:false}).
   await page.evaluate(() => reinstateEmployee('RSR0100', 'Admin'));
   const unsyncedCleared = await page.evaluate(() => !awolUnsynced['RSR0100']);
   const localCleared = await page.evaluate(() => !suspendedEmployees['RSR0100']);
@@ -1201,10 +1211,53 @@ await scenario('G10 · PAKYAW/PEM workers are exempt from AWOL', manila(2026, 7,
   });
   mock.telegram = [];
   await page.evaluate(() => checkAllAbsences());
+  // Assert the pre-existing suspendedEmployees[code] guard did NOT shadow this check — a PEM
+  // worker must independently prove "no HOLD note" via the isPemCode skip, not by accident because
+  // it happened to already be suspended (it never should be).
+  const stillNotSuspended = await page.evaluate(() => !suspendedEmployees['PEM9001']);
   const holdFlagged = await page.evaluate(() => !!awolPending['PEM9001']);
   report('G10c · PEM worker with a pending leave gets no HOLD note either',
-    mock.telegram.length === 0 && !holdFlagged,
-    `telegramSends=${mock.telegram.length} holdFlagged=${holdFlagged}`);
+    stillNotSuspended && mock.telegram.length === 0 && !holdFlagged,
+    `stillNotSuspended=${stillNotSuspended} telegramSends=${mock.telegram.length} holdFlagged=${holdFlagged}`);
+});
+
+// G11 — DASHBOARD IS THE ONLY DOOR (owner 2026-07-26): the kiosk keeps the 🚫 Suspended badge but
+// has NO reinstate control, and the Telegram reinstate/reject buttons are gone. The only remaining
+// kiosk-side un-suspension is the leave-approval auto-cancel, which must be labelled CANCELLED.
+await scenario('G11 · kiosk has no reinstate control; leave cancel is labelled CANCELLED', manila(2026, 7, 21, 8, 0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1005554443332';
+  await page.evaluate(() => loadTgFromCloud());
+  mock.suspensions['RSR0100'] = { employee_code: 'RSR0100', active: true, reason: 'AWOL',
+    suspended_on: '07/20/2026', absent_dates: ['2026-07-17','2026-07-18','2026-07-20'],
+    awol_group_msg_id: '9001', awol_group_chat: '-1005554443332', letter_received: false };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  await page.evaluate(() => renderRoster());
+
+  const rosterHtml = await page.evaluate(() => {
+    const c = document.getElementById('emp-roster');
+    return c ? c.innerHTML : '';
+  });
+  report('G11a · Staff roster shows the Suspended badge but NO reinstate button',
+    /Suspended/.test(rosterHtml) && !/reinstateEmployee\(/.test(rosterHtml) && /RSR Admin dashboard/.test(rosterHtml),
+    `hasBadge=${/Suspended/.test(rosterHtml)} hasButton=${/reinstateEmployee\(/.test(rosterHtml)}`);
+
+  // The Telegram callback handler must no longer act on approve_reinstate_* / reject_reinstate_*.
+  mock.telegram = [];
+  mock.tgCallbacks = [{ id: 'cb1', from: { id: 111, first_name: 'Boss' },
+    data: 'approve_reinstate_RSR0100_1', message: { chat: { id: -1005554443332 }, message_id: 9001 } }];
+  await page.evaluate(() => processTgCallbacks());
+  const stillBlocked = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  report('G11b · Telegram approve_reinstate callback no longer reinstates',
+    stillBlocked === true && mock.suspensions['RSR0100'].active === true,
+    `stillBlockedLocally=${stillBlocked} stillActiveInDb=${mock.suspensions['RSR0100'].active}`);
+
+  // Leave approval still clears the block — and says CANCELLED, not reinstated.
+  mock.telegram = [];
+  await page.evaluate(() => reinstateEmployee('RSR0100', 'leave approved'));
+  const texts = mock.telegram.map(t => t.text || '').join(' || ');
+  report('G11c · leave-approval cancel posts CANCELLED and edits the original alert',
+    /CANCELLED/i.test(texts) && !/REINSTATED/i.test(texts) && mock.suspensions['RSR0100'].active === false,
+    `sends=${texts}`);
 });
 
 // G9 — SMS/VIOLATION PATH REST-DAY GUARD (this branch's Fix A): checkAndSendAbsenceSMS() must mirror

@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-24b</span>
+        <span id="version-stamp">v2026-07-26i</span>
       </div>
     </div>
   </div>
@@ -2044,7 +2044,7 @@ function kp(n){
       // (2026-07-24) AWOL: a suspended worker is blocked at PIN entry on EVERY kiosk (DB-shared state).
       // Fully blocks — a 3+-day-absent worker has no open shift to Time Out. Dismiss → kpClr clears PIN.
       if(suspendedEmployees[emp.code]){
-        showBisayaModal('GI-SUSPEND ANG IMONG ACCOUNT\n\nAbsent ka og 3+ ka adlaw nga sunod-sunod nga walay approved nga leave.\n\nAdto sa admin/opisina aron ma-reinstate una ka maka-punch.');
+        showBisayaModal('GI-SUSPEND ANG IMONG ACCOUNT\n\nAbsent ka og 3+ ka adlaw nga sunod-sunod nga walay approved nga leave.\n\nKuhaa ug sulati ang AWOL letter, ihatag sa coordinator, dayon hulaton ang approval sa admin una ka maka-punch.');
         loadSuspensionsFromCloud(); // opportunistic refresh so the next worker's state is fresh
         return;
       }
@@ -2261,7 +2261,7 @@ async function checkAllAbsences(){
   await retryAwolUnsynced();
   const today=todayKey();
   for(const emp of employees){
-    if(isPemCode(emp.code))continue;          // PAKYAW exempt — no suspension, no alert, no HOLD note
+    if(isPemCode(emp.code)){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; } // PAKYAW exempt — no suspension, no alert, no HOLD note; defensive clear so a pre-exemption flag can't strand
     if(suspendedEmployees[emp.code])continue;
     if(onLeaveToday(emp.code))continue;
     const dates=collectAbsentDates(emp.code);
@@ -2316,25 +2316,29 @@ async function sendAwolPendingFlag(emp,iso){
   const t=awolTarget();
   if(t) await tgSendText(t,text); else for(const id of mgrIds)if(id)await tgSendText(id,text);
 }
+// (2026-07-26) The ONLY kiosk-side un-suspension left: the leave-approval auto-cancel. An absence
+// later covered by an APPROVED leave means the suspension was issued in error, so it clears with no
+// letter and no two-step — and is logged as CANCELLED, never as a reinstatement. Every other path
+// now goes through the dashboard gate (awol_letter_received → awol_admin_decide).
 async function reinstateEmployee(code,by){
   let res=null;
-  try{ const {data}=await sbClient.rpc('awol_reinstate',{p_code:code,p_by:by||'Admin (kiosk)',p_on:todayKey()}); res=data; }
+  try{ const {data}=await sbClient.rpc('awol_cancel_leave_approved',{p_code:code,p_by:by||'leave approved',p_on:todayKey()}); res=data; }
   catch(e){ res=null; }
   const newly = res ? (res.newly!==false) : true; // offline → assume newly so the local block clears
   delete suspendedEmployees[code];
   delete awolUnsynced[code]; saveAwolUnsynced();
   saveData();renderRoster();updateStats();
   const nm=employees.find(e=>e.code===code)?.name||code;
-  logNotif(`✅ ${nm} reinstated`,'',true);
-  if(newly) await sendAwolReinstatedMsg(code,nm,by||'Admin (kiosk)',res);
+  logNotif(`↩️ ${nm} — suspension cancelled (leave approved)`,'',true);
+  if(newly) await sendAwolCancelledMsg(code,nm,by||'leave approved',res);
   loadSuspensionsFromCloud();
 }
-async function sendAwolReinstatedMsg(code,name,by,res){
+async function sendAwolCancelledMsg(code,name,by,res){
   if(!tgToken||tgToken.length<20)return;
   const t=awolTarget();
-  if(t) await tgSendText(t,`✅ <b>Reinstated</b>\n👤 ${name} (${code}) — by ${by} on ${todayKey()}`);
+  if(t) await tgSendText(t,`↩️ <b>CANCELLED — leave approved</b>\n👤 ${name} (${code}) — cleared on ${todayKey()}\nThe absence was covered by an approved leave, so the suspension was issued in error.`);
   const chat=res&&res.awol_group_chat, mid=res&&res.awol_group_msg_id;
-  if(chat&&mid){ try{ await tgEditMessage(chat,mid,`✅ RESOLVED — ${name} reinstated ${todayKey()}`);}catch(e){} }
+  if(chat&&mid){ try{ await tgEditMessage(chat,mid,`↩️ CANCELLED — ${name}: leave approved ${todayKey()}`);}catch(e){} }
 }
 
 // ── AWOL: DB-shared suspension state (employee_suspensions is source of truth) ──
@@ -4331,18 +4335,9 @@ Rejected by: ${cb.from.first_name}`;
           logNotif(`${label2} denied: ${pending.empName}`,'late-n',true);
         }
       } else if(reqType==='reinstate'){
-        // callback_data: approve_reinstate_EMPCODE_REQID or reject_reinstate_EMPCODE_REQID
-        const empCode=parts[2];
-        const emp=employees.find(e=>e.code===empCode);
-        if(!emp){await tgAnswerCallback(cb.id,'Employee not found.');continue;}
-        if(action==='approve'){
-          await reinstateEmployee(empCode, cb.from.first_name||'Telegram');
-          await tgAnswerCallback(cb.id,'✅ Employee reinstated!');
-          showMsg('ok',(employees.find(e=>e.code===empCode)?.name||empCode)+' reinstated','Employee can now punch in.',4000);
-        } else {
-          await tgAnswerCallback(cb.id,'Employee remains suspended.');
-          logNotif(`${employees.find(e=>e.code===empCode)?.name||empCode} reinstatement denied by ${cb.from.first_name}`,'late-n',true);
-        }
+        // (2026-07-26) Reinstatement moved to the RSR Admin dashboard's two-step gate (coordinator
+        // confirms the letter, admin approves). Old inline buttons are inert — answer and do nothing.
+        await tgAnswerCallback(cb.id,'Reinstatement is now done on the RSR Admin dashboard.');
       }
     }
   }catch(e){console.warn('TG poll error',e);}
@@ -4798,7 +4793,7 @@ function renderRoster(){
         ${suspendedEmployees[emp.code]?`<span style="background:#FCEBEB;color:#A32D2D;font-size:10px;font-weight:600;padding:3px 8px;border-radius:6px">🚫 Suspended</span>`:''}
         <button onclick="openEditModal('${emp.code}')" style="background:#E6F1FB;border:none;color:#185FA5;cursor:pointer;font-size:11px;font-weight:600;padding:5px 12px;border-radius:8px">Edit</button>
         <button onclick="removeEmployee('${emp.code}')" style="background:#FCEBEB;border:none;color:#A32D2D;cursor:pointer;font-size:11px;font-weight:600;padding:5px 12px;border-radius:8px">Remove</button>
-        ${suspendedEmployees[emp.code]?`<button onclick="reinstateEmployee('${emp.code}')" style="background:#E1F5EE;border:none;color:#085041;cursor:pointer;font-size:11px;font-weight:600;padding:5px 12px;border-radius:8px">✅ Reinstate</button>`:''}
+        ${suspendedEmployees[emp.code]?`<span style="color:#6B7280;font-size:10px;font-weight:600;align-self:center">Reinstate on the RSR Admin dashboard</span>`:''}
       </div>`;
     c.appendChild(d);
   });
