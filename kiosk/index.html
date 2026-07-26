@@ -2301,7 +2301,8 @@ async function sendAwolAlert(emp,iso){
   const letter=base+'/awol-letter.html?name='+encodeURIComponent(emp.name)+'&code='+encodeURIComponent(emp.code)+'&yard='+encodeURIComponent(yard)+'&dates='+encodeURIComponent(iso.join(','))+'&pdate='+encodeURIComponent(awolISO(todayKey()));
   const text=`🚨 <b>AWOL — Account Suspended</b>\n👤 ${emp.name} (${emp.code}) · 🏢 ${yard}\n📅 Absent: ${iso.join(', ')} · Suspended: ${todayKey()}\n📄 Printable letter: ${letter}`;
   // Notification-only (owner request): no inline Reinstate/Keep-Suspended buttons — the AWOL
-  // group includes coordinators, and reinstatement must stay admin-only (kiosk Staff tab).
+  // group includes coordinators, and reinstatement now goes entirely through the RSR Admin
+  // dashboard's two-step gate (awol_letter_received -> awol_admin_decide), not the kiosk.
   let chat='',msgId=0;
   if(tgAwolGroup){ chat=tgAwolGroup; msgId=await tgSendWithButtons(tgAwolGroup,text,[]); }
   else { for(const id of mgrIds){ if(!id)continue; const m=await tgSendWithButtons(id,text,[]); if(m&&!msgId){chat=id;msgId=m;} } }
@@ -2762,8 +2763,8 @@ async function punch(type){
   // and the pending_approvals poller are now inert.)
   // Block suspended employees from punching in
   if(type==='timein'&&suspendedEmployees[emp.code]){
-    showMsg('err',emp.name+' — Account Suspended',
-      'Absent 3+ days without leave. Admin reinstatement required before clocking in.',6000);
+    showMsg('err',emp.name+' — Suspendido',
+      'Kuhaa ug sulati ang AWOL letter, ihatag sa coordinator, dayon hulaton ang approval sa admin una ka maka-punch.',6000);
     return;
   }
   // (v2026-07-12) Policy A: a Time In at/after shift end NO LONGER waits on admin approval. It
@@ -3477,7 +3478,11 @@ function renderAdminPanel(){
   const bel=document.getElementById('admin-balances');bel.innerHTML='';
   employees.forEach(emp=>{const bal=emp.balance||{VL:2,SL:2};const d=document.createElement('div');d.className='bal-editor';d.innerHTML=`<div style="font-size:13px;font-weight:600;margin-bottom:8px">${emp.name} <span style="font-size:11px;color:#888;font-weight:400">(${siteName(emp.homeSite)} · PIN: ${emp.code})</span></div><div class="bal-editor-row"><label>VL</label><input type="number" min="0" max="30" value="${bal.VL}" id="b-${emp.code}-VL" /></div><div class="bal-editor-row"><label>SL</label><input type="number" min="0" max="30" value="${bal.SL}" id="b-${emp.code}-SL" /></div><`;bel.appendChild(d);});
 }
-function approveLeave(id){const r=leaveRequests.find(x=>x.id===id);if(!r)return;r.status='Approved';const e=findEmp(r.code);if(e){const k=lkey(r.type);e.balance[k]=Math.max(0,(e.balance[k]||0)-r.days);}renderAdminPanel();updateStats();}
+function approveLeave(id){const r=leaveRequests.find(x=>x.id===id);if(!r)return;r.status='Approved';const e=findEmp(r.code);if(e){const k=lkey(r.type);e.balance[k]=Math.max(0,(e.balance[k]||0)-r.days);}
+  // (2026-07-26) Mirror the Telegram approve_leave branch (~line 4115): both surfaces that can approve
+  // a leave request must cancel a matching active suspension the same way — keep them in step.
+  if(suspendedEmployees[r.code])reinstateEmployee(r.code,'leave approved');
+  renderAdminPanel();updateStats();}
 function rejectLeave(id){const r=leaveRequests.find(x=>x.id===id);if(!r)return;r.status='Rejected';renderAdminPanel();updateStats();}
 function saveBalances(){employees.forEach(emp=>{emp.balance={VL:vl,SL:sl};});document.getElementById('bal-msg').textContent='Balances saved.';setTimeout(()=>document.getElementById('bal-msg').textContent='',2000);}
 

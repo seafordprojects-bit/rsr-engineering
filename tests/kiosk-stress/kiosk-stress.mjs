@@ -989,8 +989,13 @@ await scenario('G4 · leave-approval cancel → closing msg + CANCELLED edit, on
   await page.evaluate(() => loadSuspensionsFromCloud());
   await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator Bob'));
   await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator Bob')); // second → {newly:false}, no dup
-  const posts = mock.telegram.filter(m => m.method === 'sendMessage' && /CANCELLED/.test(m.text));
-  const edits = mock.telegram.filter(m => m.method === 'editMessageText' && /CANCELLED/.test(m.text));
+  // (FINDING 6) Both messages say "CANCELLED", but the post (sendAwolCancelledMsg's sendMessage —
+  // the closing note to the AWOL target) and the edit (its editMessageText on the original group
+  // alert) have DISTINCT bodies. Match on text that appears in ONLY ONE of them, so a future edit
+  // that swaps or collapses the two message bodies is still caught — a bare /CANCELLED/ on both
+  // sides can't tell the two apart.
+  const posts = mock.telegram.filter(m => m.method === 'sendMessage' && /CANCELLED/.test(m.text) && /issued in error/.test(m.text));
+  const edits = mock.telegram.filter(m => m.method === 'editMessageText' && /CANCELLED/.test(m.text) && /: leave approved/.test(m.text));
   const cleared = !(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   report('G4 · reinstate closing log once', posts.length === 1 && edits.length === 1 && cleared,
     `posts=${posts.length} edits=${edits.length} cleared=${cleared}`);
@@ -1272,6 +1277,85 @@ await scenario('G11 · kiosk has no reinstate control; leave cancel is labelled 
   report('G11c · leave-approval cancel posts CANCELLED and edits the original alert',
     /CANCELLED/i.test(texts) && !/REINSTATED/i.test(texts) && mock.suspensions['RSR0100'].active === false,
     `sends=${texts}`);
+});
+
+// G12 — FINDING 2 lock: the REAL Telegram approve_leave callback dispatch must still cancel a
+// matching active suspension. G4 and G11c above both call reinstateEmployee() directly, bypassing
+// the actual dispatch glue in processTgCallbacks() (~line 4115: `if(suspendedEmployees[req.code])
+// reinstateEmployee(req.code,'leave approved');`) — a future edit that dropped that one line would
+// slip past every other AWOL check in this file. This scenario delivers a genuine approve_leave_*
+// callback through mock.tgCallbacks (the same delivery pattern G11b already uses) and drives it
+// through processTgCallbacks() itself, not a direct function call.
+await scenario('G12 · real Telegram approve_leave callback cancels a matching suspension', manila(2026,7,24,9,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1004443332221';
+  await page.evaluate(() => loadTgFromCloud());
+
+  // Active suspension for a roster employee, seeded the same way G4/G11 seed it.
+  mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'5001', awol_group_chat:'-1004443332221' };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const suspendedBefore = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+
+  // A matching Pending leave request covering the absence window.
+  await page.evaluate(() => {
+    leaveRequests = [{ id: 777, code:'RSR0100', name:'Regular Rey', dept:'Painting', type:'Vacation Leave',
+      startDate:'2026-07-21', endDate:'2026-07-23', days:3, reason:'family emergency', status:'Pending', tgMsgIds:{} }];
+  });
+
+  // Deliver the genuine callback (from an authorized mgr id — settings mock supplies mgr_ids='111,222')
+  // and drive it through the REAL dispatch function, not reinstateEmployee() directly.
+  mock.telegram = [];
+  mock.tgCallbacks = [{ id:'cb-g12', from:{ id:111, first_name:'Boss' },
+    data:'approve_leave_777', message:{ chat:{ id:-1004443332221 }, message_id: 5001 } }];
+  await page.evaluate(() => processTgCallbacks());
+  const callbacksDrained = mock.tgCallbacks.length === 0;
+
+  // reinstateEmployee() is fired-and-forgotten by the dispatch branch (mirrors production — the real
+  // code does not await it either), so poll briefly for its detached work (DB cancel + Telegram post)
+  // to land instead of racing it.
+  let tries = 0; while (mock.telegram.length === 0 && tries < 40) { await page.waitForTimeout(20); tries++; }
+
+  const reqStatus = await page.evaluate(() => (leaveRequests.find(r => r.id === 777) || {}).status);
+  const dbCancelled = mock.suspensions['RSR0100'].active === false;
+  const localCleared = await page.evaluate(() => !suspendedEmployees['RSR0100']);
+  const texts = mock.telegram.map(t => t.text || '').join(' || ');
+  const saysCancelled = /CANCELLED/.test(texts) && !/REINSTATED/i.test(texts);
+  report('G12 · real approve_leave dispatch cancels the matching suspension',
+    callbacksDrained && suspendedBefore && reqStatus === 'Approved' && dbCancelled && localCleared && saysCancelled,
+    `callbacksDrained=${callbacksDrained} suspendedBefore=${suspendedBefore} reqStatus=${reqStatus} dbCancelled=${dbCancelled} localCleared=${localCleared} sends=${texts}`);
+});
+
+// G13 — FINDING 1/3 lock: the kiosk's OWN Admin-tab Approve button (approveLeave(id), reached from
+// renderAdminPanel()) must cancel a matching active suspension exactly like the Telegram path does.
+// This gap predates the AWOL feature (it is not a regression) — an admin approving a leave from the
+// tablet used to leave the worker blocked, contradicting the owner's locked rule. Finding 1 fixed it
+// by mirroring the Telegram approve_leave branch's cancel call into approveLeave() (~line 3480).
+await scenario('G13 · kiosk Admin-tab approveLeave() cancels a matching suspension', manila(2026,7,24,9,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1003332221110';
+  await page.evaluate(() => loadTgFromCloud());
+
+  mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'6001', awol_group_chat:'-1003332221110' };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const suspendedBefore = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+
+  await page.evaluate(() => {
+    leaveRequests = [{ id: 888, code:'RSR0100', name:'Regular Rey', dept:'Painting', type:'Vacation Leave',
+      startDate:'2026-07-21', endDate:'2026-07-23', days:3, reason:'family emergency', status:'Pending', tgMsgIds:{} }];
+  });
+
+  mock.telegram = [];
+  await page.evaluate(() => approveLeave(888)); // the kiosk Admin-tab Approve button's handler
+  let tries = 0; while (mock.telegram.length === 0 && tries < 40) { await page.waitForTimeout(20); tries++; }
+
+  const reqStatus = await page.evaluate(() => (leaveRequests.find(r => r.id === 888) || {}).status);
+  const dbCancelled = mock.suspensions['RSR0100'].active === false;
+  const localCleared = await page.evaluate(() => !suspendedEmployees['RSR0100']);
+  const texts = mock.telegram.map(t => t.text || '').join(' || ');
+  const saysCancelled = /CANCELLED/.test(texts);
+  report('G13 · kiosk Admin-tab approveLeave cancels the matching suspension',
+    suspendedBefore && reqStatus === 'Approved' && dbCancelled && localCleared && saysCancelled,
+    `suspendedBefore=${suspendedBefore} reqStatus=${reqStatus} dbCancelled=${dbCancelled} localCleared=${localCleared} sends=${texts}`);
 });
 
 // G9 — SMS/VIOLATION PATH REST-DAY GUARD (this branch's Fix A): checkAndSendAbsenceSMS() must mirror
