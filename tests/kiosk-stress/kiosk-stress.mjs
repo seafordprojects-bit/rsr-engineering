@@ -229,6 +229,12 @@ async function newKioskContext(browser, base, initMs) {
         mock.tgCallbacks = [];
         return json(200, { ok: true, result: cbs.map((c, i) => ({ update_id: i + 1, callback_query: c })) });
       }
+      if (p.endsWith('/answerCallbackQuery')) {
+        // Captured the same way as sendMessage/editMessageText — this is the only evidence that
+        // distinguishes "the handler branch ran and deliberately answered" from "nothing happened".
+        mock.telegram.push({ method: 'answerCallbackQuery', callback_query_id: String(b.callback_query_id || ''), text: String(b.text || ''), hasButtons: false });
+        return json(200, { ok: true, result: true });
+      }
       return json(200, { ok: true, result: {} });
     }
 
@@ -1242,14 +1248,22 @@ await scenario('G11 · kiosk has no reinstate control; leave cancel is labelled 
     `hasBadge=${/Suspended/.test(rosterHtml)} hasButton=${/reinstateEmployee\(/.test(rosterHtml)}`);
 
   // The Telegram callback handler must no longer act on approve_reinstate_* / reject_reinstate_*.
+  // A "still blocked afterwards" check alone is worthless here — that's equally true if the
+  // callback was silently dropped and never processed at all. Prove all three: the callback was
+  // actually CONSUMED (drained from the mock's delivery queue), the handler ANSWERED it with the
+  // new inert-branch text (the only signal that distinguishes "ran and deliberately refused" from
+  // "nothing happened"), and the worker is still blocked both locally and in the DB.
   mock.telegram = [];
   mock.tgCallbacks = [{ id: 'cb1', from: { id: 111, first_name: 'Boss' },
     data: 'approve_reinstate_RSR0100_1', message: { chat: { id: -1005554443332 }, message_id: 9001 } }];
   await page.evaluate(() => processTgCallbacks());
+  const callbacksDrained = mock.tgCallbacks.length === 0;
+  const answered = mock.telegram.some(m => m.method === 'answerCallbackQuery'
+    && /Reinstatement is now done on the RSR Admin dashboard\./.test(m.text));
   const stillBlocked = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
-  report('G11b · Telegram approve_reinstate callback no longer reinstates',
-    stillBlocked === true && mock.suspensions['RSR0100'].active === true,
-    `stillBlockedLocally=${stillBlocked} stillActiveInDb=${mock.suspensions['RSR0100'].active}`);
+  report('G11b · Telegram approve_reinstate callback consumed, answered inert, still blocked',
+    callbacksDrained && answered && stillBlocked === true && mock.suspensions['RSR0100'].active === true,
+    `callbacksDrained=${callbacksDrained} answeredInert=${answered} stillBlockedLocally=${stillBlocked} stillActiveInDb=${mock.suspensions['RSR0100'].active}`);
 
   // Leave approval still clears the block — and says CANCELLED, not reinstated.
   mock.telegram = [];
