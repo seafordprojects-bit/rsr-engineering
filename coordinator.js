@@ -245,6 +245,26 @@ async function notifyTg(text, buttons) {
   } catch (_) {}
 }
 
+// AWOL group notifier — posts to the dedicated AWOL group, falling back to the manager DMs while
+// the group chat id is unset so an alert is never silently dropped.
+async function notifyAwol(text) {
+  try {
+    const token = await getSetting('tg_token');
+    if (!token) return;
+    const grp = (await getSetting('tg_awol_group')) || '';
+    const targets = grp ? [grp] : String((await getSetting('mgr_ids')) || '').split(',').map(s => s.trim()).filter(Boolean);
+    await Promise.all(targets.map(id => fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: id, text, parse_mode: 'HTML' }),
+    }).catch(() => {})));
+  } catch (_) {}
+}
+
+// (site rename shim, copied from home.js) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue;
+// real yard names pass through unchanged. coordinator.js and home.js share no module, hence the copy.
+const _SITE_LEGACY = { 'A': 'Carmen', 'SITE A': 'Carmen', 'B': 'Mandaue', 'SITE B': 'Mandaue' };
+const siteNorm = v => { const t = String(v == null ? '' : v).trim(); return _SITE_LEGACY[t.toUpperCase()] || t; };
+
 // ---------- small ui ----------
 function Field({ label, children }) {
   return html`<div class="field"><label>${label}</label>${children}</div>`;
@@ -1522,6 +1542,114 @@ function Liquidation({ voyages, employees, sites, toast, tab, setTab }) {
   `;
 }
 
+// ---------- AWOL letters (step 1 of the reinstate gate) ----------
+// The coordinator page can CONFIRM a letter but can never unblock anyone. Only the employee flagged
+// is_awol_clerk (RSR 0025 Jamaica) may tick, verified server-side by awol_clerk_for_pin — the shared
+// coordinator passcode that opened this page is deliberately not enough.
+function AwolLetters({ toast, employees }) {
+  const [rows, setRows] = useState(null);
+  const [pinFor, setPinFor] = useState(null);   // employee_code awaiting a PIN, or null
+  const [pin, setPin] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  // employee_suspensions stores neither the name nor the yard — enrich from the loaded roster.
+  const load = async () => {
+    try {
+      const { data, error } = await supabase.from('employee_suspensions').select('*').eq('active', true);
+      if (error) throw error;
+      const byCode = {};
+      (employees || []).forEach(e => { byCode[String(e.code).replace(/\s/g, '').toUpperCase()] = e; });
+      setRows((data || []).map(r => {
+        const e = byCode[String(r.employee_code).replace(/\s/g, '').toUpperCase()];
+        return { ...r, emp_name: e ? e.name : r.employee_code, yard: e ? siteNorm(e.home_site) : '' };
+      }));
+    } catch (e) { setRows([]); toast('Could not load suspensions: ' + e.message, true); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const letterUrl = (r) => {
+    const b = location.origin + location.pathname.replace(/\/coordinator(\/.*)?$/, '');
+    const q = new URLSearchParams({
+      name: r.emp_name || r.employee_code, code: r.employee_code, yard: r.yard || '',
+      dates: (Array.isArray(r.absent_dates) ? r.absent_dates : []).join(','),
+      pdate: r.suspended_on || '',
+    });
+    return `${b}/awol-letter.html?${q.toString()}`;
+  };
+
+  const confirmTick = async () => {
+    if (busy) return;
+    setBusy(true); setErr('');
+    try {
+      const { data: who, error: e1 } = await supabase.rpc('awol_clerk_for_pin', { p_pin: pin });
+      if (e1) throw e1;
+      if (!who || who.ok !== true) { setErr('This PIN is not authorised for the AWOL letter step'); setPin(''); return; }
+      const { data: res, error: e2 } = await supabase.rpc('awol_letter_received', { p_code: pinFor, p_by: who.name });
+      if (e2) throw e2;
+      const row = (rows || []).find(r => r.employee_code === pinFor);
+      if (res && res.newly === true) {
+        await notifyAwol(`📄 <b>Letter received</b>\n👤 ${(row && row.emp_name) || pinFor} (${pinFor})\nConfirmed by ${who.name} · waiting for admin approval`);
+      }
+      setPinFor(null); setPin('');
+      toast('Letter confirmed — it is with the admin now');
+      await load();
+    } catch (e) { setErr('Could not confirm — check the connection and try again.'); }
+    finally { setBusy(false); }
+  };
+
+  if (rows == null) return html`<div class="card"><div class="empty">Loading…</div></div>`;
+  const waiting = rows.filter(r => !r.letter_received);
+  const withBoss = rows.filter(r => r.letter_received);
+
+  return html`
+    <div class="card">
+      <label>Waiting for the letter (${waiting.length})</label>
+      ${waiting.length ? waiting.map(r => html`
+        <div class="row" key=${r.employee_code} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.emp_name || r.employee_code}</div>
+            <div class="sub">${r.employee_code}${r.yard ? ' · ' + r.yard : ''} · suspended ${r.suspended_on || '—'}</div>
+            <div class="sub">Absent: ${(Array.isArray(r.absent_dates) ? r.absent_dates : []).join(', ') || '—'}</div>
+            ${r.ref_note ? html`<div class="sub">${r.ref_note}</div>` : ''}
+            <a class="sub" href=${letterUrl(r)} target="_blank" rel="noopener">Open / print letter →</a>
+          </div>
+          <button class="ret" onClick=${() => { setPinFor(r.employee_code); setPin(''); setErr(''); }}>Letter received</button>
+        </div>`)
+        : html`<div class="empty">Nobody is waiting for a letter.</div>`}
+    </div>
+
+    ${pinFor && html`
+      <div class="card" style="border-color:var(--hivis)">
+        <label>Confirm with your own passcode</label>
+        <p class="note" style="margin:0 0 10px">Only the person authorised for AWOL letters can confirm this. Your name is recorded on the case.</p>
+        <${Field} label="Your passcode">
+          <input data-awol-pin type="password" inputmode="numeric" value=${pin}
+            onInput=${e => setPin(e.target.value)}
+            onKeyDown=${e => { if (e.key === 'Enter') confirmTick(); }} />
+        <//>
+        <div style="display:flex;gap:8px">
+          <button class="btn" disabled=${busy} onClick=${confirmTick}>${busy ? 'Checking…' : 'Confirm'}</button>
+          <button class="btn ghost" disabled=${busy} onClick=${() => { setPinFor(null); setPin(''); setErr(''); }}>Cancel</button>
+        </div>
+        ${err && html`<p class="note" style="margin-top:10px;color:var(--warn)">${err}</p>`}
+      </div>`}
+
+    <div class="card">
+      <label>Waiting for the boss (${withBoss.length})</label>
+      ${withBoss.length ? withBoss.map(r => html`
+        <div class="row" key=${r.employee_code} style="align-items:flex-start">
+          <div>
+            <div class="name">${r.emp_name || r.employee_code}</div>
+            <div class="sub">${r.employee_code} · letter confirmed by ${r.letter_received_by || '—'}</div>
+          </div>
+          <span class="pill">WITH ADMIN</span>
+        </div>`)
+        : html`<div class="empty">Nothing waiting with the admin.</div>`}
+      <p class="note" style="margin-top:10px">Only the admin can lift a suspension. This page confirms the letter only.</p>
+    </div>`;
+}
+
 function App() {
   const [authed, setAuthed] = useState(sessionStorage.getItem('rsr_coord') === '1');
   const [area, setArea] = useState(null);          // null | 'vessels' | 'personnel' | 'expenses'
@@ -1592,19 +1720,24 @@ function App() {
           <div style="font-size:24px">📋</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Roll-call</div>
           <div class="sub" style="font-size:12px;color:var(--ink-dim)">View entries by day, job & yard — view only</div>
         </div>
+        <div class="card" style="cursor:pointer;margin:0;grid-column:1/-1" onClick=${() => setArea('awol')}>
+          <div style="font-size:24px">📄</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">AWOL — letters</div>
+          <div class="sub" style="font-size:12px;color:var(--ink-dim)">Confirm a received AWOL letter · admin approves after</div>
+        </div>
       </div>
     </div>
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}`;
 
   // ---- areas ----
   return html`
-    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'attendance' ? 'ATTENDANCE' : area === 'rollcall' ? 'ROLL-CALL (VIEW ONLY)' : area === 'approvals' ? 'APPROVALS' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISCELLANEOUS':'SUMMARY') : '')) : 'PERSONNEL DATA')}
+    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'attendance' ? 'ATTENDANCE' : area === 'rollcall' ? 'ROLL-CALL (VIEW ONLY)' : area === 'approvals' ? 'APPROVALS' : area === 'awol' ? 'AWOL — LETTERS' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISCELLANEOUS':'SUMMARY') : '')) : 'PERSONNEL DATA')}
     <div class="wrap">
       ${area === 'vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
       ${area === 'expenses' && html`<${Expenses} voyages=${voyages} toast=${flash} />`}
       ${area === 'attendance' && html`<${Attendance} toast=${flash} />`}
       ${area === 'rollcall' && html`<${RollCall} employees=${employees} toast=${flash} />`}
       ${area === 'approvals' && html`<${Approvals} toast=${flash} />`}
+      ${area === 'awol' && html`<${AwolLetters} toast=${flash} employees=${employees} />`}
       ${area === 'liquidation' && html`<${Liquidation} voyages=${voyages} employees=${employees} sites=${sites} toast=${flash} tab=${liqTab} setTab=${setLiqTab} />`}
       ${area === 'personnel' && html`
         <div class="tabs">
