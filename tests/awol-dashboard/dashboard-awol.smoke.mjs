@@ -1,5 +1,5 @@
-// Playwright smoke over the coordinator (+ admin, pending Task 5) AWOL surfaces with Supabase
-// fully mocked. Nothing here touches the live project — the real host is walled off.
+// Playwright smoke over the coordinator + admin dashboard AWOL surfaces with Supabase fully mocked.
+// Nothing here touches the live project — the real host is walled off.
 // Run: node tests/awol-dashboard/dashboard-awol.smoke.mjs
 //
 // NOTE on running this: this repo has no package.json/node_modules of its own (no build step,
@@ -39,8 +39,8 @@ const check = (name, ok, detail) => {
   console.log(`${ok ? '  \x1b[32mPASS\x1b[0m' : '  \x1b[31mFAIL\x1b[0m'}  ${name}${detail ? `\n        ${detail}` : ''}`);
   ok ? pass++ : fail++;
 };
-// Task 5 (admin dashboard) doesn't exist yet — mark expected-not-yet-built checks distinctly
-// so they don't read as real failures of THIS task's work.
+// Kept for future not-yet-built sections of this test (e.g. Task 6's manual re-suspension form) —
+// unused now that the admin dashboard AWOL card (Task 5) is built and its checks run for real below.
 const pend = (name, why) => {
   console.log(`  \x1b[33mPEND\x1b[0m  ${name}\n        ${why}`);
   pending++;
@@ -181,34 +181,29 @@ check('coordinator: a Telegram alert went to the AWOL group chat (not a raw mana
   state.tgCalls.some(c => c.chatId === '-1001112223334' && /Letter received/.test(c.text || '')),
   `tgCalls=${JSON.stringify(state.tgCalls)}`);
 
-// ── admin dashboard: gate + decisions — Task 5, not built yet ──────────────────
-console.log('\n== admin: AWOL suspensions dashboard (Task 5 — not built yet) ==');
-const ADMIN_PENDING_ITEMS = [
-  ['admin: ticked case shows under "Needs your decision"', 'no AWOL card/route exists on the admin page yet'],
-  ['admin: keep-suspended clears the tick and the worker stays blocked', 'awol_admin_decide is never called from the UI yet'],
-  ['admin: no Approve button while the case is waiting for the letter', 'there is no Approve button of any kind yet'],
-];
-try {
-  const admin = await context.newPage();
-  admin.setDefaultTimeout(4000);
-  await admin.goto(`${base}/admin/`, { waitUntil: 'networkidle' });
-  for (const d of '123456') await admin.click(`button:has-text("${d}")`);
-  await admin.waitForSelector('text=AWOL — suspensions');
-  // If Task 5 ever lands and this stops throwing, these will start running for real.
-  check('admin: ticked case shows under "Needs your decision"',
-    await admin.isVisible('text=Needs your decision'));
-  await admin.click('button:has-text("Keep suspended")');
-  for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
-  await admin.waitForSelector('text=Waiting for the letter');
-  check('admin: keep-suspended clears the tick and the worker stays blocked',
-    state.suspensions['RSR 0006'].active === true && state.suspensions['RSR 0006'].letter_received === false);
-  check('admin: no Approve button while the case is waiting for the letter',
-    !(await admin.isVisible('button:has-text("Approve")')));
-} catch (e) {
-  for (const [name, why] of ADMIN_PENDING_ITEMS) pend(name, why);
-}
+// ── admin dashboard: gate + decisions — Task 5 ──────────────────────────────────
+console.log('\n== admin: AWOL suspensions dashboard ==');
+const admin = await context.newPage();
+admin.setDefaultTimeout(4000);
+await admin.goto(`${base}/admin/`, { waitUntil: 'networkidle' });
+for (const d of '123456') await admin.click(`button:has-text("${d}")`);
+await admin.waitForSelector('text=AWOL — suspensions');
+check('admin: ticked case shows under "Needs your decision"',
+  await admin.isVisible('text=Needs your decision'));
+await admin.click('button:has-text("Keep suspended")');
+for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
+// NOTE: the sectlabel "Waiting for the letter (N)" is always on screen (it's a static heading with
+// a live count, not a state-dependent card) — waiting for that text resolves immediately and races
+// ahead of the RPC round trip. Wait for the toast this decision actually produces instead, so the
+// PIN-signed awol_admin_decide('keep') call is guaranteed to have completed before asserting on it.
+await admin.waitForSelector('text=Baby Monterola stays suspended');   // proves awol_admin_decide('keep') resolved
+check('admin: keep-suspended clears the tick and the worker stays blocked',
+  state.suspensions['RSR 0006'].active === true && state.suspensions['RSR 0006'].letter_received === false);
+await admin.waitForSelector('text=Nothing waiting on you.');   // proves the post-decision reload re-rendered
+check('admin: no Approve button while the case is waiting for the letter',
+  !(await admin.isVisible('button:has-text("Approve")')));
 
 await browser.close();
 server.close();
-console.log(`\n${pass} passed, ${fail} failed, ${pending} pending (Task 5)\n`);
+console.log(`\n${pass} passed, ${fail} failed, ${pending} pending\n`);
 process.exit(fail ? 1 : 0);

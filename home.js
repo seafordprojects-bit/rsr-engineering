@@ -24,6 +24,33 @@ async function countRows(table, build) {
     return count || 0;
   } catch (_) { return null; }
 }
+// AWOL group notifier — the dashboard posts its own decision messages so the log always shows who
+// acted. Falls back to the manager DMs while tg_awol_group is unset, so nothing is silently dropped.
+// (coordinator.js carries its own copy of this same helper — the two pages share no module.)
+async function notifyAwol(text) {
+  try {
+    const token = await getSetting('tg_token');
+    if (!token) return;
+    const grp = (await getSetting('tg_awol_group')) || '';
+    const targets = grp ? [grp] : String((await getSetting('mgr_ids')) || '').split(',').map(s => s.trim()).filter(Boolean);
+    await Promise.all(targets.map(id => fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: id, text, parse_mode: 'HTML' }),
+    }).catch(() => {})));
+  } catch (_) {}
+}
+// Edit the ORIGINAL 🚨 alert so the group reads as a running open/resolved log.
+async function editAwolMsg(chat, msgId, text) {
+  if (!chat || !msgId) return;
+  try {
+    const token = await getSetting('tg_token');
+    if (!token) return;
+    await fetch('https://api.telegram.org/bot' + token + '/editMessageText', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chat, message_id: msgId, text, parse_mode: 'HTML' }),
+    }).catch(() => {});
+  } catch (_) {}
+}
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
     .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate, home_site, is_issuer').order('name').limit(2000);
@@ -305,6 +332,161 @@ function Lock({ onUnlock }) {
         <p class="note" style="min-height:16px;margin-top:12px;color:var(--warn)">${busy ? 'Checking…' : err}</p>
       </div>
     </div>`;
+}
+
+// ---------- AWOL suspensions (step 2 of the reinstate gate) ----------
+// The dashboard is the ONLY door back: the kiosk and Telegram one-tap buttons were removed. The
+// admin PIN is re-verified on EVERY decision — it is the signature, not a session unlock — and
+// awol_admin_decide refuses to approve unless the letter has been confirmed, so a stale screen
+// cannot slip one through.
+// `manual` / `closedRows` are wired up for Task 6 (manual re-suspension from this same card) — not
+// built here; kept so that task can slot in without reshaping this component's state.
+function AwolSuspensions({ emps, flash }) {
+  const [rows, setRows] = useState(null);
+  const [closedRows, setClosedRows] = useState([]);
+  const [closed, setClosed] = useState([]);
+  const [ask, setAsk] = useState(null);   // {code, name, decision:'approve'|'keep'|'tick'}
+  const [manual, setManual] = useState(null);
+  const [pin, setPin] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const byCode = {};
+  (emps || []).forEach(e => { byCode[String(e.code).replace(/\s/g, '').toUpperCase()] = e; });
+  const nameOf = (code) => { const e = byCode[String(code).replace(/\s/g, '').toUpperCase()]; return e ? e.name : code; };
+  const yardOf = (code) => { const e = byCode[String(code).replace(/\s/g, '').toUpperCase()]; return e ? siteNorm(e.home_site) : ''; };
+
+  const load = async () => {
+    try {
+      const { data, error } = await supabase.from('employee_suspensions').select('*').eq('active', true);
+      if (error) throw error;
+      setRows(data || []);
+    } catch (_) { setRows([]); }
+    try {
+      const { data } = await supabase.from('employee_suspensions').select('*').eq('active', false).limit(50);
+      setClosedRows(data || []);
+    } catch (_) { setClosedRows([]); }
+    try {
+      const { data } = await supabase.from('awol_events').select('*')
+        .in('event', ['reinstated', 'kept_suspended', 'cancelled_leave_approved'])
+        .order('at', { ascending: false }).limit(10);
+      setClosed(data || []);
+    } catch (_) { setClosed([]); }
+  };
+  useEffect(() => { load(); }, []);
+
+  const letterUrl = (r) => {
+    const b = location.origin + location.pathname.replace(/\/admin(\/.*)?$/, '');
+    const q = new URLSearchParams({
+      name: nameOf(r.employee_code), code: r.employee_code, yard: yardOf(r.employee_code),
+      dates: (Array.isArray(r.absent_dates) ? r.absent_dates : []).join(','), pdate: r.suspended_on || '',
+    });
+    return `${b}/awol-letter.html?${q.toString()}`;
+  };
+
+  // Accepts the just-typed PIN explicitly rather than reading the `pin` state: the keypad below
+  // fires this via setTimeout right after the 6th digit's setPin(), and at that instant this
+  // closure (from the pre-6th-digit render) still sees the OLD `pin` value — state updates don't
+  // land until the next render. Passing the freshly-built string in avoids sending a 5-digit PIN.
+  const run = async (typed) => {
+    if (busy || !ask) return;
+    setBusy(true); setErr('');
+    try {
+      const { data: ok, error: e1 } = await supabase.rpc('admin_verify_passcode', { p_input: typed });
+      if (e1) throw e1;
+      if (ok !== true) { setErr('Wrong PIN.'); setPin(''); return; }
+      const actor = localStorage.getItem('rsr_prepared_by') || 'Admin';
+      const nm = ask.name, code = ask.code;
+      const today = new Date().toLocaleDateString('en-PH');
+
+      if (ask.decision === 'tick') {
+        // The owner has no assigned clerk on hand — this is the fallback path, so the log always
+        // shows "Admin — <name>" and never reads as if the real clerk confirmed it.
+        const { data: res } = await supabase.rpc('awol_letter_received', { p_code: code, p_by: 'Admin — ' + actor });
+        if (res && res.newly === true) {
+          await notifyAwol(`📄 <b>Letter received</b>\n👤 ${nm} (${code})\nConfirmed by Admin — ${actor} · waiting for admin approval`);
+        }
+        flash('Letter confirmed');
+      } else if (ask.decision === 'approve') {
+        const { data: res } = await supabase.rpc('awol_admin_decide', { p_code: code, p_by: actor, p_decision: 'approve' });
+        if (!res || res.newly !== true) { setErr(res && res.reason ? res.reason : 'Could not approve.'); return; }
+        await notifyAwol(`✅ <b>REINSTATED</b>\n👤 ${nm} (${code}) — approved by ${actor} on ${today}`);
+        await editAwolMsg(res.awol_group_chat, res.awol_group_msg_id, `✅ RESOLVED — ${nm} reinstated ${today}`);
+        flash(nm + ' can punch again');
+      } else if (ask.decision === 'keep') {
+        const { data: res } = await supabase.rpc('awol_admin_decide', { p_code: code, p_by: actor, p_decision: 'keep' });
+        if (!res || res.newly !== true) { setErr(res && res.reason ? res.reason : 'Could not save.'); return; }
+        await notifyAwol(`⛔ <b>Kept suspended</b>\n👤 ${nm} (${code}) — decided by ${actor} on ${today} · letter step reset`);
+        flash(nm + ' stays suspended');
+      }
+      setAsk(null); setPin('');
+      await load();
+    } catch (_) { setErr('Could not save — check the connection and try again.'); }
+    finally { setBusy(false); }
+  };
+
+  if (rows == null) return '';
+  const needsDecision = rows.filter(r => r.letter_received);
+  const waitingLetter = rows.filter(r => !r.letter_received);
+
+  const line = (r) => html`
+    <div>
+      <div class="name">${nameOf(r.employee_code)}</div>
+      <div class="unit">${r.employee_code}${yardOf(r.employee_code) ? ' · ' + yardOf(r.employee_code) : ''} · suspended ${r.suspended_on || '—'}</div>
+      <div class="unit">Absent: ${(Array.isArray(r.absent_dates) ? r.absent_dates : []).join(', ') || '—'}</div>
+      ${r.letter_received ? html`<div class="unit">Letter confirmed by ${r.letter_received_by || '—'}</div>` : ''}
+      ${r.ref_note ? html`<div class="unit" style="color:var(--hivis)">${r.ref_note}</div>` : ''}
+      <a class="unit" href=${letterUrl(r)} target="_blank" rel="noopener">Open / print letter →</a>
+    </div>`;
+
+  return html`
+    <div class="card" style=${needsDecision.length ? 'border-color:var(--hivis)' : ''}>
+      <label>AWOL — suspensions</label>
+
+      <div class="sectlabel" style="margin-top:0">Needs your decision (${needsDecision.length})</div>
+      ${needsDecision.length ? needsDecision.map(r => html`
+        <div class="row" key=${r.employee_code} style="align-items:flex-start">
+          ${line(r)}
+          <span style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn" onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'approve' }); setPin(''); setErr(''); }}>✅ Approve — worker can punch</button>
+            <button class="btn ghost" onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'keep' }); setPin(''); setErr(''); }}>⛔ Keep suspended</button>
+          </span>
+        </div>`)
+        : html`<div class="empty">Nothing waiting on you.</div>`}
+
+      <div class="sectlabel">Waiting for the letter (${waitingLetter.length})</div>
+      ${waitingLetter.length ? waitingLetter.map(r => html`
+        <div class="row" key=${r.employee_code} style="align-items:flex-start">
+          ${line(r)}
+          <button class="btn ghost" onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'tick' }); setPin(''); setErr(''); }}>Tick letter received (admin)</button>
+        </div>`)
+        : html`<div class="empty">Nobody outstanding.</div>`}
+
+      <div class="sectlabel">Recently closed</div>
+      ${closed.length ? closed.map(e => html`
+        <div class="row" key=${e.id}>
+          <div>
+            <div class="name">${nameOf(e.employee_code)}</div>
+            <div class="unit">${e.event === 'reinstated' ? 'Approved' : e.event === 'kept_suspended' ? 'Kept suspended' : 'Cancelled — leave approved'} · ${e.actor || '—'} · ${e.at ? new Date(e.at).toLocaleDateString('en-PH') : ''}</div>
+          </div>
+        </div>`)
+        : html`<div class="empty">No closed cases yet.</div>`}
+    </div>
+
+    ${ask && html`
+      <div class="card" style="border-color:var(--hivis)">
+        <label>${ask.decision === 'approve' ? 'Approve ' + ask.name : ask.decision === 'keep' ? 'Keep ' + ask.name + ' suspended' : 'Confirm the letter for ' + ask.name}</label>
+        <p class="note" style="margin:0 0 10px">Enter the 6-digit admin PIN to sign this decision.</p>
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:280px">
+          ${['1','2','3','4','5','6','7','8','9','0'].map(d => html`
+            <button class="btn ghost" data-admin-key=${d} disabled=${busy}
+              onClick=${() => { const n = (pin + d).slice(0, 6); setPin(n); if (n.length === 6) setTimeout(() => run(n), 0); }}>${d}</button>`)}
+          <button class="btn ghost" disabled=${busy} onClick=${() => setPin(p => p.slice(0, -1))}>⌫</button>
+        </div>
+        <p class="note" style="margin-top:10px">${'•'.repeat(pin.length)}</p>
+        <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk(null); setPin(''); setErr(''); }}>Cancel</button>
+        ${err && html`<p class="note" style="margin-top:10px;color:var(--warn)">${err}</p>`}
+      </div>`}`;
 }
 
 function Tile({ ico, num, unit, title, href, onClick }) {
@@ -1573,6 +1755,7 @@ function App() {
     </header>
     <div class="wrap">
       ${healthBanner()}
+      <${AwolSuspensions} emps=${emps} flash=${flash} />
       ${(() => {
         const needs = emps.filter(e => !e.pin).length;
         return needs > 0 ? html`
