@@ -47,8 +47,10 @@ select count(*) as backed_up from public.bak_employee_suspensions_20260726;   --
 -- only written FRESH the very first time this file executes. If this file is ever re-pasted later,
 -- re-running this DELETE would remove every resolved suspension since then with NO fresh backup
 -- underneath it. The `active is not true` guard means it can never touch a LIVE suspension, but
--- that does not make a second run of this delete safe. Uncomment the two lines below only the
--- first time this file is run, then leave them commented out for good.
+-- that does not make a second run of this delete safe. Uncomment the THREE lines below (the delete,
+-- the count, and the validate) only the first time this file is run, then leave them commented out
+-- for good. Uncommenting only the first two leaves the constraint enforcing but NOT VALID — not an
+-- error, and STEP 14 carries the validate line as the catch-up.
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- delete from public.employee_suspensions where active is not true;
 -- select count(*) as remaining from public.employee_suspensions;                -- expect 0
@@ -404,11 +406,21 @@ select conname, convalidated from pg_constraint where conname = 'employee_suspen
 
 -- ═══════════════════════════════════════════════════════════════════════════════
 -- ── STEP 14 — RUN THIS SEPARATELY, *AFTER* the verification script has been run ──
--- The verification script exercises the RPCs against two throwaway codes, TEST999 and 'PEM TEST9'.
--- It cannot delete them itself: anon holds no delete on either table, deliberately, so that no
--- client can erase an audit trail. Clear the probes here once verification has passed.
+-- Verification exercises the RPCs against throwaway codes. None can be deleted by the client: anon
+-- holds no delete on either table, deliberately, so that no client can erase an audit trail. Clear
+-- the probes here once verification has passed. Codes actually used (verified live 2026-07-26):
+--   TEST999      — the gate/manual-suspension probe; left ACTIVE by the manual re-suspension check,
+--                  so it MUST be cleared or it shows up as a live suspension on the dashboard.
+--   RSR ZZTEST   — inactive; the control row proving the PEM constraint is not over-broad.
+--   PEM TEST9    — was removed by STEP 2; listed for completeness, the delete is a harmless no-op.
+-- The validate line is here because STEP 2's own banner said "uncomment the two lines below" and was
+-- followed literally, so the constraint is still NOT VALID (STEP 13 reported convalidated = f). The
+-- table is empty now, so validating is instant and cannot fail.
 -- ═══════════════════════════════════════════════════════════════════════════════
--- delete from public.employee_suspensions where employee_code in ('TEST999', 'PEM TEST9');
--- delete from public.awol_events          where employee_code in ('TEST999', 'PEM TEST9');
+-- delete from public.employee_suspensions where employee_code in ('TEST999', 'RSR ZZTEST', 'PEM TEST9');
+-- delete from public.awol_events          where employee_code in ('TEST999', 'RSR ZZTEST', 'PEM TEST9');
+-- alter table public.employee_suspensions validate constraint employee_suspensions_no_pem;
 -- select count(*) as suspensions_remaining from public.employee_suspensions;   -- expect 0
 -- select count(*) as events_remaining      from public.awol_events;            -- expect 0
+-- select conname, convalidated from pg_constraint where conname = 'employee_suspensions_no_pem';
+--   -- expect convalidated = t
