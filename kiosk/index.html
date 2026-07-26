@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-24a</span>
+        <span id="version-stamp">v2026-07-26h</span>
       </div>
     </div>
   </div>
@@ -2229,24 +2229,22 @@ function getConsecutiveAbsences(empCode){
   }
   return count;
 }
+// (2026-07-26 HOTFIX — owner-approved) AWOL detection is DISABLED on the live kiosk.
+// WHY: getConsecutiveAbsences above has no rest-day concept — it counts backward and breaks on the
+// first non-absent day, so a no-punch SUNDAY counts as an absence. On a Monday boot a worker who
+// missed only Friday and Saturday reaches 3 and is refused Time In (punch() ~2645), plus a manager
+// alert. The Sunday-aware counter, the DB-shared suspension state and the two-role dashboard
+// reinstate gate all live on the awol-suspension-flow branch and have NOT shipped; this half-built
+// detection reached main ahead of them. Detection stays off until that reviewed build lands.
+// Also clears any suspension a previous boot already wrote to this tablet's localStorage, so nobody
+// remains blocked by a feature that was never meant to be live. Suspensions here were per-device
+// only (this build has no employee_suspensions/RPC code), so there is no server state to reconcile.
 function checkAllAbsences(){
-  const today=todayKey();
-  employees.forEach(emp=>{
-    if(suspendedEmployees[emp.code])return; // already suspended
-    if(onLeaveToday(emp.code))return;
-    const consecutive=getConsecutiveAbsences(emp.code);
-    if(consecutive>=3){
-      suspendedEmployees[emp.code]={
-        reason:`Absent for ${consecutive} consecutive day(s) without filed leave`,
-        suspendedOn:today,tgMsgIds:{},notified:false
-      };
-      saveData();
-      if(!suspendedEmployees[emp.code].notified){
-        sendAbsenceSuspensionAlert(emp,consecutive);
-        suspendedEmployees[emp.code].notified=true;
-      }
-    }
-  });
+  if(suspendedEmployees && Object.keys(suspendedEmployees).length){
+    suspendedEmployees={};
+    if(typeof saveData==='function')saveData();
+    if(typeof renderRoster==='function')renderRoster();
+  }
 }
 async function sendAbsenceSuspensionAlert(emp,days){
   logNotif(`⚠️ ${emp.name} suspended — ${days} consecutive absences`,'late-n',true);
