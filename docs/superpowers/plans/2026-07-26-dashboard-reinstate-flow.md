@@ -671,10 +671,10 @@ git commit -m "feat(awol): SQL — walkthrough cleanup, two-role gate schema, PE
 Add to `tests/kiosk-stress/kiosk-stress.mjs`, immediately after the existing G8 scenario block:
 
 ```js
-// G9 — PAKYAW/PEM EXEMPTION (owner 2026-07-26): piece-rate/casual workers have irregular
+// G10 — PAKYAW/PEM EXEMPTION (owner 2026-07-26): piece-rate/casual workers have irregular
 // attendance by nature. They are skipped COMPLETELY — no suspension, no alert, no letter, and
 // no pending-leave HOLD note. The employee CODE PREFIX is the marker (coordinator.js empType).
-await scenario('G9 · PAKYAW/PEM workers are exempt from AWOL', manila(2026, 7, 21, 8, 0), async (page) => {
+await scenario('G10 · PAKYAW/PEM workers are exempt from AWOL', manila(2026, 7, 21, 8, 0), async (page) => {
   mock.tgConfigured = true; mock.awolGroupId = '-1007776665554';
   await page.evaluate(() => loadTgFromCloud());
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {}; });
@@ -687,13 +687,13 @@ await scenario('G9 · PAKYAW/PEM workers are exempt from AWOL', manila(2026, 7, 
   const suspended = !!(mock.suspensions['PEM9001'] && mock.suspensions['PEM9001'].active);
   const localBlock = await page.evaluate(() => !!suspendedEmployees['PEM9001']);
   const anyTelegram = mock.telegram.length > 0;
-  report('G9a · PEM worker absent 5+ working days → never suspended, no alert, no letter',
+  report('G10a · PEM worker absent 5+ working days → never suspended, no alert, no letter',
     !suspended && !localBlock && !anyTelegram && chain.length >= 5,
     `absentChain=${chain.length} suspendedInDb=${suspended} blockedLocally=${localBlock} telegramSends=${mock.telegram.length}`);
 
   // The space-separated live spelling must be exempt too ('PEM 0001' on the real roster).
   const bothSpellings = await page.evaluate(() => [isPemCode('PEM 0001'), isPemCode('PEM9001'), isPemCode('RSR0100')]);
-  report('G9b · both PEM spellings exempt, RSR not',
+  report('G10b · both PEM spellings exempt, RSR not',
     JSON.stringify(bothSpellings) === JSON.stringify([true, true, false]),
     `isPemCode(['PEM 0001','PEM9001','RSR0100']) = ${JSON.stringify(bothSpellings)}`);
 
@@ -704,7 +704,7 @@ await scenario('G9 · PAKYAW/PEM workers are exempt from AWOL', manila(2026, 7, 
   mock.telegram = [];
   await page.evaluate(() => checkAllAbsences());
   const holdFlagged = await page.evaluate(() => !!awolPending['PEM9001']);
-  report('G9c · PEM worker with a pending leave gets no HOLD note either',
+  report('G10c · PEM worker with a pending leave gets no HOLD note either',
     mock.telegram.length === 0 && !holdFlagged,
     `telegramSends=${mock.telegram.length} holdFlagged=${holdFlagged}`);
 });
@@ -723,7 +723,7 @@ Edit the comment block at ~line 1080 and the case body at ~line 1110:
 ```js
   // ── Case C (RSR0303) — the owner's exact reported bug, on a real Monday ──────────────────────
   // NOTE: deliberately an RSR code. This case used to use PEM9001; once PAKYAW/PEM workers became
-  // exempt from AWOL (G9), the exemption would fire FIRST and this scenario would pass without ever
+  // exempt from AWOL (G10), the exemption would fire FIRST and this scenario would pass without ever
   // exercising the Sunday rest-day chain — silently gutting the owner's locked regression guard.
   await page.evaluate(() => { employees = window.__g8Roster.filter(e => e.code === 'RSR0303'); });
   await page.evaluate(thu => {
@@ -742,7 +742,7 @@ Edit the comment block at ~line 1080 and the case body at ~line 1110:
 node tests/kiosk-stress/kiosk-stress.mjs
 ```
 
-Expected: `G8c` still PASSes (re-pointed, logic unchanged) and `G9a` FAILs — the PEM worker IS suspended, `suspendedInDb=true`, with a Telegram alert sent. `G9b` FAILs with a page error: `isPemCode is not defined`.
+Expected: `G8c` still PASSes (re-pointed, logic unchanged) and `G10a` FAILs — the PEM worker IS suspended, `suspendedInDb=true`, with a Telegram alert sent. `G10b` FAILs with a page error: `isPemCode is not defined`.
 
 - [ ] **Step 4: Implement the exemption in the kiosk**
 
@@ -772,7 +772,7 @@ Then in `checkAllAbsences` (line 2254), add the skip as the **first** check in t
 node tests/kiosk-stress/kiosk-stress.mjs
 ```
 
-Expected: `G9a`, `G9b`, `G9c` PASS; `G8c` still PASSes; every pre-existing scenario still passes (no count regression).
+Expected: `G10a`, `G10b`, `G10c` PASS; `G8c` still PASSes; every pre-existing scenario still passes (no count regression).
 
 - [ ] **Step 6: Validate + commit**
 
@@ -799,13 +799,13 @@ git commit -m "feat(kiosk): PAKYAW/PEM workers exempt from AWOL; re-point G8c of
 
 - [ ] **Step 1: Write the failing harness scenarios**
 
-Add after the G9 scenario:
+Add after the G10 scenario:
 
 ```js
-// G10 — DASHBOARD IS THE ONLY DOOR (owner 2026-07-26): the kiosk keeps the 🚫 Suspended badge but
+// G11 — DASHBOARD IS THE ONLY DOOR (owner 2026-07-26): the kiosk keeps the 🚫 Suspended badge but
 // has NO reinstate control, and the Telegram reinstate/reject buttons are gone. The only remaining
 // kiosk-side un-suspension is the leave-approval auto-cancel, which must be labelled CANCELLED.
-await scenario('G10 · kiosk has no reinstate control; leave cancel is labelled CANCELLED', manila(2026, 7, 21, 8, 0), async (page) => {
+await scenario('G11 · kiosk has no reinstate control; leave cancel is labelled CANCELLED', manila(2026, 7, 21, 8, 0), async (page) => {
   mock.tgConfigured = true; mock.awolGroupId = '-1005554443332';
   await page.evaluate(() => loadTgFromCloud());
   mock.suspensions['RSR0100'] = { employee_code: 'RSR0100', active: true, reason: 'AWOL',
@@ -818,7 +818,7 @@ await scenario('G10 · kiosk has no reinstate control; leave cancel is labelled 
     const c = document.getElementById('roster-list');
     return c ? c.innerHTML : '';
   });
-  report('G10a · Staff roster shows the Suspended badge but NO reinstate button',
+  report('G11a · Staff roster shows the Suspended badge but NO reinstate button',
     /Suspended/.test(rosterHtml) && !/reinstateEmployee\(/.test(rosterHtml) && /RSR Admin dashboard/.test(rosterHtml),
     `hasBadge=${/Suspended/.test(rosterHtml)} hasButton=${/reinstateEmployee\(/.test(rosterHtml)}`);
 
@@ -828,7 +828,7 @@ await scenario('G10 · kiosk has no reinstate control; leave cancel is labelled 
     data: 'approve_reinstate_RSR0100_1', message: { chat: { id: -1005554443332 }, message_id: 9001 } }];
   await page.evaluate(() => pollTelegram());
   const stillBlocked = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
-  report('G10b · Telegram approve_reinstate callback no longer reinstates',
+  report('G11b · Telegram approve_reinstate callback no longer reinstates',
     stillBlocked === true && mock.suspensions['RSR0100'].active === true,
     `stillBlockedLocally=${stillBlocked} stillActiveInDb=${mock.suspensions['RSR0100'].active}`);
 
@@ -836,7 +836,7 @@ await scenario('G10 · kiosk has no reinstate control; leave cancel is labelled 
   mock.telegram = [];
   await page.evaluate(() => reinstateEmployee('RSR0100', 'leave approved'));
   const texts = mock.telegram.map(t => t.text || '').join(' || ');
-  report('G10c · leave-approval cancel posts CANCELLED and edits the original alert',
+  report('G11c · leave-approval cancel posts CANCELLED and edits the original alert',
     /CANCELLED/i.test(texts) && !/REINSTATED/i.test(texts) && mock.suspensions['RSR0100'].active === false,
     `sends=${texts}`);
 });
@@ -858,7 +858,7 @@ The `mock.tgCallbacks` hook above needs a mocked `getUpdates`. If the harness do
 node tests/kiosk-stress/kiosk-stress.mjs
 ```
 
-Expected: `G10a` FAILs (the roster still renders `reinstateEmployee(`), `G10b` FAILs (the callback still reinstates), `G10c` FAILs (the message says "Reinstated").
+Expected: `G11a` FAILs (the roster still renders `reinstateEmployee(`), `G11b` FAILs (the callback still reinstates), `G11c` FAILs (the message says "Reinstated").
 
 - [ ] **Step 3: Remove the roster reinstate button**
 
@@ -937,7 +937,7 @@ At ~2047, replace the `showBisayaModal(...)` argument with the owner-approved co
 node tests/kiosk-stress/kiosk-stress.mjs
 ```
 
-Expected: `G10a/b/c` PASS, `G9*` and `G8*` still PASS, no pre-existing scenario regresses.
+Expected: `G11a/b/c` PASS, `G10*` and `G8*` still PASS, no pre-existing scenario regresses.
 
 - [ ] **Step 9: Validate + commit**
 
@@ -1733,9 +1733,9 @@ Also make the PEM guard real in the `awol_set_suspended` mock — add as its fir
 - [ ] **Step 2: Add the cross-device gate scenario**
 
 ```js
-// G11 — THE GATE, CROSS-DEVICE: an approval on the dashboard must lift the block on the kiosks
+// G12 — THE GATE, CROSS-DEVICE: an approval on the dashboard must lift the block on the kiosks
 // via the existing poller, and an approve attempted without the letter tick must be refused.
-await scenario('G11 · two-step gate lifts the block on every kiosk', manila(2026, 7, 21, 8, 0), async (page) => {
+await scenario('G12 · two-step gate lifts the block on every kiosk', manila(2026, 7, 21, 8, 0), async (page) => {
   mock.tgConfigured = true; mock.awolGroupId = '-1004443332221';
   await page.evaluate(() => loadTgFromCloud());
   mock.suspensions['RSR0100'] = { employee_code: 'RSR0100', active: true, reason: 'AWOL',
@@ -1749,18 +1749,18 @@ await scenario('G11 · two-step gate lifts the block on every kiosk', manila(202
     const { data } = await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0100', p_by: 'Boss', p_decision: 'approve' });
     return data;
   });
-  report('G11a · approve refused before the letter is confirmed',
+  report('G12a · approve refused before the letter is confirmed',
     refused && refused.newly === false && /letter/i.test(refused.reason || ''),
     `response=${JSON.stringify(refused)}`);
   const stillBlocked = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
-  report('G11b · worker still blocked after the refused approval', blockedBefore && stillBlocked);
+  report('G12b · worker still blocked after the refused approval', blockedBefore && stillBlocked);
 
   // Tick, then approve — the kiosk's own poller must clear the block with no kiosk-side action.
   await page.evaluate(async () => { await sbClient.rpc('awol_letter_received', { p_code: 'RSR0100', p_by: 'Jamaica L. Batucan' }); });
   await page.evaluate(async () => { await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0100', p_by: 'Boss', p_decision: 'approve' }); });
   await page.evaluate(() => loadSuspensionsFromCloud());
   const clearedAfter = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
-  report('G11c · after approval the poller clears the block on this kiosk',
+  report('G12c · after approval the poller clears the block on this kiosk',
     !clearedAfter && mock.suspensions['RSR0100'].active === false,
     `blockedLocally=${clearedAfter} activeInDb=${mock.suspensions['RSR0100'].active}`);
 
@@ -1771,7 +1771,7 @@ await scenario('G11 · two-step gate lifts the block on every kiosk', manila(202
   await page.evaluate(async () => { await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0207', p_by: 'Boss', p_decision: 'keep' }); });
   await page.evaluate(() => loadSuspensionsFromCloud());
   const stillBlocked207 = await page.evaluate(() => !!suspendedEmployees['RSR0207']);
-  report('G11d · keep-suspended clears the tick and the worker stays blocked',
+  report('G12d · keep-suspended clears the tick and the worker stays blocked',
     mock.suspensions['RSR0207'].active === true && mock.suspensions['RSR0207'].letter_received === false && stillBlocked207,
     `activeInDb=${mock.suspensions['RSR0207'].active} letter=${mock.suspensions['RSR0207'].letter_received} blocked=${stillBlocked207}`);
 });
@@ -1783,7 +1783,7 @@ await scenario('G11 · two-step gate lifts the block on every kiosk', manila(202
 node tests/kiosk-stress/kiosk-stress.mjs
 ```
 
-Expected: `G11a`–`G11d` PASS and every earlier scenario still passes.
+Expected: `G12a`–`G12d` PASS and every earlier scenario still passes.
 
 - [ ] **Step 4: Commit**
 
