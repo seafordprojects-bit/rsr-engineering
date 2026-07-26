@@ -1077,7 +1077,7 @@ await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurre
 // G8 — REST-DAY POLICY (owner 2026-07-25): a no-punch Sunday must be TRANSPARENT — not counted as
 // absent, and does not break the consecutive-absence chain. Self-checked below via the REAL
 // dateKeyOffset()/isSundayKey() functions before each case runs.
-//   Case C (PEM9001, "today" = a real Monday) — THE OWNER'S EXACT REPORTED BUG, reproduced and locked:
+//   Case C (RSR0303, "today" = a real Monday) — THE OWNER'S EXACT REPORTED BUG, reproduced and locked:
 //     worked Thursday, absent Fri+Sat, no-punch Sunday. Back-scan i=1→Sun(skip), i=2→Sat(absent #1),
 //     i=3→Fri(absent #2), i=4→Thu(worked→break) = 2 working-day absences. MUST NOT suspend, and
 //     collectAbsentDates must be exactly [Sat,Fri] (length 2) with the Sunday date absent from it.
@@ -1107,16 +1107,19 @@ await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', mani
   // silently lose the other cases' codes).
   await page.evaluate(() => { window.__g8Roster = employees.slice(); });
 
-  // ── Case C (PEM9001) — the owner's exact reported bug, on a real Monday ──────────────────────
-  await page.evaluate(() => { employees = window.__g8Roster.filter(e => e.code === 'PEM9001'); });
+  // ── Case C (RSR0303) — the owner's exact reported bug, on a real Monday ──────────────────────
+  // NOTE: deliberately an RSR code. This case used to use PEM9001; once PAKYAW/PEM workers became
+  // exempt from AWOL (G9), the exemption would fire FIRST and this scenario would pass without ever
+  // exercising the Sunday rest-day chain — silently gutting the owner's locked regression guard.
+  await page.evaluate(() => { employees = window.__g8Roster.filter(e => e.code === 'RSR0303'); });
   await page.evaluate(thu => {
-    records['PEM9001_' + thu] = { punches: { timein: '08:00:00 AM' } }; // worked Thursday → caps the chain
+    records['RSR0303_' + thu] = { punches: { timein: '08:00:00 AM' } }; // worked Thursday → caps the chain
     // Fri/Sat intentionally unseeded → isAbsentOnDate() defaults to absent (no timein, no leave)
     // Sunday intentionally unseeded → moot either way, transparent regardless of a record
   }, thuKey);
-  const chainC = await page.evaluate(code => collectAbsentDates(code), 'PEM9001');
+  const chainC = await page.evaluate(code => collectAbsentDates(code), 'RSR0303');
   await page.evaluate(() => checkAllAbsences());
-  const susC = mock.suspensions['PEM9001'] && mock.suspensions['PEM9001'].active === true;
+  const susC = mock.suspensions['RSR0303'] && mock.suspensions['RSR0303'].active === true;
   const exactlyTwoC = chainC.length === 2;
   const noSundayInC = !chainC.includes(sunKey);
   const hasFriSatC = [friKey, satKey].every(k => chainC.includes(k));
@@ -1162,6 +1165,46 @@ await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', mani
   const chainZeroB = chainB.length === 0;
   report('G8b · a punched day (Monday) halts the chain outright → NOT suspended', !susB && chainZeroB,
     `suspended=${!!susB} chain=[${chainB.join(', ')}] (worked Monday is i=1, the scan breaks before Fri/Sat are ever reached — distinct from G8c's real 2-absence run)`);
+});
+
+// G10 — PAKYAW/PEM EXEMPTION (owner 2026-07-26): piece-rate/casual workers have irregular
+// attendance by nature. They are skipped COMPLETELY — no suspension, no alert, no letter, and
+// no pending-leave HOLD note. The employee CODE PREFIX is the marker (coordinator.js empType).
+// NOTE: named G10, not G9 — an existing "G9" scenario (SMS/violation Sunday-guard) already
+// occupies that label further down in this file; reusing G9 here would collide in the report output.
+await scenario('G10 · PAKYAW/PEM workers are exempt from AWOL', manila(2026, 7, 21, 8, 0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007776665554';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {}; });
+
+  // PEM9001 with a 5+ working-day absence run and NO punches at all — far past the 3-day threshold.
+  await page.evaluate(() => { employees = employees.filter(e => e.code === 'PEM9001'); });
+  const chain = await page.evaluate(() => collectAbsentDates('PEM9001'));
+  await page.evaluate(() => checkAllAbsences());
+
+  const suspended = !!(mock.suspensions['PEM9001'] && mock.suspensions['PEM9001'].active);
+  const localBlock = await page.evaluate(() => !!suspendedEmployees['PEM9001']);
+  const anyTelegram = mock.telegram.length > 0;
+  report('G10a · PEM worker absent 5+ working days → never suspended, no alert, no letter',
+    !suspended && !localBlock && !anyTelegram && chain.length >= 5,
+    `absentChain=${chain.length} suspendedInDb=${suspended} blockedLocally=${localBlock} telegramSends=${mock.telegram.length}`);
+
+  // The space-separated live spelling must be exempt too ('PEM 0001' on the real roster).
+  const bothSpellings = await page.evaluate(() => [isPemCode('PEM 0001'), isPemCode('PEM9001'), isPemCode('RSR0100')]);
+  report('G10b · both PEM spellings exempt, RSR not',
+    JSON.stringify(bothSpellings) === JSON.stringify([true, true, false]),
+    `isPemCode(['PEM 0001','PEM9001','RSR0100']) = ${JSON.stringify(bothSpellings)}`);
+
+  // A PEM worker with a PENDING leave must not even generate the "please decide" HOLD note.
+  await page.evaluate(() => {
+    leaveRequests.push({ code: 'PEM9001', status: 'Pending', startDate: '07/15/2026', endDate: '07/20/2026' });
+  });
+  mock.telegram = [];
+  await page.evaluate(() => checkAllAbsences());
+  const holdFlagged = await page.evaluate(() => !!awolPending['PEM9001']);
+  report('G10c · PEM worker with a pending leave gets no HOLD note either',
+    mock.telegram.length === 0 && !holdFlagged,
+    `telegramSends=${mock.telegram.length} holdFlagged=${holdFlagged}`);
 });
 
 // G9 — SMS/VIOLATION PATH REST-DAY GUARD (this branch's Fix A): checkAndSendAbsenceSMS() must mirror

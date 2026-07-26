@@ -2221,6 +2221,12 @@ function dateKeyOffset(offsetDays){
   const d=new Date();d.setDate(d.getDate()+offsetDays);
   return d.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
 }
+// PAKYAW/PEM workers are EXEMPT from AWOL entirely (owner 2026-07-26): piece-rate/casual, so
+// irregular attendance is normal for them. The employee CODE PREFIX is the marker — coordinator.js
+// sets it at creation time (empType 'RSR' = regular, 'PEM' = pakyaw). Normalized like normCode
+// (upper-cased, whitespace stripped) so live 'PEM 0001' and test 'PEM9001' both match. Mirrored
+// server-side by awol_is_pem() so no path can suspend a pakyaw worker.
+function isPemCode(code){ return /^PEM/.test(String(code||'').replace(/\s/g,'').toUpperCase()); }
 function isAbsentOnDate(empCode,dateStr){
   // Absent = no timein punch AND no approved leave on that date
   const rec=records[empCode+'_'+dateStr];
@@ -2255,6 +2261,7 @@ async function checkAllAbsences(){
   await retryAwolUnsynced();
   const today=todayKey();
   for(const emp of employees){
+    if(isPemCode(emp.code))continue;          // PAKYAW exempt — no suspension, no alert, no HOLD note
     if(suspendedEmployees[emp.code])continue;
     if(onLeaveToday(emp.code))continue;
     const dates=collectAbsentDates(emp.code);
