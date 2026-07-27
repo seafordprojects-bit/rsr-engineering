@@ -10,11 +10,24 @@ import { vesselFlag } from './monitoring/vessel.mjs';
 
 // ---------- data ----------
 async function getEmployees() {
+  // code_norm is a GENERATED ALWAYS column — upper(regexp_replace(code,'[^A-Za-z0-9]','','g')) —
+  // backed by the unique index employees_code_norm_uniq. It is the system's authority on whether
+  // two spellings are the same worker, so it is READ here and never recomputed for existing rows.
   const { data, error } = await supabase.from('employees')
-    .select('id, code, name, dept, position, phone, network, home_site, pin, started_on, sl_balance, vl_balance, is_suspended')
+    .select('id, code, code_norm, name, dept, position, phone, network, home_site, pin, started_on, sl_balance, vl_balance, is_suspended')
     .order('name').limit(2000);
   if (error) throw error;
   return data;
+}
+
+// Who currently owns a normalized code. Used only after the database rejects an insert, to name the
+// clashing worker instead of showing a raw constraint error.
+async function findEmployeeByCodeNorm(norm) {
+  try {
+    const { data } = await supabase.from('employees')
+      .select('code, name').eq('code_norm', norm).maybeSingle();
+    return data || null;
+  } catch (_) { return null; }
 }
 async function addEmployee(row) {
   const { error } = await supabase.from('employees').insert(row);
@@ -291,7 +304,33 @@ function Personnel({ employees, onReload, toast }) {
   // 'rsr 0025' / 'RSR0025' / 'RSR 0025' all collapse to 'RSR0025'. This mirrors normCode in the
   // kiosk and payroll, and the SQL idiom upper(regexp_replace(code,'\s','','g')) used in the
   // migrations — the system treats those spellings as the SAME person everywhere else.
-  const normCode = (c) => String(c == null ? '' : c).replace(/\s/g, '').toUpperCase();
+  // Mirrors the database's generated column EXACTLY, which is the real authority:
+  //   employees.code_norm = upper(regexp_replace(code, '[^A-Za-z0-9]', '', 'g'))
+  //   enforced by unique index employees_code_norm_uniq
+  // Operation ORDER matters and is deliberate: SQL strips FIRST, then upper-cases, so this does the
+  // same. The reverse order silently disagrees on characters whose upper-case form is alphanumeric
+  // when the original is not — 'ı' -> 'I', 'ﬁ' -> 'FI', 'ß' -> 'SS' would all survive stripping if
+  // upper-cased first, and the client would then compute a different key than the database.
+  // Use this ONLY for a candidate code that does not exist yet. For a row already in the roster,
+  // read e.code_norm — never recompute it.
+  // NOTE: stricter than the '\s'-only idiom still used in awol-reinstate-flow.sql and
+  // named-issuer-access.sql. Aligning those two is a separate follow-up.
+  const normCode = (c) => String(c == null ? '' : c).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+  // The stored value always wins. code_norm is GENERATED ALWAYS, so it can never be null on a live
+  // row — if it is missing here it means the column was dropped from the select, which would push
+  // us back onto client-side normalization without anyone noticing. Warn once rather than hide it.
+  let _codeNormWarned = false;
+  const codeKey = (e) => {
+    if (e && e.code_norm) return e.code_norm;
+    if (!_codeNormWarned) {
+      _codeNormWarned = true;
+      console.warn('[coordinator] employees.code_norm missing from a roster row — falling back to ' +
+                   'client-side normalization. Check the select list in getEmployees(); the database ' +
+                   'column is the authority and this fallback can drift from it.');
+    }
+    return normCode(e && e.code);
+  };
 
   // (2026-07-27) BUG FIX. This is the ONLY function that mints a new employee code, so a mistake
   // here creates a second worker who is indistinguishable from an existing one.
@@ -306,7 +345,7 @@ function Personnel({ employees, onReload, toast }) {
     const p = normCode(prefix);
     let max = 0;
     (employees || []).forEach(e => {
-      const k = normCode(e.code);
+      const k = codeKey(e);
       if (!k.startsWith(p)) return;
       const tail = k.slice(p.length);
       if (!/^\d+$/.test(tail)) return;          // only pure-numeric tails are part of the series
@@ -328,17 +367,38 @@ function Personnel({ employees, onReload, toast }) {
         await updateEmployee(editKey, { name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null });
         toast('Employee updated');
       } else {
-        // Belt-and-braces collision guard. nextCode is now normalization-aware, but this is the
-        // last point before a duplicate identity becomes permanent, so refuse rather than risk it:
-        // two employees sharing a normalized code would silently share attendance and pay.
-        // Fails CLOSED on purpose — creating the wrong worker is far worse than refusing to create
-        // one, and the coordinator can simply call it in.
-        const clash = (employees || []).find(e => normCode(e.code) === normCode(autoCode));
+        // TWO layers, deliberately. Both fail CLOSED: creating a worker who shares another man's
+        // identity would silently merge their attendance and pay, which is far worse than refusing
+        // to add someone and having the coordinator call it in.
+        //
+        // Layer 1 — fast local check against the loaded roster. Gives an immediate, friendly
+        // refusal in the ordinary case, without a round trip.
+        const wanted = normCode(autoCode);
+        const clash = (employees || []).find(e => codeKey(e) === wanted);
         if (clash) {
           toast(`Cannot add — code ${autoCode} already belongs to ${clash.name} (${clash.code}). Tell the admin.`, true);
           return;
         }
-        await addEmployee({ id: crypto.randomUUID(), code: autoCode, name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null, sl_balance: 0, vl_balance: 0 });
+        // Layer 2 — the database. `employees` here is a snapshot, so two coordinators adding at the
+        // same moment can both pass layer 1; only the unique index cannot be raced. addEmployee
+        // THROWS on error (it does `if (error) throw error`), and what it throws is the supabase-js
+        // error object — a plain object carrying .code/.message, not an Error instance.
+        try {
+          await addEmployee({ id: crypto.randomUUID(), code: autoCode, name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null, sl_balance: 0, vl_balance: 0 });
+        } catch (err) {
+          // 23505 = unique_violation. Match the constraint by NAME so a future unique index
+          // elsewhere on employees is not misreported as a duplicate worker code.
+          const isDup = err && (err.code === '23505' || (err.error && err.error.code === '23505'));
+          const onCodeNorm = String((err && (err.message || err.details)) || '').includes('employees_code_norm_uniq');
+          if (isDup && onCodeNorm) {
+            const owner = await findEmployeeByCodeNorm(wanted);
+            toast(owner
+              ? `Cannot add — code ${autoCode} already belongs to ${owner.name} (${owner.code}). Tell the admin.`
+              : `Cannot add — code ${autoCode} is already taken. Tell the admin.`, true);
+            return;
+          }
+          throw err;
+        }
         toast('Employee added · ' + autoCode);
       }
       reset(); onReload();
