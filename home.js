@@ -53,7 +53,14 @@ async function editAwolMsg(chat, msgId, text) {
 }
 async function getEmployees() {
   const { data, error } = await supabase.from('employees')
-    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate, home_site, is_issuer, is_active').order('name').limit(2000);
+    // Do NOT name a column here before its migration has been applied. `is_active` was listed
+    // before awol-inactive-workers.sql had been run, and because the column did not exist
+    // PostgREST answered 400 (42703) — which getEmployees() rethrows, so the ENTIRE dashboard
+    // employee list failed to load: AWOL card, staff list, salary, PIN assignment, all of it.
+    // The kiosk survived the same mistake only because it uses select('*'), where a missing
+    // column is simply absent. `separated_at` (employee-lifecycle.sql) is deliberately NOT added
+    // here yet for the same reason — it goes in only after that migration is live.
+    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate, home_site, is_issuer').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
@@ -515,7 +522,7 @@ function AwolSuspensions({ emps, flash }) {
           <div style="display:grid;gap:8px">
             <select data-manual-emp value=${manual.code} onChange=${e => setManual(m => ({ ...m, code: e.target.value }))}>
               <option value="">— choose a worker —</option>
-              ${(emps || []).filter(e => !/^PEM/i.test(String(e.code).replace(/\s/g, '').toUpperCase()) && e.is_active !== false)
+              ${(emps || []).filter(e => !/^PEM/i.test(String(e.code).replace(/\s/g, '').toUpperCase()))
                 .map(e => html`<option value=${e.code} key=${e.code}>${e.name} (${e.code})</option>`)}
             </select>
             <input data-manual-reason placeholder="Reason" value=${manual.reason} onInput=${e => setManual(m => ({ ...m, reason: e.target.value }))} />
