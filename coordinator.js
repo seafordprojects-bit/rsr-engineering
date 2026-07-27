@@ -354,21 +354,32 @@ function Personnel({ employees, onReload, toast }) {
   // and AWOL all match on the NORMALIZED code, so two people would silently share one identity —
   // one man's punches paying the other. No error, no warning.
   // Fixed by scanning the normalized form, so every spelling is seen.
-  const nextCode = (prefix) => {
-    const p = normCode(prefix);
-    let max = 0;
-    (employees || []).forEach(e => {
-      const k = codeKey(e);
-      if (!k.startsWith(p)) return;
-      const tail = k.slice(p.length);
-      if (!/^\d+$/.test(tail)) return;          // only pure-numeric tails are part of the series
-      const n = parseInt(tail, 10);
-      if (n > max) max = n;
-    });
-    return prefix + ' ' + String(max + 1).padStart(4, '0');
-  };
-  const autoCode = nextCode(empType);              // shown while adding
-  const shownCode = editId ? code : autoCode;
+  // SUPERSEDED by the database function next_employee_code(). A client cannot see
+  // employee_deletions — the retired-code registry — without another round trip, so it could
+  // re-mint a code that belonged to a deleted worker. Ten of the twelve tables that reference a
+  // worker do so by TEXT code with no foreign key, so an orphan row pointing at that retired code
+  // would silently re-attach to whoever received it next. Only the server can see live and retired
+  // codes in one query, so only the server may mint.
+  //
+  // The value below is a PREVIEW ONLY and is never written. Minting happens inside submit(),
+  // immediately before the insert: this RPC is a read and reserves nothing, so two coordinators
+  // with the form open would both be shown the same code, and a form left open goes stale. Either
+  // way the man at the desk would be rejected for a code the screen had promised him.
+  const [previewCode, setPreviewCode] = useState('');
+  const [previewErr, setPreviewErr] = useState('');
+  useEffect(() => {
+    if (editId) return;
+    let cancelled = false;
+    (async () => {
+      setPreviewErr('');
+      const { data, error } = await supabase.rpc('next_employee_code', { p_prefix: empType });
+      if (cancelled) return;
+      if (error) { setPreviewCode(''); setPreviewErr(error.message || 'could not reach the server'); }
+      else setPreviewCode(data || '');
+    })();
+    return () => { cancelled = true; };
+  }, [empType, editId]);
+  const shownCode = editId ? code : (previewCode || '…');
 
   const reset = () => { setCode(''); setEditKey(null); setEmpType('RSR'); setName(''); setPosition(''); setPhone(''); setStarted(''); setHomeSite(''); setEditId(null); };
 
@@ -397,6 +408,22 @@ function Personnel({ employees, onReload, toast }) {
         // identity would silently merge their attendance and pay, which is far worse than refusing
         // to add someone and having the coordinator call it in.
         //
+        // MINT HERE, not on form open. The preview shown while typing reserves nothing — it is a
+        // read — so it can be stale by the time Save is pressed, or identical to what another
+        // coordinator is looking at. Fetch the code immediately before the insert and write THAT.
+        const { data: minted, error: mintErr } = await supabase.rpc('next_employee_code', { p_prefix: empType });
+        if (mintErr) {
+          // Never swallow this: a network blip and a real server failure must not look alike, or
+          // the coordinator cannot tell whether to retry or to call the admin.
+          toast(`Could not get the next code — ${mintErr.message || 'server unreachable'}. Try again; if it repeats, tell the admin.`, true);
+          return;
+        }
+        const autoCode = minted;
+        if (!autoCode) {
+          toast('Could not get the next code — the server returned nothing. Tell the admin.', true);
+          return;
+        }
+
         // Layer 1 — fast local check against the loaded roster. Gives an immediate, friendly
         // refusal in the ordinary case, without a round trip.
         const wanted = normCode(autoCode);
@@ -417,7 +444,18 @@ function Personnel({ employees, onReload, toast }) {
           // 23505 = unique_violation. Match the constraint by NAME so a future unique index
           // elsewhere on employees is not misreported as a duplicate worker code.
           const isDup = err && (err.code === '23505' || (err.error && err.error.code === '23505'));
-          const onCodeNorm = String((err && (err.message || err.details)) || '').includes('employees_code_norm_uniq');
+          const msg = String((err && (err.message || err.details)) || '');
+          const onCodeNorm = msg.includes('employees_code_norm_uniq');
+          // The retirement trigger (employees_no_retired_code) ALSO raises 23505, but with its own
+          // message rather than the index name — so it must be matched separately or it would fall
+          // through and surface as a raw database error. It needs different wording too: a retired
+          // code is not "owned" by anyone, it belonged to a record that was deleted, so telling the
+          // coordinator to go and find that worker would send them chasing a man who is not there.
+          const isRetired = msg.includes('RETIRED');
+          if (isDup && isRetired) {
+            toast(`Cannot add — code ${autoCode} is retired and can never be reused. Tell the admin.`, true);
+            return;
+          }
           if (isDup && onCodeNorm) {
             const owner = await findEmployeeByCodeNorm(wanted);
             toast(owner
@@ -451,6 +489,11 @@ function Personnel({ employees, onReload, toast }) {
         <//>`}
       <${Field} label="Employee code (auto)">
         <input value=${shownCode} disabled placeholder="auto-generated" />
+        ${!editId && previewErr && html`<p class="note" style="margin:4px 0 0;color:var(--warn)">
+          Could not reach the server to preview the next code (${previewErr}). You can still fill the
+          form — the real code is taken at the moment you save.</p>`}
+        ${!editId && !previewErr && html`<p class="note" style="margin:4px 0 0">
+          Preview only — the final code is issued when you press Save.</p>`}
       <//>
     </div>
     <div class="card">
