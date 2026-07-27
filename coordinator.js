@@ -296,8 +296,21 @@ function Personnel({ employees, onReload, toast }) {
   const [position, setPosition] = useState('');
   const [phone, setPhone] = useState('');
   const [started, setStarted] = useState('');
+  const [homeSite, setHomeSite] = useState('');   // REQUIRED on add — no default, see submit()
+  const [yards, setYards] = useState([]);         // data-driven, never hardcoded
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
+
+  // Yard list is DATA (settings.attendance_sites) — the same list the kiosk and the phone read.
+  // Deliberately NOT the `sites` table: that one still carries the pre-rename rows "Site A"/"Site B"
+  // and is owned by the inventory system, so it would offer yards that are not real attendance yards.
+  useEffect(() => { (async () => {
+    try {
+      const raw = await getSetting('attendance_sites');
+      const a = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(a)) setYards(a.map(x => String(x).trim()).filter(Boolean));
+    } catch (_) { /* leave empty — submit() refuses rather than guessing a yard */ }
+  })(); }, []);
 
   // next code in a series, e.g. "RSR 0001" → "RSR 0002"
   // Canonical employee-code form: upper-cased with ALL whitespace stripped.
@@ -357,10 +370,23 @@ function Personnel({ employees, onReload, toast }) {
   const autoCode = nextCode(empType);              // shown while adding
   const shownCode = editId ? code : autoCode;
 
-  const reset = () => { setCode(''); setEditKey(null); setEmpType('RSR'); setName(''); setPosition(''); setPhone(''); setStarted(''); setEditId(null); };
+  const reset = () => { setCode(''); setEditKey(null); setEmpType('RSR'); setName(''); setPosition(''); setPhone(''); setStarted(''); setHomeSite(''); setEditId(null); };
 
   const submit = async () => {
     if (!name.trim()) { toast('Enter a name', true); return; }
+    // Home yard is REQUIRED when adding, and this fails CLOSED on purpose. Until now the form sent
+    // no home_site at all, so the database's own column DEFAULT supplied one — a pre-rename legacy
+    // 'A' — invisibly, in code nobody reading this file would ever see. That is how RSR 0038 was
+    // filed at a yard that is not one of the real yards.
+    // The cost of refusing here is a re-prompt; the cost of proceeding is a worker filed at the
+    // wrong yard, which follows him into attendance, away allowance and every per-yard roll-up.
+    // (Opposite default to the kiosk punch gate, which must fail OPEN — there the cost of refusing
+    // is a man unable to work.)
+    if (!editId) {
+      if (!yards.length) { toast('Yard list not loaded yet — cannot add an employee. Check your connection.', true); return; }
+      if (!homeSite) { toast('Choose the home yard', true); return; }
+      if (!yards.includes(homeSite)) { toast('That yard is not on the current list — pick one from the dropdown.', true); return; }
+    }
     setSaving(true);
     try {
       if (editId) {
@@ -384,7 +410,9 @@ function Personnel({ employees, onReload, toast }) {
         // THROWS on error (it does `if (error) throw error`), and what it throws is the supabase-js
         // error object — a plain object carrying .code/.message, not an Error instance.
         try {
-          await addEmployee({ id: crypto.randomUUID(), code: autoCode, name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null, sl_balance: 0, vl_balance: 0 });
+          // home_site is sent EXPLICITLY so the column DEFAULT can never apply. code_norm is
+          // GENERATED ALWAYS and is deliberately absent — Postgres rejects any write to it.
+          await addEmployee({ id: crypto.randomUUID(), code: autoCode, name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null, home_site: homeSite, sl_balance: 0, vl_balance: 0 });
         } catch (err) {
           // 23505 = unique_violation. Match the constraint by NAME so a future unique index
           // elsewhere on employees is not misreported as a duplicate worker code.
@@ -436,6 +464,15 @@ function Personnel({ employees, onReload, toast }) {
       <${Field} label="Date started working">
         <input type="date" value=${started} onInput=${e => setStarted(e.target.value)} />
       <//>
+      ${!editId && html`
+        <${Field} label="Home yard (required)">
+          <select value=${homeSite} onChange=${e => setHomeSite(e.target.value)}>
+            <option value="">— choose a yard —</option>
+            ${yards.map(y => html`<option value=${y} key=${y}>${y}</option>`)}
+          </select>
+        <//>
+        ${!yards.length && html`<p class="note" style="margin:-6px 0 8px;color:var(--warn)">
+          Yard list unavailable — cannot add an employee until it loads. Check your connection.</p>`}`}
       <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Saving…' : (editId ? 'Update Employee' : 'Add Employee')}</button>
       ${editId && html`<button class="btn ghost" style="margin-top:8px" onClick=${reset}>Cancel edit</button>`}
     </div>
