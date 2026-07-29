@@ -10,11 +10,24 @@ import { vesselFlag } from './monitoring/vessel.mjs';
 
 // ---------- data ----------
 async function getEmployees() {
+  // code_norm is a GENERATED ALWAYS column — upper(regexp_replace(code,'[^A-Za-z0-9]','','g')) —
+  // backed by the unique index employees_code_norm_uniq. It is the system's authority on whether
+  // two spellings are the same worker, so it is READ here and never recomputed for existing rows.
   const { data, error } = await supabase.from('employees')
-    .select('id, code, name, dept, position, phone, network, home_site, pin, started_on, sl_balance, vl_balance, is_suspended')
+    .select('id, code, code_norm, name, dept, position, phone, network, home_site, pin, started_on, sl_balance, vl_balance, is_suspended')
     .order('name').limit(2000);
   if (error) throw error;
   return data;
+}
+
+// Who currently owns a normalized code. Used only after the database rejects an insert, to name the
+// clashing worker instead of showing a raw constraint error.
+async function findEmployeeByCodeNorm(norm) {
+  try {
+    const { data } = await supabase.from('employees')
+      .select('code, name').eq('code_norm', norm).maybeSingle();
+    return data || null;
+  } catch (_) { return null; }
 }
 async function addEmployee(row) {
   const { error } = await supabase.from('employees').insert(row);
@@ -303,35 +316,175 @@ function Personnel({ employees, onReload, toast }) {
   const [position, setPosition] = useState('');
   const [phone, setPhone] = useState('');
   const [started, setStarted] = useState('');
+  const [homeSite, setHomeSite] = useState('');   // REQUIRED on add — no default, see submit()
+  const [yards, setYards] = useState([]);         // data-driven, never hardcoded
   const [editId, setEditId] = useState(null);
   const [saving, setSaving] = useState(false);
 
-  // next code in a series, e.g. "RSR 0001" → "RSR 0002"
-  const nextCode = (prefix) => {
-    let max = 0;
-    (employees || []).forEach(e => {
-      const c = e.code || '';
-      if (c.startsWith(prefix + ' ')) {
-        const n = parseInt(c.slice(prefix.length + 1), 10);
-        if (!isNaN(n) && n > max) max = n;
-      }
-    });
-    return prefix + ' ' + String(max + 1).padStart(4, '0');
-  };
-  const autoCode = nextCode(empType);              // shown while adding
-  const shownCode = editId ? code : autoCode;
+  // Yard list is DATA (settings.attendance_sites) — the same list the kiosk and the phone read.
+  // Deliberately NOT the `sites` table: that one still carries the pre-rename rows "Site A"/"Site B"
+  // and is owned by the inventory system, so it would offer yards that are not real attendance yards.
+  useEffect(() => { (async () => {
+    try {
+      const raw = await getSetting('attendance_sites');
+      const a = raw ? JSON.parse(raw) : [];
+      if (Array.isArray(a)) setYards(a.map(x => String(x).trim()).filter(Boolean));
+    } catch (_) { /* leave empty — submit() refuses rather than guessing a yard */ }
+  })(); }, []);
 
-  const reset = () => { setCode(''); setEditKey(null); setEmpType('RSR'); setName(''); setPosition(''); setPhone(''); setStarted(''); setEditId(null); };
+  // next code in a series, e.g. "RSR 0001" → "RSR 0002"
+  // Canonical employee-code form: upper-cased with ALL whitespace stripped.
+  // 'rsr 0025' / 'RSR0025' / 'RSR 0025' all collapse to 'RSR0025'. This mirrors normCode in the
+  // kiosk and payroll, and the SQL idiom upper(regexp_replace(code,'\s','','g')) used in the
+  // migrations — the system treats those spellings as the SAME person everywhere else.
+  // Mirrors the database's generated column EXACTLY, which is the real authority:
+  //   employees.code_norm = upper(regexp_replace(code, '[^A-Za-z0-9]', '', 'g'))
+  //   enforced by unique index employees_code_norm_uniq
+  // Operation ORDER matters and is deliberate: SQL strips FIRST, then upper-cases, so this does the
+  // same. The reverse order silently disagrees on characters whose upper-case form is alphanumeric
+  // when the original is not — 'ı' -> 'I', 'ﬁ' -> 'FI', 'ß' -> 'SS' would all survive stripping if
+  // upper-cased first, and the client would then compute a different key than the database.
+  // Use this ONLY for a candidate code that does not exist yet. For a row already in the roster,
+  // read e.code_norm — never recompute it.
+  // NOTE: stricter than the '\s'-only idiom still used in awol-reinstate-flow.sql and
+  // named-issuer-access.sql. Aligning those two is a separate follow-up.
+  const normCode = (c) => String(c == null ? '' : c).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
+  // The stored value always wins. code_norm is GENERATED ALWAYS, so it can never be null on a live
+  // row — if it is missing here it means the column was dropped from the select, which would push
+  // us back onto client-side normalization without anyone noticing. Warn once rather than hide it.
+  let _codeNormWarned = false;
+  const codeKey = (e) => {
+    if (e && e.code_norm) return e.code_norm;
+    if (!_codeNormWarned) {
+      _codeNormWarned = true;
+      console.warn('[coordinator] employees.code_norm missing from a roster row — falling back to ' +
+                   'client-side normalization. Check the select list in getEmployees(); the database ' +
+                   'column is the authority and this fallback can drift from it.');
+    }
+    return normCode(e && e.code);
+  };
+
+  // (2026-07-27) BUG FIX. This is the ONLY function that mints a new employee code, so a mistake
+  // here creates a second worker who is indistinguishable from an existing one.
+  // It previously scanned with `c.startsWith(prefix + ' ')` — requiring a literal space and exact
+  // case. Any existing code stored WITHOUT the space (or lower-cased) was therefore invisible to
+  // the scan, so `max` came out too low and this function could hand a new hire a code that
+  // normalizes to one already in use. Nothing downstream would object: attendance, payroll, leave
+  // and AWOL all match on the NORMALIZED code, so two people would silently share one identity —
+  // one man's punches paying the other. No error, no warning.
+  // Fixed by scanning the normalized form, so every spelling is seen.
+  // SUPERSEDED by the database function next_employee_code(). A client cannot see
+  // employee_deletions — the retired-code registry — without another round trip, so it could
+  // re-mint a code that belonged to a deleted worker. Ten of the twelve tables that reference a
+  // worker do so by TEXT code with no foreign key, so an orphan row pointing at that retired code
+  // would silently re-attach to whoever received it next. Only the server can see live and retired
+  // codes in one query, so only the server may mint.
+  //
+  // The value below is a PREVIEW ONLY and is never written. Minting happens inside submit(),
+  // immediately before the insert: this RPC is a read and reserves nothing, so two coordinators
+  // with the form open would both be shown the same code, and a form left open goes stale. Either
+  // way the man at the desk would be rejected for a code the screen had promised him.
+  const [previewCode, setPreviewCode] = useState('');
+  const [previewErr, setPreviewErr] = useState('');
+  useEffect(() => {
+    if (editId) return;
+    let cancelled = false;
+    (async () => {
+      setPreviewErr('');
+      const { data, error } = await supabase.rpc('next_employee_code', { p_prefix: empType });
+      if (cancelled) return;
+      if (error) { setPreviewCode(''); setPreviewErr(error.message || 'could not reach the server'); }
+      else setPreviewCode(data || '');
+    })();
+    return () => { cancelled = true; };
+  }, [empType, editId]);
+  const shownCode = editId ? code : (previewCode || '…');
+
+  const reset = () => { setCode(''); setEditKey(null); setEmpType('RSR'); setName(''); setPosition(''); setPhone(''); setStarted(''); setHomeSite(''); setEditId(null); };
 
   const submit = async () => {
     if (!name.trim()) { toast('Enter a name', true); return; }
+    // Home yard is REQUIRED when adding, and this fails CLOSED on purpose. Until now the form sent
+    // no home_site at all, so the database's own column DEFAULT supplied one — a pre-rename legacy
+    // 'A' — invisibly, in code nobody reading this file would ever see. That is how RSR 0038 was
+    // filed at a yard that is not one of the real yards.
+    // The cost of refusing here is a re-prompt; the cost of proceeding is a worker filed at the
+    // wrong yard, which follows him into attendance, away allowance and every per-yard roll-up.
+    // (Opposite default to the kiosk punch gate, which must fail OPEN — there the cost of refusing
+    // is a man unable to work.)
+    if (!editId) {
+      if (!yards.length) { toast('Yard list not loaded yet — cannot add an employee. Check your connection.', true); return; }
+      if (!homeSite) { toast('Choose the home yard', true); return; }
+      if (!yards.includes(homeSite)) { toast('That yard is not on the current list — pick one from the dropdown.', true); return; }
+    }
     setSaving(true);
     try {
       if (editId) {
         await updateEmployee(editKey, { name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null });
         toast('Employee updated');
       } else {
-        await addEmployee({ id: crypto.randomUUID(), code: autoCode, name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null, sl_balance: 0, vl_balance: 0 });
+        // TWO layers, deliberately. Both fail CLOSED: creating a worker who shares another man's
+        // identity would silently merge their attendance and pay, which is far worse than refusing
+        // to add someone and having the coordinator call it in.
+        //
+        // MINT HERE, not on form open. The preview shown while typing reserves nothing — it is a
+        // read — so it can be stale by the time Save is pressed, or identical to what another
+        // coordinator is looking at. Fetch the code immediately before the insert and write THAT.
+        const { data: minted, error: mintErr } = await supabase.rpc('next_employee_code', { p_prefix: empType });
+        if (mintErr) {
+          // Never swallow this: a network blip and a real server failure must not look alike, or
+          // the coordinator cannot tell whether to retry or to call the admin.
+          toast(`Could not get the next code — ${mintErr.message || 'server unreachable'}. Try again; if it repeats, tell the admin.`, true);
+          return;
+        }
+        const autoCode = minted;
+        if (!autoCode) {
+          toast('Could not get the next code — the server returned nothing. Tell the admin.', true);
+          return;
+        }
+
+        // Layer 1 — fast local check against the loaded roster. Gives an immediate, friendly
+        // refusal in the ordinary case, without a round trip.
+        const wanted = normCode(autoCode);
+        const clash = (employees || []).find(e => codeKey(e) === wanted);
+        if (clash) {
+          toast(`Cannot add — code ${autoCode} already belongs to ${clash.name} (${clash.code}). Tell the admin.`, true);
+          return;
+        }
+        // Layer 2 — the database. `employees` here is a snapshot, so two coordinators adding at the
+        // same moment can both pass layer 1; only the unique index cannot be raced. addEmployee
+        // THROWS on error (it does `if (error) throw error`), and what it throws is the supabase-js
+        // error object — a plain object carrying .code/.message, not an Error instance.
+        try {
+          // home_site is sent EXPLICITLY so the column DEFAULT can never apply. code_norm is
+          // GENERATED ALWAYS and is deliberately absent — Postgres rejects any write to it.
+          await addEmployee({ id: crypto.randomUUID(), code: autoCode, name: name.trim(), position: position.trim() || null, phone: phone.trim() || null, started_on: started || null, home_site: homeSite, sl_balance: 0, vl_balance: 0 });
+        } catch (err) {
+          // 23505 = unique_violation. Match the constraint by NAME so a future unique index
+          // elsewhere on employees is not misreported as a duplicate worker code.
+          const isDup = err && (err.code === '23505' || (err.error && err.error.code === '23505'));
+          const msg = String((err && (err.message || err.details)) || '');
+          const onCodeNorm = msg.includes('employees_code_norm_uniq');
+          // The retirement trigger (employees_no_retired_code) ALSO raises 23505, but with its own
+          // message rather than the index name — so it must be matched separately or it would fall
+          // through and surface as a raw database error. It needs different wording too: a retired
+          // code is not "owned" by anyone, it belonged to a record that was deleted, so telling the
+          // coordinator to go and find that worker would send them chasing a man who is not there.
+          const isRetired = msg.includes('RETIRED');
+          if (isDup && isRetired) {
+            toast(`Cannot add — code ${autoCode} is retired and can never be reused. Tell the admin.`, true);
+            return;
+          }
+          if (isDup && onCodeNorm) {
+            const owner = await findEmployeeByCodeNorm(wanted);
+            toast(owner
+              ? `Cannot add — code ${autoCode} already belongs to ${owner.name} (${owner.code}). Tell the admin.`
+              : `Cannot add — code ${autoCode} is already taken. Tell the admin.`, true);
+            return;
+          }
+          throw err;
+        }
         toast('Employee added · ' + autoCode);
       }
       reset(); onReload();
@@ -356,6 +509,11 @@ function Personnel({ employees, onReload, toast }) {
         <//>`}
       <${Field} label="Employee code (auto)">
         <input value=${shownCode} disabled placeholder="auto-generated" />
+        ${!editId && previewErr && html`<p class="note" style="margin:4px 0 0;color:var(--warn)">
+          Could not reach the server to preview the next code (${previewErr}). You can still fill the
+          form — the real code is taken at the moment you save.</p>`}
+        ${!editId && !previewErr && html`<p class="note" style="margin:4px 0 0">
+          Preview only — the final code is issued when you press Save.</p>`}
       <//>
     </div>
     <div class="card">
@@ -369,6 +527,15 @@ function Personnel({ employees, onReload, toast }) {
       <${Field} label="Date started working">
         <input type="date" value=${started} onInput=${e => setStarted(e.target.value)} />
       <//>
+      ${!editId && html`
+        <${Field} label="Home yard (required)">
+          <select value=${homeSite} onChange=${e => setHomeSite(e.target.value)}>
+            <option value="">— choose a yard —</option>
+            ${yards.map(y => html`<option value=${y} key=${y}>${y}</option>`)}
+          </select>
+        <//>
+        ${!yards.length && html`<p class="note" style="margin:-6px 0 8px;color:var(--warn)">
+          Yard list unavailable — cannot add an employee until it loads. Check your connection.</p>`}`}
       <button class="btn" disabled=${saving} onClick=${submit}>${saving ? 'Saving…' : (editId ? 'Update Employee' : 'Add Employee')}</button>
       ${editId && html`<button class="btn ghost" style="margin-top:8px" onClick=${reset}>Cancel edit</button>`}
     </div>

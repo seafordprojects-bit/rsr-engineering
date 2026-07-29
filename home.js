@@ -2114,7 +2114,13 @@ function App() {
       <div class="sectlabel">Operations</div>
       <div class="grid">
         ${[
-          { ico:'🏠', num:m.pendingReqs, unit:'pending requests', title:'Warehouse', href:'../warehouse/' },
+          // (2026-07-27, owner-approved) The standalone Warehouse tile is REMOVED. That page had no
+          // working sign-in — the login screen never received its `active` class — and with RLS
+          // disabled on this project, anyone who knew the URL could read and edit warehouse_stock.
+          // It was safe to pull: `dispatches` and `deliveries` are both empty, so nothing was ever
+          // issued or delivered through it. The page now serves an OFFLINE notice; the original app
+          // is preserved as warehouse/app.offline.html. The admin-only Warehouse view inside this
+          // dashboard (adminTab === 'warehouse') is UNAFFECTED and stays — it sits behind the admin PIN.
           { ico:'🛒', num:m.poInbox, unit:'to purchase', title:'Purchasing', href:'../purchasing/' },
           { ico:'💵', num:null, unit:'weekly', title:'Payroll', href:'../payroll/' },
           { ico:'📊', num:null, unit:'close & approve jobs', title:'Job Monitoring', onClick:() => setAdminTab('monitoring') },
