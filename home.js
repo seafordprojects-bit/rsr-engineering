@@ -208,20 +208,46 @@ async function getLeaves() {
   if (error) throw error;
   return data || [];
 }
-// Approve/reject a leave from Admin. On approval, deduct VL/SL balance (mirrors kiosk).
-async function decideLeave(row, status) {
-  await supabase.from('leave_requests')
-    .update({ status, approved_by: 'Admin', approved_via: 'Admin app' }).eq('id', row.id);
-  if (status === 'Approved' && row.employee_code && row.days) {
-    const t = row.type;
-    const col = t === 'Vacation Leave' ? 'vl_balance' : t === 'Sick Leave' ? 'sl_balance' : null;
-    if (col) {
-      const { data: emp } = await supabase.from('employees').select('id,' + col).eq('code', row.employee_code).maybeSingle();
-      if (emp) {
-        const newBal = Math.max(0, (Number(emp[col]) || 0) - Number(row.days));
-        await supabase.from('employees').update({ [col]: newBal }).eq('id', emp.id);
-      }
-    }
+// Approve/reject a leave. EVERYTHING happens inside one server-side transaction — see
+// leave-decide-rpc.sql and leave-decide-rpc-fix-uncomparable.sql. The client performs NO table
+// writes at all. The old version did four separate browser writes with no transaction and ignored
+// every error: a half-success left a leave approved, a balance deducted, and the suspension still
+// blocking the man at the kiosk with nobody told. It also matched the raw code instead of
+// code_norm, so a spacing difference silently skipped the balance deduction.
+// The passcode is verified INSIDE the RPC because the anon key is published in this very file.
+async function decideLeave(row, status, passcode) {
+  const actor = localStorage.getItem('rsr_prepared_by') || 'Admin';
+  const { data, error } = await supabase.rpc('leave_decide', {
+    p_id: row.id, p_status: status, p_actor: actor, p_passcode: passcode,
+  });
+  if (error) throw error;
+  if (!data || data.ok !== true) throw new Error((data && data.reason) || 'Decision refused');
+  return data;
+}
+
+// Every suspension outcome is NAMED. The owner must never be left inferring why a man is still
+// blocked after an approval — nor assume he was cleared when the check could not run.
+// `persist` marks the two messages that must NOT be shown as a 2.4-second toast: they carry the
+// dates and the reason, and a message you can miss is a silent failure with extra steps.
+function leaveOutcomeMessage(row, res) {
+  const who = row.employee_name || row.employee_code || 'Worker';
+  const verb = res.status === 'Approved' ? 'approved' : 'rejected';
+  const susp = (Array.isArray(res.suspension_dates) ? res.suspension_dates : []).join(', ') || '—';
+  const lv = res.leave_dates ? `${res.leave_dates.from || '?'} → ${res.leave_dates.to || '?'}` : '—';
+  switch (res.suspension_outcome) {
+    case 'cancelled':
+      return { persist: false, tone: 'ok', text: `${who} ${verb} — suspension cancelled, he can punch again` };
+    case 'stood':
+      return { persist: true, tone: 'warn',
+        text: `${who} ${verb}, but the suspension STANDS — the leave does not cover the days he was absent. `
+            + `Absent: ${susp}. Leave: ${lv}. He still cannot punch until the letter step is done.` };
+    case 'uncomparable':
+      return { persist: true, tone: 'warn',
+        text: `${who} ${verb}. The suspension was LIFTED so he can punch, but ${res.dates_unreadable} of its `
+            + `absent date(s) could not be read, so nothing could be compared. Absent: ${susp}. Leave: ${lv}. `
+            + `Check the suspension record.` };
+    default:   // 'none' (no active suspension) and 'not_applicable' (a rejection)
+      return { persist: false, tone: 'ok', text: `${who} ${verb}` };
   }
 }
 async function getApprovals() {
@@ -341,6 +367,34 @@ function Lock({ onUnlock }) {
     </div>`;
 }
 
+// Shared 6-digit PIN keypad for per-action signatures. Extracted from the AWOL card so the leave
+// approvals reuse it instead of growing a second copy — a duplicated keypad is how leave ended up
+// approvable from three places that did not behave identically.
+// NOT the same thing as `Lock` above: that is the one-time boot gate with its own 5-try lockout and
+// dot display. This one signs a SINGLE action and is re-entered every time.
+// It owns the typed digits itself and clears them once onSubmit settles, so a wrong PIN never
+// leaves stale digits behind for the next attempt. The typed value is passed to onSubmit
+// EXPLICITLY: the 6th digit fires on the same tick as its setPin, so a closure reading the `pin`
+// state here would still see five digits.
+function PinPad({ title, note, busy, err, onSubmit, onCancel }) {
+  const [pin, setPin] = useState('');
+  const fire = async (typed) => { try { await onSubmit(typed); } finally { setPin(''); } };
+  return html`
+    <div class="card" style="border-color:var(--hivis)">
+      <label>${title}</label>
+      <p class="note" style="margin:0 0 10px">${note || 'Enter the 6-digit admin PIN to sign this decision.'}</p>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:280px">
+        ${['1','2','3','4','5','6','7','8','9','0'].map(d => html`
+          <button class="btn ghost" data-admin-key=${d} disabled=${busy}
+            onClick=${() => { const n = (pin + d).slice(0, 6); setPin(n); if (n.length === 6) setTimeout(() => fire(n), 0); }}>${d}</button>`)}
+        <button class="btn ghost" disabled=${busy} onClick=${() => setPin(p => p.slice(0, -1))}>⌫</button>
+      </div>
+      <p class="note" style="margin-top:10px">${'•'.repeat(pin.length)}</p>
+      <button class="btn ghost" disabled=${busy} onClick=${() => { setPin(''); onCancel(); }}>Cancel</button>
+      ${err && html`<p class="note" style="margin-top:10px;color:var(--warn)">${err}</p>`}
+    </div>`;
+}
+
 // ---------- AWOL suspensions (step 2 of the reinstate gate) ----------
 // The dashboard is the ONLY door back: the kiosk and Telegram one-tap buttons were removed. The
 // admin PIN is re-verified on EVERY decision — it is the signature, not a session unlock — and
@@ -354,7 +408,6 @@ function AwolSuspensions({ emps, flash }) {
   const [closed, setClosed] = useState([]);
   const [ask, setAsk] = useState(null);   // {code, name, decision:'approve'|'keep'|'tick'}
   const [manual, setManual] = useState(null);
-  const [pin, setPin] = useState('');
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
   // Synchronous guard for run() — `busy` (state) only takes effect on re-render, which cannot
@@ -397,10 +450,9 @@ function AwolSuspensions({ emps, flash }) {
     return `${b}/awol-letter.html?${q.toString()}`;
   };
 
-  // Accepts the just-typed PIN explicitly rather than reading the `pin` state: the keypad below
-  // fires this via setTimeout right after the 6th digit's setPin(), and at that instant this
-  // closure (from the pre-6th-digit render) still sees the OLD `pin` value — state updates don't
-  // land until the next render. Passing the freshly-built string in avoids sending a 5-digit PIN.
+  // Accepts the just-typed PIN explicitly rather than reading any state: PinPad fires this on the
+  // same tick as the 6th digit, before the digit has landed in a render, so a closure reading the
+  // pad's state would send a 5-digit PIN. PinPad owns and clears the digits.
   const run = async (typed) => {
     if (busyRef.current || !ask) return;
     busyRef.current = true;
@@ -408,7 +460,7 @@ function AwolSuspensions({ emps, flash }) {
     try {
       const { data: ok, error: e1 } = await supabase.rpc('admin_verify_passcode', { p_input: typed });
       if (e1) throw e1;
-      if (ok !== true) { setErr('Wrong PIN.'); setPin(''); return; }
+      if (ok !== true) { setErr('Wrong PIN.'); return; }   // PinPad clears the typed digits itself
       const actor = localStorage.getItem('rsr_prepared_by') || 'Admin';
       const nm = ask.name, code = ask.code;
       const today = new Date().toLocaleDateString('en-PH');
@@ -452,7 +504,7 @@ function AwolSuspensions({ emps, flash }) {
         setManual(null);
         flash(nm + ' is suspended');
       }
-      setAsk(null); setPin('');
+      setAsk(null);
       await load();
     } catch (_) { setErr('Could not save — check the connection and try again.'); }
     finally { busyRef.current = false; setBusy(false); }
@@ -481,8 +533,8 @@ function AwolSuspensions({ emps, flash }) {
         <div class="row" key=${r.employee_code} style="align-items:flex-start">
           ${line(r)}
           <span style="display:flex;gap:6px;flex-wrap:wrap">
-            <button class="btn" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'approve' }); setPin(''); setErr(''); }}>✅ Approve — worker can punch</button>
-            <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'keep' }); setPin(''); setErr(''); }}>⛔ Keep suspended</button>
+            <button class="btn" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'approve' }); setErr(''); }}>✅ Approve — worker can punch</button>
+            <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'keep' }); setErr(''); }}>⛔ Keep suspended</button>
           </span>
         </div>`)
         : html`<div class="empty">Nothing waiting on you.</div>`}
@@ -491,7 +543,7 @@ function AwolSuspensions({ emps, flash }) {
       ${waitingLetter.length ? waitingLetter.map(r => html`
         <div class="row" key=${r.employee_code} style="align-items:flex-start">
           ${line(r)}
-          <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'tick' }); setPin(''); setErr(''); }}>Tick letter received (admin)</button>
+          <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'tick' }); setErr(''); }}>Tick letter received (admin)</button>
         </div>`)
         : html`<div class="empty">Nobody outstanding.</div>`}
 
@@ -510,7 +562,7 @@ function AwolSuspensions({ emps, flash }) {
                 dates: (Array.isArray(prev.absent_dates) ? prev.absent_dates : []).join(', '),
                 refNote: `manual re-suspension, ref: case of ${prev.suspended_on || (e.at ? new Date(e.at).toLocaleDateString('en-PH') : '—')} — letter already on file`,
                 letterOnFile: true });
-              setPin(''); setErr('');
+              setErr('');
             }}>Re-suspend (letter on file)</button>` : ''}
         </div>`)
         : html`<div class="empty">No closed cases yet.</div>`}
@@ -533,30 +585,20 @@ function AwolSuspensions({ emps, flash }) {
                 if (!manual.code) { flash('Choose a worker'); return; }
                 setAsk({ code: manual.code, name: nameOf(manual.code), decision: 'manual',
                   reason: manual.reason, dates: manual.dates, refNote: null, letterOnFile: false });
-                setPin(''); setErr('');
+                setErr('');
               }}>Create suspension</button>
               <button class="btn ghost" disabled=${busy} onClick=${() => setManual(null)}>Cancel</button>
             </span>
           </div>`}
     </div>
 
-    ${ask && html`
-      <div class="card" style="border-color:var(--hivis)">
-        <label>${ask.decision === 'approve' ? 'Approve ' + ask.name
-          : ask.decision === 'keep' ? 'Keep ' + ask.name + ' suspended'
-          : ask.decision === 'manual' ? (ask.letterOnFile ? 'Re-suspend ' + ask.name : 'Suspend ' + ask.name)
-          : 'Confirm the letter for ' + ask.name}</label>
-        <p class="note" style="margin:0 0 10px">Enter the 6-digit admin PIN to sign this decision.</p>
-        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:280px">
-          ${['1','2','3','4','5','6','7','8','9','0'].map(d => html`
-            <button class="btn ghost" data-admin-key=${d} disabled=${busy}
-              onClick=${() => { const n = (pin + d).slice(0, 6); setPin(n); if (n.length === 6) setTimeout(() => run(n), 0); }}>${d}</button>`)}
-          <button class="btn ghost" disabled=${busy} onClick=${() => setPin(p => p.slice(0, -1))}>⌫</button>
-        </div>
-        <p class="note" style="margin-top:10px">${'•'.repeat(pin.length)}</p>
-        <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk(null); setPin(''); setErr(''); }}>Cancel</button>
-        ${err && html`<p class="note" style="margin-top:10px;color:var(--warn)">${err}</p>`}
-      </div>`}`;
+    ${ask && html`<${PinPad}
+      title=${ask.decision === 'approve' ? 'Approve ' + ask.name
+        : ask.decision === 'keep' ? 'Keep ' + ask.name + ' suspended'
+        : ask.decision === 'manual' ? (ask.letterOnFile ? 'Re-suspend ' + ask.name : 'Suspend ' + ask.name)
+        : 'Confirm the letter for ' + ask.name}
+      busy=${busy} err=${err} onSubmit=${run}
+      onCancel=${() => { setAsk(null); setErr(''); }} />`}`;
 }
 
 function Tile({ ico, num, unit, title, href, onClick }) {
@@ -998,6 +1040,32 @@ function App() {
   const [liqReqs, setLiqReqs] = useState(null);   // coordinator purchase requests to approve
   const [toast, setToast] = useState(null);
   const flash = (msg) => { setToast(msg); setTimeout(() => setToast(null), 2400); };
+
+  // Leave decisions are signed with the admin PIN on EVERY tap — the dashboard is now the only
+  // approval surface, so this is the signature, not a session unlock.
+  const [leaveAsk, setLeaveAsk] = useState(null);   // {row, status} awaiting the PIN
+  const [leaveBusy, setLeaveBusy] = useState(false);
+  const [leaveErr, setLeaveErr] = useState('');
+  const [leaveNotes, setLeaveNotes] = useState({}); // id -> outcome that must NOT fade away
+  const runLeaveDecision = async (typed) => {
+    if (!leaveAsk || leaveBusy) return;
+    setLeaveBusy(true); setLeaveErr('');
+    try {
+      const res = await decideLeave(leaveAsk.row, leaveAsk.status, typed);
+      const m = leaveOutcomeMessage(leaveAsk.row, res);
+      // 'stood' and 'uncomparable' stay on the row until dismissed. They explain why a man is
+      // still blocked, or that the check could not run — too important for a 2.4-second toast.
+      if (m.persist) setLeaveNotes(n => ({ ...n, [leaveAsk.row.id]: m }));
+      else flash(m.text);
+      setLeaveAsk(null);
+      setHrRows(await getLeaves());
+    } catch (e) {
+      const msg = (e && e.message) || 'Could not save';
+      // A wrong PIN keeps the pad open so it can simply be retyped; anything else is the RPC
+      // refusing for a real reason (already decided, unknown code) and is shown verbatim.
+      setLeaveErr(/not authorised/i.test(msg) ? 'Wrong PIN.' : msg);
+    } finally { setLeaveBusy(false); }
+  };
 
   // Change the shared server-side admin PIN (same credential as the kiosk) via admin_change_passcode.
   const changePin = async () => {
@@ -1538,8 +1606,14 @@ function App() {
     const body = (() => {
       if (hrRows == null) return html`<div class="empty">Loading…</div>`;
       if (!hrRows.length) return html`<div class="empty">Nothing here yet.</div>`;
-      if (adminTab === 'leaves') return hrRows.map(r => {
-        const decide = async (st) => { try { await decideLeave(r, st); flash(r.employee_name + ' ' + st.toLowerCase()); setHrRows(await getLeaves()); } catch (e) { flash('Error: ' + e.message); } };
+      if (adminTab === 'leaves') return [
+        leaveAsk ? html`<${PinPad} key="leavepin"
+          title=${(leaveAsk.status === 'Approved' ? 'Approve ' : 'Reject ') + (leaveAsk.row.employee_name || leaveAsk.row.employee_code) + ' — ' + (leaveAsk.row.type || 'leave')}
+          busy=${leaveBusy} err=${leaveErr} onSubmit=${runLeaveDecision}
+          onCancel=${() => { setLeaveAsk(null); setLeaveErr(''); }} />` : '',
+        ...hrRows.map(r => {
+        const ask = (st) => { setLeaveErr(''); setLeaveAsk({ row: r, status: st }); };
+        const note = leaveNotes[r.id];
         return html`
         <div class="row" key=${r.id} style="align-items:flex-start">
           <div>
@@ -1547,14 +1621,20 @@ function App() {
             <div class="unit">${r.start_date || '?'} → ${r.end_date || '?'}${r.days ? ' · ' + r.days + ' day(s)' : ''}</div>
             ${r.reason ? html`<div class="unit">${r.reason}</div>` : ''}
             ${r.status !== 'Pending' && r.approved_by ? html`<div class="unit" style="color:var(--ink-dim)">${r.status} by ${r.approved_by}${r.approved_via ? ' (' + r.approved_via + ')' : ''}</div>` : ''}
+            ${note ? html`<div class="unit" style="margin-top:8px;padding:8px 10px;border-left:3px solid var(--warn);background:rgba(0,0,0,.15)">
+              <div style="color:var(--warn);font-weight:700;margin-bottom:2px">⚠️ Read this</div>
+              <div>${note.text}</div>
+              <button class="btn ghost" style="padding:4px 10px;font-size:12px;margin-top:6px"
+                onClick=${() => setLeaveNotes(n => { const c = { ...n }; delete c[r.id]; return c; })}>Dismiss</button>
+            </div>` : ''}
             ${r.status === 'Pending' ? html`<div style="display:flex;gap:8px;margin-top:8px">
-              <button class="btn" style="padding:6px 14px;font-size:13px" onClick=${() => decide('Approved')}>✅ Approve</button>
-              <button class="btn ghost" style="padding:6px 14px;font-size:13px" onClick=${() => decide('Rejected')}>❌ Reject</button>
+              <button class="btn" style="padding:6px 14px;font-size:13px" onClick=${() => ask('Approved')}>✅ Approve</button>
+              <button class="btn ghost" style="padding:6px 14px;font-size:13px" onClick=${() => ask('Rejected')}>❌ Reject</button>
             </div>` : ''}
           </div>
           ${statusPill(r.status)}
         </div>`;
-      });
+      })];
       if (adminTab === 'approvals') return hrRows.map(r => {
         const decide = async (st) => { try { await decideApproval(r.id, st); flash(r.employee_name + ' ' + st.toLowerCase()); setHrRows(await getApprovals()); } catch (e) { flash('Error: ' + e.message); } };
         return html`

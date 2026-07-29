@@ -4,3 +4,8 @@
 
 # Dev-only test tooling deps (the app itself has no npm/build)
 node_modules/
+
+# Local SQL probes — these get a real admin passcode typed into them while testing.
+# This repo is PUBLIC and serves GitHub Pages, so a probe swept in by `git add -A`
+# would publish the admin PIN into permanent git history. Never track them.
+probe-*.sql
