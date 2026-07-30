@@ -10,8 +10,18 @@ mistake in this document's neighbourhood, which is why it says so twice.
 > **Project:** `wpmcbjrisuyjvobvzaus` **only** (RLS disabled). Never point this at the old
 > abandoned Supabase project banned in CLAUDE.md — any URL containing it is a bug.
 
-**Written 2026-07-30**, after a lockout during the AWOL Defect C/D/F work. Until then there was
-**no documented recovery path at all** for this credential.
+**Written 2026-07-30**, after an apparent lockout during the AWOL Defect C/D/F work. Until then
+there was **no documented recovery path at all** for this credential.
+
+> **The passcode that prompted this runbook was never actually lost.** `admin_verify_passcode`
+> later returned `true` and the credential was intact throughout — STEPs 8 and 9 completed with it.
+> **This procedure has never been run.** It is written for a real future lockout, unexercised, so
+> treat the steps as reviewed-but-untested and read them before trusting them.
+>
+> The false alarm is itself instructive, and is why the "is it actually lost?" section below exists:
+> `kiosk_admin_credential.updated_at` looked suspiciously old, but that column records when the hash
+> was **written**, not when it was last used. A ten-day-old timestamp on a PIN in daily use is
+> normal. Check the throttle and re-read that section before deleting anything.
 
 ---
 

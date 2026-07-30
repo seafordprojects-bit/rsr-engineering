@@ -404,7 +404,48 @@ Everything below was run by the owner in the Supabase SQL editor against **produ
 | 6 | `awol_set_barred` (bar + the minimal reinstate path, §3.4) | created; **probes not yet run** — they are in STEP 9 and need the passcode |
 | 7 | read-only verification of D and F | skip list = 9: four Mandaue men + five pakyaw |
 
-**Not yet applied: STEP 8, STEP 9, STEP 10.**
+### STEP 8, 9, 10 — applied and verified 2026-07-30, later the same session
+
+| STEP | What | Verified by |
+|---|---|---|
+| 8 | Jamaica marked non-punching | `ok true`; RSR 0025 `is_non_punching = true`, `set_by Raffy`, timestamp written; **one `awol_events` row (`non_punching_set`, actor Raffy) in the same transaction**; skip list now **10** |
+| 9 | **Defect C demonstrated, not merely applied** | see below |
+| 10 | final verify | `2 · 1 · 5 · 2 · 1 · 1 · 0` |
+
+**STEP 9 — the C1 acceptance criterion is met:**
+
+- hand-typed `UPDATE` to `barred_at` → **ERROR 42501, refused**
+- `case_open` true with `barred_at` NULL → **the separation holds**
+- `awol_set_barred` bar → `ok true`, `now_barred true`
+- `awol_set_barred` unbar → `ok true`, `barred_at` and `barred_by` both back to NULL — **the minimal reinstate path of §3.4 works end to end**
+- wrong passcode → `{"ok": false, "reason": "Not authorised"}`
+- teardown → `0 · 0 · 0`
+
+So a sweep-written row cannot reach the punch gate **at the database layer**. The client half is
+still unwritten — see "the three items owed".
+
+### Defect B reproduced in miniature, during the STEP 9 teardown
+
+`ZZ BARTEST` finished with **2** `awol_events` rows, not 3. `barred` and `unbarred` were both
+written; **the insert that opened the case wrote none.**
+
+Precisely what this does and does not show:
+
+- **It does show** there is no structural guarantee pairing a case with its originating event.
+  Nothing at the database layer forces one, which is exactly what §10's "Required: suspension and
+  originating event written atomically" asks for. The fix has a demonstrated need.
+- **It does not yet explain the original divergence.** The probe used a raw `insert`, which no
+  trigger watches, so writing no event is expected. Defect B's actual puzzle is why
+  `awol_set_suspended` wrote an event for `ZZ WALK3` and none for `RSR 0000` **in the same sweep
+  run**. That still needs the investigation §10 asks for — do not treat this as the diagnosis and
+  skip straight to a patch.
+
+### The passcode was never lost
+
+`admin_verify_passcode` verified `true`. The credential was intact throughout, exactly as the
+`updated_at` reasoning predicted: that column records when the hash was **written**, not when it was
+last used, so a ten-day-old timestamp was never evidence of a problem. **The break-glass procedure
+was not needed and was not run.** It stands as documentation for a real future lockout.
 
 ### STEP 8 is BLOCKED on the admin passcode
 
