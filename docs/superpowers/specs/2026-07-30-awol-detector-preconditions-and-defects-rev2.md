@@ -9,6 +9,49 @@ states the inverse of the truth and must not be implemented.
 
 ---
 
+## 0. BLOCKING PRECONDITION — read before touching anything
+
+### The merge gate is C **and** E **and** G. Not C alone.
+
+**`awol-suspension-flow` does not merge to `main` until all three are closed.**
+
+| | |
+|---|---|
+| **C** | A sweep-created case cannot bar a worker at the kiosk by any path, **and** a barred worker can be reinstated and punch again. |
+| **E** | A filed-but-unapproved leave suppresses detection for the dates it covers. |
+| **G** | A verbally authorized absence can be recorded on the day, so the detector has something to read. |
+
+**Why C alone is not enough.** C makes a false flag *harmless* — nobody is barred, nobody loses pay.
+It does **not** make a false flag *stop*. With C, D and F in place the detector still opens cases,
+still posts to the AWOL Telegram group, and in time still auto-drafts non-submission letters —
+against **RSR 0005**, whose leave is filed and awaiting approval, and **RSR 0014**, who was absent
+with the owner's spoken permission. Neither did anything wrong.
+
+"The alert was harmless" is not a defence if an NTE issued on those facts is ever contested. A
+detector that is safe but wrong still puts a notice in an innocent man's file.
+
+**Status 2026-07-30:** C is closed at the database layer and demonstrated (STEP 9). **C's client half,
+E and G are all still open.** The three-flag Z1 result is a checkpoint that C+D+F landed correctly —
+it is **not** permission to merge. The merge criterion is the final Z1: **one flag, RSR 0015.**
+
+### How C is closed, and why the naming mattered
+
+The kiosk punch gate read `employee_suspensions.active`, which the **sweep** writes. One boolean
+meaning "this case is open" was being consumed as "this worker is barred from the tablet" — so a
+machine decision barred a man, with no human in the loop. That ambiguity is what produced Allan
+Manos's four unrecorded days (§3.1).
+
+`barred_at` is now a separate column that **only a PIN-gated human action can set**, enforced by a
+trigger with a transaction-local flag rather than by grants — because a `security definer` RPC runs
+as owner and bypasses grants entirely. `active` keeps its meaning: case open, gating nothing.
+
+### Do not start A or B first
+
+Both are improvements to the *accuracy* of a detector whose *blast radius* is the actual problem.
+Fix what a wrong answer costs before fixing how often the answer is wrong. Order of work is §11.
+
+---
+
 ## 1. The finding in one paragraph
 
 The AWOL detector opened a case against a worker whose absence the owner had personally

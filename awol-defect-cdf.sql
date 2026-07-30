@@ -480,3 +480,55 @@ select (select count(*) from information_schema.columns
 -- EXPECT: 2 · 1 · 5 · 2 · 1 · 1 · 0
 -- barred_must_be_0 is the line that matters: nobody is barred, and from here only a PIN-gated
 -- human action can change that.
+
+-- ── STEP 11 — batch skip list, and a way to see it fail ─────────────────────────────────────
+-- WHY BATCH: the sweep iterates every employee. Calling awol_skip_detection() per worker is 43
+-- REST round trips on every kiosk boot — seconds on yard wifi, on the boot path of a tablet that
+-- has to stay responsive for punching. And the client CANNOT compute it locally: awol_effective_site
+-- needs each worker's most recent punch across ALL sites, and a Carmen tablet only holds Carmen's
+-- records. So one call returns the whole list.
+--
+-- Returns EVERY active employee with skip true/false, not just the exempt ones. That is deliberate:
+-- it makes an empty result unambiguously a FAILURE rather than a legitimate "nobody is exempt".
+create or replace function public.awol_skip_list()
+returns table (code text, skip boolean, reason text)
+language sql stable as $$
+  select e.code,
+         public.awol_skip_detection(e.code),
+         public.awol_skip_reason(e.code)
+    from public.employees e
+   where e.separated_at is null
+   order by e.code;
+$$;
+grant execute on function public.awol_skip_list() to anon, authenticated;
+
+-- Owner requirement 2026-07-30: if awol_skip_list() errors OR returns nothing, the sweep must skip
+-- detection ENTIRELY for that boot rather than treat everyone as detectable. An empty list read as
+-- "nobody is exempt" would flag all 43 workers including the five pakyaw men and Jamaica.
+-- Fail open — and the failure must not be invisible, so it rides the heartbeat to the dashboard the
+-- same way unknown_type_count does. A LEVEL, not an event: the sweep rewrites it every run, so a
+-- recovered tablet reports false and the banner clears itself.
+alter table public.kiosk_health
+  add column if not exists detection_skipped boolean not null default false;
+
+-- ── STEP 11 VERIFY ──────────────────────────────────────────────────────────────────────────
+select count(*) as rows_must_be_43_ish,
+       count(*) filter (where skip)     as skipped_must_be_10,
+       count(*) filter (where not skip) as detectable
+  from public.awol_skip_list();
+-- EXPECT: ~43 · 10 · ~33   (10 = five pakyaw + Jamaica + four Mandaue men)
+
+select code, reason from public.awol_skip_list() where skip order by reason, code;
+-- EXPECT exactly 10 rows. Read the reasons — nobody should be skipped for a reason you did not
+-- intend. Any Carmen worker other than RSR 0025 appearing here means the site gate is wrong.
+
+select code, skip, reason from public.awol_skip_list()
+ where code in ('RSR 0015','RSR 0005','RSR 0014');
+-- EXPECT all three skip = false, reason NULL. These are Z1's expected three flags: RSR 0015 is the
+-- genuine AWOL control, RSR 0005 needs Defect E, RSR 0014 needs Defect G. If any is skipped, the
+-- C+D+F scope has gone too far.
+
+select column_name, data_type, column_default
+  from information_schema.columns
+ where table_schema='public' and table_name='kiosk_health' and column_name='detection_skipped';
+-- EXPECT: detection_skipped | boolean | false
