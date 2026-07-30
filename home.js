@@ -6,6 +6,13 @@ import { html, render } from 'htm/preact';
 import { useState, useEffect, useRef } from 'preact/hooks';
 import { supabase } from './supabase.js';
 
+// Visible build stamp. The deploy rule is to read stamps BY EYE, and this page had none while the
+// kiosk showed one under its title — so there was no way to tell a stale dashboard from a fresh
+// one without opening devtools. Shown on the lock screen, the launcher and the admin header.
+// MUST be bumped in lockstep with the `home.js?v=` query string in admin/index.html, index.html
+// and preflight.html. A stamp that lags the query string is worse than none: it reads as proof.
+const BUILD = 'v2026-07-30a';
+
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
 // The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
 const _SITE_LEGACY = { 'A': 'Carmen', 'SITE A': 'Carmen', 'B': 'Mandaue', 'SITE B': 'Mandaue' };
@@ -60,10 +67,20 @@ async function getEmployees() {
     // The kiosk survived the same mistake only because it uses select('*'), where a missing
     // column is simply absent. `separated_at` (employee-lifecycle.sql) is deliberately NOT added
     // here yet for the same reason — it goes in only after that migration is live.
-    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate, home_site, is_issuer').order('name').limit(2000);
+    // employment_type / type_effective_from added 2026-07-29, AFTER employment-type.sql was run
+    // and verified live (STEP 4 + STEP 5 probes). Naming them any earlier would have repeated the
+    // is_active failure described above.
+    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate, home_site, is_issuer, employment_type, type_effective_from').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
+// PAKYAW exemption marker — employment_type, NEVER the code prefix (owner 2026-07-29). A converted
+// man keeps his PEM code and must read as regular everywhere, so no /^PEM/ test survives in this
+// file. Mirrored by kiosk awolExemptState() and server-side awol_is_pem(), all reading one column.
+// Unknown/missing type is NOT treated as pakyaw here: this is the manual-suspension picker, and
+// wrongly hiding a regular worker from it would silently deny the admin an action. The kiosk makes
+// the opposite call for the opposite reason — there, unknown means "do not judge him".
+function isPakyaw(emp) { return emp && emp.employment_type === 'pakyaw'; }
 async function getSalaryHistory(empId) {
   const { data, error } = await supabase.from('salary_history')
     .select('id, daily_rate, effective_date, note').eq('employee_id', empId)
@@ -352,6 +369,7 @@ function Lock({ onUnlock }) {
     <div class="wrap">
       <div class="card lock">
         <div class="brand" style="justify-content:center;margin-bottom:6px"><b>RSR</b><span class="tag">ADMIN</span></div>
+        <div class="note" style="text-align:center;margin:0 0 8px">${BUILD}</div>
         <p class="note" style="margin:0 0 14px">Enter the 6-digit admin PIN</p>
         <div style="display:flex;justify-content:center;gap:12px;margin-bottom:16px">
           ${[0,1,2,3,4,5].map(i => html`<div style=${`width:14px;height:14px;border-radius:50%;border:2px solid var(--line);background:${i < pin.length ? 'var(--hivis)' : 'transparent'}`}></div>`)}
@@ -491,6 +509,28 @@ function AwolSuspensions({ emps, flash }) {
         if (!res || res.newly !== true) { setErr(res && res.reason ? res.reason : 'Could not save.'); return; }
         await notifyAwol(`⛔ <b>Kept suspended</b>\n👤 ${nm} (${code}) — decided by ${actor} on ${today} · letter step reset`);
         flash(nm + ' stays suspended');
+      } else if (ask.decision === 'unbar' || ask.decision === 'bar') {
+        // DEFECT C: the ONLY door to barred_at. awol_set_barred verifies the passcode INSIDE the
+        // function (the anon key is public), a DB trigger refuses any other writer, and the
+        // column-level grant refuses direct REST. Bar and unbar share one implementation so the
+        // audit is symmetric — one awol_events row either way, naming the actor.
+        const wantBar = ask.decision === 'bar';
+        const { data: res, error: eB } = await supabase.rpc('awol_set_barred', {
+          p_code: code, p_passcode: typed, p_bar: wantBar, p_actor: actor,
+          p_note: wantBar ? 'Barred from the kiosk by admin decision' : 'Reinstated by admin — may punch again',
+        });
+        if (eB) { setErr('Could not save — check the connection and try again.'); return; }
+        if (!res || res.ok !== true) { setErr((res && res.reason) || 'Refused.'); return; }
+        if (wantBar) {
+          await notifyAwol(`GI-BAR - ${nm} (${code})
+Dili na siya maka-Time In. Desisyon ni ${actor} ${today}.
+Makapunch pa siya sa Time Out kung naabli pa ang adlaw niya.`);
+          flash(nm + ' is barred from starting work');
+        } else {
+          await notifyAwol(`GI-REINSTATE - ${nm} (${code})
+Makatrabaho na siya pag-usab. Desisyon ni ${actor} ${today}.`);
+          flash(nm + ' can punch again');
+        }
       } else if (ask.decision === 'manual') {
         const dates = String(ask.dates || '').split(',').map(s => s.trim()).filter(Boolean);
         if (!dates.length) { setErr('at least one absent date is required'); return; }
@@ -521,6 +561,9 @@ function AwolSuspensions({ emps, flash }) {
       <div class="unit">Absent: ${(Array.isArray(r.absent_dates) ? r.absent_dates : []).join(', ') || '—'}</div>
       ${r.letter_received ? html`<div class="unit">Letter confirmed by ${r.letter_received_by || '—'}</div>` : ''}
       ${r.ref_note ? html`<div class="unit" style="color:var(--hivis)">${r.ref_note}</div>` : ''}
+      ${r.barred_at
+        ? html`<div class="unit" style="color:var(--warn);font-weight:700">BARRED from starting work — by ${r.barred_by || '—'}. He can still Time Out an open day.</div>`
+        : html`<div class="unit" style="color:var(--ink-dim)">Case open. NOT barred — he punches normally.</div>`}
       <a class="unit" href=${letterUrl(r)} target="_blank" rel="noopener">Open / print letter →</a>
     </div>`;
 
@@ -535,6 +578,9 @@ function AwolSuspensions({ emps, flash }) {
           <span style="display:flex;gap:6px;flex-wrap:wrap">
             <button class="btn" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'approve' }); setErr(''); }}>✅ Approve — worker can punch</button>
             <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'keep' }); setErr(''); }}>⛔ Keep suspended</button>
+            ${r.barred_at
+              ? html`<button class="btn" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'unbar' }); setErr(''); }}>↩️ Reinstate — he can punch again</button>`
+              : html`<button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'bar' }); setErr(''); }}>🚫 Bar from starting work</button>`}
           </span>
         </div>`)
         : html`<div class="empty">Nothing waiting on you.</div>`}
@@ -543,7 +589,10 @@ function AwolSuspensions({ emps, flash }) {
       ${waitingLetter.length ? waitingLetter.map(r => html`
         <div class="row" key=${r.employee_code} style="align-items:flex-start">
           ${line(r)}
-          <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'tick' }); setErr(''); }}>Tick letter received (admin)</button>
+          <span style="display:flex;gap:6px;flex-wrap:wrap">
+            <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'tick' }); setErr(''); }}>Tick letter received (admin)</button>
+            ${r.barred_at ? html`<button class="btn" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'unbar' }); setErr(''); }}>↩️ Reinstate — he can punch again</button>` : ''}
+          </span>
         </div>`)
         : html`<div class="empty">Nobody outstanding.</div>`}
 
@@ -574,7 +623,7 @@ function AwolSuspensions({ emps, flash }) {
           <div style="display:grid;gap:8px">
             <select data-manual-emp value=${manual.code} onChange=${e => setManual(m => ({ ...m, code: e.target.value }))}>
               <option value="">— choose a worker —</option>
-              ${(emps || []).filter(e => !/^PEM/i.test(String(e.code).replace(/\s/g, '').toUpperCase()))
+              ${(emps || []).filter(e => !isPakyaw(e))
                 .map(e => html`<option value=${e.code} key=${e.code}>${e.name} (${e.code})</option>`)}
             </select>
             <input data-manual-reason placeholder="Reason" value=${manual.reason} onInput=${e => setManual(m => ({ ...m, reason: e.target.value }))} />
@@ -593,7 +642,9 @@ function AwolSuspensions({ emps, flash }) {
     </div>
 
     ${ask && html`<${PinPad}
-      title=${ask.decision === 'approve' ? 'Approve ' + ask.name
+      title=${ask.decision === 'unbar' ? 'Reinstate ' + ask.name + ' — he can punch again'
+        : ask.decision === 'bar' ? 'Bar ' + ask.name + ' from starting work'
+        : ask.decision === 'approve' ? 'Approve ' + ask.name
         : ask.decision === 'keep' ? 'Keep ' + ask.name + ' suspended'
         : ask.decision === 'manual' ? (ask.letterOnFile ? 'Re-suspend ' + ask.name : 'Suspend ' + ask.name)
         : 'Confirm the letter for ' + ask.name}
@@ -1097,15 +1148,41 @@ function App() {
     for (const r of health) {
       const s = siteNorm(r.site) || '(unknown site)';
       const seen = r.last_seen ? new Date(r.last_seen).getTime() : 0;
-      const b = bySite[s] || (bySite[s] = { stuck: 0, newest: 0 });
+      const b = bySite[s] || (bySite[s] = { stuck: 0, newest: 0, unknown: 0, unknownSeen: 0 });
       b.stuck += (r.stuck_count || 0);
+      // Track WHEN the unknown-type count was reported, separately from the count itself, so a
+      // stale row can never assert a current fact (see the silence branch below).
+      if ((r.unknown_type_count || 0) > 0) {
+        b.unknown += r.unknown_type_count;
+        if (seen > b.unknownSeen) b.unknownSeen = seen;
+      }
       if (seen > b.newest) b.newest = seen;
     }
     const alarms = [], pending = [];
     for (const s in bySite) {
       const b = bySite[s];
+      const silent = b.newest && (now - b.newest) > STALE_MS;
       if (b.stuck > 0) alarms.push(`${s}: ${b.stuck} stuck punch${b.stuck === 1 ? '' : 'es'}`);
-      else if (b.newest && (now - b.newest) > STALE_MS) alarms.push(`${s}: was reporting, silent ${Math.round((now - b.newest) / 60000)} min`);
+      // A yard that has gone quiet reports its SILENCE. Site-level: judged on the newest heartbeat
+      // from ANY device at that yard, because one live tablet means the yard is being covered.
+      if (silent) alarms.push(`${s}: was reporting, silent ${Math.round((now - b.newest) / 60000)} min`);
+      // AWOL detection could not classify these workers: employment_type had not synced to that
+      // tablet, so it SKIPPED them rather than judging them — nobody is blocked, and this is how
+      // you are told. Clears on its own: the sweep rewrites the count every run, so a synced
+      // tablet reports 0 and this disappears.
+      //
+      // FRESHNESS IS JUDGED PER DEVICE (unknownSeen), NOT PER SITE (newest). A yard can have a
+      // live tablet AND a stale one — Carmen currently has four rows, two fresh and two old. The
+      // first version tested the count against the SITE's newest heartbeat, so a stale device's
+      // count was reported in the present tense on the strength of a different tablet being
+      // awake. That was the Step F failure on 2026-07-30: unknown=7 from a device silent 224 min,
+      // rendered as a current fact because a real Carmen tablet had just checked in.
+      if (b.unknown > 0) {
+        const age = now - b.unknownSeen;
+        alarms.push(age > STALE_MS
+          ? `${s}: ${b.unknown} worker${b.unknown === 1 ? '' : 's'} were not checked for AWOL as of ${Math.round(age / 60000)} min ago — that tablet has not reported since`
+          : `${s}: ${b.unknown} worker${b.unknown === 1 ? '' : 's'} not checked for AWOL — employment type not synced to that tablet`);
+      }
     }
     for (const y of siteList) { if (!bySite[siteNorm(y)]) pending.push(siteNorm(y)); }
     // Build an ARRAY of only the cards that apply, each with a stable key. Returning [redCard, greyCard]
@@ -1318,8 +1395,13 @@ function App() {
     let stop = false;
     const load = async () => {
       try {
+        // unknown_type_count added 2026-07-29 (kiosk-health-unknown-type.sql, STEP 1 verified live
+        // BEFORE it was named here). It MUST be listed: this is an explicit select, so a column
+        // that is not named arrives undefined and the banner silently never fires — which is
+        // exactly what happened on the first banner test, and is the same failure as `is_active`
+        // in b64ed5c. Adding a column to the banner logic means adding it HERE first.
         const { data, error } = await supabase.from('kiosk_health')
-          .select('device_id,site,stuck_count,queue_length,last_seen');
+          .select('device_id,site,stuck_count,queue_length,last_seen,unknown_type_count');
         if (!stop) setHealth(error ? [] : (data || []));
       } catch (_) { if (!stop) setHealth([]); }
     };
@@ -1380,7 +1462,10 @@ function App() {
   // ---- front chooser (everyone except admin): Coordinator | Issuance ----
   if (!onAdminPage) return html`
     <header class="app">
-      <div class="wrap"><div class="brand"><b>RSR</b><span class="tag">ENGINEERING</span></div></div>
+      <div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
+        <span><b>RSR</b><span class="tag">ENGINEERING</span></span>
+        <span class="note" style="font-variant-numeric:tabular-nums">${BUILD}</span>
+      </div></div>
     </header>
     <div class="wrap">
       <div class="sectlabel">Choose your area</div>
@@ -1896,6 +1981,7 @@ function App() {
       <div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
         <span><b>RSR</b><span class="tag">ENGINEERING</span></span>
         <span style="display:flex;gap:12px;align-items:center">
+          <span class="note" style="font-variant-numeric:tabular-nums">${BUILD}</span>
           <button onClick=${() => setShowSet(s => !s)}
             style="background:none;border:none;color:var(--ink-dim);font-size:13px;font-weight:700;cursor:pointer">settings</button>
           <button onClick=${() => { sessionStorage.removeItem(SESSION_KEY); setAuthed(false); setShowSet(false); setAdminTab('dash'); }}

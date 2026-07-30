@@ -33,6 +33,8 @@ const state = {
   rpcCalls: [],
   tgCalls: [],                     // { chatId, text } — every mocked Telegram sendMessage
   clerkPin: '250250',              // Jamaica's PIN in this mock
+  adminPin: '123456',              // the admin PIN in this mock — used by BOTH admin_verify_passcode
+                                   // and awol_set_barred, so they can never disagree
 };
 let pass = 0, fail = 0, pending = 0;
 const check = (name, ok, detail) => {
@@ -81,6 +83,19 @@ await context.route('**/*', (route) => {
       r.letter_received = true; r.letter_received_by = body.p_by;
       return json(200, { newly: true });
     }
+    if (p.endsWith('/rest/v1/rpc/awol_set_barred')) {
+      // DEFECT C: the only door to barred_at. Mirrors the real RPC's refusals — wrong passcode, no
+      // case, and never barring an exempt worker — so the UI is tested against the same answers.
+      state.rpcCalls.push(['setBarred', body.p_code, body.p_bar, body.p_actor]);
+      if (body.p_passcode !== state.adminPin) return json(200, { ok: false, reason: 'Not authorised' });
+      const r = state.suspensions[body.p_code];
+      if (!r) return json(200, { ok: false, reason: 'No case exists for ' + body.p_code });
+      if (body.p_bar && r.exempt) return json(200, { ok: false, reason: 'Exempt worker — cannot be barred: ' + body.p_code });
+      r.barred_at = body.p_bar ? new Date().toISOString() : null;
+      r.barred_by = body.p_bar ? (body.p_actor || 'Admin') : null;
+      state.events.push({ employee_code: body.p_code, event: body.p_bar ? 'barred' : 'unbarred', actor: body.p_actor || 'Admin' });
+      return json(200, { ok: true, employee_code: body.p_code, barred: body.p_bar === true });
+    }
     if (p.endsWith('/rest/v1/rpc/awol_admin_decide')) {
       state.rpcCalls.push(['decide', body.p_code, body.p_decision]);
       const r = state.suspensions[body.p_code];
@@ -93,7 +108,7 @@ await context.route('**/*', (route) => {
       r.letter_received = false; r.last_decision = 'kept';
       return json(200, { newly: true, kept: true });
     }
-    if (p.endsWith('/rest/v1/rpc/admin_verify_passcode')) return json(200, body.p_input === '123456');
+    if (p.endsWith('/rest/v1/rpc/admin_verify_passcode')) return json(200, body.p_input === state.adminPin);
     if (p.endsWith('/rest/v1/rpc/awol_manual_suspend')) {
       state.rpcCalls.push(['manual', body.p_code, !!body.p_letter_on_file]);
       if (!Array.isArray(body.p_dates) || !body.p_dates.length) return json(200, { newly: false, reason: 'at least one absent date is required' });
@@ -107,9 +122,13 @@ await context.route('**/*', (route) => {
     }
     if (p.endsWith('/rest/v1/awol_events')) return json(200, state.events);
     if (p.endsWith('/rest/v1/employees')) return json(200, [
-      { id: 'u1', code: 'RSR 0006', name: 'Baby Monterola', position: 'Fitter', home_site: 'Mandaue', pin: '660660', is_issuer: false },
-      { id: 'u2', code: 'RSR 0025', name: 'Jamaica L. Batucan', position: 'Office', home_site: 'Carmen', pin: '250250', is_issuer: true },
-      { id: 'u3', code: 'PEM 0001', name: 'Julius', position: 'Fitter', home_site: 'Carmen', pin: '500500', is_issuer: false },
+      // employment_type replaced the PEM code prefix as the exemption marker (owner 2026-07-29).
+      // u4 is the case that proves it: a CONVERTED man who keeps his PEM code but is now regular.
+      // He MUST be offered for manual suspension. Under the old prefix rule he was invisible.
+      { id: 'u1', code: 'RSR 0006', name: 'Baby Monterola', position: 'Fitter', home_site: 'Mandaue', pin: '660660', is_issuer: false, employment_type: 'regular', type_effective_from: '2026-01-05' },
+      { id: 'u2', code: 'RSR 0025', name: 'Jamaica L. Batucan', position: 'Office', home_site: 'Carmen', pin: '250250', is_issuer: true, employment_type: 'regular', type_effective_from: '2026-01-05' },
+      { id: 'u3', code: 'PEM 0001', name: 'Julius', position: 'Fitter', home_site: 'Carmen', pin: '500500', is_issuer: false, employment_type: 'pakyaw', type_effective_from: '2026-01-05' },
+      { id: 'u4', code: 'PEM 0009', name: 'Converted Man', position: 'Fitter', home_site: 'Carmen', pin: '900900', is_issuer: false, employment_type: 'regular', type_effective_from: '2026-07-20' },
     ]);
     if (p.endsWith('/rest/v1/settings')) {
       const all = [
@@ -249,8 +268,16 @@ await admin.click('button:has-text("Cancel")');   // close the still-open PIN mo
 // ── manual suspension: PEM workers must not be offered ──────────────────────────
 await admin.click('button:has-text("Suspend someone manually")');
 const options = await admin.$$eval('select[data-manual-emp] option', els => els.map(e => e.value));
-check('admin: PEM workers are not listed for manual suspension',
-  !options.some(v => /^PEM/i.test(String(v).replace(/\s/g, ''))) && options.some(v => /RSR/.test(v)),
+// PEM 0001 (employment_type 'pakyaw') must be absent. PEM 0009 (converted to 'regular' while
+// KEEPING his PEM code) must be PRESENT — that pair is the whole point of the change: the prefix
+// no longer decides, the column does. Asserting only the first half would still pass under the
+// old prefix rule and prove nothing.
+check('admin: pakyaw workers are not listed for manual suspension',
+  !options.includes('PEM 0001') && options.some(v => /RSR/.test(v)),
+  `options=${JSON.stringify(options)}`);
+
+check('admin: a CONVERTED man (PEM code, employment_type regular) IS listed',
+  options.includes('PEM 0009'),
   `options=${JSON.stringify(options)}`);
 
 // ── manual suspension: at least one date is required ─────────────────────────────
@@ -263,6 +290,62 @@ await admin.waitForSelector('text=at least one absent date');
 check('admin: manual suspension refused with no dates',
   (!state.suspensions['RSR 0025'] || state.suspensions['RSR 0025'].active !== true) &&
   !state.rpcCalls.some(c => c[0] === 'manual' && c[1] === 'RSR 0025'));
+
+// ══ DEFECT C — a sweep-created case must NOT bar, and a bar must be reversible ═══════════════
+// C1 on the client. The database half is proven in awol-defect-cdf.sql STEP 9; this proves the UI
+// agrees: an open case offers "Bar", never arrives already barred, and a barred man can be released.
+console.log('');
+console.log('== admin: Defect C - case open is not a bar ==');
+
+state.suspensions['RSR 0006'] = { employee_code: 'RSR 0006', active: true, reason: 'Absent 3 consecutive days',
+  absent_dates: ['2026-07-27','2026-07-28','2026-07-29'], letter_received: true, barred_at: null, barred_by: null };
+state.events.length = 0;
+await admin.reload({ waitUntil: 'domcontentloaded' });
+for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
+await admin.waitForSelector('text=AWOL');
+
+check('admin: a sweep-created case shows NOT barred and he punches normally',
+  await admin.locator('text=Case open. NOT barred').first().isVisible(),
+  'a case must never arrive already barring anyone — that was Defect C');
+
+check('admin: an unbarred case offers Bar, not Reinstate',
+  await admin.locator('button:has-text("Bar from starting work")').first().isVisible()
+  && !(await admin.locator('button:has-text("Reinstate")').first().isVisible().catch(() => false)));
+
+// Bar him — PIN-gated.
+await admin.click('button:has-text("Bar from starting work")');
+for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
+await admin.waitForFunction(() => !document.body.innerText.includes('Bar from starting work'), null, { timeout: 5000 }).catch(() => {});
+check('admin: barring goes through awol_set_barred with p_bar true, and writes one event',
+  state.rpcCalls.some(c => c[0] === 'setBarred' && c[1] === 'RSR 0006' && c[2] === true)
+  && state.suspensions['RSR 0006'].barred_at !== null
+  && state.events.filter(e => e.event === 'barred').length === 1,
+  `events=${JSON.stringify(state.events)}`);
+
+check('admin: a barred man is labelled BARRED and offered Reinstate',
+  await admin.locator('text=BARRED from starting work').first().isVisible()
+  && await admin.locator('button:has-text("Reinstate")').first().isVisible());
+
+// Wrong PIN must refuse, and must change nothing.
+await admin.click('button:has-text("Reinstate")');
+for (const d of '999999') await admin.click(`button[data-admin-key="${d}"]`);
+await admin.waitForSelector('text=Not authorised', { timeout: 5000 }).catch(() => {});
+check('admin: reinstate with the wrong PIN is refused and he stays barred',
+  state.suspensions['RSR 0006'].barred_at !== null
+  && !state.events.some(e => e.event === 'unbarred'));
+
+// Correct PIN releases him — spec §3.4: a system that can bar and cannot un-bar is not shippable.
+for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
+await admin.waitForFunction(() => document.body.innerText.includes('Case open. NOT barred'), null, { timeout: 5000 }).catch(() => {});
+check('admin: reinstate clears barred_at and writes an unbarred event',
+  state.suspensions['RSR 0006'].barred_at === null
+  && state.suspensions['RSR 0006'].barred_by === null
+  && state.events.filter(e => e.event === 'unbarred').length === 1,
+  `events=${JSON.stringify(state.events)}`);
+
+check('admin: the case is STILL open after reinstating — releasing him is not closing the case',
+  state.suspensions['RSR 0006'].active === true,
+  'unbar must not resolve the disciplinary case; only a decision does that');
 
 await browser.close();
 server.close();

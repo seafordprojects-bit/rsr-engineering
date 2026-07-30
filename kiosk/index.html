@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-26i</span>
+        <span id="version-stamp">v2026-07-30b</span>
       </div>
     </div>
   </div>
@@ -427,6 +427,24 @@ textarea.field-input{resize:none;height:65px}
            vertical list of links below the card; each opens its section as a full view with a "Back"
            button. Leave requests/balances live in Staff; site/SMS/timing/export/passcode in Settings.
            Nothing removed, just relocated. -->
+      <!-- Tablet health notices that must be seen WITHOUT a gesture. The notification log in
+           Settings is two levels behind a ~2s long-press, which makes it a place to look things up,
+           never a place that tells you anything — the skipped-workers notice failed to be visible
+           three times before it was put here. This card is the only thing rendered on admin unlock,
+           so it is the kiosk's real health surface. Stays hidden when there is nothing to say. -->
+      <div class="card" id="awol-type-card" style="display:none;border-color:#E9A23B">
+        <h4 style="color:#8a5a00">⚠ AWOL check skipped</h4>
+        <p style="font-size:12px;color:#555;margin:0" id="awol-type-msg"></p>
+      </div>
+      <div class="card" id="awol-skip-card" style="display:none;border-color:#E9A23B">
+        <h4 style="color:#8a5a00">⚠ AWOL detection did not run</h4>
+        <p style="font-size:12px;color:#555;margin:0" id="awol-skip-msg"></p>
+      </div>
+      <div class="card" id="awol-dropped-card" style="display:none;border-color:#A32D2D">
+        <h4 style="color:#A32D2D">⚠ Dropped AWOL cases — read this</h4>
+        <p style="font-size:12px;color:#555;margin:0 0 8px" id="awol-dropped-msg"></p>
+        <button class="btn-sm" onclick="dismissAwolDropped()">I have read this — dismiss</button>
+      </div>
       <div class="card">
         <h4 id="stuck-title">⚠ Stuck punches (need manual recovery)</h4>
         <p style="font-size:12px;color:#888;margin-bottom:12px">Punches this tablet could not sync to the server after 5 tries. They are still saved here and will NOT be lost — fix the cause, then press <b>Retry now</b>. This list is per-tablet.</p>
@@ -1181,6 +1199,16 @@ function normCode(c){return String(c==null?'':c).toUpperCase().replace(/\s+/g,''
 // Resolve an external code to the EXACT roster code string it matches, so downstream '==='
 // comparisons against curEmp.code / record keys keep working. Falls back to the input if unmatched.
 function resolveCode(c){const n=normCode(c);const e=employees.find(x=>normCode(x.code)===n);return e?e.code:c;}
+// A bar must stop a man STARTING work, never strand him mid-shift: an open session makes payroll see
+// an incomplete record, and Policy A zeroes a day he actually worked - turning a disciplinary decision
+// into unpaid wages by accident. Checks yesterday too, because a cross-midnight OT or night shift
+// closes against yesterday's record (the same lookback updBtns uses).
+function hasOpenShift(code){
+  const t=records[code+'_'+todayKey()];
+  if(t&&t.punches&&t.punches.timein&&!t.punches.timeout)return true;
+  const y=records[code+'_'+dateKeyOffset(-1)];
+  return !!(y&&y.punches&&y.punches.timein&&!y.punches.timeout);
+}
 function getStatus(rec){if(!rec.punches.timein)return'absent';if(rec.punches.timeout)return'out';for(const[bo,bi]of BPAIRS)if(rec.punches[bo]&&!rec.punches[bi])return'break';return rec.isLate?'late':'working';}
 function isIncomplete(rec){return !!(rec.punches.timein&&!rec.punches.timeout);}
 function getNext(rec){
@@ -2044,11 +2072,38 @@ function kp(n){
   if(pin.length===PIN_LEN){
     const emp=findEmp(pin);
     if(emp){pinFailCount=0;curEmp=emp;hint.textContent='';hint.style.color='';showEmpPreview(emp);clearMsg();
-      // (2026-07-24) AWOL: a suspended worker is blocked at PIN entry on EVERY kiosk (DB-shared state).
-      // Fully blocks — a 3+-day-absent worker has no open shift to Time Out. Dismiss → kpClr clears PIN.
-      if(suspendedEmployees[emp.code]){
-        showBisayaModal('GI-SUSPEND ANG IMONG ACCOUNT\n\nAbsent ka og 3+ ka adlaw nga sunod-sunod nga walay approved nga leave.\n\nKuhaa ug sulati ang AWOL letter, ihatag sa coordinator, dayon hulaton ang approval sa admin una ka maka-punch.');
-        loadSuspensionsFromCloud(); // opportunistic refresh so the next worker's state is fresh
+      // A BARRED worker is stopped at PIN entry on every tablet (DB-shared via barred_at).
+      //
+      // CORRECTED 2026-07-30. This block previously carried the comment "a 3+-day-absent worker has
+      // no open shift to Time Out" and blocked EVERY punch type on that basis. True of someone absent
+      // three days; FALSE of anyone barred by hand mid-shift via awol_set_barred - and that wrong
+      // comment is why the hole survived. A man barred at 2pm could never Time Out, his session
+      // stayed open, and Policy A zeroed a day he had worked. A disciplinary decision must not become
+      // unpaid wages by accident.
+      //
+      // SO: refuse only when he has NO open shift - when the only thing he could do is start work.
+      // With a shift open he passes, and punch() refuses Time In specifically. Every other punch is
+      // allowed: blocking the lunch pair would zero the MORNING as well as the afternoon, because
+      // Policy A needs timein AND lunch_out to close the morning session.
+      //
+      // ORDERING FIX: the refresh used to run AFTER the refusal, so a just-reinstated man was turned
+      // away on his first attempt and got through only on his second. A reinstate that fails the first
+      // time is not a reinstate. kp() stays SYNCHRONOUS - making it async is invisible at all ten
+      // onclick call sites but would break tests/kiosk-stress/kiosk-stress.mjs:313, which fires the
+      // digits in a loop and reads curEmp on the very next statement. curEmp is assigned above, so
+      // the harness still sees what it expects.
+      if(suspendedEmployees[emp.code]&&!hasOpenShift(emp.code)){
+        const _code=emp.code;
+        kpBusy=true; updBtns();
+        (async()=>{
+          try{ await loadSuspensionsFromCloud(); }catch(_){}
+          kpBusy=false;
+          if(suspendedEmployees[_code]&&!hasOpenShift(_code)){
+            showBisayaModal('GI-SUSPEND ANG IMONG ACCOUNT\n\nAbsent ka og 3+ ka adlaw nga sunod-sunod nga walay approved nga leave.\n\nKuhaa ug sulati ang AWOL letter, ihatag sa coordinator, dayon hulaton ang approval sa admin una ka maka-punch.');
+          } else {
+            updBtns(getRec(_code));   // cleared while he stood there, or a shift is open - let him work
+          }
+        })();
         return;
       }
       // (2026-07-23) Informational dead-window heads-up at identification time — NO punch, NO record. A
@@ -2228,12 +2283,102 @@ function dateKeyOffset(offsetDays){
   const d=new Date();d.setDate(d.getDate()+offsetDays);
   return d.toLocaleDateString('en-PH',{year:'numeric',month:'2-digit',day:'2-digit'});
 }
-// PAKYAW/PEM workers are EXEMPT from AWOL entirely (owner 2026-07-26): piece-rate/casual, so
-// irregular attendance is normal for them. The employee CODE PREFIX is the marker — coordinator.js
-// sets it at creation time (empType 'RSR' = regular, 'PEM' = pakyaw). Normalized like normCode
-// (upper-cased, whitespace stripped) so live 'PEM 0001' and test 'PEM9001' both match. Mirrored
-// server-side by awol_is_pem() so no path can suspend a pakyaw worker.
-function isPemCode(code){ return /^PEM/.test(String(code||'').replace(/\s/g,'').toUpperCase()); }
+// PAKYAW workers are EXEMPT from AWOL entirely (owner 2026-07-26): piece-rate/casual, so
+// irregular attendance is normal for them.
+// The marker is employees.employment_type, NOT the code prefix (owner 2026-07-29). A converted
+// man KEEPS his PEM code and must display and behave as REGULAR from his conversion date, so the
+// prefix decides nothing anywhere — no /^PEM/ test survives in this file. Mirrored server-side by
+// awol_is_pem(), which reads the same column, so the kiosk and the database cannot disagree.
+// Returns 'exempt' | 'regular' | 'unknown'. 'unknown' means this tablet is running on a
+// localStorage roster written before the column existed and has not yet pulled from the cloud —
+// see loadEmployeesFromSupabase(), whose mapping is an allow-list.
+// Last sweep's count of workers this tablet could not classify. Starts at 0 so a tablet that has
+// not yet run a sweep reports "nothing wrong" rather than a false alarm.
+let awolUnknownTypeCount=0;
+// LEVEL: the last sweep abandoned detection entirely because awol_skip_list() failed or came back
+// empty. Recomputed every sweep, so a recovered tablet clears it by itself.
+let awolDetectionSkipped=false;
+// PIN entry is re-checking a bar against the server. Held for the duration so no punch button is live
+// while the answer is in flight. A REAL flag, checked explicitly by updBtns - not the accident that
+// updBtns() with no argument happens to disable everything, which means "no record" and would be
+// re-enabled by the next legitimate updBtns(rec).
+let kpBusy=false;
+// EVENT, not a level — and the distinction is load-bearing (owner 2026-07-30). A dropped case is a
+// disciplinary decision that was made and then abandoned; it cannot be undone by fixing a row, so it
+// must NOT share a counter with awolUnknownTypeCount. If they shared one, the banner would clear when
+// the data-quality condition cleared and the dropped case would stop being visible without anyone
+// having read it. Persisted, appended, never rewritten by a sweep, cleared only by an explicit tap.
+let awolDropped=[];
+function loadAwolDropped(){ try{ awolDropped=JSON.parse(localStorage.getItem('rsr_awol_dropped')||'[]')||[]; }catch(e){ awolDropped=[]; } }
+function saveAwolDropped(){ try{ localStorage.setItem('rsr_awol_dropped',JSON.stringify(awolDropped)); }catch(e){} }
+loadAwolDropped();
+// Paint the always-visible Admin card. Called on every sweep with the current list, so it HIDES
+// itself again when the condition clears — the same level-not-event rule as the dashboard banner
+// and the heartbeat column. Safe to call before the DOM exists (boot sweep) and outside Admin.
+// Paints THREE independent cards. The first two are LEVELS and hide themselves when the condition
+// clears. The third is an EVENT LOG and persists until dismissed — see awolDropped's comment.
+function renderAwolCards(codes){
+  const card=document.getElementById('awol-type-card'), msg=document.getElementById('awol-type-msg');
+  const sk=document.getElementById('awol-skip-card'), skm=document.getElementById('awol-skip-msg');
+  const dr=document.getElementById('awol-dropped-card'), drm=document.getElementById('awol-dropped-msg');
+  if(sk&&skm){
+    if(awolDetectionSkipped){
+      skm.textContent='AWOL detection did not run on this tablet: the exemption list could not be read. Nobody was judged and nobody is blocked — this is the safe direction. It clears itself once the tablet can reach the server.';
+      sk.style.display='';
+    } else { sk.style.display='none'; skm.textContent=''; }
+  }
+  if(dr&&drm){
+    if(awolDropped.length){
+      const l=awolDropped.slice(-6).map(d=>`${d.code} (${d.skipReason})`).join(', ');
+      drm.textContent=`${awolDropped.length} queued AWOL case${awolDropped.length===1?'':'s'} were DROPPED, not sent: the worker became exempt before the case could sync. Nothing was recorded against them. This does NOT clear itself — read it, then dismiss. ${l}`;
+      dr.style.display='';
+    } else { dr.style.display='none'; drm.textContent=''; }
+  }
+  if(!card||!msg)return;
+  const n=(codes||[]).length;
+  if(!n){ card.style.display='none'; msg.textContent=''; return; }
+  const shown=codes.slice(0,8).join(', ')+(n>8?` +${n-8} more`:'');
+  msg.textContent=`${n} worker${n===1?'':'s'} were NOT checked for AWOL: this tablet has no employment type for them yet, so it skipped them rather than judging them. Nobody is blocked. It clears itself once the tablet syncs. ${shown}`;
+  card.style.display='';
+}
+function awolExemptState(emp){
+  const t=emp&&emp.employmentType;
+  if(t==='pakyaw')return 'exempt';
+  if(t==='regular')return 'regular';
+  return 'unknown';
+}
+// On-screen FIRST, Telegram second and best-effort. The notice must appear whether or not the
+// send works: this rides the browser send path, whose failures are still swallowed until the
+// delivery-ledger work lands, so Telegram is the unreliable half and must never gate the notice.
+// Explicit dismiss: the ONLY thing that clears the dropped-case log, because it records events that
+// already happened rather than a condition that can be fixed.
+function dismissAwolDropped(){ awolDropped=[]; saveAwolDropped(); renderAwolCards(); }
+
+// On-screen FIRST, Telegram second and best-effort — the notice must appear whether or not the send
+// works, exactly as sendAwolTypeUnknown does.
+async function sendAwolDetectionSkipped(why){
+  logNotif('⚠️ AWOL detection skipped — exemption list unreadable'+(why?' ('+why+')':''),'late-n',true);
+  if(typeof renderNotifLog==='function') renderNotifLog();
+  if(!tgToken||tgToken.length<20)return;
+  const text='AWOL - wala modagan ang detection niini nga tablet karon: dili mabasa ang exemption list. Walay gi-judge, walay gi-block.'+(why?' ('+why+')':'');
+  try{
+    if(tgAwolGroup){ await tgSendWithButtons(tgAwolGroup,text,[]); }
+    else { for(const id of mgrIds){ if(id) await tgSendWithButtons(id,text,[]); } }
+  }catch(e){}
+}
+
+async function sendAwolTypeUnknown(codes){
+  logNotif(`⚠️ AWOL skipped ${codes.length} worker(s) — employment type unknown on this tablet`,'late-n',true);
+  // logNotif only pushes onto the notifLog ARRAY, and that log lives in Settings behind a ~2s
+  // long-press — a record, not a notice. renderAwolCards() is the surface that is actually seen.
+  if(typeof renderNotifLog==='function') renderNotifLog();
+  if(!tgToken||tgToken.length<20)return;
+  const text=`AWOL - ${codes.length} ka trabahante wala ma-check karon: wala pa ma-sync ang employment type niini nga tablet.\n${codes.join(', ')}`;
+  try{
+    if(tgAwolGroup){ await tgSendWithButtons(tgAwolGroup,text,[]); }
+    else { for(const id of mgrIds){ if(id) await tgSendWithButtons(id,text,[]); } }
+  }catch(e){}
+}
 function isAbsentOnDate(empCode,dateStr){
   // Absent = no timein punch AND no approved leave on that date
   const rec=records[empCode+'_'+dateStr];
@@ -2289,10 +2434,63 @@ function hasRecentPunchHistory(empCode){
   return false;
 }
 async function checkAllAbsences(){
-  await retryAwolUnsynced();
   const today=todayKey();
+
+  // ── DEFECT D + F: ONE authoritative skip list, fetched once, before anything writes ─────────
+  // Per-worker awol_skip_detection() would be ~43 REST round trips on the boot path of a tablet
+  // that must stay responsive for punching. It cannot be computed locally either: the site gate
+  // needs each worker's most recent punch across ALL sites, and this tablet holds only its own.
+  //
+  // FAIL OPEN (owner 2026-07-30): on error OR an empty result, abandon detection ENTIRELY for this
+  // boot. An empty list read as "nobody is exempt" would flag all 43 — including the five pakyaw
+  // men and Jamaica, who cannot afford a lockout because she performs the letter-received step.
+  // awol_skip_list() returns EVERY active employee with skip true/false precisely so that "empty"
+  // is unambiguously a failure rather than a legitimate answer.
+  let _skip=null;
+  try{
+    const {data,error}=await sbClient.rpc('awol_skip_list');
+    if(error)throw error;
+    if(!Array.isArray(data)||!data.length)throw new Error('skip list empty');
+    _skip={};
+    data.forEach(r=>{ _skip[normCode(r.code)]={skip:r.skip===true,reason:r.reason||null}; });
+  }catch(e){
+    awolDetectionSkipped=true;
+    awolUnknownTypeCount=0;          // a DIFFERENT condition — never conflate the two
+    renderAwolCards();
+    await sendAwolDetectionSkipped(e&&e.message);
+    loadSuspensionsFromCloud();      // the BAR list must stay current even with detection off
+    return;                          // no detection, and no retry push, this boot
+  }
+  awolDetectionSkipped=false;
+
+  // Moved below the fetch and given the list — see retryAwolUnsynced's own comment.
+  await retryAwolUnsynced(_skip);
+  const _unknownType=[];   // codes this tablet could not classify — reported after the sweep
+  // Cleared to 0 on EVERY sweep before counting, so a condition that has gone away cannot leave a
+  // stale non-zero riding on the heartbeat and a red banner sitting on the dashboard forever.
   for(const emp of employees){
-    if(isPemCode(emp.code)){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; } // PAKYAW exempt — no suspension, no alert, no HOLD note; defensive clear so a pre-exemption flag can't strand
+    // PAKYAW exempt — no suspension, no alert, no HOLD note; defensive clear so a pre-exemption
+    // flag can't strand. 'unknown' is treated as EXEMPT deliberately and REPORTED below: a stale
+    // tablet would otherwise judge every pakyaw man as regular and try to suspend him, and the
+    // catch further down treats an RPC refusal as "offline" and blocks him on this tablet anyway.
+    // Skipping is the fail-open direction — nobody is blocked by a rule the tablet could not
+    // read — and the owner is TOLD instead. It is never silent.
+    // The SERVER decides exemption now: pakyaw, non-punching and site-without-a-kiosk in one
+    // answer, with awol_skip_reason() behind it so a skip is never silent. A worker in the roster
+    // but ABSENT from the skip list is unknown to the server — fail open and report, never judge.
+    const _s=_skip[normCode(emp.code)];
+    if(!_s||_s.skip){
+      if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();}
+      if(!_s)_unknownType.push(emp.code);
+      continue;
+    }
+    // Second gate, kept deliberately: this tablet's own roster may predate the column. If the
+    // server says detectable but the local row cannot confirm it, fail open and report.
+    if(awolExemptState(emp)!=='regular'){
+      if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();}
+      _unknownType.push(emp.code);
+      continue;
+    }
     if(emp.isActive===false){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; } // inactive (owner 2026-07-26): no longer works here — never judge AWOL
     if(suspendedEmployees[emp.code])continue;
     if(onLeaveToday(emp.code))continue;
@@ -2315,17 +2513,24 @@ async function checkAllAbsences(){
     try{
       const {data,error}=await sbClient.rpc('awol_set_suspended',{p_code:emp.code,p_reason:reason,p_dates:iso,p_on:today});
       if(error)throw error;
-      suspendedEmployees[emp.code]={reason:`Absent ${dates.length} consecutive days`,suspendedOn:today,absentDates:iso};
-      saveData();
+      // DEFECT C: the sweep OPENS A CASE and stops. It does NOT write suspendedEmployees — that map
+      // is the punch gate, and a machine must never be able to reach it. Barring is barred_at, set
+      // only by awol_set_barred() behind the admin PIN.
       if(data===true) await sendAwolAlert(emp,iso);
     }catch(e){
-      // offline: block locally, defer the alert to retryAwolUnsynced() when connectivity returns
-      suspendedEmployees[emp.code]={reason:`Absent ${dates.length} consecutive days`,suspendedOn:today,absentDates:iso};
+      // Queue the CASE for retry. NEVER bar. A database refusal (pakyaw guard, non-punching guard,
+      // any constraint) is indistinguishable from being offline at this point, and barring on either
+      // lets the tablet overrule the server — the second defect in rev2 §3.1, and the shape that
+      // turned one bad flag into four of Allan Manos's unrecorded days.
       awolUnsynced[emp.code]={reason,suspendedOn:today,absentDates:iso};
       saveAwolUnsynced();
-      saveData();
     }
   }
+  awolUnknownTypeCount=_unknownType.length;   // level for the heartbeat; 0 when clear
+  // UNCONDITIONAL, and before the Telegram attempt: this call is what HIDES the card again when
+  // the condition has cleared, and painting must not wait on a network send that may hang.
+  renderAwolCards(_unknownType);
+  if(_unknownType.length) await sendAwolTypeUnknown(_unknownType);
   loadSuspensionsFromCloud();
 }
 // PART 2/3 — AWOL alert to the dedicated group (or mgr-DM fallback) with the printable letter link.
@@ -2384,10 +2589,23 @@ function saveAwolPending(){ try{localStorage.setItem('rsr_awol_pending',JSON.str
 let awolUnsynced={}; // {code:{reason,suspendedOn,absentDates}} — suspensions set locally while offline, not yet in the DB
 function saveAwolUnsynced(){ try{localStorage.setItem('rsr_awol_unsynced',JSON.stringify(awolUnsynced));}catch(e){} }
 // Retry any offline-set suspensions: push to the DB and fire the alert once they land (skipped on the first offline attempt).
-async function retryAwolUnsynced(){
+// Takes the skip list so a queued case is not re-pushed for a worker who has since become exempt.
+// Called AFTER the fetch in checkAllAbsences (owner 2026-07-30): it used to run first, so a stale
+// queued case was pushed anyway and the DB trigger refused it — safe, but noisily, into a catch.
+// Fail safely and QUIETLY. A dropped case is RECORDED, because an abandoned disciplinary decision
+// disappearing into console.warn is invisible.
+async function retryAwolUnsynced(skipList){
   for(const code of Object.keys(awolUnsynced)){
     const e=awolUnsynced[code];
     const emp=employees.find(x=>x.code===code);
+    const s=skipList&&skipList[normCode(code)];
+    if(!s||s.skip){
+      awolDropped.push({ code, reason:e.reason||'', at:new Date().toISOString(),
+                         skipReason:(s&&s.reason)||'not in skip list' });
+      saveAwolDropped();
+      delete awolUnsynced[code]; saveAwolUnsynced();
+      continue;
+    }
     try{
       const {data,error}=await sbClient.rpc('awol_set_suspended',{p_code:code,p_reason:e.reason||'Absent (retry)',p_dates:(e.absentDates||[]),p_on:e.suspendedOn||todayKey()});
       if(error)throw error;
@@ -2402,7 +2620,11 @@ function awolISO(s){ s=String(s||'').trim();
   return m?m[3]+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0'):s; }
 async function loadSuspensionsFromCloud(){
   try{
-    const { data, error } = await sbClient.from('employee_suspensions').select('*').eq('active',true);
+    // DEFECT C: the punch gate reads BARRED, not case-open. `active` means "a case is open" and the
+    // SWEEP writes it. barred_at is set only by awol_set_barred(), which verifies the admin passcode
+    // inside the function and is enforced by a DB trigger plus a column-level grant — so no machine
+    // decision can reach this map. suspendedEmployees now means BARRED BY A HUMAN, not flagged.
+    const { data, error } = await sbClient.from('employee_suspensions').select('*').not('barred_at','is',null);
     if(error) throw error;
     const next={};
     (data||[]).forEach(r=>{ next[r.employee_code]={ reason:r.reason||'', suspendedOn:r.suspended_on||'',
@@ -2546,6 +2768,14 @@ function showEmpPreview(emp){
 }
 
 function updBtns(rec){
+  // Busy: a bar re-check is in flight for the worker at the keypad. Every punch button stays down
+  // until it resolves, so nobody can tap through the gap between PIN entry and the answer.
+  if(kpBusy){
+    PUNCHES.forEach(p=>{const b=document.getElementById(BIDS[p]);if(b){b.disabled=true;b.classList.remove('highlight-next');}});
+    const _l=document.getElementById('btn-leave'), _u=document.getElementById('btn-undertime');
+    if(_l)_l.disabled=true; if(_u)_u.disabled=true;
+    return;
+  }
   const next=rec?getNext(rec):null;
   PUNCHES.forEach(p=>{const b=document.getElementById(BIDS[p]);if(!b)return;b.disabled=(next!==p);b.classList.remove('highlight-next');});
   if(next){const nb=document.getElementById(BIDS[next]);if(nb)nb.classList.add('highlight-next');}
@@ -2797,7 +3027,9 @@ async function punch(type){
   // today's Time In. The punch records normally; payroll flags yesterday's missing Time Out. No
   // admin/Telegram wait. (Incomplete-record approval gate removed; its sender, Telegram callback,
   // and the pending_approvals poller are now inert.)
-  // Block suspended employees from punching in
+  // A barred man may not START a day. Every OTHER punch type is deliberately allowed: refusing Lunch
+  // Out or Time Out would leave a session open, and Policy A zeroes an incomplete session - costing
+  // him a day he actually worked. The bar stops new work; it never corrupts work already done.
   if(type==='timein'&&suspendedEmployees[emp.code]){
     showMsg('err',emp.name+' — Suspendido',
       'Kuhaa ug sulati ang AWOL letter, ihatag sa coordinator, dayon hulaton ang approval sa admin una ka maka-punch.',6000);
@@ -5486,6 +5718,12 @@ async function loadEmployeesFromSupabase() {
           shift: se.shift || 8, dailyRate: se.daily_rate || 500,
           pin: se.pin || '',
           isActive: se.is_active !== false, // AWOL never-suspend-inactive skip (owner 2026-07-26); missing column/undefined defaults to active
+          // Employment type replaces the PEM code prefix as the AWOL exemption marker (owner
+          // 2026-07-29). MUST be carried here: this object is an ALLOW-LIST, so a column that is
+          // fetched by select('*') but not copied never reaches employees[] however often the
+          // tablet syncs — which would leave awolExemptState() returning 'unknown' forever.
+          employmentType: se.employment_type || null,
+          typeEffectiveFrom: se.type_effective_from || null,
           balance: { VL: se.vl_balance ?? 2, SL: se.sl_balance ?? 2 }
         };
         const existing = employees.find(e => normCode(e.code) === normCode(se.code));
@@ -5838,7 +6076,10 @@ async function sendHeartbeat(){
     await sbClient.from('kiosk_health').upsert(
       // today_key: the kiosk's OWN todayKey() string — the 7 PM sweep matches "today" against this exact
       // value (no second date implementation server-side; see the sweep design + Req 2).
-      { device_id: getDeviceId(), site: activeSite || null, stuck_count: deadCount(), queue_length: pendingCount(), stuck_details: buildStuckDetails(), today_key: todayKey() },
+      // unknown_type_count: how many workers the LAST AWOL sweep could not classify because
+      // employment_type had not synced to this tablet. A LEVEL, not an event — the sweep rewrites
+      // it every run (0 when clear), which is what lets the dashboard banner clear itself.
+      { device_id: getDeviceId(), site: activeSite || null, stuck_count: deadCount(), queue_length: pendingCount(), stuck_details: buildStuckDetails(), today_key: todayKey(), unknown_type_count: awolUnknownTypeCount, detection_skipped: awolDetectionSkipped, dropped_case_count: awolDropped.length },
       { onConflict: 'device_id' });
   } catch(e){ /* silently dropped — never blocks or queues punches */ }
 }
