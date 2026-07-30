@@ -140,6 +140,60 @@ The failure is self-reinforcing: a false positive produces a lockout, the lockou
 the very evidence that appears to justify it, and nothing in the loop requires a human. Four
 days of work exist with no record.
 
+### C0 — ANSWERED 2026-07-30. The mechanism, from code, not inference.
+
+**The tablet was running a build from before the 07-26 hotfix.** That build's sweep bars directly,
+with no server call and no `try`/`catch` to misread:
+
+```js
+if(consecutive>=3){
+  suspendedEmployees[emp.code]={reason:`Absent for ${consecutive} consecutive day(s)...`,
+    suspendedOn:today,tgMsgIds:{},notified:false};
+  saveData();                       // persisted to localStorage rsr_suspended
+```
+
+Timeline, reconstructed from his attendance rows:
+
+| Date | |
+|---|---|
+| 07/21 | last punch, `08:00 AM`, Carmen |
+| 07/22, 07/23 | absences 1 and 2 |
+| **07/24** | **absence 3 — the sweep bars him and writes it to localStorage** |
+| 07/25 | absence 4 |
+| 07/26 | Sunday, correctly skipped — **and the day the hotfix shipped** |
+| **07/27 →** | he returns, is refused at the Time-In gate, and each refused day adds another absence |
+
+**The suspension was created two days before the hotfix existed.** Nothing had to re-add it after a
+wipe; the wipe had not shipped yet.
+
+**Why it outlived the hotfix.** Owner field finding: the Carmen tablet took a fresh load on 07-28
+(`?fresh=1785204755780`, Last app start 2026-07-28 10:10), so the hotfix *did* arrive and *did* clear
+`rsr_suspended`. By then Allan had stopped trying after Monday's refusal. **The block outlived its
+cause in his behaviour, not in storage.** Marked **probable, not proven** — the Carmen tablet's
+version stamp was never read directly.
+
+**Corrected reading of §3.2.** Revision 1 was not wrong about `main`; it was wrong to reason about
+`main` at all. `main` genuinely carries no case-table reader and genuinely wipes local suspensions.
+Both true, both irrelevant to a tablet three builds behind. **"Deployed" is not a property of the
+repository** — and nothing surfaced the gap, because `kiosk_health` carries no build stamp. That is
+the actual control failure, and it makes §15 step 4 the real safeguard rather than a formality.
+
+### A SECOND, DIFFERENT defect found in the branch — not Allan's cause
+
+Branch `awol-suspension-flow` calls `awol_set_suspended` and then, on **any** error:
+
+```js
+}catch(e){
+  // offline: block locally, defer the alert to retryAwolUnsynced() when connectivity returns
+  suspendedEmployees[emp.code]={...};      // <-- bars him regardless of what the server said
+```
+
+A **database refusal** — the pakyaw guard, the non-punching guard, any constraint — is
+indistinguishable from being offline, so the tablet bars a man the server explicitly declined to
+suspend. This did **not** cause Allan's cascade (the build that blocked him had no RPC at all), but it
+would have reproduced the same outcome on deploy while looking like a network hiccup. Removed as part
+of Defect C's client half: the sweep no longer writes to `suspendedEmployees` on any path.
+
 ### 3.2 Deployed `main` is not safe — revision 1 was wrong
 
 Revision 1 reasoned that `main` carries no `employee_suspensions` reader, that its
@@ -380,7 +434,8 @@ case without writing its event.
 
 Each demonstrated with pasted output, per "measured, not assumed."
 
-**C0.** The mechanism that blocked Allan on deployed `main` is identified and stated plainly.
+**C0. ANSWERED 2026-07-30** — see §3.1. Pre-hotfix build barred directly; created 07/24, two
+days before the hotfix shipped. Probable-not-proven on why it outlived the 07-28 fresh load.
 **C1.** A sweep-created case cannot block a worker at the kiosk by any path. Show the failing
 test.
 **C2.** Case-open and worker-barred are separate fields; only a PIN-gated owner action writes
