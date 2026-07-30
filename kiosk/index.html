@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-26h</span>
+        <span id="version-stamp">v2026-07-30a</span>
       </div>
     </div>
   </div>
@@ -4491,6 +4491,33 @@ async function sendAbsenceSMS(emp,consecutiveDays){
 }
 
 async function checkAndSendAbsenceSMS(){
+  // (2026-07-30 — owner-approved) DISABLED. Companion to the 2026-07-26 hotfix above, which
+  // neutralised checkAllAbsences() but left THIS path running on the same broken counter.
+  //
+  // It fires automatically from the dismissal-time tick (~:1737) and, for every worker at exactly
+  // 1, 2 or 3 absent days, composes a worker-facing SMS — at 3: "your account has been flagged" —
+  // then writes an sms_log row and syncs it to Supabase. At exactly 3 it also increments a
+  // violations record. NEITHER WRITE NEEDS THE SEMAPHORE KEY: sendSMS() returns
+  // {success:false} without throwing, so the log row and the violation are written regardless of
+  // whether a message was ever delivered. The missing API key was never a brake on the records.
+  //
+  // And it counts with getConsecutiveAbsences(), which has no rest-day concept — so on a Monday a
+  // man who missed only Friday and Saturday reaches 3 and is told his account is flagged. It
+  // consults NO exemption: not awol_skip_list(), not pending leave, not is_non_punching, not
+  // pakyaw, not site capture. Mandaue (no kiosk ever commissioned), the pakyaw men, and the AWOL
+  // clerk herself are all reachable in the three days following any single punch.
+  //
+  // Guard placed INSIDE the function on purpose: :1737 is a dense single-line statement chain that
+  // also carries sendSummary() and autoExportCSV(), and those must not be put at risk to disable
+  // this. :1737 is the only caller, so this return fully disables the path.
+  //
+  // RE-ENABLE ONLY WITH ALL FOUR (spec rev2 §10a "Required"): awol_skip_list() as the single
+  // exemption authority, fail-open on error or empty; Defect E (filed-but-undecided leave) and
+  // Defect G (recorded verbal authorisation) honoured; collectAbsentDates() instead of
+  // getConsecutiveAbsences(); and the violation write behind the same gate, not conditional on
+  // the send succeeding. Until then a worker gets no automated absence SMS at all — which is the
+  // safe direction, because every message it currently composes is unreviewed.
+  return;
   // Run at end of day — check all employees for consecutive absences
   for(const emp of employees){
     if(onLeaveToday(emp.code))continue;
