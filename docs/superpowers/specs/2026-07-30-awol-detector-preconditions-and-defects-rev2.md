@@ -189,6 +189,53 @@ Carmen has a slow week. Skipped sites surface in the kiosk health banner.
 
 Subject to Defect H: the gate needs a trustworthy notion of where a worker actually works.
 
+### Implemented 2026-07-30, and two consequences to keep in mind
+
+`awol_effective_site(code)` resolves to **the site of the worker's most recent real punch**, falling
+back to `home_site` only for a worker who has never punched anywhere. It is NOT keyed on
+`home_site`, deliberately: 11 of 43 active rows disagreed with their punch site (measured 07-30,
+before the RSR 0014 correction), 10 of them men posted to Mandaue who clock in at Carmen because
+Mandaue has no kiosk. A gate keyed on `home_site` would have exempted ten men who punch at Carmen
+every day, and looked like it was working.
+
+**Consequence 1 — a single stray punch moves a man's detection site.** Found live during the STEP 7
+probes: one owner test punch on the Mandaue tablet became RSR 0000's most recent punch, so
+`awol_effective_site` returned Mandaue and the site gate exempted him. Correct behaviour by the
+rule as written, surprising in effect, and **it would have been invisible without
+`awol_skip_reason()`** — the skip list is what surfaced it. Anyone changing the resolution rule
+later should know it is last-punch-wins, not most-frequent or most-recent-N.
+
+**Consequence 2 — a site that captures punches but is not configured skips detection.** Fail-open by
+design (`not` outside the `coalesce`), so nobody is harmed, but it means a newly commissioned yard
+switches detection OFF for everyone there until someone adds it to `site_capture_status`. Standing
+check for that:
+
+```sql
+-- Workers whose most recent punch is at a site not in site_capture_status. EXPECT 0.
+with last_punch as (
+  select distinct on (upper(regexp_replace(employee_code,'[^A-Za-z0-9]','','g')))
+         upper(regexp_replace(employee_code,'[^A-Za-z0-9]','','g')) as code_norm,
+         site, public.leave_try_date(date) as d
+    from public.attendance_records
+   where timein is not null and timein <> '(auto-skipped)'
+     and site is not null and public.leave_try_date(date) is not null
+   order by 1, public.leave_try_date(date) desc)
+select e.code, e.name, l.site, l.d
+  from public.employees e join last_punch l on l.code_norm = e.code_norm
+ where e.separated_at is null
+   and not exists (select 1 from public.site_capture_status s where s.site = l.site)
+ order by e.code;
+```
+
+Measured 07-30: 0 rows. `TEST-SITE` holds 17 rows (RSR 0001, 0002, 0003, all 8–13 June) but none of
+the three has it as their latest punch, so nobody is currently affected.
+
+**Follow-up, owner-requested 2026-07-30, not built:** flipping `has_kiosk` currently needs SQL editor
+access, because `insert/update/delete` on `site_capture_status` is revoked from `anon` — a client
+that could set `has_kiosk = false` could switch off detection for a whole yard. It wants a PIN-gated
+RPC (`set_site_capture`) in the same shape as `set_non_punching`, so commissioning the Mandaue kiosk
+does not require a developer. Deliberately deferred, not forgotten.
+
 **This also breaks Defect A's fix alone.** Flooring the scan at `started_on` does nothing for
 George Galo, whose start date is 2023-10-27 and whose attendance is empty — he would be flagged
 with roughly a thousand consecutive absences. A and D must both land.
@@ -313,13 +360,112 @@ still punch.
 both tables.
 **B2.** Forced-failure test: with the event insert made to fail, no suspension row survives and
 the failure is visible.
-**Z1.** Re-run the §2.2 query after all fixes. **Expect exactly one worker flagged: RSR 0015.**
-Any Mandaue worker, Jamaica, Alvin, Allan or Art appearing means the fix is incomplete. RSR 0015
-*not* appearing means the fix has gone too far and is now suppressing real absences — every
-defect in this spec pushes toward flagging less, and a detector that flags nobody would satisfy
-every other criterion here. RSR 0015 is the control case.
+**Z1 — scoped to C + D + F (owner, 2026-07-30).** G, E and H come after, so their false positives
+are still expected. Re-run the §2.2 query with C, D and F in and **expect exactly three flagged:**
+
+| Code | Name | Why still flagged | Closed by |
+|---|---|---|---|
+| RSR 0015 | Niño Nieto Panut | genuine unexcused absence — the control case | nothing; must stay |
+| RSR 0005 | Alvin H. Operio | pending leave not yet approved | Defect E |
+| RSR 0014 | Art Clenthon Tañola | absence agreed verbally, no artifact | Defect G |
+
+**Any Mandaue worker appearing means D is incomplete. Jamaica appearing means F is incomplete.**
+
+**RSR 0015 missing means it has gone too far** and is now suppressing real absences. Every defect
+in this spec pushes toward flagging less, and a detector that flags nobody satisfies every other
+criterion here — RSR 0015 is the only thing standing between "fixed" and "switched off".
+
+**RSR 0014 must NOT be suppressed by D.** He is listed `home_site = Mandaue` and works at Carmen.
+A site gate keyed on `home_site` would exempt him and quietly pass a test it should fail. The gate
+therefore keys on `awol_effective_site()` — the site that captured his most recent real punch,
+falling back to `home_site` only for a worker who has never punched anywhere. Verified in
+`awol-defect-cdf.sql` STEP 7: `awol_effective_site('RSR 0014')` must return `Carmen` and
+`awol_skip_detection('RSR 0014')` must return **false**.
+
+Final Z1 (one worker, RSR 0015 only) applies once G, E and H land.
 
 ---
+
+## 13a. STATE AS OF 2026-07-30, END OF SESSION — read this first tomorrow
+
+Migration file: **`awol-defect-cdf.sql`** at the repo root. Steps are numbered in that file.
+Everything below was run by the owner in the Supabase SQL editor against **production**
+(`wpmcbjrisuyjvobvzaus`) and verified with a probe. Nothing was assumed.
+
+### Applied and verified — STEPs 1 to 7
+
+| STEP | What | Verified by |
+|---|---|---|
+| 1 | `employee_suspensions.barred_at` / `barred_by` added | both columns `timestamptz`/`text`, nullable |
+| 2 | `employee_suspensions_bar_guard_biu` trigger; anon UPDATE narrowed | trigger count 1; anon holds UPDATE on exactly `awol_group_chat`, `awol_group_msg_id` — neither `barred_at` nor `barred_by` |
+| 3 | `is_non_punching` + audit columns; `employees_flag_guard_biu`; `set_awol_clerk`; `set_non_punching` (5-arg) | guard refused `is_awol_clerk` **and** `is_non_punching` on RSR 0000 with `42501` |
+| 4 | `site_capture_status` (Carmen true / Mandaue false); `awol_effective_site` | Carmen true · Mandaue false; Art → Carmen, Galo → Mandaue, Niño → Carmen |
+| 5 | `awol_is_exempt`, `awol_skip_detection`, `awol_skip_reason`; suspension guard extended to non-punching | pem true · Niño false/false/null |
+| 6 | `awol_set_barred` (bar + the minimal reinstate path, §3.4) | created; **probes not yet run** — they are in STEP 9 and need the passcode |
+| 7 | read-only verification of D and F | skip list = 9: four Mandaue men + five pakyaw |
+
+**Not yet applied: STEP 8, STEP 9, STEP 10.**
+
+### STEP 8 is BLOCKED on the admin passcode
+
+`set_non_punching` verifies via `admin_verify_passcode`, which is returning `false` for what the
+owner is typing. State when the session ended: `kiosk_admin_credential` has 1 row,
+`updated_at 2026-07-20 09:16 UTC`; `admin_verify_throttle` showed **3 fails, no lockout** — so
+**7 attempts remain** before a 15-minute global lockout that takes both tablets' Admin panels with it.
+
+**Do not brute-force it.** Two facts established while diagnosing:
+
+- `updated_at` is when the hash was **written**, not when it was last used. `admin_verify_passcode`
+  only reads the credential row and writes `admin_verify_throttle`. A ten-day-old timestamp is
+  normal for a PIN in daily use and is **not** evidence the credential changed.
+- A correct PIN **was** accepted on 2026-07-30: the dashboard AWOL card returns early at
+  `if (ok !== true)` and the scenario-2 manual suspension got past it, and probe v2's seven
+  `leave_decide` cases each verify the passcode inside the RPC. So the credential is intact — this is
+  recall, not corruption.
+
+If it cannot be recalled: **`docs/runbooks/kiosk-admin-passcode-reset.md`** (written 2026-07-30 —
+there was no documented path before). It resets to a throwaway value in SQL and rotates to the real
+PIN **through the dashboard**, because `admin_bootstrap_passcode` takes the PIN as a literal argument
+and would otherwise leave it in Supabase query history. **It invalidates Admin on both tablets at
+once** — do it when nobody needs the panel, and tell Jamaica and the yard coordinator immediately,
+since she performs the letter-received step.
+
+### Also verified tonight, worth not rediscovering
+
+- **`home_site` disagrees with the punch site for 11 of 43 active workers** (10 of them posted to
+  Mandaue but clocking in at Carmen). A site gate keyed on `home_site` would have exempted ten men
+  who punch at Carmen daily. Defect D keys on `awol_effective_site` instead — see §6.
+- **A single stray punch moves a worker's detection site** (last-punch-wins). Found live: one owner
+  test punch on the Mandaue tablet exempted RSR 0000. Only `awol_skip_reason()` made it visible.
+- **`TEST-SITE` holds 17 rows** — RSR 0001, 0002, 0003, all 8–13 June. None of the three has it as
+  their most recent punch, so nobody is currently affected.
+- **The kiosk employee sync cannot trip the new guards.** `kiosk/index.html:5268-5272` is
+  select-then-update-or-insert, not an upsert, and its 13-column payload contains neither flag. So
+  marking Jamaica non-punching in STEP 8 will not break Carmen.
+- **`employees` has table-level UPDATE granted to anon**, covering all 24 columns including `pin` and
+  `daily_rate`. Not fixed, deliberately — written up as
+  `docs/superpowers/specs/2026-07-30-anon-grant-surface-on-employees.md`.
+- **The `%s` in the guard's `raise` was corrected to `%`** (PostgreSQL uses bare `%`; the message
+  read `is_non_punchings`). Cosmetic; behaviour was always correct.
+
+### The three items owed
+
+1. **`awol-defect-cdf.sql` STEPs 8, 9, 10** — 8 needs the passcode; 9 is the C1 proof that a
+   sweep-written row cannot reach the punch gate, plus the bar/unbar round trip; 10 is the final
+   verify.
+2. **The client changes**, still unwritten and deliberately so — naming `barred_at` or
+   `is_non_punching` in an explicit select before the migration is verified live is the `b64ed5c`
+   mistake. Once STEP 10 passes: the kiosk gate repointed from `active` to `barred_at` at both sites
+   (`:2058`, `:2868`); **the `:2058` ordering fix** so a reinstate works on the first attempt rather
+   than the second; the sweep calling `awol_skip_detection()` with skips surfaced in the health
+   banner; a Reinstate button on the dashboard AWOL card; and a smoke-test case that fails if a
+   sweep-written row reaches the gate.
+3. **Localhost walkthrough before anything is pushed.** Nothing in this work has been near `main`.
+
+### Still not started, in §11 order
+
+Defect C's client half, then **G, E, H**, then **B**, then **A**. Z1 for the C+D+F scope expects
+**three** flagged — RSR 0015, RSR 0005, RSR 0014 — not one.
 
 ## 14. Test data hygiene
 
