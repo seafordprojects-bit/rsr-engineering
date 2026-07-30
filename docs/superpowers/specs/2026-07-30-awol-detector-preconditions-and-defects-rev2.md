@@ -382,7 +382,33 @@ falling back to `home_site` only for a worker who has never punched anywhere. Ve
 `awol-defect-cdf.sql` STEP 7: `awol_effective_site('RSR 0014')` must return `Carmen` and
 `awol_skip_detection('RSR 0014')` must return **false**.
 
-Final Z1 (one worker, RSR 0015 only) applies once G, E and H land.
+Final Z1 (one worker, RSR 0015 only) applies once G, E and H land — **and that, not the three-flag
+checkpoint, is the merge criterion.**
+
+### Only RSR 0015 deserves a flag — so C alone is not a merge gate
+
+Owner, 2026-07-30, reviewing the STEP 11 skip list. Of the three:
+
+- **RSR 0015** — genuinely absent, unexcused. Correct, and must keep being flagged.
+- **RSR 0005** — leave **filed, awaiting the owner's approval**. Did nothing wrong. Needs Defect E.
+- **RSR 0014** — absent with the owner's **verbal permission**. Did nothing wrong. Needs Defect G.
+
+`awol_skip_detection` returns `false` for all three and is **right** to: "skip" means *has a
+legitimate exemption category*, and neither RSR 0005 nor RSR 0014 has one. The fault is upstream —
+**the system has nothing to read.** A filed-but-unapproved leave and a spoken permission are both
+invisible to it. No detector tuning fixes an absence the database cannot see.
+
+So with C, D and F alone the detector would open cases, post to the AWOL Telegram group, and in time
+auto-draft non-submission letters **against two men who did nothing wrong.** C makes that harmless at
+the tablet — nobody is barred, nobody loses pay — but it does not make it *stop*. The disciplinary
+noise, and the standing of any NTE issued on those facts, are untouched by C.
+
+**The merge gate is therefore C and E and G, not C alone.** A detector that is safe but wrong still
+puts a notice in an innocent man's file, and "the alert was harmless" is no defence if one is ever
+contested. D and F removed seven of the nine false positives; E and G remove the last two.
+
+The three-flag result is a **checkpoint** proving C+D+F landed correctly. It is not permission to
+merge.
 
 ---
 
