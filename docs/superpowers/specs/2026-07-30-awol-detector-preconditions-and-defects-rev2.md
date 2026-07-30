@@ -613,6 +613,70 @@ since she performs the letter-received step.
 - **The `%s` in the guard's `raise` was corrected to `%`** (PostgreSQL uses bare `%`; the message
   read `is_non_punchings`). Cosmetic; behaviour was always correct.
 
+### CLIENT HALF OF DEFECT C — committed 83b9c89, then verified 21/21
+
+Committed at **83b9c89**, and the commit message says plainly that the smoke test was red and the
+changes were syntax-verified but untested. **That is now out of date in the good direction:** the
+harness was fixed afterwards and passes **21 of 21**, including six new Defect C assertions. Read the
+harness result, not the commit message.
+
+What the client half does:
+
+- The sweep writes `suspendedEmployees` on **no path**. Three writes removed: the success path and
+  both halves of the error path. The error path was the dangerous one — it treated any RPC failure as
+  "offline" and barred locally, so a DATABASE REFUSAL was indistinguishable from a network drop.
+- `loadSuspensionsFromCloud` filters on `barred_at`, not `active`. `suspendedEmployees` therefore
+  means BARRED BY A HUMAN. All six readers of that map were checked.
+- `awol_skip_list()` once per sweep, fail-open on error **or empty**.
+- `retryAwolUnsynced` moved below that fetch and consults it; a queued case for a now-exempt worker
+  is dropped and **recorded** persistently, never rewritten by a sweep.
+- `kpBusy`, a real flag checked explicitly by `updBtns`.
+- The `:2058` gate refreshes **before** refusing, and refuses only when there is **no open shift**.
+  Time In refused; every other punch allowed, because blocking the lunch pair would zero the morning
+  as well as the afternoon.
+- Dashboard reinstate button, PIN-gated through `awol_set_barred`, in **both** lists.
+
+### The smoke test: what actually happened, and what it means for earlier claims
+
+**The harness was never broken by the merge.** The failure that stopped work was a **flake** — a
+30-second timeout on the coordinator's first page load. On re-run with page-error logging added, the
+coordinator section passed unchanged. My diagnosis that main's newer `coordinator.js` had broken it
+was wrong.
+
+**But the fixture change had never been committed.** `PEM 0009` appears **zero** times in the
+pre-merge branch tip (`1a0fe38^1`); the smoke test file's previous commit was `478e068`, predating
+this session entirely. So every smoke-test number reported before 83b9c89 was measured against an
+**uncommitted working tree that no longer exists**, and two of those reports — 14, then 13 — are
+mutually inconsistent. One was wrong and it cannot now be determined which.
+
+Three claims rested on those runs. All three are **now verified by the 21/21 run**, but they were
+**not** verified when they were asserted:
+
+1. "The PinPad extraction is verified post-merge."
+2. "The `employment_type` exemption change is verified."
+3. The merge verification itself — the harness was **not** re-run after the merge changed
+   `coordinator.js` by 197 lines. That omission is what let the flake hide.
+
+The SQL work is unaffected throughout: every step of `awol-defect-cdf.sql` rests on probes the owner
+ran and pasted against production.
+
+### Two harness defects fixed, both of which hid this
+
+**Assertions could be skipped silently.** The first uncaught timeout killed the run and every later
+assertion was simply absent from a smaller total — six Defect C assertions sat behind a failing
+section and never executed, which reads as coverage in review while proving nothing. A `section()`
+runner now records one failure and continues, so the total is always the full set.
+
+**Browser errors were swallowed.** A page could throw during load, leave a card empty, and the only
+symptom was a selector timeout 30 seconds later with no cause. Every page is now wired for
+`pageerror`, `console.error` and `requestfailed`.
+
+Two smaller things worth not rediscovering: the Lock screen keypad is `button:has-text(d)` while the
+AWOL card's PinPad is `button[data-admin-key=d]`, and the PinPad does not exist until a decision
+button opens it. And the card verifies the passcode via `admin_verify_passcode` **before** calling
+`awol_set_barred`, so a wrong PIN shows the card's "Wrong PIN." and never reaches the RPC's
+"Not authorised" — defence in depth, since the RPC still verifies inside.
+
 ### The three items owed
 
 1. **`awol-defect-cdf.sql` STEPs 8, 9, 10** — 8 needs the passcode; 9 is the C1 proof that a

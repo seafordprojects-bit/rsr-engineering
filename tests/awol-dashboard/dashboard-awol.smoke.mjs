@@ -37,6 +37,26 @@ const state = {
                                    // and awol_set_barred, so they can never disagree
 };
 let pass = 0, fail = 0, pending = 0;
+// SECTION ISOLATION (added 2026-07-30). Before this, the first uncaught Playwright timeout killed the
+// whole run and every later assertion was skipped SILENTLY — the summary simply printed a smaller
+// number. Six C1 assertions sat behind a failing coordinator section and never executed, which reads
+// as coverage in review while proving nothing. A section that throws now records ONE failure, names
+// itself, and the run continues, so the total is always the full set.
+const sections = [];
+const section = (name, fn) => sections.push([name, fn]);
+async function runSections(){
+  for (const [name, fn] of sections){
+    console.log('');
+    console.log('== ' + name + ' ==');
+    try { await fn(); }
+    catch (e) {
+      fail++;
+      const why = String((e && e.message) || e).slice(0, 140);
+      console.log('  FAIL  ' + name + ' - SECTION ABORTED: ' + why);
+      console.log('        assertions after this point in the section did not run');
+    }
+  }
+}
 const check = (name, ok, detail) => {
   console.log(`${ok ? '  \x1b[32mPASS\x1b[0m' : '  \x1b[31mFAIL\x1b[0m'}  ${name}${detail ? `\n        ${detail}` : ''}`);
   ok ? pass++ : fail++;
@@ -171,7 +191,16 @@ state.suspensions['RSR 0006'] = { employee_code: 'RSR 0006', active: true, reaso
   letter_received: false, awol_group_msg_id: '9001', awol_group_chat: '-1001112223334' };
 
 console.log('\n== coordinator: AWOL letters card ==');
-const coord = await context.newPage();
+// Browser errors were previously swallowed: a page could throw during load, leave a card empty, and
+// the only symptom was a selector timeout 30s later with no clue why. Every page is wired for both
+// pageerror and console.error from now on.
+const wire = (pg, label) => {
+  pg.on('pageerror', (e) => console.log('  PAGEERROR[' + label + '] ' + String((e && e.message) || e).slice(0, 200)));
+  pg.on('console', (m) => { if (m.type() === 'error') console.log('  CONSOLE[' + label + '] ' + m.text().slice(0, 200)); });
+  pg.on('requestfailed', (r) => console.log('  REQFAIL[' + label + '] ' + r.url().slice(0, 120)));
+  return pg;
+};
+const coord = wire(await context.newPage(), 'coordinator');
 await coord.goto(`${base}/coordinator/`, { waitUntil: 'networkidle' });
 await coord.fill('input[type=password]', '1234');
 await coord.click('button:has-text("Unlock")');
@@ -202,7 +231,7 @@ check('coordinator: a Telegram alert went to the AWOL group chat (not a raw mana
 
 // ── admin dashboard: gate + decisions — Task 5 ──────────────────────────────────
 console.log('\n== admin: AWOL suspensions dashboard ==');
-const admin = await context.newPage();
+const admin = wire(await context.newPage(), 'admin');
 admin.setDefaultTimeout(4000);
 await admin.goto(`${base}/admin/`, { waitUntil: 'networkidle' });
 for (const d of '123456') await admin.click(`button:has-text("${d}")`);
@@ -292,58 +321,74 @@ check('admin: manual suspension refused with no dates',
   !state.rpcCalls.some(c => c[0] === 'manual' && c[1] === 'RSR 0025'));
 
 // ══ DEFECT C — a sweep-created case must NOT bar, and a bar must be reversible ═══════════════
-// C1 on the client. The database half is proven in awol-defect-cdf.sql STEP 9; this proves the UI
-// agrees: an open case offers "Bar", never arrives already barred, and a barred man can be released.
+// == DEFECT C on the client ==============================================================
+// The database half is proven in awol-defect-cdf.sql STEP 9. This proves the UI agrees: an open
+// case offers Bar and never arrives already barred, and a barred man can always be released.
+//
+// NOTE the two DIFFERENT keypads, which cost a debugging round earlier: the Lock screen uses
+// button:has-text(d), the AWOL card's PinPad uses button[data-admin-key=d]. The PinPad does not
+// exist until a decision button opens it, so digits can never be clicked before that.
 console.log('');
-console.log('== admin: Defect C - case open is not a bar ==');
+console.log('== admin: Defect C - a case open is not a bar ==');
 
-state.suspensions['RSR 0006'] = { employee_code: 'RSR 0006', active: true, reason: 'Absent 3 consecutive days',
-  absent_dates: ['2026-07-27','2026-07-28','2026-07-29'], letter_received: true, barred_at: null, barred_by: null };
+state.suspensions = { 'RSR 0006': { employee_code: 'RSR 0006', active: true,
+  reason: 'Absent 3 consecutive days', suspended_on: '07/26/2026',
+  absent_dates: ['2026-07-27','2026-07-28','2026-07-29'],
+  letter_received: true, barred_at: null, barred_by: null } };
 state.events.length = 0;
-await admin.reload({ waitUntil: 'domcontentloaded' });
-for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
+state.rpcCalls.length = 0;
+
+await admin.reload({ waitUntil: 'networkidle' });
+// sessionStorage survives a reload, so the Lock screen may be skipped. Unlock only if it is there.
+if (await admin.locator('text=Enter the 6-digit admin PIN').first().isVisible().catch(() => false)) {
+  for (const d of '123456') await admin.click('button:has-text("' + d + '")');
+}
 await admin.waitForSelector('text=AWOL');
 
-check('admin: a sweep-created case shows NOT barred and he punches normally',
+check('admin: a sweep-created case reads NOT barred - he punches normally',
   await admin.locator('text=Case open. NOT barred').first().isVisible(),
-  'a case must never arrive already barring anyone — that was Defect C');
+  'a case must never arrive already barring anyone - that was Defect C');
 
-check('admin: an unbarred case offers Bar, not Reinstate',
+check('admin: an unbarred case offers Bar and not Reinstate',
   await admin.locator('button:has-text("Bar from starting work")').first().isVisible()
   && !(await admin.locator('button:has-text("Reinstate")').first().isVisible().catch(() => false)));
 
-// Bar him — PIN-gated.
+// Bar him. The button opens the PinPad; only then do the digits exist.
 await admin.click('button:has-text("Bar from starting work")');
-for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
-await admin.waitForFunction(() => !document.body.innerText.includes('Bar from starting work'), null, { timeout: 5000 }).catch(() => {});
-check('admin: barring goes through awol_set_barred with p_bar true, and writes one event',
-  state.rpcCalls.some(c => c[0] === 'setBarred' && c[1] === 'RSR 0006' && c[2] === true)
+for (const d of '123456') await admin.click('button[data-admin-key="' + d + '"]');
+await admin.waitForSelector('text=BARRED from starting work');
+
+check('admin: barring goes through awol_set_barred with p_bar true and writes one event',
+  state.rpcCalls.some((c) => c[0] === 'setBarred' && c[1] === 'RSR 0006' && c[2] === true)
   && state.suspensions['RSR 0006'].barred_at !== null
-  && state.events.filter(e => e.event === 'barred').length === 1,
-  `events=${JSON.stringify(state.events)}`);
+  && state.events.filter((x) => x.event === 'barred').length === 1,
+  'events=' + JSON.stringify(state.events));
 
 check('admin: a barred man is labelled BARRED and offered Reinstate',
   await admin.locator('text=BARRED from starting work').first().isVisible()
   && await admin.locator('button:has-text("Reinstate")').first().isVisible());
 
-// Wrong PIN must refuse, and must change nothing.
+// Wrong PIN must refuse and change nothing.
 await admin.click('button:has-text("Reinstate")');
-for (const d of '999999') await admin.click(`button[data-admin-key="${d}"]`);
-await admin.waitForSelector('text=Not authorised', { timeout: 5000 }).catch(() => {});
+for (const d of '999999') await admin.click('button[data-admin-key="' + d + '"]');
+// The card verifies via admin_verify_passcode BEFORE calling awol_set_barred, so a bad PIN never
+// reaches the RPC and the message is the card's own 'Wrong PIN.' rather than the RPC's
+// 'Not authorised'. Defence in depth: the RPC still verifies inside, because the anon key is public.
+await admin.waitForSelector('text=Wrong PIN.');
 check('admin: reinstate with the wrong PIN is refused and he stays barred',
   state.suspensions['RSR 0006'].barred_at !== null
-  && !state.events.some(e => e.event === 'unbarred'));
+  && !state.events.some((x) => x.event === 'unbarred'));
 
-// Correct PIN releases him — spec §3.4: a system that can bar and cannot un-bar is not shippable.
-for (const d of '123456') await admin.click(`button[data-admin-key="${d}"]`);
-await admin.waitForFunction(() => document.body.innerText.includes('Case open. NOT barred'), null, { timeout: 5000 }).catch(() => {});
-check('admin: reinstate clears barred_at and writes an unbarred event',
+// Correct PIN releases him. Spec 3.4: a system that can bar and cannot un-bar is not shippable.
+for (const d of '123456') await admin.click('button[data-admin-key="' + d + '"]');
+await admin.waitForSelector('text=Case open. NOT barred');
+check('admin: reinstate clears barred_at and barred_by and writes an unbarred event',
   state.suspensions['RSR 0006'].barred_at === null
   && state.suspensions['RSR 0006'].barred_by === null
-  && state.events.filter(e => e.event === 'unbarred').length === 1,
-  `events=${JSON.stringify(state.events)}`);
+  && state.events.filter((x) => x.event === 'unbarred').length === 1,
+  'events=' + JSON.stringify(state.events));
 
-check('admin: the case is STILL open after reinstating — releasing him is not closing the case',
+check('admin: the case is STILL open after reinstating - releasing him is not closing the case',
   state.suspensions['RSR 0006'].active === true,
   'unbar must not resolve the disciplinary case; only a decision does that');
 
