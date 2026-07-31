@@ -61,7 +61,7 @@ man who is at work today. See **§10a**.
 
 **DISABLED 2026-07-30 in commit `6f6338f`, kiosk `v2026-07-30a`** — a `return;` at the top of the
 function, deployed to `main` and stamped. That stops new false records. It does **not** address the
-existing ones, and it is **not** the fix: §10a's four Required items still stand before the path is
+existing ones, and it is **not** the fix: §10a's **thirteen** Required items still stand before the path is
 ever re-enabled, and the Semaphore key must not be entered until they are done. Separate gate from
 this branch's C+E+G merge gate.
 
