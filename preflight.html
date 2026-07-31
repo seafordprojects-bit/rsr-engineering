@@ -35,9 +35,14 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Expected version stamp per deployed page (this file sits at the repo root, so the
 // pages are same-origin siblings under payroll/ and kiosk/). Bump these each deploy.
+// RULE (owner, 2026-07-31): ON THIS BRANCH preflight tracks the BRANCH build. It flips to the live
+// stamp only when this branch merges to main and ships. That is why merging main here always
+// conflicts on this line — main's value must name what is DEPLOYED, this branch's must name what
+// is being tested. Neither is wrong; they answer different questions. Resolve in favour of the
+// branch while the branch is unshipped.
 // payroll from main (v2026-07-25a — the mini-slip print fix that IS live); kiosk from this
-// branch (v2026-07-29a — the AWOL build, which is NOT live and must not be until it is decided).
-const EXPECT = { 'payroll/index.html':'v2026-07-25a', 'kiosk/index.html':'v2026-07-30b',
+// branch (v2026-07-31a — the AWOL build, which is NOT live and must not be until it is decided).
+const EXPECT = { 'payroll/index.html':'v2026-07-25a', 'kiosk/index.html':'v2026-07-31a',
                  'monitoring/roll-call.html':'v2026-07-18a', 'monitoring/borrow.html':'v2026-07-16c',
                  'tools/index.html':'v2026-07-19b', 'monitoring/index.html':'v2026-07-16c',
                  'monitoring/job-order.html':'v2026-07-19a', 'monitoring/efficiency.html':'v2026-07-18a',
