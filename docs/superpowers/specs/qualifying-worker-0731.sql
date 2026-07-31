@@ -156,8 +156,27 @@ select c.site, e.code, e.name,
 --    armed + ANY 08/02 violations row                                   -> stale build caught; find
 --                                                                          the device and re-stamp it.
 --    not armed (either man punched Saturday)                            -> nothing proved; re-arm.
---    armed + zero violations + wakefulness UNKNOWN                      -> STILL UNDECIDED. Do not
---                                                                          record it as a pass.
+--    armed + zero violations + YARD KIOSK awake near 17:00 Sunday       -> DISABLE MEASURED.
+--    armed + zero violations + yard kiosk wakefulness UNKNOWN           -> STILL UNDECIDED. Do not
+--                                                                          record it as a pass. A
+--                                                                          heartbeat from a device
+--                                                                          that is NOT the yard
+--                                                                          kiosk does not count.
+--
+--  THE WAKEFULNESS QUESTION IS NARROWER THAN "WAS A DEVICE AWAKE" (owner fleet facts, 2026-07-31).
+--  THE ONLY DEVICE WHOSE WAKEFULNESS MATTERS IS THE CARMEN YARD KIOSK.
+--  The day-3 violation write requires the device to COMPUTE consecutive = 3, and that computation
+--  reads the device's own localStorage `records` map. Only the yard kiosk holds PEM 0004's and
+--  RSR 0001's punch history. Every other device in the fleet computes them at the counter's 7-day
+--  cap — day 8, outside the 1..3 bound — and therefore CANNOT fire the write no matter how awake
+--  it is:
+--    · the Mandaue tablet (with the owner, yard never commissioned) — no punch history at all;
+--    · the coordinator tablet — does not take punches;
+--    · the owner's PC — localhost, heartbeat-suppressed, and no punch history either.
+--  So Monday's wakefulness read is: WAS THE YARD KIOSK'S device_id ALIVE NEAR 17:00 ON SUNDAY?
+--  A small heartbeat_age on some OTHER device_id answers nothing. Until the uuid mapping is
+--  measured (see kiosk-heartbeat-snapshot.sql), "a device was awake" is not the same claim and must
+--  not be recorded as one.
 --
 --  THE WAKEFULNESS LEG IS THE WEAK ONE, AND kiosk_health CANNOT CARRY IT.
 --  sendHeartbeat (kiosk :6100) upserts onConflict device_id every 5 minutes (:6120) — ONE ROW PER

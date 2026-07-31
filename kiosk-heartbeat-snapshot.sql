@@ -56,11 +56,35 @@
 --  punch history, so every worker runs to the counter's 7-day cap and lands outside the 1..3 bound.
 --
 --  OBSERVED 2026-07-31: THREE rows — two distinct device_ids both reporting site Carmen
---  (updated_at 17:13 and 17:49 Manila, BOTH AFTER the 17:00 tick), and Mandaue last seen 13:56,
---  roughly four hours before shift end. Which of the two Carmen identities is the yard tablet, which
---  is a stale post-clear identity, and whether either is a PC on the live URL, is NOT DETERMINABLE
---  from this table. Resolve it by hand — read rsr_device_id out of the tablet's own localStorage and
---  match it — before treating any Carmen row as "the tablet".
+--  (updated_at 17:13 and 17:49 Manila, BOTH AFTER the 17:00 tick), and one reporting site Mandaue,
+--  last seen 13:56.
+--
+--  FLEET FACTS FROM THE OWNER, 2026-07-31 — these override any reading taken from the table alone:
+--    · THE MANDAUE YARD WAS NEVER COMMISSIONED. The row labelled Mandaue is a tablet sitting WITH
+--      THE OWNER, not a kiosk at a yard. Its 13:56 heartbeat is that device, and it has no bearing
+--      on any yard's shift. AN EARLIER DRAFT OF THIS FILE CALLED IT "roughly four hours before shift
+--      end" — WRONG, and struck: there is no shift there to end. Any reading of "Mandaue live since
+--      ~the 28th" is likewise void.
+--      Its zero qualifier rows on 07/31 is the NEVER-COMMISSIONED SIGNATURE confirming itself: no
+--      punch history means every worker runs to the counter's 7-day cap, outside the 1..3 bound.
+--    · THE OWNER'S PC RUNS LOCALHOST ONLY, so IS_LOCALHOST suppresses it. NEITHER Carmen row is the
+--      PC. The hostname-guard hazard above remains true in general and simply does not apply here.
+--    · THREE PHYSICAL TABLETS EXIST: the Carmen yard kiosk, the Mandaue tablet with the owner, and
+--      the coordinator tablet. Three tablets, three heartbeat rows.
+--      WORKING HYPOTHESIS, NOT YET MEASURED: the second Carmen device_id is the COORDINATOR tablet.
+--
+--  UUID MAPPING — fill in once measured, do not guess:
+--      device_id                              role                          confirmed
+--      -------------------------------------  ----------------------------  ---------
+--      <carmen id A>                          ?                             no
+--      <carmen id B>                          ?                             no
+--      e91c8227...                            Mandaue tablet (with owner)   NO — pending power-on
+--
+--  HOW THE MAPPING GETS MEASURED (owner's plan, 2026-07-31):
+--    · Tomorrow morning's kiosk_health re-query names the YARD KIOSK: it is the Carmen row whose
+--      updated_at MOVES as workers punch in. The coordinator tablet's row will not track punches.
+--    · The Mandaue tablet is powered on deliberately to confirm e91c8227.
+--  Until both are confirmed, treat every device_id in this table as unlabelled.
 --
 --  THE SNAPSHOT IS ALREADY BUILT FOR THIS: it copies EVERY kiosk_health row, keyed on the table's own
 --  bigserial id, with device_id carried per row. There is no unique constraint on site and no
