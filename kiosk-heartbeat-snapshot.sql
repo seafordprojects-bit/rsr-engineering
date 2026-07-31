@@ -188,6 +188,19 @@ select jobname, schedule, active from cron.job order by jobname;
 -- EXPECT both jobs: kiosk-1705-heartbeat-snapshot '5 9 * * *' and kiosk-7pm-close-check '10 11 * * *'.
 
 
+-- ── INSTALLED 2026-07-31, MEASURED NOT ASSUMED ──────────────────────────────────────────────
+--    STEP 0c  trg_kiosk_health_touch PRESENT — so updated_at is server-stamped and every age
+--             recorded here is a real measurement rather than a frozen insert time.
+--    STEP 3   devices_captured = 3 on the manual test fire. All three kiosk_health rows were
+--             copied — BOTH Carmen device_ids and Mandaue — which proves in practice, not just by
+--             design, that nothing here collapses rows per site.
+--    STEP 4/5 scheduled. cron.job holds exactly two entries:
+--               kiosk-1705-heartbeat-snapshot  '5 9 * * *'   = 17:05 Manila
+--               kiosk-7pm-close-check          '10 11 * * *' = 19:10 Manila
+--    The table was proven to receive rows BEFORE the schedule was created, so the first scheduled
+--    fire is not also the first test.
+--
+
 -- ── FIRST LIVE FIRE: SATURDAY 2026-08-01, 17:05 — AND IT IS ITSELF AN INSTRUMENT ────────────
 --
 --  The first scheduled fire lands on a SATURDAY, and that is not merely incidental.
