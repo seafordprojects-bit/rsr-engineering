@@ -703,6 +703,21 @@ This is the concrete instance of the general finding above ("it consults NO exem
 more than the general form because it is dated, named, and would have been a message to a man whose
 absence is not measured in days at all.
 
+**AND THE ONLY THING THAT SAVED HIM WAS A BLANK FIELD.** Measured the same evening: the active roster
+holds **eight** workers with no phone number, and they are **all five pakyaw men**, plus `RSR 0000`,
+`Elias Entero` and `Chrismark Ybas`. `sendAbsenceSMS` returns on `!emp.phone` before composing
+anything, so **5 of 5 pakyaw men are currently unreachable by this path for one reason only: nobody
+has entered their number.**
+
+That is not an exemption. It is a data gap standing in for a rule, and it is one edit away from
+gone — from the ordinary Admin employee form, by someone doing the obviously correct thing.
+
+**The sequencing hazard is real and immediate.** There is a legitimate ops task waiting — Semaphore
+needs numbers for **Elias Entero and Chrismark Ybas**, both regular workers who should have them. The
+moment phone data is completed for completeness' sake, **the accidental protection over all five
+pakyaw men disappears with it**, silently, on a path that has no code filter. The backfill is right;
+doing it before the filter is not.
+
 **Mandaue returned zero rows in the same run**, confirming the second accidental protection recorded
 under Required #7: it holds no punch history, so every worker ran to the counter's 7-day cap and
 landed at day 8, outside the `1..3` bound. Structural silence, not a rule.
@@ -839,6 +854,20 @@ Two consequences worth stating:
     two segments on every send. The Bisaya set already satisfies this; pin it so the property
     survives the rebuild rather than depending on whoever writes the next wording.
 
+13. **THE CODE FILTER IS A PRECONDITION FOR THE SEND PATH GOING LIVE, AND PHONE-DATA
+    INCOMPLETENESS MUST NEVER BE THE PROTECTION.** Measured 2026-07-31: `PEM 0004` qualified for a
+    day-1 notice and was stopped only by `sendAbsenceSMS` returning on `!emp.phone`. The eight
+    phone-less actives are all five pakyaw men plus `RSR 0000`, `Elias Entero` and `Chrismark Ybas`
+    — so the pakyaw exemption survives in this path at **5 of 5, by blank field alone**.
+    Two consequences, both binding:
+    **(a)** the send path does not go live until it consults `awol_skip_list()` (Required #1) — a
+    missing phone number is not a policy and cannot be relied on as one; and
+    **(b) SEQUENCING.** Semaphore legitimately needs numbers for Elias Entero and Chrismark Ybas.
+    Completing phone data **before** the code filter ships removes the accidental protection from
+    all five pakyaw men at the same stroke, silently, from the ordinary Admin employee form. **Do
+    the filter first, or do the backfill only while the path is disabled.** Whoever collects those
+    two numbers must know this; it is not obvious from the form.
+
 ---
 
 ## 11. Order of work
@@ -862,7 +891,7 @@ Two consequences worth stating:
    JSON export, and would flush to the database the moment anyone connects `syncViolationToSupabase()`.
    §10a has the detail. **Edwin Lacno is at work holding a record that says he was AWOL** — check the
    Carmen tablet's own violation list, not just the database, before calling him clean.
-2. **The real fix**, per §10a's **twelve** Required items — it was four when first written; the
+2. **The real fix**, per §10a's **thirteen** Required items — it was four when first written; the
    measured evidence added five more, of which #7 (server-side dedup), #8 (one shared
    counter), #9 (returned vs deep-AWOL) and #10 (a message may assert only state the same
    transaction read) are new *design* obligations, not just corrections — #10 in particular is
