@@ -293,8 +293,10 @@ select code, skip, reason from public.awol_skip_list()
 select count(*) filter (where skip)     as skipped_must_be_13,
        count(*) filter (where not skip) as detectable
   from public.awol_skip_list();
--- EXPECT: 13 (the 10 real skips + the 3 held). Anything else means the code list does not match
--- A5 — 12 or 11 is the dangerous one: a PARTIAL hold lets exactly one real man through.
+-- EXPECT: 13 = 10 real skips + 3 held (as of 2026-07-31, after employee-separate-backdate.sql L2, 3-code hold).
+-- The 10 is 5 pakyaw + Jamaica + 4 Mandaue and is stable; the 3 is whatever A5 returned THIS run.
+-- Anything else means the code list does not match A5 — 12 or 11 is the dangerous one: a PARTIAL
+-- hold lets exactly one real man through.
 
 -- B2. TELEGRAM REDIRECT. The walkthrough's own AWOL alert for ZZ WALK5 must not land in the real
 --     group. Sent to the owner's DM instead, so the alert text and the printable-letter link are
@@ -379,11 +381,18 @@ select code, name, pin, employment_type, home_site,
 -- skip=true and is easy to miss by eye: the sweep hits `if(!_s)` at :2481, treats the worker as
 -- unknown to the server, fails open and reports him in the health banner — so no case opens and
 -- the walkthrough silently tests nothing.
-select count(*)                         as roster_must_be_45,
+select count(*)                         as roster_must_be_43,
        count(*) filter (where skip)     as skipped_must_be_13,
-       count(*) filter (where not skip) as detectable_must_be_32
+       count(*) filter (where not skip) as detectable_must_be_30
   from public.awol_skip_list();
--- EXPECT: 45 · 13 · 32   (43 active + the 2 ZZ identities; skipped unchanged by staging)
+-- EXPECT: 43 · 13 · 30   as of 2026-07-31, after employee-separate-backdate.sql L2, ASSUMING A 3-CODE HOLD.
+--   roster     43 = 41 active + 2 ZZ identities staged in B3.
+--   skipped    13 = 10 real (5 pakyaw + Jamaica + 4 Mandaue) + 3 held by B1.
+--   detectable 30 = 43 - 13.
+-- THE HELD COUNT IS NOT A CONSTANT. B1's list is rebuilt from a live A5 every run, so if A5
+-- returns N holdable codes the numbers are 43 · (10+N) · (33-N). Recompute, do not assume 3.
+-- NOTE the collision: 43 meant ACTIVE ROSTER before 2026-07-31 and means WALKTHROUGH TOTAL after.
+-- That is exactly why every count here now carries its derivation.
 
 
 -- B5. ONLY NOW BOOT THE KIOSK. Hard-reload it (localhost) so loadTgFromCloud() replaces the cached
@@ -456,7 +465,8 @@ update public.settings set value = '-5510566104' where key = 'tg_awol_group';
 -- C1-VERIFY. Do not proceed to C3 until both read correctly. Full probes are in D3.
 select count(*) filter (where skip) as skipped_must_be_10 from public.awol_skip_list();
 select key, value from public.settings where key = 'tg_awol_group';
--- EXPECT: 10, and -5510566104
+-- EXPECT: 10 = 5 pakyaw + Jamaica + 4 Mandaue (as of 2026-07-31, after employee-separate-backdate.sql L2), and -5510566104.
+-- 13 here means C1 never ran and three real men are still held.
 
 -- C2. LOCAL CLEAR — ALWAYS BEFORE C3. See the block below for the LOCALHOST version (targeted and
 --     verifiable). The original tablet wording follows it.
@@ -565,14 +575,14 @@ select code, skip, reason from public.awol_skip_list()
  where upper(regexp_replace(code,'[^A-Za-z0-9]','','g'))
        in ('RSR0005','RSR0014','RSR0015')
  order by code;
--- EXPECT: 4 rows, skip = false, reason NULL. Any true, or any reason text, means the hold is live.
+-- EXPECT: 3 rows, skip = false, reason NULL. Any true, or any reason text, means the hold is live.
 
 -- D3b. The skip list is back to its verified shape — the same assertion awol-defect-cdf.sql STEP 11
 --      makes, so this and that migration cannot disagree.
 select count(*) filter (where skip)     as skipped_must_be_10,
        count(*) filter (where not skip) as detectable
   from public.awol_skip_list();
--- EXPECT: 10. A 14 here means C1 never ran.
+-- EXPECT: 10 = 5 pakyaw + Jamaica + 4 Mandaue (as of 2026-07-31, after employee-separate-backdate.sql L2). A 13 means C1 never ran.
 
 -- D3c. TEXT probe on the function body — catches a partial or mistyped revert that D3a would pass.
 --      Also asserts the two functions the hold deliberately never touched are still intact.

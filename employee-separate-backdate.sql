@@ -6,7 +6,9 @@
 --  requirement 2026-07-30: separated_at must be the real last working day, not today.
 --
 --  Immediate use: RSR 0017 Gaviola Salvador and RSR 0020 John Michael Armenion, both verified as
---  not returning, both still carrying separated_at = null — spec rev2 §2.5 and §16.
+--  not returning, both then carrying separated_at = null — spec rev2 §2.5 and §16.
+--  EXECUTED 2026-07-31: RSR 0017 -> 2026-07-11, RSR 0020 -> 2026-06-27 (corrected from 06/28, a
+--  Sunday; see L2). Post-run measured: skip roster 41 · skipped 10 · detectable 31.
 --
 --  RUN ORDER: L0 (pre-check, read-only) -> L1 (this extension) -> L2 (the two calls) -> L3 (verify).
 --  L0 comes first because employee-lifecycle.sql is UNTRACKED and may never have been applied to
@@ -47,11 +49,12 @@ select e.id, e.code, e.name, e.home_site, e.employment_type,
 --   `last_punch`    — if NOT NULL, the date supplied in L2 must be on or after it. The L1 guard
 --                     refuses otherwise, which is the point: a typo must not backdate a separation
 --                     behind real attendance.
---   `skip`          — decides the post-hold count in walkthrough-defect-c.sql B1-VERIFY.
---                     RSR 0017 is known DETECTABLE (he appeared in A5, which filters `not skip`).
---                     skipped_after_hold = 14 - (1 if RSR 0020 skip is true, else 0).
---                     So 14, or 13. NOT 12 — separating a DETECTABLE worker does not reduce the
---                     skipped count, it reduces the detectable count.
+--   `skip`          — RESOLVED 2026-07-31 by A5: BOTH men are DETECTABLE. Neither is in the
+--                     skipped 10 (= 5 pakyaw + Jamaica + 4 Mandaue), because both appeared in A5,
+--                     which filters `not skip`. Separating a DETECTABLE worker reduces the
+--                     detectable count, NOT the skipped count. Expect `skip` = false on both rows
+--                     here; a true on either means the base has moved since 07-31 and the agreed
+--                     L3b numbers below are wrong.
 
 
 -- ── L1 — THE EXTENSION ──────────────────────────────────────────────────────────────────────
@@ -155,28 +158,36 @@ select public.employee_separate(gen_random_uuid(), 'probe',
 -- lockout of Admin on BOTH tablets). Run it once. Do not repeat it to "make sure".
 
 
--- ── L2 — THE TWO CALLS. Dates supplied by the owner 2026-07-30. ─────────────────────────────
---   RSR 0017  Gaviola Salvador      last working day 2026-07-11
---   RSR 0020  John Michael Armenion last working day 2026-06-28
+-- ── L2 — THE TWO CALLS. EXECUTED 2026-07-31. This section is now a RECORD, not a runbook:
+--    re-running it returns {"ok": false, "reason": "Already separated on ..."} by design.
 --
--- Substitute the id from L0b and the admin PIN. Nothing else needs editing.
+--   RSR 0017  Gaviola Salvador      last working day 2026-07-11  -> separated_at 2026-07-11 17:00+08
+--   RSR 0020  John Michael Armenion last working day 2026-06-27  -> separated_at 2026-06-27 17:00+08
+--
+-- RSR 0020's DATE WAS CORRECTED AFTER THE FIRST CALL. It was first written as 2026-06-28, which is
+-- a SUNDAY — end-of-June recollection rather than a worked day. Corrected once, transaction-wrapped,
+-- to Saturday 2026-06-27, the true last working day. His separated_reason carries the correction in
+-- the permanent record: "last working day corrected 06/28 -> 06/27 on 07/31/2026".
+-- THE DATE BELOW IS 06/27 SO THIS FILE MATCHES WHAT PRODUCTION HOLDS. The 06/28 in the original
+-- run is deliberately not hidden — a permanent column that was written twice should say so.
+--
 -- The reason is written permanently to separated_reason and must be >= 10 characters.
 -- RUN ONE, READ THE RESULT, THEN RUN THE OTHER. Each verifies the passcode, so a wrong PIN costs
 -- an attempt on the global throttle — do not fire both blind.
 
 select public.employee_separate(
-         '<RSR 0017 id from L0b>'::uuid,
+         'cb5cb99e-395a-4777-a148-3b9860f1b843'::uuid,   -- RSR 0017, id captured at L0b
          'Raffy',
          'Left the company, verified not returning (spec rev2 s2.5)',
          '<admin PIN>',
          date '2026-07-11') as rsr_0017;
 
 select public.employee_separate(
-         '<RSR 0020 id from L0b>'::uuid,
+         '8082b0f4-11d3-4159-ba8a-d2d25312f244'::uuid,   -- RSR 0020, id captured at L0b
          'Raffy',
          'Left the company, verified not returning (spec rev2 s2.5)',
          '<admin PIN>',
-         date '2026-06-28') as rsr_0020;
+         date '2026-06-27') as rsr_0020;
 
 -- EXPECT each: {"ok": true, "code": "RSR 00xx", "name": "...", "separated_at": "...T17:00:00+08:00"}
 -- An {"ok": false} is a guard working, not a failure to route around. Read the reason:
@@ -199,15 +210,20 @@ select count(*)                          as active_rows,
        count(*) filter (where skip)      as skipped,
        count(*) filter (where not skip)  as detectable
   from public.awol_skip_list();
--- EXPECT: active_rows 41 (was 43). skipped unchanged at 10 unless RSR 0020 was one of the
--- skipped 10 — L0b's `skip` column already told you which.
+-- EXPECT (agreed with the owner 2026-07-31, from the measured base 43 · 10 · 33):
+--   active_rows 41  = 43 active - 2 separated        (43 census-verified 2026-07-31: 38 RSR + 5 PEM)
+--   skipped     10  = 5 pakyaw + Jamaica + 4 Mandaue (UNCHANGED — both separated men were
+--                     DETECTABLE, confirmed by A5 on 2026-07-31, so neither was in the 10)
+--   detectable  31  = 41 - 10
+-- Employees table itself: total 43 (rows are never deleted), separated 0 -> 2.
 
 select count(*) as must_be_0 from public.awol_skip_list()
  where code in ('RSR 0017','RSR 0020');
 -- EXPECT: 0 — awol_skip_list filters separated_at is null.
 
--- L3c. THEN re-run A5 in walkthrough-defect-c.sql. It must return exactly FOUR rows:
---      RSR 0005, RSR 0014, RSR 0015, RSR 0035. If RSR 0017 or RSR 0020 still appears, L2 did not
+-- L3c. THEN re-run A5 in walkthrough-defect-c.sql. Do NOT expect a fixed list — it is
+--      date-dependent and was already stale within 24 hours once. Expect only that RSR 0017 and
+--      RSR 0020 are GONE from it. If either still appears, L2 did not
 --      take. If a NEW code appears, add it to the B1 hold AND the D3a probe before staging.
 
 -- L3d. Pay check. Both men have no attendance rows (L0b `attendance_rows`), so separation is

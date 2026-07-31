@@ -512,11 +512,18 @@ alter table public.kiosk_health
   add column if not exists detection_skipped boolean not null default false;
 
 -- ── STEP 11 VERIFY ──────────────────────────────────────────────────────────────────────────
-select count(*) as rows_must_be_43_ish,
+select count(*) as roster_must_be_41,
        count(*) filter (where skip)     as skipped_must_be_10,
        count(*) filter (where not skip) as detectable
   from public.awol_skip_list();
--- EXPECT: ~43 · 10 · ~33   (10 = five pakyaw + Jamaica + four Mandaue men)
+-- EXPECT: 41 · 10 · 31   as of 2026-07-31, after employee-separate-backdate.sql L2.
+--   roster     41 = 43 active - 2 separated (RSR 0017, RSR 0020). employees still holds 43 rows;
+--                   awol_skip_list filters separated_at is null, so only IT drops to 41.
+--   skipped    10 = 5 pakyaw + Jamaica + 4 Mandaue. UNCHANGED by the separations — both men were
+--                   DETECTABLE, so removing them reduced the detectable count, not this one.
+--   detectable 31 = 41 - 10.
+-- The earlier '~43 · 10 · ~33' was correct before 2026-07-31 and is kept here only as the reason
+-- these numbers now carry derivations: a bare total cannot say which roster it counted.
 
 select code, reason from public.awol_skip_list() where skip order by reason, code;
 -- EXPECT exactly 10 rows. Read the reasons — nobody should be skipped for a reason you did not
@@ -532,3 +539,53 @@ select column_name, data_type, column_default
   from information_schema.columns
  where table_schema='public' and table_name='kiosk_health' and column_name='detection_skipped';
 -- EXPECT: detection_skipped | boolean | false
+
+-- ── STEP 12 — close the audit-table write hole, and surface dropped cases ────────────────────
+-- FOUND 2026-07-30 by live probe: awol-reinstate-flow.sql:125 grants SELECT only on awol_events,
+-- yet an anon INSERT succeeded and anon PATCH/DELETE both returned 204. A Supabase default grant was
+-- never revoked, so the audit trail the twin-notice process rests on is client-writable AND
+-- client-erasable by anyone holding the published anon key: a letter_received could be forged, a
+-- `barred` row deleted, an actor rewritten. Defect B is a case with no event behind it; this is
+-- worse — an event can be manufactured or removed for a case that did happen.
+--
+-- Owner ran this immediately rather than spec'ing it: a real NTE is being served against RSR 0015
+-- this week and its audit trail must not be erasable while a scope boundary is debated.
+--
+-- NOTHING IS GRANTED BACK. Verified across both trees, multi-line aware: deployed main makes NO
+-- call to this table, and the branch's only reference (home.js:454) is a read. Every write is a
+-- `security definer` RPC — awol_set_suspended, awol_letter_received, awol_admin_decide,
+-- awol_manual_suspend, awol_cancel_leave_approved, awol_set_barred, set_non_punching,
+-- set_awol_clerk — which run as owner and are unaffected by anon's grants.
+revoke insert, update, delete on public.awol_events from anon, authenticated;
+
+-- Sequence access is moot once INSERT is gone, but revoke it so nothing can consume ids either.
+revoke usage, select on all sequences in schema public from anon, authenticated;
+grant  usage, select on all sequences in schema public to anon, authenticated;
+-- (re-granted immediately: other tables DO need client inserts — attendance_records, leave_requests,
+--  violations, sms_log. Blanket-revoking sequences would break punching. Listed here so the next
+--  reader knows it was considered and deliberately NOT narrowed; per-sequence work belongs with
+--  2026-07-30-anon-grant-surface-on-employees.md.)
+
+-- Owner requirement 2026-07-30: a dropped case is an EVENT that already happened, not a level that
+-- clears when someone fixes a row. It must not share a counter with unknown_type_count — if it did,
+-- the banner would clear on the wrong condition and the dropped case would stop being visible
+-- without anyone having read it.
+alter table public.kiosk_health
+  add column if not exists dropped_case_count integer not null default 0;
+
+-- ── STEP 12 VERIFY ──────────────────────────────────────────────────────────────────────────
+select privilege_type
+  from information_schema.table_privileges
+ where grantee='anon' and table_schema='public' and table_name='awol_events'
+ order by privilege_type;
+-- EXPECT: exactly one row — SELECT. Any INSERT/UPDATE/DELETE here means the revoke did not take.
+
+select column_name, data_type, column_default
+  from information_schema.columns
+ where table_schema='public' and table_name='kiosk_health'
+   and column_name in ('detection_skipped','dropped_case_count')
+ order by column_name;
+-- EXPECT: detection_skipped | boolean | false     dropped_case_count | integer | 0
+
+select count(*) as events_must_still_be_1 from public.awol_events;
+-- EXPECT: 1 — Jamaica's non_punching_set from STEP 8. The revoke must not have removed anything.
