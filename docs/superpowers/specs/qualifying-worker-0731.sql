@@ -114,8 +114,10 @@ select c.site, e.code, e.name,
 --                  a phone. Zero rows was guaranteed with or without the disable.
 --    · violations — the write is a SIBLING statement below the return; (main :4532), gated on
 --                  `consecutive === 3` EXACTLY. Both men are at day 1. It could not have fired.
---  So the quiet evening proves the device was awake, which Carmen being three-for-three at 17:00
---  this week already established. It does NOT yet prove the return; took a hit.
+--  STRUCK 2026-07-31 (owner): an earlier draft here said the quiet evening "proves the device was
+--  awake". IT DOES NOT. With BOTH channels blind, nothing on 07/31 measured the device at all. The
+--  three-for-three at 17:00 on 07/28-07/30 remains valid evidence FOR THOSE DAYS — a message fired,
+--  so the tick ran — but it says nothing about 07/31. Device-wakefulness on 07/31 is UNMEASURED.
 --
 --  WHAT A CLEAN KILL NEEDS
 --    · for sms_log:    a qualifier at day 1..3 WITH a phone.
@@ -131,6 +133,46 @@ select c.site, e.code, e.name,
 --  ALSO MEASURED, and now spec rev2 §10a: PEM 0004 is PAKYAW and qualified anyway. The SMS path
 --  has no code filter and never consults awol_skip_list(), so the pakyaw exemption never reaches
 --  it. Measured on 2026-07-31, not inferred from reading.
+--
+
+-- ── WEEKEND PROTOCOL — the 2026-08-02 tripwire (owner, 2026-07-31) ──────────────────────────
+--
+--  ARMING CONDITION: neither PEM 0004 nor RSR 0001 punches on Saturday 2026-08-01.
+--  If so, both reach DAY 3 on Sunday 2026-08-02 (counter 2 from Sat 08/01 + Fri 07/31, plus one
+--  for today), which is the violations channel — PHONE-INDEPENDENT, so the blank-phone blindness
+--  that made 07/31 undecidable does not apply. That is why Sunday is the strong test.
+--  If either man punches Saturday his chain breaks and he is back to day 1 on Sunday: no violation,
+--  no evidence, tripwire disarmed for him.
+--
+--  MONDAY READS, in order:
+--    1. Saturday 08/01 attendance for both men   -> did the tripwire arm at all?
+--    2. violations rows dated 08/02              -> ANY row = a stale build is still running the
+--                                                   path somewhere. That is the catch.
+--    3. kiosk_sweep_log row for sweep_date 08/02 -> unverified flag + note.
+--
+--  DECISION TABLE
+--    armed + ZERO 08/02 violations + tablet demonstrably awake at 17:00 -> DISABLE MEASURED, strong
+--                                                                          channel. This is the win.
+--    armed + ANY 08/02 violations row                                   -> stale build caught; find
+--                                                                          the device and re-stamp it.
+--    not armed (either man punched Saturday)                            -> nothing proved; re-arm.
+--    armed + zero violations + wakefulness UNKNOWN                      -> STILL UNDECIDED. Do not
+--                                                                          record it as a pass.
+--
+--  THE WAKEFULNESS LEG IS THE WEAK ONE, AND kiosk_health CANNOT CARRY IT.
+--  sendHeartbeat (kiosk :6100) upserts onConflict device_id every 5 minutes (:6120) — ONE ROW PER
+--  DEVICE, OVERWRITTEN IN PLACE. No history table exists in any SQL file in this repo. Reading
+--  kiosk_health on Monday describes MONDAY; Sunday 17:00 is long overwritten. It is an excellent
+--  real-time instrument (5-min resolution, IS_LOCALHOST-guarded so only real tablets appear, carries
+--  site and today_key) and worthless retrospectively.
+--  kiosk_sweep_log IS retrospective but pins 19:10, not 17:00: a tablet asleep 16:00-19:00 that woke
+--  at 19:05 records as healthy. Treat unverified=false as a FLOOR ("alive by ~17:40"), never as proof
+--  of 17:00. unverified=true with a pre-17:00 last-heartbeat note DOES settle it the other way.
+--
+--  TO MAKE WAKEFULNESS A MEASUREMENT RATHER THAN AN INFERENCE, PERMANENTLY: a pg_cron job at 17:05
+--  Manila snapshotting device_id, site, today_key, updated_at from kiosk_health into a small
+--  append-only table. Monitoring only, writes no attendance. NOT BUILT — proposed 2026-07-31.
+--  Until it exists, the only way to witness 17:00 is to query kiosk_health at 17:00.
 --
 
 -- ── HOW TO READ IT ──────────────────────────────────────────────────────────────────────────
