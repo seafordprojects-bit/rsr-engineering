@@ -156,27 +156,37 @@ select c.site, e.code, e.name,
 --    armed + ANY 08/02 violations row                                   -> stale build caught; find
 --                                                                          the device and re-stamp it.
 --    not armed (either man punched Saturday)                            -> nothing proved; re-arm.
---    armed + zero violations + YARD KIOSK awake near 17:00 Sunday       -> DISABLE MEASURED.
---    armed + zero violations + yard kiosk wakefulness UNKNOWN           -> STILL UNDECIDED. Do not
+--    armed + zero violations + BOTH Carmen devices awake near 17:00     -> DISABLE MEASURED across
+--                                                                          the pair.
+--    armed + zero violations + only ONE Carmen device awake             -> measured for that device
+--                                                                          ONLY. If the sleeping one
+--                                                                          turns out to hold the
+--                                                                          history, nothing is proved.
+--    armed + zero violations + Carmen wakefulness UNKNOWN               -> STILL UNDECIDED. Do not
 --                                                                          record it as a pass. A
---                                                                          heartbeat from a device
---                                                                          that is NOT the yard
---                                                                          kiosk does not count.
+--                                                                          heartbeat from the Mandaue
+--                                                                          tablet does not count.
 --
---  THE WAKEFULNESS QUESTION IS NARROWER THAN "WAS A DEVICE AWAKE" (owner fleet facts, 2026-07-31).
---  THE ONLY DEVICE WHOSE WAKEFULNESS MATTERS IS THE CARMEN YARD KIOSK.
+--  WHOSE WAKEFULNESS MATTERS (owner fleet facts 2026-07-31, CORRECTED 2026-08-01).
 --  The day-3 violation write requires the device to COMPUTE consecutive = 3, and that computation
---  reads the device's own localStorage `records` map. Only the yard kiosk holds PEM 0004's and
---  RSR 0001's punch history. Every other device in the fleet computes them at the counter's 7-day
---  cap — day 8, outside the 1..3 bound — and therefore CANNOT fire the write no matter how awake
---  it is:
---    · the Mandaue tablet (with the owner, yard never commissioned) — no punch history at all;
---    · the coordinator tablet — does not take punches;
---    · the owner's PC — localhost, heartbeat-suppressed, and no punch history either.
---  So Monday's wakefulness read is: WAS THE YARD KIOSK'S device_id ALIVE NEAR 17:00 ON SUNDAY?
---  A small heartbeat_age on some OTHER device_id answers nothing. Until the uuid mapping is
---  measured (see kiosk-heartbeat-snapshot.sql), "a device was awake" is not the same claim and must
---  not be recorded as one.
+--  reads the device's OWN localStorage `records`. So only a device holding PEM 0004's and
+--  RSR 0001's punch history can fire it. Ruled OUT on that basis:
+--    · the Mandaue tablet (with the owner; that yard was NEVER commissioned) — no punch history;
+--    · the owner's PC — localhost, heartbeat-suppressed, no punch history.
+--
+--  BOTH CARMEN DEVICES ARE IN. An earlier draft here ruled the coordinator tablet out because it
+--  "does not take punches" — THAT WAS AN ASSUMPTION AND IS WITHDRAWN. It sits AT CARMEN on the
+--  KIOSK PAGE, so it may hold punch history of its own, and its build was never in the 2026-07-15
+--  remediation scope, so the absence-SMS path may still be LIVE on it.
+--
+--  => SUNDAY'S SNAPSHOT NEEDS BOTH CARMEN ROWS READ, NOT ONE. Until the uuid mapping lands, either
+--  Carmen device_id could be the day-3 writer, and a small heartbeat_age on one says nothing about
+--  the other. "A device was awake" is still not the claim that matters; "BOTH Carmen devices were
+--  awake, or the one that holds the history was" is.
+--
+--  And note the sharper hazard the two-device fact creates: two devices at ONE yard with DIFFERENT
+--  local histories compute DIFFERENT day numbers for the same man. One could fire a day-3 write for
+--  a worker the other correctly reads as day 1.
 --
 --  THE WAKEFULNESS LEG IS THE WEAK ONE, AND kiosk_health CANNOT CARRY IT.
 --  sendHeartbeat (kiosk :6100) upserts onConflict device_id every 5 minutes (:6120) — ONE ROW PER

@@ -69,9 +69,28 @@
 --      punch history means every worker runs to the counter's 7-day cap, outside the 1..3 bound.
 --    · THE OWNER'S PC RUNS LOCALHOST ONLY, so IS_LOCALHOST suppresses it. NEITHER Carmen row is the
 --      PC. The hostname-guard hazard above remains true in general and simply does not apply here.
---    · THREE PHYSICAL TABLETS EXIST: the Carmen yard kiosk, the Mandaue tablet with the owner, and
---      the coordinator tablet. Three tablets, three heartbeat rows.
---      WORKING HYPOTHESIS, NOT YET MEASURED: the second Carmen device_id is the COORDINATOR tablet.
+--    · THREE PHYSICAL TABLETS EXIST: the Carmen WALL KIOSK, the COORDINATOR TABLET — ALSO AT
+--      CARMEN AND ALSO ON THE KIOSK PAGE — and the Mandaue tablet with the owner.
+--      So the two Carmen device_ids are almost certainly TWO REAL DEVICES AT ONE YARD. There is no
+--      phantom identity and no stale post-clear row to explain away.
+--      CORRECTED 2026-08-01: an earlier draft here asserted the coordinator tablet "does not take
+--      punches". THAT WAS AN ASSUMPTION, NOT A FACT, and it is withdrawn. A second device at the
+--      same yard on the same page may hold punch history of its own.
+--
+--    · CONSEQUENCE — TWO DEVICES AT ONE YARD CAN DISAGREE ABOUT WHAT DAY A MAN IS ON. The counter
+--      reads each device's OWN localStorage `records`, and the kiosk never pulls attendance down.
+--      A device holding only SOME of a man's punches computes a DIFFERENT consecutive count from
+--      the device holding all of them — so one Carmen device could fire a day-3 write for a man the
+--      other correctly reads as day 1, or miss one the other would catch. This is the per-device
+--      localStorage defect biting twice at a single yard, and it is further argument for spec rev2
+--      §10a Required #7 (server-side dedup) and #8 (one shared counter).
+--
+--    · OUTRANKS THE MAPPING — THE COORDINATOR TABLET WAS NEVER IN THE 2026-07-15 REMEDIATION SCOPE.
+--      Its build is therefore UNVERIFIED. If it carries a pre-v2026-07-30a stamp, the absence-SMS
+--      path is STILL LIVE ON IT, at Carmen, on the kiosk page, possibly with punch history — which
+--      is precisely the "stale device" the 08/02 tripwire hunts. The report that "the disable held
+--      on both tablets" covered TWO devices; if this is a third, the disable's coverage there has
+--      never been checked. Read the version stamp on BOTH Carmen devices before anything else.
 --
 --  UUID MAPPING — fill in once measured, do not guess:
 --      device_id                              role                          confirmed
@@ -80,11 +99,20 @@
 --      <carmen id B>                          ?                             no
 --      e91c8227...                            Mandaue tablet (with owner)   NO — pending power-on
 --
---  HOW THE MAPPING GETS MEASURED (owner's plan, 2026-07-31):
---    · Tomorrow morning's kiosk_health re-query names the YARD KIOSK: it is the Carmen row whose
---      updated_at MOVES as workers punch in. The coordinator tablet's row will not track punches.
+--  HOW THE MAPPING GETS MEASURED (owner's plan, revised 2026-08-01):
+--    · PHYSICAL ERRAND at Carmen — both devices are there and neither can be power-cycled remotely.
+--      On EACH device, in the browser console (read-only, one line):
+--
+--        (r=>({id:localStorage.getItem('rsr_device_id'),stamp:document.querySelector('#version-stamp')?.textContent,records:r.length,pem0004:r.filter(k=>k.startsWith('PEM 0004')).length,rsr0001:r.filter(k=>k.startsWith('RSR 0001')).length}))(Object.keys(JSON.parse(localStorage.getItem('rsr_records')||'{}')))
+--
+--      `id` names the device; `stamp` settles the remediation question; `records`/`pem0004`/`rsr0001`
+--      settle whether that device can fire the day-3 write AT ALL — no punches for those two means
+--      it computes them at the 7-day cap and cannot fire, whatever its build.
+--    · kiosk/reset.html does NOT show the id — and, checked 2026-08-01, it clears only service
+--      workers and caches, NOT localStorage, so it does not regenerate rsr_device_id either. Safe
+--      to run, useless for reading.
 --    · The Mandaue tablet is powered on deliberately to confirm e91c8227.
---  Until both are confirmed, treat every device_id in this table as unlabelled.
+--  Until measured, treat every device_id in this table as unlabelled.
 --
 --  THE SNAPSHOT IS ALREADY BUILT FOR THIS: it copies EVERY kiosk_health row, keyed on the table's own
 --  bigserial id, with device_id carried per row. There is no unique constraint on site and no
