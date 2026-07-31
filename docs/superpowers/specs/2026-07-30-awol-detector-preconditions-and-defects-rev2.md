@@ -1,4 +1,4 @@
-# Spec — AWOL detector: merge preconditions and eight defects
+# Spec — AWOL detector: merge preconditions and nine defects
 
 **Target path in repo:** `docs/superpowers/specs/2026-07-30-awol-detector-preconditions-and-defects.md`
 **Revision:** 2 (2026-07-30, evening). Revision 1 of this filename is superseded — its §3.1 claim that
@@ -44,6 +44,26 @@ Manos's four unrecorded days (§3.1).
 `barred_at` is now a separate column that **only a PIN-gated human action can set**, enforced by a
 trigger with a transaction-local flag rather than by grants — because a `security definer` RPC runs
 as owner and bypasses grants entirely. `active` keeps its meaning: case open, gating nothing.
+
+### Deployed `main` cannot suspend — but it is not inert on absences (Defect I)
+
+Established from `main`'s own code 2026-07-30: it holds **no** `employee_suspensions` write, **no**
+`awol_*` RPC call, and `checkAllAbsences()` is a no-op that only clears localStorage. So a
+database-layer hold or migration cannot conflict with the live tablets.
+
+**It did still run `checkAndSendAbsenceSMS()` on a daily timer, on the Sunday-unaware counter,
+consulting none of the exemptions this branch built** — and its `sms_log` and `violations` writes
+never needed the Semaphore key (the key only ever governed whether a phone rang; `public.violations`
+is empty for an unrelated reason — an unwired sync function, §10a). Confirmed live: a month of daily
+records, absence notices dated on
+the Sundays 07/19 and 07/26, and four "your account has been flagged" warnings on 07/28 including a
+man who is at work today. See **§10a**.
+
+**DISABLED 2026-07-30 in commit `6f6338f`, kiosk `v2026-07-30a`** — a `return;` at the top of the
+function, deployed to `main` and stamped. That stops new false records. It does **not** address the
+existing ones, and it is **not** the fix: §10a's four Required items still stand before the path is
+ever re-enabled, and the Semaphore key must not be entered until they are done. Separate gate from
+this branch's C+E+G merge gate.
 
 ### Do not start A or B first
 
@@ -402,6 +422,228 @@ case without writing its event.
 
 ---
 
+## 10a. Defect I — the end-of-day absence SMS path is LIVE on `main`, on the broken counter
+
+**Found 2026-07-30 while answering a different question:** whether deployed `main` could interfere
+with a database-layer hold applied during the Defect C walkthrough. It cannot write
+`employee_suspensions` and cannot post an AWOL Telegram message — but it is **not** inert on
+absences, and the 2026-07-26 hotfix did not make it so.
+
+### What the hotfix actually disabled, and what it left running
+
+The hotfix neutralised `checkAllAbsences()` — on `main` its whole body clears
+`suspendedEmployees` from localStorage (`kiosk/index.html:2242`), and
+`sendAbsenceSuspensionAlert` has **zero callers**. That half is genuinely off.
+
+**`checkAndSendAbsenceSMS()` was left live, driven by the same counter the hotfix condemned.**
+
+| | |
+|---|---|
+| **Trigger** | `setInterval` every 30s (`:1735`). At `endH:endM` it fires `sendSummary(); autoExportCSV(); checkAndSendAbsenceSMS(); …`. **A daily timer. Automatic, no human in the loop — confirmed from the live `sms_log`, which holds over a month of daily records.** `endH,endM` defaults to `17,0` (`:1093`) and is loaded from **each tablet's own `rsr_settings` localStorage** (`:4376`), set from the Settings field (`:3525`) — so it is per-device, not a shared setting, and two tablets can fire at different times. |
+| **Rest day** | **No guard on the run day at all.** The job runs on Sundays and, since nobody punches, treats the rest day itself as absence day 1. This is a SECOND Sunday bug, distinct from the counter. |
+| **Scope** | Every employee (`:4493`). Skips only an **Approved** leave (`onLeaveToday`) and anyone with a `timein` today. |
+| **Counter** | `getConsecutiveAbsences()` (`:2222`) — the **Sunday-unaware** one. The comment at `:2233` documents this exact flaw *for the suspension path* and leaves it driving SMS. On a Monday a man who missed only Friday and Saturday reaches 3. |
+| **Messages** | Texts the worker at 1, 2 and 3 consecutive days. At 3: *"AWOL Warning: … you have been absent for 3 or more consecutive days without approved leave … Your account has been flagged."* (`:4480`) |
+| **Violation** | At exactly 3 it writes a violation record (`:4505-4510`) — **unconditionally, and independent of the Semaphore key**: the `if(consecutive===3)` block is a sibling statement, not nested in the SMS branch and not conditioned on `result.success`. It lands in **localStorage only** (`rsr_violations` via `saveData()`), because `syncViolationToSupabase()` (`:5278`) **has zero callers**. See the correction below — the empty `violations` table is an accident, not a guard. |
+| **Only brake** | `sendSMS`'s `if(!semaphoreKey||!phone)` guard. `semaphoreKey` is loaded from saved settings (`:4389`) or **typed into kiosk Admin → Settings** (`:4453`). |
+
+### Why this is a defect and not a configuration state
+
+**The brake is not a design decision, it is an empty field.** The key goes live the moment it is
+entered in the Admin panel — no deploy, no review, no code change. The owner has the SMS fix on his
+list, so both protections (missing key, and any phone left blank) are temporary by intention.
+
+**It consults none of the exemption authority this branch built.** No `awol_skip_list()`, no
+`awol_skip_detection()`, no pending-leave check, no `is_non_punching`, no pakyaw check, no site
+capture.
+
+**Who is actually exposed — the `1..3` bound matters.** `if(consecutive>=1&&consecutive<=3)` means
+only a worker at **exactly 1, 2 or 3** absent days is texted, so the population is not the chronic
+non-punchers. On the Sunday-unaware counter as of 2026-07-30, **RSR 0015 sits at 5** (07/29, 07/28,
+07/27 plus 07/26 counted as absent, +1 for today) and **RSR 0014 is weeks out** — both fall *outside*
+the window and would not be texted. **RSR 0035 is excluded today** by his 14:19 punch (`hasTimein`).
+The four Mandaue men, the five pakyaw men and Jamaica sit far past 3 for the same reason. **This is
+luck, not design** — none of it is a rule the code applies.
+
+The genuinely exposed population is anyone passing *through* days 1–3, which rotates daily:
+
+- a worker taking a short absence with the owner's spoken permission — **exactly RSR 0014's and
+  RSR 0035's situation, caught in its first three days instead of its third week**;
+- a worker whose leave is filed and undecided — **RSR 0005**, once his run is 1–3;
+- **the Monday case**: missed Friday and Saturday only, counted as 3 by the Sunday-unaware counter,
+  texted *"your account has been flagged"* on the first morning back;
+- any Mandaue or pakyaw man in the three days following a single punch, and **Jamaica** likewise —
+  she is the sole authorized AWOL clerk.
+
+**And the violation half is live today.** It needs no key. Any evening a worker hits exactly 3 on the
+Sunday-unaware counter, a violation is recorded and can reach `public.violations`.
+
+### CONFIRMED FROM THE LIVE `sms_log` — this is not a hypothetical
+
+Read by the owner from production `sms_log`, 2026-07-30. **Over a month of daily records, every one
+`Failed`** — the Semaphore key was absent throughout, so no worker's phone ever rang. Every row below
+nonetheless exists in production as a dated record with its full message text.
+
+| Date | What the records show | Why it is wrong |
+|---|---|---|
+| **2026-07-19** | absence notices dated on a **Sunday** | the rest day itself counted as absence day 1 |
+| **2026-07-23** | a notice to **Jamaica L. Batucan (RSR 0025)** | she is office-based and **does not punch** — Defect F's whole subject, and the sole authorized AWOL clerk |
+| **2026-07-26** | absence notices dated on a **Sunday**, to **seven men** | same rest-day bug, seven false records in one run |
+| **2026-07-28** | **four day-3 "your account has been flagged" warnings**, including **Alvin H. Operio (RSR 0005)** and **Edwin Lacno** | Alvin's leave was **filed and awaiting decision** (Defect E). Edwin **is working today** — his "3 consecutive absences" was false when written |
+
+**The Sunday defect is proven twice over**, by two independent mechanisms in the same path: the
+Sunday-unaware counter (`getConsecutiveAbsences`), and the absence of any rest-day guard on the run
+day. 07/19 and 07/26 are Sundays; the notices are dated *on* them.
+
+**Edwin Lacno is the sharpest case.** A man at work today holds a production record stating he was
+absent three consecutive days without approved leave. Had the Semaphore key been present on 07/28 he
+would have been told by text that his account was flagged. Confirm his employee code and check
+whether a `violations` row accompanies the notice.
+
+**Trigger time — one open question.** The owner read these as a 09:00 daily timer. `sms_log.timestamp`
+is `Date.now()` epoch milliseconds and **09:00 UTC is exactly 17:00 Manila**, the `endH,endM` default,
+so this is most likely the editor rendering UTC. Resolve before relying on it: if the timestamps
+really are 09:00 **Manila**, that tablet's `endH` is 9 rather than 17, and the same variable also
+drives `shiftEndW` (`:1018`), the late-Time-In `lateFlow` (`:2430`) and `:2666` — a misconfiguration
+with a far wider blast radius than this defect. Query in the session notes; not yet run.
+
+### `public.violations` is EMPTY — and why that is not the reassurance it looks like
+
+Queried by the owner 2026-07-30: **zero rows.** Two candidate explanations were tested against the
+code, and both were wrong.
+
+**Not "the write is downstream of a successful send."** It is not. `:4505-4510` is a sibling
+`if(consecutive===3)` statement — not nested in the `if(consecutive>=1&&consecutive<=3)` SMS branch,
+and never reads `result.success`. The four men who took a day-3 warning on 07/28 each incremented a
+violation. The Semaphore key has **no bearing** on it.
+
+**The actual reason: `syncViolationToSupabase()` (`:5278`) has exactly one occurrence in the file —
+its own definition. Zero callers. It is dead code.** Every sibling sync function (`syncEmployeeTo…`,
+`syncSmsLogTo…`, the leave sync) *is* called. This one was never wired up, which is why `sms_log`
+filled for a month while `violations` stayed empty.
+
+**So the records exist — they are just not in the database.** Three consequences:
+
+1. **They are on the tablets.** `absenceViolations` persists to `rsr_violations` in localStorage and
+   is rendered by `renderViolationList()` in the kiosk Admin panel (SMS-log tab, `:4770`). **"Edwin
+   is clean" is true of the database and probably false of the Carmen tablet's own violation list.**
+   Check that screen before concluding no record of him exists.
+2. **They have left the tablet by another route.** The monthly-records JSON export carries
+   `absenceViolations` verbatim plus a `totalViolations` sum (`:1843`, `:1851`), filename
+   `<company>_monthly_records_<date>.json`. Any export already produced contains them.
+3. **The protection is one line from being undone.** An uncalled sync function reads as an
+   oversight, not a decision. The moment anyone wires `syncViolationToSupabase()` up — a plausible
+   "finish the sync" tidy-up — **the entire localStorage backlog flushes into `public.violations` at
+   once**, including every false entry from the Sunday runs. The empty table is luck.
+
+**Corrected conclusion.** The missing Semaphore key was protecting exactly **one** thing: whether a
+worker's phone rang. It never protected the records. What kept the disciplinary rows out of the
+database was an unwired function, and that is a weaker guarantee than a missing credential — a key
+has to be typed deliberately, whereas dead code invites being connected.
+
+### The branch forked one commit BEFORE the disable — the merge resolution is load-bearing
+
+Established 2026-07-31 from the git history, not inferred.
+
+| | |
+|---|---|
+| Disable committed | `6f6338f`, author `2026-07-30T20:34:35+08:00`, committed `20:35:20+08:00`, pushed immediately after |
+| Last SMS fired | 17:00 Manila on 07/30 — **~3.5 hours BEFORE the disable existed** |
+| Branch contains it? | **No.** `git merge-base --is-ancestor 6f6338f awol-suspension-flow` → false. Fork point is `1cd49e5`, the commit immediately before |
+
+So the 07/30 fire neither defeated nor tested the disable; it is the last legitimate one. **The first real test is 17:00 Manila on 07/31.**
+
+**And `awol-suspension-flow`'s SMS timer was live.** `:1770` still called `checkAndSendAbsenceSMS()` and the function had no early return — so any localhost session open across 17:00 could write `sms_log` rows. That directly contradicts the walkthrough method, which spans 17:00 by design (the GI-SUSPEND test needs the afternoon Time In window). Merged 2026-07-31 for exactly that reason.
+
+**MERGE RESOLUTION RULE — the branch and `main` both modified the same opening lines of
+`checkAndSendAbsenceSMS`, so every future merge of this function conflicts.** `main` added
+`return;` at the top; the branch rewrote the opening to add a Sunday run-day guard.
+
+> **Keep `main`'s `return;` on top. Put the branch's Sunday guard underneath it.**
+> Resolving in favour of the branch alone silently re-enables Defect I — deployed, with no visible
+> symptom until the next 17:00.
+
+### Two Sunday bugs, one of them already fixed on the branch
+
+The branch carries a **run-day** guard `main` never received:
+
+```js
+const todaySunday=isSundayKey(todayKey());
+…
+if(todaySunday)continue; // no-punch Sunday = rest day, not absent — don't SMS/log
+```
+
+That closes the bug behind the 07/19 and 07/26 spikes — **the two largest days in `sms_log`, 10 and 17 messages**, sampled rows all day-1 notices to men who had punched the Saturday. On the branch those Sundays send nothing.
+
+**The second Sunday bug is untouched.** The counter is still `getConsecutiveAbsences(emp.code)+1`, which is Sunday-unaware, so a rest day still inflates the *count* even when it no longer triggers a *run*. Confirmed live: **Alvin (RSR 0005) took a day-2 notice on Monday 07/27**, which is only possible if Sunday 07/26 was counted as day 1. Suppressing the Sunday run does not fix the Sunday count.
+
+Branch status against the Required list: **#3 half done** (run day yes, counter no); **#1, #2, #4 untouched**.
+
+### No dedup exists — and 07/30's single row does not prove one
+
+`syncSmsLogToSupabase` is a bare `.insert()` with no `onConflict`, and `sms_log` carries no unique
+index or constraint anywhere in the repo SQL. Nothing prevents two devices writing the same
+`(employee_code, date, day)`.
+
+07/30 had **two candidate writers at 17:00** — the Carmen tablet on pre-disable `main`, and the
+localhost branch kiosk — yet produced **one row**. The reason is not dedup:
+
+**The localhost build cannot qualify anyone.** Its `records` map is empty, because the kiosk has
+**zero `.select()` calls on `attendance_records`** and never pulls history down. So
+`collectAbsentDates` finds no punch on any day, runs to its `out.length>=10` cap, and
+`getConsecutiveAbsences()+1` returns **11** — outside the `consecutive>=1 && consecutive<=3`
+window. No SMS, no violation. The same empty-records fact that made the ZZ WALK sweep silent during
+the Defect C walkthrough also made the localhost kiosk incapable of sending day-1..3 notices.
+
+**One row, one writer — the Carmen tablet.** Nothing was preventing a double-send; the second device
+simply never reached the threshold. **The rebuild must ADD a dedup that has never existed**, because
+once two commissioned tablets both hold real local history they will both qualify the same man on the
+same evening and send twice.
+
+### Required, in addition to the four below
+
+5. **Clear `rsr_violations` on the tablets**, mirroring what commit `c6696df` did for
+   `suspendedEmployees` — a boot-time clear in the next kiosk build is the safe route. Do **not**
+   clear site data to achieve it: that also destroys the punch sync queue (§14, and the
+   local-clear-before-DB-delete rule).
+6. **Leave `syncViolationToSupabase()` unwired, or delete it.** If it is ever connected, it must be
+   connected *after* items 1–4, never before — otherwise the fix ships the backlog.
+7. **Add per-worker-per-day dedup, which has never existed.** `sms_log` has no unique constraint and
+   the sync is a bare `insert`. Today only one tablet holds real attendance history, which is the
+   sole reason 07/30 produced one row rather than two. The moment Mandaue is commissioned, or any
+   second device accumulates history, the same man is texted twice on the same evening. A unique
+   index on `(employee_code, date, day)` plus an `onConflict` on the insert is the minimum; the
+   send itself should also check before dispatching, so the constraint is a backstop rather than
+   the mechanism.
+
+### Required
+
+1. `checkAndSendAbsenceSMS` consults **`awol_skip_list()`** — the same single authority as the sweep,
+   fetched once, with the same fail-open-on-error-or-empty rule (§6). A worker absent from the list is
+   skipped and reported, never texted.
+2. It honours **E** (a filed-but-unapproved leave suppresses it) and **G** (a recorded verbal
+   authorisation suppresses it). A "your account has been flagged" SMS is a disciplinary
+   communication to the worker — it must not precede a decision the owner has not yet made.
+3. It uses the **Sunday-aware** counter (`collectAbsentDates`), not `getConsecutiveAbsences`.
+4. The violation write moves behind the same gate, and is **not** conditional on the SMS succeeding —
+   today it fires whether or not a message is sent, which is how it became live unnoticed.
+
+### Gate implication — read this precisely
+
+**Defect I does not join the C+E+G merge gate for `awol-suspension-flow`.** That gate is about what
+this branch ships. Defect I gates a different door: **the Semaphore key must not be entered on any
+tablet until 1–4 above are done.** Adding it to the merge gate would delay a branch that reduces
+blast radius, in the name of a path that branch does not touch.
+
+Two consequences worth stating:
+
+- **If the SMS fix lands before this branch merges, the order reverses** — the SMS path would then
+  need E and G, which are merge-gate items here, so whichever ships second inherits the dependency.
+  Do not fix SMS and this branch in parallel without deciding which is first.
+- **The violation write is live now and gated by nothing.** That part does not wait for either.
+
+---
+
 ## 11. Order of work
 
 1. **§3.2 — how Allan was blocked on deployed `main`.** Diagnosis only, no code. Nothing else
@@ -412,12 +654,29 @@ case without writing its event.
 4. **Defect B** — audit integrity, before any real case is opened against a real worker.
 5. **Defect A** — new-hire trap, no live instance.
 
+**Off this ladder, on its own clock: Defect I (§10a).** Not gated by the above and does not gate it.
+
+**Bleeding stopped 2026-07-30** — commit `6f6338f`, kiosk `v2026-07-30a`, the path disabled with a
+`return;`. What remains is in three parts, and only the first is urgent:
+
+1. **Review the records already written.** A month of `sms_log` rows in the database, including four
+   false day-3 warnings. `public.violations` is **empty** — but only because its sync function was
+   never wired up; the violation records themselves exist in tablet localStorage and in any monthly
+   JSON export, and would flush to the database the moment anyone connects `syncViolationToSupabase()`.
+   §10a has the detail. **Edwin Lacno is at work holding a record that says he was AWOL** — check the
+   Carmen tablet's own violation list, not just the database, before calling him clean.
+2. **The real fix**, per §10a's four Required items. Needs E and G, which are C's merge-gate siblings,
+   so "do Defect I first" resolves to "do E and G first" — it reorders nothing.
+3. **The Semaphore key stays out of every tablet** until 2 is done.
+
 ---
 
 ## 12. Out of scope
 
 - The 3-consecutive-absence threshold and Sunday exclusion. Both verified correct (the evidence
-  correctly omitted 07/26 and 07/19).
+  correctly omitted 07/26 and 07/19). **Scope note added 2026-07-30:** that verdict covers the
+  branch's `collectAbsentDates`. It does **not** cover `getConsecutiveAbsences`, which is
+  Sunday-unaware, still live on `main`, and still driving the SMS path — §10a.
 - PEM/pakyaw exemption via `employment_type` / `type_effective_from`. Working, leave alone.
 - The reinstate dashboard as a feature. Note that a minimal reinstate path is **in** scope per
   §3.4 — the dashboard build is not.

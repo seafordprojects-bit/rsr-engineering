@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-30b</span>
+        <span id="version-stamp">v2026-07-31a</span>
       </div>
     </div>
   </div>
@@ -4875,6 +4875,34 @@ async function sendAbsenceSMS(emp,consecutiveDays){
 }
 
 async function checkAndSendAbsenceSMS(){
+  // (2026-07-30 — owner-approved) DISABLED. Ported from main 6f6338f onto this branch 2026-07-31.
+  //
+  // THIS IS THE MERGE-RESOLUTION SHAPE. main and this branch both edited the opening lines of this
+  // function: main added the `return;`, the branch added the Sunday run-day guard below it. Spec
+  // rev2 §10a states the rule — MAIN'S `return;` STAYS ON TOP, THE BRANCH'S SUNDAY GUARD GOES
+  // UNDERNEATH IT. Resolving in favour of the branch alone silently re-enables Defect I, deployed,
+  // with no visible symptom until the next 17:00. Keep this order on every future merge.
+  //
+  // Why it is off: the dismissal-time tick fires this automatically, and for every worker at
+  // exactly 1, 2 or 3 absent days it composes a worker-facing SMS — at 3, "your account has been
+  // flagged" — then writes an sms_log row and syncs it to Supabase. At exactly 3 it also increments
+  // a violations record. NEITHER WRITE NEEDS THE SEMAPHORE KEY: sendSMS() returns {success:false}
+  // without throwing, so the log row and the violation are written whether or not a message was
+  // ever delivered. Confirmed live: a month of daily records, absence notices dated on the Sundays
+  // 07/19 and 07/26 (the two largest days in sms_log), and four "flagged" warnings on 07/28
+  // including a man who was at work.
+  //
+  // The Sunday guard below closes the RUN-DAY bug only. The COUNTER is still Sunday-unaware
+  // (getConsecutiveAbsences), proven by Alvin taking a day-2 notice on Monday 07/27 — only possible
+  // if Sunday 07/26 counted as day 1. Suppressing the run does not fix the count.
+  //
+  // RE-ENABLE ONLY WITH ALL OF spec rev2 §10a "Required": awol_skip_list() as the single exemption
+  // authority (fail-open on error or empty); Defects E and G honoured; collectAbsentDates() instead
+  // of getConsecutiveAbsences(); the violation write behind the same gate rather than independent of
+  // the send; and per-worker-per-day DEDUP, which has never existed — sms_log has no unique
+  // constraint and the sync is a bare insert, so two tablets with real history will both text the
+  // same man on the same evening.
+  return;
   // Run at end of day — check all employees for consecutive absences
   // Rest-day policy (owner 2026-07-25, mirrors collectAbsentDates): a no-punch Sunday is
   // transparent — today does NOT count as absent, so no SMS/violation fires for it.
