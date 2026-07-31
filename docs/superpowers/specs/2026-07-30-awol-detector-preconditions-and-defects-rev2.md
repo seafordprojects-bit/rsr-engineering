@@ -260,6 +260,45 @@ barred." One boolean, two meanings, nobody's intent. **Rename as part of this ch
 ambiguity caused the defect and has already misled two readers of this codebase, including the
 author of revision 1.
 
+### 3.6 The bar is DB-shared, but its enforcement reads per-tablet localStorage
+
+Found 2026-07-31 during the Defect C walkthrough, when a barred `ZZ WALK5` passed PIN entry with an
+abandoned PM break open. **That was correct behaviour** — but the reason it is correct exposes a
+narrower guarantee than "barred at the database, enforced everywhere."
+
+`barred_at` is DB-shared and refreshes every 45s (`setInterval(loadSuspensionsFromCloud, 45000)`).
+The **other half** of the gate condition is not:
+
+```js
+if(suspendedEmployees[emp.code] && !hasOpenShift(emp.code)){   // kiosk/index.html ~:2095
+```
+
+`hasOpenShift()` tests **timein present and timeout absent — today, then yesterday** — read entirely
+from that tablet's local `records`. Breaks are invisible to it: `pm_out`, `pm_in`, `lunch_out` and
+`lunch_in` are never consulted. Three consequences:
+
+- **A barred man with an open shift keeps passing PIN entry until his `timeout` is written.** This is
+  deliberate (§3.4 — refusing him would block his Time Out and let a disciplinary decision become
+  unpaid wages), but the window is longer than "the rest of his shift": an abandoned PM break holds
+  the shift open until the 19:00 client auto-close.
+- **The yesterday branch is never auto-closed.** `autoCloseAbandonedBreaks()` computes
+  `const today=todayKey()` and iterates that day only, so an unclosed shift from yesterday satisfies
+  `hasOpenShift` all of today and nothing on the tablet will close it. Self-heals the following day;
+  a one-day bypass, not permanent.
+- **A `timeout` written anywhere else does not close it on this tablet.** `attendance_records` has
+  **zero `.select()` calls** in the kiosk — both references are upserts — so `records` never refreshes
+  from the database. A payroll Edit-times close, or a close by the *other* tablet, leaves this tablet
+  still believing the shift is open. `suspendedEmployees` syncs; `records` does not.
+
+**Net: only the tablet holding the record can end the bypass, and only by writing `timeout` itself.**
+Same root cause as the absence chain being computed from localStorage — the detector and its gate
+both trust per-device state that no device can correct for another.
+
+**Not a merge blocker.** Every failure mode here is fail-open in the worker's favour, which is the
+required direction. Recorded so that "barred means barred on every tablet immediately" is never
+assumed — it means *barred from starting work, once that tablet knows and once his own shift is
+closed*.
+
 ---
 
 ## 4. Defect G — verbally approved absence leaves no artifact
@@ -600,6 +639,109 @@ simply never reached the threshold. **The rebuild must ADD a dedup that has neve
 once two commissioned tablets both hold real local history they will both qualify the same man on the
 same evening and send twice.
 
+### The counter bug, MEASURED: every Sunday-spanning chain warns a day early
+
+Not a theoretical off-by-one. Measured from `sms_log` 07/28–07/30, 2026-07-31.
+
+**All four day-3 "your account has been flagged" notices on 07/28 — RSR 0004, RSR 0005, RSR 0015,
+RSR 0024 — chain back to Sunday 07/26 as their day 1**, the 17-message spike. Counting forward:
+07/26 Sun = 1, 07/27 Mon = 2, 07/28 Tue = 3 → final warning.
+
+**Under the detector's own rule, a no-punch Sunday is transparent.** Drop it and the same four read:
+07/27 = 1, 07/28 = 2. **All four were at day 2 when they were told their account was flagged.**
+
+So the consequence is not "a number is wrong" — it is that **the disciplinary threshold is announced
+to a worker a full day before the policy is met, on any chain that spans a Sunday.** Since the
+absence window most workers hit begins Monday, spanning a Sunday is the common case, not the edge.
+Had the Semaphore key been present, four men would have been told in writing that they had breached
+a three-day rule they had not yet breached.
+
+### The SMS counter and the detector's chain disagree on BOTH ends
+
+They are two different definitions of "how many days absent", and neither device knows the other's
+answer:
+
+| | SMS path | Detector chain |
+|---|---|---|
+| Today | **counted** — `getConsecutiveAbsences(emp.code)+1 // +1 for today`; and suppressed entirely by a punch today (`if(hasTimein)continue`) | **ignored** — `collectAbsentDates` starts at `i=1`, yesterday |
+| Sunday | branch guards the RUN day only; the counter still counts it | transparent, does not count and does not break |
+
+Measured both ends: **Anthony's 07/30 day-2 names 07/30 itself**, and **June Dimco's same-day punch
+silenced his notice** — neither is true of the chain.
+
+**And the divergence has Allan's exact shape.** A man who returns to work today gets **no SMS**
+(punched today ⇒ suppressed) while the detector, which ignores today, still counts his prior run and
+**opens a case anyway**. He is told nothing and suspended regardless — §3.1 in miniature, arriving
+through the notification path instead of the lockout.
+
+### Silence after day 3 means two opposite things
+
+The `consecutive<=3` upper bound makes the system go quiet exactly when a case escalates, and the
+silence is indistinguishable from resolution. Measured on the same four:
+
+- **RSR 0004 and RSR 0024 went quiet by RETURNING** — both present in the A1 baseline for 07/30.
+- **RSR 0005 and RSR 0015 went quiet by getting WORSE** — both at run 4 in A5 on 07/31, past the
+  window's upper edge.
+
+Same silence, opposite meanings, no signal either way. A supervisor reading `sms_log` cannot tell a
+man who came back from a man now four days absent.
+
+### MEASURED 2026-07-31: a PAKYAW man qualified for a day-1 notice
+
+Not inferred from reading the code — measured live, on the evening of the disable, with
+`docs/superpowers/specs/qualifying-worker-0731.sql` modelling the deployed counter exactly.
+
+**Two men qualified at Carmen, both at day 1, and one of them was `PEM 0004` (Erwin) — pakyaw.**
+
+The pakyaw exemption is the oldest and best-established rule in this system: `awol_is_pem()`
+server-side, `awolExemptState()` in the kiosk, `employment_type` as the single source, all of it
+verified live. **None of it reaches the SMS path.** `checkAndSendAbsenceSMS` applies no code filter,
+never calls `awol_skip_list()`, and never reads `employment_type` — so a pakyaw man is a candidate
+for a worker-facing absence notice on exactly the same terms as anyone else.
+
+This is the concrete instance of the general finding above ("it consults NO exemption"). It matters
+more than the general form because it is dated, named, and would have been a message to a man whose
+absence is not measured in days at all.
+
+**Mandaue returned zero rows in the same run**, confirming the second accidental protection recorded
+under Required #7: it holds no punch history, so every worker ran to the counter's 7-day cap and
+landed at day 8, outside the `1..3` bound. Structural silence, not a rule.
+
+**Neither the notice nor a violation would have left evidence that night** — both men have no phone,
+so `sendAbsenceSMS` returns before writing `sms_log`; and both were at day 1, while the violation
+write is gated on `consecutive === 3` exactly (`main:4532`). So 2026-07-31's quiet `sms_log`
+**discriminates nothing on its own**. The disable is not yet measured; see the file for what a clean
+kill requires.
+
+### The message asserts state the system never checked
+
+**"Your account has been flagged" was false for all four men who received it on 07/28.**
+
+- **Measured** for RSR 0005 and RSR 0015: A4a on 2026-07-30 returned **no suspension rows at all**
+  for either. Nothing had been flagged.
+- **Structural** for RSR 0004 and RSR 0024: the build that sent the message carries the 2026-07-26
+  hotfix, under which `checkAllAbsences()` is a no-op. That build **cannot create a case**, so no
+  case could have existed to describe.
+
+The sentence is produced from the counter's arithmetic (`consecutiveDays>=3`) and **never reads a
+case row**. When it happens to be true it is coincidence — Allan's 07/24 day-3 was "true" only
+because his lockout case already existed for unrelated reasons. A worker-facing disciplinary
+assertion has been generated by an `if` on an integer.
+
+**And Defect E reaches the wording, not only the send decision.** Alvin's day-3 read *"without
+approved leave"* while his leave sat **filed and awaiting the owner's decision**. The template has no
+way to represent *pending* — it offers only "approved" or nothing — so even a version of this path
+that correctly declined to *suspend* him would still have told him, in writing, that he had no leave
+on file. Suppressing the send is necessary but not sufficient; the sentence itself is unrepresentable
+for his actual state.
+
+### The old template costs two SMS segments per send
+
+The 07/28 text runs **≈210 characters**. GSM-7 single-segment is 160, so every one of those notices
+billed as **two segments** — double cost on a path that was sending daily to multiple men. The
+Bisaya replacement set already sits at ≤160; that is a property worth pinning as a requirement rather
+than leaving as an accident of the current wording.
+
 ### Required, in addition to the four below
 
 5. **Clear `rsr_violations` on the tablets**, mirroring what commit `c6696df` did for
@@ -608,13 +750,49 @@ same evening and send twice.
    local-clear-before-DB-delete rule).
 6. **Leave `syncViolationToSupabase()` unwired, or delete it.** If it is ever connected, it must be
    connected *after* items 1–4, never before — otherwise the fix ships the backlog.
-7. **Add per-worker-per-day dedup, which has never existed.** `sms_log` has no unique constraint and
-   the sync is a bare `insert`. Today only one tablet holds real attendance history, which is the
-   sole reason 07/30 produced one row rather than two. The moment Mandaue is commissioned, or any
-   second device accumulates history, the same man is texted twice on the same evening. A unique
-   index on `(employee_code, date, day)` plus an `onConflict` on the insert is the minimum; the
-   send itself should also check before dispatching, so the constraint is a backstop rather than
-   the mechanism.
+7. **ONE NOTICE PER WORKER PER DAY, ACROSS ALL DEVICES, ENFORCED SERVER-SIDE.**
+   No dedup has ever existed: `sms_log` carries no unique constraint and `syncSmsLogToSupabase` is a
+   bare `insert`. **The only thing that has ever prevented a double-send is which device happened to
+   be awake at 17:00** — on 07/30 the Carmen tablet was the sole writer because the other candidate,
+   the localhost build, had an empty `records` map and computed every worker to 11 consecutive
+   absences, outside the `1..3` window. That is luck, and it expires the moment a second device holds
+   real attendance history.
+   **Client-side checks are not sufficient** and must not be the mechanism: each tablet reads its own
+   localStorage, so two tablets can each believe they are the first to notify. Enforcement belongs in
+   the database — a unique index on `(employee_code, date, day)` at minimum, with the send path
+   claiming the row **before** dispatching rather than logging after, so a losing device never sends
+   at all. A client-side pre-check may exist as an optimisation, never as the guarantee.
+
+   **What has been preventing a double-send, so it is not mistaken for a design.** Two unrelated
+   accidents, both expiring. **(a) A one-minute window with no catch-up.** The fire is
+   `setInterval(…,30000)` at `:1770` testing `now.getHours()===endH && now.getMinutes()===endM`;
+   `summaryDone` (`:1162`) is an in-memory `let`, **never persisted**, cleared 70s later — a
+   re-entry guard, not a fired-today flag. Miss the minute and nothing fires that day, silently and
+   with no retry. Only an awake, foregrounded device fires; the kiosk's wake lock (`:1956`) keeps a
+   tablet's timers alive while a background browser tab gets no such protection.
+   **(b) Devices without local punch history compute out-of-window counts.** The counter reads
+   per-device localStorage; a device with no history counts every day absent, hits the
+   `out.length>=10` cap and returns 11 — outside `1..3`, so it can never send. That is why the
+   localhost build never wrote a row, and why **Mandaue cannot send even when awake** until it
+   accumulates real punches.
+   Neither is a dedup. Both fail the moment two commissioned kiosks hold real history and wake locks
+   at 17:00.
+
+8. **ONE server-side counter, using the detector's chain definition, shared by SMS and detection.**
+   Today there are two definitions and they disagree on both ends (see above): the SMS path counts
+   TODAY and is silenced by a punch today; the chain ignores today entirely. Sundays differ too.
+   **The day a man is TOLD must be the day the system ACTS on** — a notice that says day 3 while the
+   detector holds day 2 cannot be defended in a twin-notice process, and the reverse lets a
+   returning worker be suspended without ever being warned. Supersedes and absorbs item 3: it is not
+   enough for SMS to adopt `collectAbsentDates`, the two must read the same computation from the
+   same place.
+
+9. **Distinguish RETURNED from DEEP-AWOL.** The `consecutive<=3` bound makes the system fall silent
+   precisely when a case escalates, and that silence is identical to the silence of a man who came
+   back — measured on the four 07/28 warnings: 0004 and 0024 returned, 0005 and 0015 went past the
+   window. The rebuild must emit a distinct signal for crossing the upper edge (escalation), and a
+   distinct one for the chain breaking (return), so no reader has to infer which happened from an
+   absence of messages.
 
 ### Required
 
@@ -642,6 +820,25 @@ Two consequences worth stating:
   Do not fix SMS and this branch in parallel without deciding which is first.
 - **The violation write is live now and gated by nothing.** That part does not wait for either.
 
+10. **A MESSAGE MAY ASSERT ONLY STATE THE SAME TRANSACTION CREATED OR READ.** "Your account has been
+    flagged" must come from the case row — read it, or do not say it. Today the sentence is emitted
+    on `consecutiveDays>=3` alone and was false for all four men who received it on 07/28: measured
+    false for RSR 0005 and RSR 0015 (no suspension rows existed), structurally impossible for
+    RSR 0004 and RSR 0024 (the sending build cannot create a case). No worker-facing disciplinary
+    claim may rest on an arithmetic comparison. The same rule covers dates, day counts and
+    leave status: if the send path did not read it, the message does not state it.
+
+11. **The template must be able to represent PENDING leave — or never reach a man whose leave is
+    pending.** Alvin's day-3 read "without approved leave" while his leave was filed and awaiting
+    decision. Defect E therefore reaches the WORDING, not just the send decision: a fix that only
+    suppresses the send still leaves a template that can describe no state between "approved" and
+    "nothing on file". Whichever way it is resolved, the outcome must be that no worker is told he
+    has no leave on file while his request sits in the owner's queue.
+
+12. **Every message ≤160 characters (GSM-7 single segment).** The old template ran ≈210 and billed as
+    two segments on every send. The Bisaya set already satisfies this; pin it so the property
+    survives the rebuild rather than depending on whoever writes the next wording.
+
 ---
 
 ## 11. Order of work
@@ -665,8 +862,13 @@ Two consequences worth stating:
    JSON export, and would flush to the database the moment anyone connects `syncViolationToSupabase()`.
    §10a has the detail. **Edwin Lacno is at work holding a record that says he was AWOL** — check the
    Carmen tablet's own violation list, not just the database, before calling him clean.
-2. **The real fix**, per §10a's four Required items. Needs E and G, which are C's merge-gate siblings,
-   so "do Defect I first" resolves to "do E and G first" — it reorders nothing.
+2. **The real fix**, per §10a's **twelve** Required items — it was four when first written; the
+   measured evidence added five more, of which #7 (server-side dedup), #8 (one shared
+   counter), #9 (returned vs deep-AWOL) and #10 (a message may assert only state the same
+   transaction read) are new *design* obligations, not just corrections — #10 in particular is
+   a rule about worker-facing text that no amount of counter fixing satisfies. Still needs E and
+   G, which are C's merge-gate siblings, so "do Defect I first" resolves to "do E and G first" — it
+   reorders nothing.
 3. **The Semaphore key stays out of every tablet** until 2 is done.
 
 ---
@@ -968,6 +1170,29 @@ Pattern: read-only recon, a guard that aborts on unexpected state, deletes order
 children-before-parents, and a verify comparing a pre-captured list of real worker codes against
 the post-teardown list. If the scenario posts to Telegram, capture `awol_group_msg_id` and delete
 the message as part of teardown — message 6287 had to be pulled by hand.
+
+**A SERVER-SIDE STAGING VERIFY CAN PASS WHILE THE CLIENT IS BLIND — stage where the code reads, and
+verify there too.** (2026-07-31.) The Defect C walkthrough staged a backdated punch into
+`attendance_records` and its B4 gate confirmed, server-side, that both test identities were
+detectable, that `awol_effective_site` resolved to Carmen, and that the roster totalled 45 · 13 · 32.
+Every check passed. **The sweep then did nothing at all, silently**, because the kiosk has **zero
+`.select()` calls on `attendance_records`** and builds its `records` map from localStorage only — so
+`hasRecentPunchHistory()` saw no punch, hit the 30-day safety net's `continue`, and returned before
+the RPC, before any Telegram, and without a single console line. Two boots an hour apart produced
+identical silence, which is indistinguishable from "never ran": the sweep writes **no** console
+output on **any** path (`logNotif` appends to an in-app array, never `console.*`).
+
+Two rules follow:
+
+- **Verify the staging in the layer that consumes it.** A server-side assertion proves the row
+  exists; it does not prove the client can see it. One line in the kiosk console —
+  `Object.keys(records).filter(k => k.startsWith('ZZ WALK'))` — would have caught this before the
+  first boot.
+- **A silent no-op is a defect in its own right**, and it is the exact inverse of the fail-open rule
+  ("a man always gets to punch and the owner gets TOLD"). The sweep's per-worker skip paths tell
+  nobody: not the console, not `notifLog`, not the health banner, which surfaces only whole-list
+  failure and workers *absent* from the skip list. A worker silently exempted is invisible on every
+  surface.
 
 ---
 
