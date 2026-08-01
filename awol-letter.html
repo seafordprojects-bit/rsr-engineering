@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="ceb">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AWOL Letter — RSR Engineering</title>
+<!-- awol-letter v2026-08-01a -->
+<style>
+  :root{ --ink:#1a1a1a; --muted:#555; --line:#333; }
+  *{ box-sizing:border-box; }
+  html,body{ margin:0; padding:0; background:#e9e9e6; color:var(--ink); font-family:'Times New Roman', Georgia, serif; }
+  .screen-bar{ position:sticky; top:0; display:flex; gap:10px; align-items:center; justify-content:center; padding:10px; background:#2b2b2b; color:#fff; font-family:-apple-system,'Segoe UI',sans-serif; font-size:13px; z-index:10; }
+  .screen-bar button{ background:#378ADD; color:#fff; border:none; border-radius:8px; padding:9px 18px; font-size:14px; font-weight:600; cursor:pointer; }
+  .sheet{ width:210mm; min-height:297mm; margin:16px auto; background:#fff; padding:22mm 20mm; box-shadow:0 2px 14px rgba(0,0,0,.2); }
+  .letterhead{ text-align:center; border-bottom:2.5px solid var(--line); padding-bottom:10px; margin-bottom:6px; }
+  .company{ font-size:26px; font-weight:700; letter-spacing:2px; }
+  .yard{ font-size:14px; color:var(--muted); margin-top:2px; letter-spacing:1px; }
+  .title{ text-align:center; margin:22px 0 4px; }
+  .title .ceb{ font-size:17px; font-weight:700; text-transform:uppercase; letter-spacing:.5px; }
+  .title .en{ font-size:12.5px; color:var(--muted); font-style:italic; margin-top:2px; }
+  .meta{ margin:20px 0 4px; font-size:14.5px; line-height:1.9; }
+  p{ font-size:14.5px; line-height:1.8; text-align:justify; margin:12px 0; }
+  .dates{ margin:10px 0 14px; padding-left:8px; }
+  .dates li{ font-size:15px; font-weight:700; line-height:2.0; list-style:none; }
+  .dates li::before{ content:"•  "; }
+  .section-label{ font-weight:700; font-size:14px; margin-top:20px; letter-spacing:.3px; }
+  .hand{ margin-top:8px; }
+  .hand .rule{ border-bottom:1px solid #444; height:2.3rem; margin-top:.7rem; }
+  .deadline{ font-weight:700; }
+  .reminder{ margin-top:18px; font-size:13px; font-style:italic; color:#333; border-left:3px solid #999; padding:6px 0 6px 12px; }
+  .sigs{ margin-top:40px; }
+  .sig{ margin-top:46px; page-break-inside:avoid; break-inside:avoid; }
+  .sig .sigline{ border-bottom:1px solid #333; width:70%; }
+  .sig .siglabel{ font-size:12.5px; color:#333; margin-top:7px; }
+  p, .meta, .dates li, .siglabel{ overflow-wrap:break-word; word-wrap:break-word; }
+  @page{ size:A4; margin:0; }
+  @media print{
+    html,body{ background:#fff; }
+    .screen-bar{ display:none; }
+    /* Margins come from the sheet's OWN padding (reliable regardless of the print dialog's
+       margin setting) — NOT from @page, which the dialog can override and was clipping the
+       body text and cramping the signature blocks. ~20mm all round = ~2cm. */
+    .sheet{ width:auto; min-height:auto; margin:0; padding:20mm 20mm 18mm; box-shadow:none; }
+  }
+</style>
+</head>
+<body>
+  <div class="screen-bar">
+    <span>Ang mubo nga bar sa ibabaw dili mo-print. I-press ang Print, unya pili og printer o "Save as PDF".</span>
+    <button onclick="window.print()">🖨 Print / Save PDF</button>
+  </div>
+
+  <div class="sheet">
+    <div class="letterhead">
+      <div class="company">RSR ENGINEERING</div>
+      <div class="yard" id="f-yard">Carmen</div>
+    </div>
+    <div class="title">
+      <div class="ceb">Pahibalo sa Pagpasabot ug Pagbalik sa Trabaho</div>
+      <div class="en">(Notice to Explain / Return-to-Work Order)</div>
+    </div>
+    <div class="meta">
+      Petsa: <b id="f-pdate">Hulyo 24, 2026</b><br>
+      Para kang: <b id="f-name">Juan Dela Cruz</b> — <b id="f-code">RSR 0042</b>
+    </div>
+    <p>Sumala sa atong rekord sa attendance, wala ka nakasulod sa trabaho sulod sa mosunod nga mga petsa:</p>
+    <ul class="dates" id="f-dates">
+      <li>Lunes, Hulyo 20, 2026</li><li>Martes, Hulyo 21, 2026</li><li>Miyerkules, Hulyo 22, 2026</li>
+    </ul>
+    <p>nga walay gi-file o approved nga leave. Kini nga <span id="f-count">unom (6)</span> ka adlaw nga sunod-sunod nga pagka-absent gikonsiderar nga AWOL sumala sa polisiya sa kompanya, nga nagtakda og tulo (3) ka sunod-sunod nga adlaw isip threshold.</p>
+    <p>Gihangyo ka na isulat sa ubos ang imong pagpasabot nganong wala ka nakasulod sa trabaho sa maong mga petsa:</p>
+    <div class="section-label">PAGPASABOT SA EMPLEYADO:</div>
+    <div class="hand"><div class="rule"></div><div class="rule"></div><div class="rule"></div><div class="rule"></div><div class="rule"></div></div>
+    <p class="deadline">Aduna kay lima (5) ka adlaw kalendaryo gikan sa petsa nga imong nadawat kini nga sulat aron isumite ang imong nasulat nga eksplinasyon.</p>
+    <p>Human nimo mapil-apan kini nga porma, isumite kini sa admin/opisina.</p>
+    <div class="reminder">Pahinumdom: Ang pagbalik-balik nga AWOL mahimong hinungdan sa dugang nga disciplinary action sumala sa polisiya sa kompanya.</div>
+    <div class="sigs">
+      <div class="sig"><div class="sigline"></div><div class="siglabel">Pirma sa Empleyado — Pagdawat sa kini nga sulat / Petsa sa Pagdawat</div></div>
+      <div class="sig"><div class="sigline"></div><div class="siglabel">Gi-prepare ni (Coordinator) / Petsa</div></div>
+    </div>
+  </div>
+
+<script>
+(function(){
+  const MON=['Enero','Pebrero','Marso','Abril','Mayo','Hunyo','Hulyo','Agosto','Septyembre','Oktubre','Nobyembre','Disyembre'];
+  const DOW=['Dominggo','Lunes','Martes','Miyerkules','Huwebes','Biyernes','Sabado'];
+  function toISO(s){ s=String(s||'').trim();
+    if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+    const m=s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+    if(m) return m[3]+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0');
+    return s; }
+  function pretty(iso){ const m=/^(\d{4})-(\d{2})-(\d{2})$/.exec(toISO(iso)); if(!m) return iso;
+    const d=new Date(+m[1],+m[2]-1,+m[3]);
+    return DOW[d.getDay()]+', '+MON[+m[2]-1]+' '+(+m[3])+', '+m[1]; }
+  const q=new URLSearchParams(location.search), g=k=>((q.get(k)||'').trim());
+  const set=(id,v)=>{ if(v) document.getElementById(id).textContent=v; };
+  set('f-yard', g('yard')); set('f-name', g('name')); set('f-code', g('code'));
+  const pd=g('pdate'); if(pd) set('f-pdate', pretty(pd));
+  const ds=g('dates');
+  if(ds){ const list=ds.split(/[,|]/).map(s=>s.trim()).filter(Boolean);
+    if(list.length){ const ul=document.getElementById('f-dates'); ul.textContent='';
+      list.forEach(x=>{ const li=document.createElement('li'); li.textContent=pretty(x); ul.appendChild(li); });
+      // The count is DERIVED, never fixed: this template serves every AWOL letter, and a hardcoded
+      // number would put the wrong figure on the next man's notice.
+      const BIS=['','usa','duha','tulo','upat','lima','unom','pito','walo','siyam','napulo'];
+      const n=list.length, w=BIS[n]||String(n);
+      set('f-count', w+' ('+n+')'); } }
+})();
+</script>
+</body>
+</html>
