@@ -404,6 +404,42 @@ window runs from **service of the NTE** — so the promise is load-bearing where
 **the man punched, with no approval from anyone.** §10a Required #10 inside the AWOL path: a message
 may assert only what the transaction actually did.
 
+### THE LOAD-BEARING FIX IS THE DATA FLOW, NOT THE WORDING (owner, 2026-08-01)
+
+**Remove the `:2632` queue-merge so cases never enter `suspendedEmployees` at all.** After that,
+`suspendedEmployees` means **barred by a human, full stop**, and three surfaces become truthful at
+once without a word being changed on any of them:
+
+- the modal at `:2102` fires only for a man a human actually barred;
+- **`:3035` STAYS AS IT IS** — the Time In refusal is correct for a genuinely barred man
+  ("a barred man may not START a day"), and it was only ever wrong because cases reached the map;
+- the letter stops describing a suspension that a case alone no longer causes.
+
+**Order of work is therefore: §3.7's merge removal FIRST, wording second.** Rewriting the strings
+while the merge stands would produce carefully-worded text that still fires on a network failure.
+The wording changes are real but secondary; they cannot make a false trigger true.
+
+### THE LETTER: CUT SYSTEM MECHANICS OUT OF A LEGAL DOCUMENT (owner, 2026-08-01)
+
+**Principle:** an NTE states ground, dates, the five-day window from service, and where to submit.
+**It does not describe how the software behaves** — those sentences go stale with every code change
+and are the ones most likely to be wrong in a contested case.
+
+`awol-letter.html` currently carries **two** such sentences, not one:
+
+1. *"Ang admin maoy mo-desisyon sa pag-reinstate sa imong account aron ka maka-punch pag-usab."*
+   — **CUT.** The owner's instruction. Keep the sentence before it,
+   *"Human nimo mapil-apan kini nga porma, isumite kini sa admin/opisina"*, which is
+   **where to submit** and belongs.
+2. *"ang imong account sa attendance system temporaryong gi-suspend"* — **ALSO SYSTEM MECHANICS, and
+   it becomes FALSE the moment the merge is removed.** After §3.7's fix an open case suspends
+   nothing; only a human bar does. A notice asserting an account suspension that did not happen is
+   the §10a Required #10 failure in the one document that reaches a case file.
+
+**And one thing is MISSING: the five-day window.** The letter recites the ground and the dates and
+asks for an explanation, but states no deadline. §16 records that the window runs from **service of
+the NTE** — so the document that constitutes service is the one place it must appear.
+
 **Required for the replacement (owner, 2026-08-01):**
 - **NAMED** — states whose case it is, so a mis-keyed PIN cannot show one man another's suspension;
 - **NON-BLOCKING** — dismissed into a working keypad, so he punches immediately;
