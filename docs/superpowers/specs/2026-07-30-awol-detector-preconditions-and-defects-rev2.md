@@ -17,7 +17,7 @@ states the inverse of the truth and must not be implemented.
 
 | | |
 |---|---|
-| **C** | A sweep-created case cannot bar a worker at the kiosk by any path, **and** a barred worker can be reinstated and punch again. |
+| **C** | A sweep-created case cannot bar a worker at the kiosk by any path, **and** a barred worker can be reinstated and punch again. **NOT YET MET — see §3.7:** the retry queue re-enters `suspendedEmployees` at `:2632` with no `barred_at` test, so a failed RPC still bars a man locally. "By any path" includes that one. |
 | **E** | A filed-but-unapproved leave suppresses detection for the dates it covers. |
 | **G** | A verbally authorized absence can be recorded on the day, so the detector has something to read. |
 
@@ -300,6 +300,72 @@ assumed — it means *barred from starting work, once that tablet knows and once
 closed*.
 
 ---
+
+### 3.7 THE QUEUE MERGE RE-BARS A MAN THE SWEEP DELIBERATELY DECLINED TO BAR
+
+**Defect C's client half is incomplete.** The sweep no longer writes `suspendedEmployees` on any
+path — but `loadSuspensionsFromCloud` puts codes back into it that no human ever barred.
+
+```js
+:2627  const {data} = await sbClient.from('employee_suspensions').select('*').not('barred_at','is',null);
+:2630  (data||[]).forEach(r => { next[r.employee_code] = {...} });
+:2632  Object.keys(awolUnsynced).forEach(code => { if(!next[code]) next[code] = {...} });   // <-- no barred_at test
+:2633  suspendedEmployees = next;
+```
+
+`awolUnsynced` is written by the sweep's own catch block, whose comment reads **"Queue the CASE for
+retry. NEVER bar."** (`:2519`). Line `:2632` bars anyway on the next poll. **The stated intent and
+the actual behaviour contradict each other in the same file.**
+
+**So a failed RPC produces a worker-facing block with `barred_at` NULL everywhere and no human at
+either end** — which is the precise shape of §3.1, arriving through the retry queue instead of
+through the sweep.
+
+**The block window is longer than "until it syncs".** `retryAwolUnsynced` — the only thing that
+clears the entry (`:2606` on exempt-drop, `:2612` on success) — is called from exactly one place,
+`:2467`, inside `checkAllAbsences`. That sweep runs at **boot (+3s)** and then **once daily at
+midnight** (`:5430`, `:5434`). It is **not** on the 45-second cycle; that is
+`loadSuspensionsFromCloud`, and every one of those polls **re-asserts** the merge. So a queued entry
+blocks the man **until the page is next loaded**. On a wall kiosk that nobody reloads, that is the
+rest of the day.
+
+**Origin:** commit `586ed3f`, 2026-07-25, *"AWOL final review fixes — offline suspension survival"*.
+On the branch, **not** on `origin/main`, and predating this week's work entirely. Nothing added it
+later; it was simply never traced when `suspendedEmployees` was repointed at `barred_at`.
+
+**Required:** the retry queue must not be able to reach the punch gate. Queue for retry without
+granting bar authority — either keep `awolUnsynced` out of `suspendedEmployees` entirely, or gate
+the merge on a real `barred_at`. A tablet must never bar a man because a network call failed.
+
+### 3.8 THE OPEN-CASE NOTICE IS WANTED — BUT WHAT EXISTS IS A BLOCK, AND ITS TEXT IS FALSE
+
+**Wanted (owner, 2026-08-01):** a flagged man should be told there is a letter waiting for him at the
+office. That is reasonable and worth building.
+
+**What exists is not that.** GI-SUSPEND (`:2102`) is a blocking gate — it `return`s at `:2107` before
+any button is enabled, and dismissing it runs `kpClr()` (`:1024`), wiping his PIN and preview. It
+fires on **every** PIN entry while the condition holds; there is no seen-once flag. And it is keyed
+on `suspendedEmployees`, i.e. on a human bar **or** on §3.7's sync failure — never on the case itself.
+
+**ITS OWN TEXT IS CONTRADICTED BY THE SYSTEM'S BEHAVIOUR.** The modal tells the worker
+*"hulaton ang approval sa admin una ka maka-punch"* — wait for the admin's approval before you can
+punch. In the 2026-08-01 demo the dialog appeared and **the man then punched, with no approval from
+anyone.** The sentence made a promise about how the system works that the system did not keep. This
+is §10a Required #10 in the AWOL path: a message may assert only what the transaction actually did.
+
+**Required for the replacement:**
+- keyed on the **open case** (`active`), not on a bar and not on a sync failure;
+- **non-blocking** — dismissed into a working keypad, so he can punch immediately;
+- **once per day**, not on every PIN entry;
+- wording that states only what is true: a letter is waiting, collect it from the coordinator. It
+  must not claim his punching is conditional on an approval, because it is not.
+
+**Demo record, 2026-08-01.** The dialog was identified as **GI-SUSPEND by elimination** — at
+07:40–08:05 no other PIN-entry modal can fire (`:3019` needs before-07:00, `:3050` needs 10:00–12:40,
+and the late notice cannot fire because the early-arrival snap stored `08:00:00`, inside grace).
+**The mechanism is UNDETERMINED and will stay that way:** whether it was a real bar or §3.7's
+queue-merge could not be separated, because the teardown removed the suspension row and its
+`awol_events` before those were read. Both defects stand on their own evidence regardless.
 
 ## 4. Defect G — verbally approved absence leaves no artifact
 
@@ -1199,6 +1265,13 @@ Pattern: read-only recon, a guard that aborts on unexpected state, deletes order
 children-before-parents, and a verify comparing a pre-captured list of real worker codes against
 the post-teardown list. If the scenario posts to Telegram, capture `awol_group_msg_id` and delete
 the message as part of teardown — message 6287 had to be pulled by hand.
+
+**CAPTURE THE EVIDENCE A RUN WAS STAGED TO PRODUCE, BEFORE THE TEARDOWN.** (2026-08-01.) The
+Defect C demo produced a worker-facing dialog whose mechanism was genuinely in question — a human bar
+versus §3.7's queue merge. The two are distinguishable only from `employee_suspensions.barred_by` and
+the `awol_events` rows, and the teardown deleted both before either was read. **The question is now
+permanently unanswerable for that run.** A teardown is designed to remove test data; it removes the
+findings with it. Read the run's own evidence queries first, paste them, and only then run Section C.
 
 **A SERVER-SIDE STAGING VERIFY CAN PASS WHILE THE CLIENT IS BLIND — stage where the code reads, and
 verify there too.** (2026-07-31.) The Defect C walkthrough staged a backdated punch into
