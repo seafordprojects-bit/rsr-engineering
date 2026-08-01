@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>AWOL Letter — RSR Engineering</title>
-<!-- awol-letter v2026-07-24b -->
+<!-- awol-letter v2026-08-01a -->
 <style>
   :root{ --ink:#1a1a1a; --muted:#555; --line:#333; }
   *{ box-sizing:border-box; }
@@ -26,6 +26,7 @@
   .section-label{ font-weight:700; font-size:14px; margin-top:20px; letter-spacing:.3px; }
   .hand{ margin-top:8px; }
   .hand .rule{ border-bottom:1px solid #444; height:2.3rem; margin-top:.7rem; }
+  .deadline{ font-weight:700; }
   .reminder{ margin-top:18px; font-size:13px; font-style:italic; color:#333; border-left:3px solid #999; padding:6px 0 6px 12px; }
   .sigs{ margin-top:40px; }
   .sig{ margin-top:46px; page-break-inside:avoid; break-inside:avoid; }
@@ -66,15 +67,15 @@
     <ul class="dates" id="f-dates">
       <li>Lunes, Hulyo 20, 2026</li><li>Martes, Hulyo 21, 2026</li><li>Miyerkules, Hulyo 22, 2026</li>
     </ul>
-    <p>nga walay gi-file o approved nga leave. Tungod niini, ang imong account sa attendance system temporaryong gi-suspend sumala sa polisiya sa kompanya bahin sa AWOL (Absent Without Official Leave — 3 ka adlaw nga sunod-sunod).</p>
+    <p>nga walay gi-file o approved nga leave. Kini nga <span id="f-count">unom (6)</span> ka adlaw nga sunod-sunod nga pagka-absent gikonsiderar nga AWOL sumala sa polisiya sa kompanya, nga nagtakda og tulo (3) ka sunod-sunod nga adlaw isip threshold.</p>
     <p>Gihangyo ka na isulat sa ubos ang imong pagpasabot nganong wala ka nakasulod sa trabaho sa maong mga petsa:</p>
     <div class="section-label">PAGPASABOT SA EMPLEYADO:</div>
     <div class="hand"><div class="rule"></div><div class="rule"></div><div class="rule"></div><div class="rule"></div><div class="rule"></div></div>
-    <p>Human nimo mapil-apan kini nga porma, isumite kini sa admin/opisina. Ang admin maoy mo-desisyon sa pag-reinstate sa imong account aron ka maka-punch pag-usab.</p>
+    <p class="deadline">Aduna kay lima (5) ka adlaw kalendaryo gikan sa petsa nga imong nadawat kini nga sulat aron isumite ang imong nasulat nga eksplinasyon.</p>
+    <p>Human nimo mapil-apan kini nga porma, isumite kini sa admin/opisina.</p>
     <div class="reminder">Pahinumdom: Ang pagbalik-balik nga AWOL mahimong hinungdan sa dugang nga disciplinary action sumala sa polisiya sa kompanya.</div>
     <div class="sigs">
-      <div class="sig"><div class="sigline"></div><div class="siglabel">Pirma sa Empleyado / Petsa</div></div>
-      <div class="sig"><div class="sigline"></div><div class="siglabel">Pirma sa Admin / Petsa sa Pag-reinstate</div></div>
+      <div class="sig"><div class="sigline"></div><div class="siglabel">Pirma sa Empleyado — Pagdawat sa kini nga sulat / Petsa sa Pagdawat</div></div>
       <div class="sig"><div class="sigline"></div><div class="siglabel">Gi-prepare ni (Coordinator) / Petsa</div></div>
     </div>
   </div>
@@ -98,7 +99,12 @@
   const ds=g('dates');
   if(ds){ const list=ds.split(/[,|]/).map(s=>s.trim()).filter(Boolean);
     if(list.length){ const ul=document.getElementById('f-dates'); ul.textContent='';
-      list.forEach(x=>{ const li=document.createElement('li'); li.textContent=pretty(x); ul.appendChild(li); }); } }
+      list.forEach(x=>{ const li=document.createElement('li'); li.textContent=pretty(x); ul.appendChild(li); });
+      // The count is DERIVED, never fixed: this template serves every AWOL letter, and a hardcoded
+      // number would put the wrong figure on the next man's notice.
+      const BIS=['','usa','duha','tulo','upat','lima','unom','pito','walo','siyam','napulo'];
+      const n=list.length, w=BIS[n]||String(n);
+      set('f-count', w+' ('+n+')'); } }
 })();
 </script>
 </body>
