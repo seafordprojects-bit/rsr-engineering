@@ -353,12 +353,65 @@ punch. In the 2026-08-01 demo the dialog appeared and **the man then punched, wi
 anyone.** The sentence made a promise about how the system works that the system did not keep. This
 is §10a Required #10 in the AWOL path: a message may assert only what the transaction actually did.
 
-**Required for the replacement:**
+### THREE WORDING DEFECTS IN THE CURRENT TEXT — baseline captured 2026-08-01
+
+The modal was rendered in isolation and screenshotted as the (b) baseline. Three faults, and the
+second is not a wording problem at all.
+
+**1. IT IDENTIFIES NOBODY.** The string at `:2102` carries **zero interpolation** — no name, no code,
+no dates. So a man who mis-keys another worker's PIN is shown **that man's suspension as his own**,
+with nothing on screen to tell him otherwise. It also leaks the fact of a suspension to whoever
+mis-keyed it.
+
+**2. IT REVERSES THE DO 147-15 FLOW.** *"Kuhaa ug sulati ang AWOL letter, ihatag sa coordinator"* —
+**get and write the AWOL letter, give it to the coordinator.** Under DO 147-15 the twin-notice
+process runs the other way: **the Notice to Explain is served BY the employer ON the worker**, and
+the worker's written explanation answers it. The kiosk currently instructs the man to author the
+notice against himself and hand it in.
+
+**BUT THE ARTIFACT ITSELF IS CORRECT — ONLY THE INSTRUCTION DESCRIBING IT IS WRONG.**
+`awol-letter.html` is a properly formed employer-issued notice. Its title is
+*"Pahibalo sa Pagpasabot ug Pagbalik sa Trabaho (Notice to Explain / Return-to-Work Order)"*, it is
+addressed *"Para kang: \<name\> — \<code\>"*, it recites the absent dates, it gives the worker a
+**PAGPASABOT SA EMPLEYADO** section to write his explanation in, and it carries signature blocks for
+the employee, the admin, and the coordinator who **prepared** it. The DO 147-15 direction is right
+in the document: served to him, explanation written on it, returned.
+
+So the remediation is **wording in two places, not a rebuild of the process.** The man does not fetch
+and author the letter — the coordinator prepares it and serves it, and he writes his explanation in
+the space provided. That is what the screens must say.
+
+**AND THE SAME WRONG INSTRUCTION APPEARS TWICE.** Fixing the modal alone leaves it live:
+
+| Line | Surface | Condition |
+|---|---|---|
+| `:2102` | `showBisayaModal` at PIN entry | `suspendedEmployees[code] && !hasOpenShift(code)` |
+| `:3035` | `showMsg('err', …, 6000)` on the Time In refusal | `type==='timein' && suspendedEmployees[code]` — **no `hasOpenShift` test** |
+
+Both carry the identical sentence. `:3035` refuses Time In whenever he is in the map, open shift or
+not, which is deliberate ("a barred man may not START a day") — but it repeats the reversed
+instruction to a second audience.
+
+**Defect 3 spans both artifacts too.** The letter states *"Ang admin maoy mo-desisyon sa pag-reinstate
+sa imong account aron ka maka-punch pag-usab"* — the admin decides on reinstatement so you can punch
+again. The modal says the same. The 2026-08-01 demo showed the man punching with no reinstatement,
+and §3.7 shows the block lifting on its own when a queued case syncs. **Two artifacts promise an
+enforcement the system does not reliably provide**, and §16 records that the five-day explanation
+window runs from **service of the NTE** — so the promise is load-bearing where it is least true.
+
+**3. IT PROMISES A BLOCK THAT IS NOT ENFORCED.** *"hulaton ang approval sa admin una ka maka-punch"*
+— wait for the admin's approval before you can punch. The 2026-08-01 demo showed the dialog and then
+**the man punched, with no approval from anyone.** §10a Required #10 inside the AWOL path: a message
+may assert only what the transaction actually did.
+
+**Required for the replacement (owner, 2026-08-01):**
+- **NAMED** — states whose case it is, so a mis-keyed PIN cannot show one man another's suspension;
+- **NON-BLOCKING** — dismissed into a working keypad, so he punches immediately;
+- **STATES THAT THE PUNCH COUNTS** — the day is recorded and paid; the case is a separate matter;
+- **DIRECTS HIM TO THE OFFICE TO *RECEIVE* HIS NTE** — served to him, not drafted by him;
 - keyed on the **open case** (`active`), not on a bar and not on a sync failure;
-- **non-blocking** — dismissed into a working keypad, so he can punch immediately;
 - **once per day**, not on every PIN entry;
-- wording that states only what is true: a letter is waiting, collect it from the coordinator. It
-  must not claim his punching is conditional on an approval, because it is not.
+- and it must not claim his punching is conditional on any approval, because it is not.
 
 **Demo record, 2026-08-01.** The dialog was identified as **GI-SUSPEND by elimination** — at
 07:40–08:05 no other PIN-entry modal can fire (`:3019` needs before-07:00, `:3050` needs 10:00–12:40,
