@@ -475,6 +475,37 @@ true and the modal is deliberately generic, but they are different numbers on tw
 receives the same day. And the ≤160-character rule (§10a Required #12) does **not** apply here — that
 governs SMS segments; this is a modal.
 
+### WITNESSED LIVE, 2026-08-02 — the silent screen, in front of the man it concerns
+
+**RSR 0015 keyed in at the tablet and his card rendered with ZERO notice, while his printed NTE sat
+pending service.** No punch was made — the keypad was cleared before Time In, so nothing was written
+for him and the observation cost nothing.
+
+This is the defect made physical rather than argued: the organisation had decided, the paper was
+printed and waiting, and **the one surface the man actually stands in front of said nothing at all.**
+He would have punched in, worked the day, and gone home without ever learning a letter existed for
+him — the notice reaching him only if someone remembered to hand it over.
+
+**It also confirms the acceptance test as the ship gate**, in the exact shape recorded above:
+open case → PIN → **PAHIBALO** modal → OK → **punch records**.
+
+**One thing the observation does NOT establish, and the acceptance run must not assume.** Silence on
+that tablet is fully explained by the build alone: deployed `main` reads `suspendedEmployees` from
+rows where `barred_at IS NOT NULL`, RSR 0015 is not barred, and no open-case notice exists to fire —
+so the screen would be silent **whether or not a case row exists for him**. And a row may well not:
+`checkAllAbsences` is a no-op on `main`, so the live kiosk cannot open one, and the only sweeps that
+have run against him were on the branch during demos, where he was held. Check before drawing
+anything further from it:
+
+```sql
+select employee_code, active, barred_at, suspended_on, absent_dates
+  from public.employee_suspensions where employee_code = 'RSR 0015';
+```
+
+**Consequence for the acceptance walkthrough: it must STAGE the case.** The notice keys on an open
+case, and on the live build no sweep can produce one — so the run cannot wait for the detector to
+supply its own precondition. Stage the row, then assert the full chain through to the punch.
+
 **BUILD ORDER — UNCHANGED, AND THE SEQUENCE IS THE POINT:**
 
 1. **§3.7 — remove the `:2632` queue-merge.** Until cases stop entering `suspendedEmployees`, a
