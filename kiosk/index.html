@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-07-31a</span>
+        <span id="version-stamp">v2026-08-02a</span>
       </div>
     </div>
   </div>
@@ -1149,7 +1149,14 @@ let straightDutyLog=[]; // approved/rejected straight duties // {empCode,empName
 let absenceViolations={}; // {empCode:{count,history:[{startDate,endDate,days}]}}
 let tgLastUpdateId=0,tgPolling=null;
 let lateLunchRequests={};
-let suspendedEmployees={}; // {empCode: {reason, suspendedOn, absentDates, awolMsgId, awolChat}} — cache of employee_suspensions active rows
+let suspendedEmployees={}; // {empCode: …} — rows with barred_at SET. BARRED BY A HUMAN. Drives the punch gate.
+let openCases={};          // {empCode: …} — active rows with barred_at NULL. Notice only; gates NOTHING.
+// One PAHIBALO per man per day. Keyed code_MM/DD/YYYY so a new day re-notifies and old keys self-drop.
+let awolNoticeShown={};
+function loadAwolNoticeShown(){ try{ const o=JSON.parse(localStorage.getItem('rsr_awol_notice')||'{}')||{};
+  const t=todayKey(); awolNoticeShown={}; Object.keys(o).forEach(k=>{ if(k.endsWith('_'+t)) awolNoticeShown[k]=true; });
+}catch(e){ awolNoticeShown={}; } }
+function saveAwolNoticeShown(){ try{ localStorage.setItem('rsr_awol_notice',JSON.stringify(awolNoticeShown)); }catch(e){} }
 let absenceLog={}; // {empCode: [dateStr, dateStr, ...]} tracks consecutive absences
 let latePmOutRequests={};
 let lateTimeInRequests={};
@@ -2119,7 +2126,26 @@ function kp(n){
         showBisayaModalKeep('⚠ Na-auto-close na ang imong adlaw sa 7:00 PM kay wala ka naka-punch og PM Break In. Palihug pahibalo sa imong coordinator. Kung mopauli ka na karon, i-punch lang ang TIME OUT — marekord ang imong tinuod nga oras. Salamat!');
       } else {
         const _dw=(_r&&_r.punches&&!_r.punches.timein&&!_r.nightShift)?deadWindowInfo(new Date()):null;
-        if(_dw)showBisayaModal(_dw.modal);
+        if(_dw){ showBisayaModal(_dw.modal); }
+        // ── PAHIBALO — the OPEN-CASE notice (spec rev2 §3.8, owner-drafted 2026-08-02) ──────────
+        // Fires on an ACTIVE case with barred_at NULL. It is NOT a gate: showBisayaModalKeep leaves
+        // the PIN, the preview and the buttons up, so dismissing it returns him to a working keypad
+        // and he punches immediately. The text says so, and the acceptance gate is that a staged
+        // worker PUNCHES THROUGH it — not merely that it renders.
+        //
+        // NAMED, because the old GI-SUSPEND string carried no name and a mis-keyed PIN therefore
+        // showed one man another's case. ONCE PER DAY, because the old one fired on every PIN entry.
+        // LAST in this chain deliberately: the swept-close and dead-window notices are actionable
+        // NOW and must not be displaced by an advisory whose own instruction is "inig break time".
+        // The shown-flag is set only when it actually displays, so a man who keys in during a dead
+        // window still gets it the next time he keys in cleanly.
+        else if(openCases[emp.code]){
+          const _k=emp.code+'_'+todayKey();
+          if(!awolNoticeShown[_k]){
+            awolNoticeShown[_k]=true; saveAwolNoticeShown();
+            showBisayaModalKeep('PAHIBALO' + String.fromCharCode(10,10) + emp.name+', absent ka og 3+ ka adlaw nga sunod-sunod nga walay approved nga leave. Dawata ang imong sulat (Notice to Explain) sa opisina inig break time, ug isulat didto ang imong pagpasabot. Ang imong punch karon dawat ug narekord.');
+          }
+        }
       }
     }
     else{
@@ -2624,14 +2650,25 @@ async function loadSuspensionsFromCloud(){
     // SWEEP writes it. barred_at is set only by awol_set_barred(), which verifies the admin passcode
     // inside the function and is enforced by a DB trigger plus a column-level grant — so no machine
     // decision can reach this map. suspendedEmployees now means BARRED BY A HUMAN, not flagged.
-    const { data, error } = await sbClient.from('employee_suspensions').select('*').not('barred_at','is',null);
+    // ONE fetch, TWO maps. barred_at drives the punch GATE; an open case with barred_at NULL drives
+    // the informational PAHIBALO notice and gates nothing.
+    const { data, error } = await sbClient.from('employee_suspensions').select('*');
     if(error) throw error;
-    const next={};
-    (data||[]).forEach(r=>{ next[r.employee_code]={ reason:r.reason||'', suspendedOn:r.suspended_on||'',
-      absentDates:Array.isArray(r.absent_dates)?r.absent_dates:[], awolMsgId:r.awol_group_msg_id||'', awolChat:r.awol_group_chat||'' }; });
-    // Don't let a poll wipe a suspension this kiosk set locally but hasn't synced to the DB yet.
-    Object.keys(awolUnsynced).forEach(code=>{ if(!next[code]) next[code]={reason:awolUnsynced[code].reason||'',suspendedOn:awolUnsynced[code].suspendedOn||'',absentDates:awolUnsynced[code].absentDates||[],awolMsgId:'',awolChat:''}; });
+    const next={}, cases={};
+    (data||[]).forEach(r=>{
+      const v={ reason:r.reason||'', suspendedOn:r.suspended_on||'',
+        absentDates:Array.isArray(r.absent_dates)?r.absent_dates:[],
+        awolMsgId:r.awol_group_msg_id||'', awolChat:r.awol_group_chat||'' };
+      if(r.barred_at) next[r.employee_code]=v;              // BARRED BY A HUMAN — the gate
+      else if(r.active===true) cases[r.employee_code]=v;    // case open, nobody barred — notice only
+    });
+    // (spec rev2 §3.7, 2026-08-02) THE awolUnsynced MERGE IS GONE. It used to re-enter every queued
+    // code here with no barred_at test, so a FAILED RPC barred a man locally — with barred_at NULL
+    // everywhere and no human at either end — until the page was next loaded. That contradicted the
+    // sweep's own catch comment ("Queue the CASE for retry. NEVER bar.") and was the second half of
+    // Defect C. awolUnsynced is now purely a retry queue and reaches the punch gate by no path.
     suspendedEmployees=next;
+    openCases=cases;
     try{localStorage.setItem('rsr_suspended',JSON.stringify(suspendedEmployees));}catch(e){}
     if(typeof renderRoster==='function')renderRoster();
     return true;
@@ -5492,6 +5529,7 @@ async function loadTgFromCloud(showStatus){
 // AWOL alerts go to the dedicated group; fall back to manager DMs while the group id is unset.
 function awolTarget(){ return tgAwolGroup || (mgrIds && mgrIds[0]) || tgGroup || ''; }
 loadTgFromCloud();
+loadAwolNoticeShown();
 awolCutover().then(loadSuspensionsFromCloud);
 setInterval(loadSuspensionsFromCloud, 45000);
 
