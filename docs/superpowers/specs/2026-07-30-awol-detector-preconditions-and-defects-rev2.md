@@ -1016,6 +1016,21 @@ than leaving as an accident of the current wording.
    at 17:00.
 
 8. **ONE server-side counter, using the detector's chain definition, shared by SMS and detection.**
+    **LIVE INSTANCE, MEASURED 2026-08-02 — PEM 0004 (Erwin), one man, one date, two verdicts.**
+    His last punch is 07/30. Counting back from yesterday: 08/01 absent, 07/31 absent, 07/30 punch
+    breaks the run.
+    · **Detector chain = 2.** Below the 3-day threshold. No case, no flag, nothing happens.
+    · **SMS counter = 3.** Same two days, plus one for today — the include-today rule — which is
+      the **final warning** band, the one that says *"your account has been flagged"* and writes a
+      violation row.
+    So on 2026-08-02 the same worker is simultaneously **below threshold** and **at final notice**,
+    and which is true depends only on which code path you ask. This is not a rounding difference;
+    it is the difference between doing nothing and issuing the last notice before a disciplinary
+    record. Any twin-notice process built on two counters that disagree by construction is
+    indefensible the moment it is contested — and the man never learns there were two numbers.
+    He is also the 08/02 tripwire subject, so this divergence is sitting live in the one case the
+    weekend was built to measure.
+
    Today there are two definitions and they disagree on both ends (see above): the SMS path counts
    TODAY and is silenced by a punch today; the chain ignores today entirely. Sundays differ too.
    **The day a man is TOLD must be the day the system ACTS on** — a notice that says day 3 while the
