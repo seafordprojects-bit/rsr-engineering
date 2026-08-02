@@ -440,14 +440,50 @@ and are the ones most likely to be wrong in a contested case.
 asks for an explanation, but states no deadline. §16 records that the window runs from **service of
 the NTE** — so the document that constitutes service is the one place it must appear.
 
-**Required for the replacement (owner, 2026-08-01):**
-- **NAMED** — states whose case it is, so a mis-keyed PIN cannot show one man another's suspension;
-- **NON-BLOCKING** — dismissed into a working keypad, so he punches immediately;
-- **STATES THAT THE PUNCH COUNTS** — the day is recorded and paid; the case is a separate matter;
-- **DIRECTS HIM TO THE OFFICE TO *RECEIVE* HIS NTE** — served to him, not drafted by him;
-- keyed on the **open case** (`active`), not on a bar and not on a sync failure;
-- **once per day**, not on every PIN entry;
-- and it must not claim his punching is conditional on any approval, because it is not.
+### FINAL WORDING — owner-drafted 2026-08-02. SUPERSEDES ALL EARLIER DRAFTS.
+
+**Title:** `PAHIBALO`
+
+**Body:**
+
+> `[Pangalan]`, absent ka og 3+ ka adlaw nga sunod-sunod nga walay approved nga leave. Dawata ang
+> imong sulat (Notice to Explain) sa opisina inig break time, ug isulat didto ang imong pagpasabot.
+> Ang imong punch karon dawat ug narekord.
+
+**Render condition:** open case (`active`), `barred_at` **NULL**, named, **non-blocking**, **once per
+day**.
+
+**The key change from the prior draft is `inig break time` in place of `karon`.** Service routes to
+**break**, not off the line. The earlier draft sent a man to the office the moment he keyed in, which
+takes him off production to receive a document that can equally be handed to him at lunch. The notice
+now schedules its own service.
+
+**How it satisfies each requirement:**
+
+| Requirement | Where it is met |
+|---|---|
+| **NAMED** | `[Pangalan]` — a mis-keyed PIN can no longer show one man another's case |
+| **NON-BLOCKING** | render condition; dismissal returns him to a working keypad |
+| **STATES THE PUNCH COUNTS** | *"Ang imong punch karon dawat ug narekord"* |
+| **DIRECTS HIM TO *RECEIVE* HIS NTE** | *"Dawata ang imong sulat… sa opisina"* — served to him, not drafted by him |
+| **CLAIMS NOTHING ABOUT APPROVAL** | the sentence is absent entirely |
+| **Title asserts no suspension** | `PAHIBALO`, not `GI-SUSPEND ANG IMONG ACCOUNT` — correct once a case no longer bars |
+
+**Two observations, neither blocking.** The modal says **`3+`** (the policy threshold) while the letter
+states his **actual run** — a man at six days sees `3+` on screen and `unom (6)` on paper. Both are
+true and the modal is deliberately generic, but they are different numbers on two artifacts he
+receives the same day. And the ≤160-character rule (§10a Required #12) does **not** apply here — that
+governs SMS segments; this is a modal.
+
+**BUILD ORDER — UNCHANGED, AND THE SEQUENCE IS THE POINT:**
+
+1. **§3.7 — remove the `:2632` queue-merge.** Until cases stop entering `suspendedEmployees`, a
+   notice keyed on "open case, `barred_at` NULL" cannot be distinguished from the block, and any
+   wording shipped first would still fire on a sync failure.
+2. **Then this notice.**
+3. **Then the acceptance walkthrough as the SHIP GATE:** a staged worker **punches through this
+   modal**. Not "the modal renders" — the punch must complete with the notice on the path. That is
+   the assertion the 2026-08-01 demo could not make, and it is what closes both defects at once.
 
 **Demo record, 2026-08-01.** The dialog was identified as **GI-SUSPEND by elimination** — at
 07:40–08:05 no other PIN-entry modal can fire (`:3019` needs before-07:00, `:3050` needs 10:00–12:40,
