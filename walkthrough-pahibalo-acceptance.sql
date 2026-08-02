@@ -159,6 +159,13 @@ select code, skip, reason from public.awol_skip_list()
 -- [PASTE RESULT]
 -- DERIVATION: the row count here must equal the number of codes you put in B1. Fewer means a
 -- PARTIAL hold, which is the dangerous failure — it lets exactly one real man through the sweep.
+--
+-- HAZARD, HIT LIVE 2026-08-02: THE create or replace CAN SILENTLY NOT TAKE. The first B1 attempt
+-- left the function unchanged and this verify read the STANDING skip count with zero rows held.
+-- That looks identical to "the hold list was wrong", and waving it through would have swept
+-- against real workers with no hold at all. Re-running the create cleanly fixed it.
+-- SO: TREAT A SHORT COUNT AS "THE CREATE DID NOT RUN" BEFORE TREATING IT AS "MY CODES ARE WRONG".
+-- Re-run the create on its own, then re-read this. Do not proceed on a count you cannot derive.
 
 select count(*) filter (where skip) as skipped, count(*) filter (where not skip) as detectable,
        count(*) as roster
