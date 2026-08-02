@@ -237,10 +237,37 @@ select jobid, jobname, schedule, active, command
 -- EXPECT: one row, schedule '5 9 * * *', active true.
 
 select jobname, schedule, active from cron.job order by jobname;
--- EXPECT both jobs: kiosk-1705-heartbeat-snapshot '5 9 * * *' and kiosk-7pm-close-check '10 11 * * *'.
+-- EXPECT the snapshot job alongside whatever else is scheduled. As of 2026-08-03 that is
+-- kiosk-alert-tick '*/5 * * * *' and kiosk-7pm-close-check '10 11 * * *'.
+
+-- STEP 5b — PERSISTENCE CHECK, ADDED 2026-08-03 AND NOT OPTIONAL.
+-- The 2026-07-31 install verified clean here and was GONE two days later. Verifying in the same
+-- session that created the objects proves only that the statements ran. CLOSE THIS EDITOR TAB,
+-- OPEN A FRESH ONE, and re-run STEP 0. If the table or the job is missing again, stop scheduling
+-- and find out what is removing them.
 
 
--- ── INSTALLED 2026-07-31, MEASURED NOT ASSUMED ──────────────────────────────────────────────
+-- ── ⚠ THE 2026-07-31 INSTALL DID NOT SURVIVE. RE-INSTALLED 2026-08-03. ─────────────────────
+--
+--  On 2026-08-03 the precheck returned: cron.job holds kiosk-alert-tick (jobid 5) and
+--  kiosk-7pm-close-check (jobid 8) and NO snapshot job, and query 2 failed with
+--  ERROR 42P01 — relation "public.kiosk_health_snapshot" does not exist.
+--
+--  BOTH THE TABLE AND THE JOB ARE GONE, despite the install below having been verified live two
+--  days earlier. CAUSE UNKNOWN. It was not a failed install: STEP 3 returned devices_captured = 3
+--  and STEP 5 listed the job at '5 9 * * *', both read back after the fact.
+--
+--  So the maiden Saturday fire on 2026-08-01 either never happened or left nothing behind, and the
+--  Saturday-wakefulness question it was built to answer IS STILL OPEN.
+--
+--  DO NOT TREAT A SUCCESSFUL RE-INSTALL AS THE END OF THIS. After running STEP 1-5, CLOSE THE SQL
+--  EDITOR TAB, OPEN A FRESH ONE, and run STEP 0 again. If the objects are gone a second time,
+--  something is systematically removing them and re-creating them is wasted work — find the cause
+--  before scheduling anything else. Candidates worth eliminating: an editor session that never
+--  committed, a migration or reset re-run that drops public objects, or the install having landed
+--  somewhere other than this project.
+--
+-- ── INSTALLED 2026-07-31, MEASURED NOT ASSUMED (SUPERSEDED BY THE NOTE ABOVE) ────────────────
 --    STEP 0c  trg_kiosk_health_touch PRESENT — so updated_at is server-stamped and every age
 --             recorded here is a real measurement rather than a frozen insert time.
 --    STEP 3   devices_captured = 3 on the manual test fire. All three kiosk_health rows were
