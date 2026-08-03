@@ -17,7 +17,7 @@ states the inverse of the truth and must not be implemented.
 
 | | |
 |---|---|
-| **C** | A sweep-created case cannot bar a worker at the kiosk by any path, **and** a barred worker can be reinstated and punch again. **NOT YET MET — see §3.7:** the retry queue re-enters `suspendedEmployees` at `:2632` with no `barred_at` test, so a failed RPC still bars a man locally. "By any path" includes that one. |
+| **C** | A sweep-created case cannot bar a worker at the kiosk by any path, **and** a barred worker can be reinstated and punch again. **MET 2026-08-03.** Both halves demonstrated. Bar/reinstate: the 07-31 Defect C walkthrough — PIN refused while barred, reinstated, punch accepted on the FIRST attempt. Cannot-bar-by-any-path: the PAHIBALO acceptance run on the full shipping chain — sweep opened the case, **PAHIBALO fired unassisted at PIN entry and NOT GI-SUSPEND**, OK dismissed to a live keypad, Time In recorded 09:42 with Late 1h42m. That the modal was PAHIBALO is itself the proof that §3.7's `:2632` merge is gone: had it survived, the case would have entered `suspendedEmployees` and the man would have been barred instead of notified. |
 | **E** | A filed-but-unapproved leave suppresses detection for the dates it covers. |
 | **G** | A verbally authorized absence can be recorded on the day, so the detector has something to read. |
 
@@ -30,8 +30,11 @@ with the owner's spoken permission. Neither did anything wrong.
 "The alert was harmless" is not a defence if an NTE issued on those facts is ever contested. A
 detector that is safe but wrong still puts a notice in an innocent man's file.
 
-**Status 2026-07-30:** C is closed at the database layer and demonstrated (STEP 9). **C's client half,
-E and G are all still open.** The three-flag Z1 result is a checkpoint that C+D+F landed correctly —
+**Status 2026-08-03:** **C IS CLOSED — database layer, client half, and demonstrated end to end on the
+full shipping chain.** **E and G REMAIN UNBUILT, so the merge gate is NOT met and the branch does not
+merge.** Alvin (RSR 0005) is still suppressed by a hand-written hold during test runs rather than by
+E, and no artifact exists for a verbally authorised absence, which is G. Until both are built, every
+walkthrough must keep holding those men by hand — which is itself the argument for building them. The three-flag Z1 result is a checkpoint that C+D+F landed correctly —
 it is **not** permission to merge. The merge criterion is the final Z1: **one flag, RSR 0015.**
 
 ### How C is closed, and why the naming mattered
