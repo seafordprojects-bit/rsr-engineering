@@ -420,6 +420,124 @@ function PinPad({ title, note, busy, err, onSubmit, onCancel }) {
 // cannot slip one through.
 // `manual` / `closedRows` are wired up for Task 6 (manual re-suspension from this same card) — not
 // built here; kept so that task can slot in without reshaping this component's state.
+
+// ---------- Defect G — REPORTED ABSENCE (provisional) ----------
+// Design: docs/superpowers/specs/2026-08-03-defect-g-provisional-absence-design.md
+// Motivating incident: rev2 §4.1 — six days reported to Jamaica, never entered, and a factually
+// wrong NTE reached paper one hand-over from service.
+//
+// THE ROW IS NOT THE APPROVAL. It is the evidence that he spoke. So this is deliberately NOT
+// PIN-gated: §4 requires it be faster than filing formal leave "or it will not be used and this
+// recurs", and a signature step on capture is exactly the friction that loses the report.
+// Accountability lives in the data instead — filed_by records who entered it, reported_to who he
+// told, and the row is provisional and reversible. The PIN belongs on the DECISION, which is E's
+// flow, not on capture.
+//
+// status 'Provisional' suppresses detection IMMEDIATELY (owner 4b) and NEVER expires (owner 4c).
+// type 'Reported Absence' is outside payroll's LEAVE_PAID set, so this is pay-neutral: it can
+// never pay a man by itself, and payroll only selects status='Approved' so it is invisible there.
+const REPORTED_HOW = ['In person', 'Call', 'Text', 'Via workmate'];
+
+function ReportedAbsence({ emps, flash }) {
+  const [open, setOpen] = useState(false);
+  const [code, setCode] = useState('');
+  const [from, setFrom] = useState(todayYmd());
+  const [to, setTo] = useState(todayYmd());
+  const [told, setTold] = useState('');
+  const [how, setHow] = useState('');
+  const [note, setNote] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);   // same reasoning as AwolSuspensions: state lags the second tap
+
+  const reset = () => { setCode(''); setFrom(todayYmd()); setTo(todayYmd()); setTold(''); setHow(''); setNote(''); setErr(''); };
+
+  // Inclusive day count. end < start is rejected before we get here.
+  const dayCount = () => {
+    const a = new Date(from + 'T00:00:00'), b = new Date(to + 'T00:00:00');
+    return Math.floor((b - a) / 86400000) + 1;
+  };
+
+  const save = async () => {
+    if (busyRef.current) return;
+    const emp = (emps || []).find(e => e.code === code);
+    if (!emp) { setErr('Pick the worker.'); return; }
+    if (!from || !to) { setErr('Both dates are required.'); return; }
+    if (to < from) { setErr('The last day cannot be before the first.'); return; }
+    if (!told.trim()) { setErr('Record who he told — that is what this row is for.'); return; }
+    if (!how) { setErr('Record how he reported.'); return; }
+    busyRef.current = true; setBusy(true); setErr('');
+    try {
+      const { error } = await supabase.from('leave_requests').insert({
+        employee_code: emp.code,
+        employee_name: emp.name,
+        type: 'Reported Absence',
+        start_date: from,
+        end_date: to,
+        days: dayCount(),
+        reason: note.trim() || null,
+        status: 'Provisional',
+        filed_by: 'Dashboard',
+        filed_on: todayPH(),
+        reported_to: told.trim(),
+        reported_how: how,
+      });
+      if (error) throw error;
+      flash(emp.name + ' — absence recorded, pending your decision');
+      reset(); setOpen(false);
+    } catch (e) {
+      // LOUD. A silent failure here is the defect: the man walks away believed and nothing is stored.
+      setErr('NOT SAVED — ' + (e.message || 'could not reach the database') + '. Try again; do not walk away from this.');
+    } finally { busyRef.current = false; setBusy(false); }
+  };
+
+  if (!open) return html`
+    <div class="card" style="cursor:pointer" onClick=${() => { reset(); setOpen(true); }}>
+      <div class="card-h"><b>📝 Record a reported absence</b></div>
+      <div class="sub">Someone told you he will be out. Enter it now — it stops him being flagged
+        while you decide, and it is the only proof he reported.</div>
+    </div>`;
+
+  return html`
+    <div class="card" style="border-color:var(--hivis)">
+      <div class="card-h"><b>📝 Record a reported absence</b></div>
+      <${Field} label="Worker">
+        <select value=${code} onChange=${e => setCode(e.target.value)}>
+          <option value="">— pick —</option>
+          ${(emps || []).slice().sort((a, b) => String(a.name).localeCompare(String(b.name)))
+            .map(e => html`<option value=${e.code}>${e.name} · ${e.code}</option>`)}
+        </select>
+      </${Field}>
+      <${Field} label="First day out">
+        <input type="date" value=${from} onChange=${e => { setFrom(e.target.value); if (to < e.target.value) setTo(e.target.value); }} />
+      </${Field}>
+      <${Field} label="Last day out">
+        <input type="date" value=${to} onChange=${e => setTo(e.target.value)} />
+      </${Field}>
+      <${Field} label="Who did he tell?">
+        <input type="text" value=${told} placeholder="Jamaica / Raffy / coordinator name"
+               onChange=${e => setTold(e.target.value)} />
+      </${Field}>
+      <${Field} label="How did he report?">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${REPORTED_HOW.map(h => html`
+            <button class=${'btn' + (how === h ? '' : ' ghost')} onClick=${() => setHow(h)}>${h}</button>`)}
+        </div>
+      </${Field}>
+      <${Field} label="Reason he gave (optional)">
+        <input type="text" value=${note} placeholder="left blank is fine"
+               onChange=${e => setNote(e.target.value)} />
+      </${Field}>
+      ${err ? html`<div class="err" style="font-weight:700">${err}</div>` : ''}
+      <div class="sub">This does NOT approve anything. It records that he reported, stops him being
+        flagged meanwhile, and waits for your decision.</div>
+      <div style="display:flex;gap:8px;margin-top:8px">
+        <button class="btn" disabled=${busy} onClick=${save}>${busy ? 'Saving…' : 'Record it'}</button>
+        <button class="btn ghost" disabled=${busy} onClick=${() => { reset(); setOpen(false); }}>Cancel</button>
+      </div>
+    </div>`;
+}
+
 function AwolSuspensions({ emps, flash }) {
   const [rows, setRows] = useState(null);
   const [closedRows, setClosedRows] = useState([]);
@@ -1991,6 +2109,7 @@ function App() {
     </header>
     <div class="wrap">
       ${healthBanner()}
+      <${ReportedAbsence} emps=${emps} flash=${flash} />
       <${AwolSuspensions} emps=${emps} flash=${flash} />
       ${(() => {
         const needs = emps.filter(e => !e.pin).length;

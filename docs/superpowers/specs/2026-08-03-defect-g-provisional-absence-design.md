@@ -1,6 +1,7 @@
 # Defect G — the one-tap provisional absence row
 
-**Status:** design, not built. Read before implementation per the walkthrough gate.
+**Status 2026-08-03:** decisions 4a-4d TAKEN. Migration LIVE. Predicate SHIPPED to the branch
+(v2026-08-03a). Entry surface IN BUILD. Acceptance walkthrough is the ship gate.
 **Motivating incident:** rev2 §4.1 — RSR 0015 reported six days in advance to Jamaica, nothing was
 entered, and a factually wrong NTE reached paper one hand-over from service.
 
@@ -32,11 +33,17 @@ still have to be joined into the same predicate. Nothing is gained.
 | `employee_code`, `employee_name` | the absent man | — |
 | `type` | **`'Reported Absence'`** | new; outside `LEAVE_PAID`, so pay-neutral without touching payroll |
 | `start_date`, `end_date`, `days` | the dates reported | what the chain reads |
-| `status` | **`'Provisional'`** | new; distinguishes "he told someone" from "it was approved" |
+| `status` | **`'Provisional'`** | new; distinguishes "he told someone" from "it was approved". NULLABLE in the table, and a null NEVER suppresses — see §3 |
 | `filed_by` | **who tapped it** | the accountable entry, not the reporter |
 | `filed_on` | today | proves it was entered ON THE DAY, which is the whole requirement |
 | `reported_to` | **NEW nullable column** | who he told — Jamaica, the owner, a coordinator |
 | `reported_how` | **NEW nullable column** | text, call, in person, through a workmate |
+
+**MIGRATION LIVE 2026-08-03.** STEP 2 read back 17 columns with both present and nullable. STEP 0
+also found that **`filed_by`, `filed_on` and an `approved_*` trio already existed** — half of this
+row was pre-provisioned by earlier work, and the `approved_*` columns are the natural home for E's
+decision flow rather than something E needs to add. STEP 0c confirmed **primary key only, no check
+constraint on `status`**, so `'Provisional'` is accepted at the database layer.
 
 Both new columns are **nullable and additive**. Payroll reads `select('*')`, so they arrive
 harmlessly. Putting them in `reason` as free text was the alternative and is rejected: this row can
@@ -61,6 +68,12 @@ Today four places ask "is this date explained?" and every one tests `status === 
 SUPPRESSING = { 'Approved', 'Provisional', 'Pending' }
 ```
 
+**`status` IS NULLABLE, AND A NULL STATUS SUPPRESSES NOTHING.** Confirmed at both layers 2026-08-03
+rather than assumed: in JS `LEAVE_SUPPRESSES.has(r&&r.status)` returns false for `null`, `undefined`
+and `''`; in SQL `status in (…)` evaluates to NULL for a null status, which is not TRUE and therefore
+does not match. **A row must SAY it explains the date. Silence is not an explanation** — which is the
+right default for a predicate that suppresses a disciplinary process.
+
 - `Approved` — today's behaviour, unchanged.
 - `Provisional` — **Defect G.** He told someone; it is recorded; he is not flagged while it stands.
 - `Pending` — **Defect E.** A filed-but-undecided leave stops suppressing nothing.
@@ -76,7 +89,25 @@ the RPC — otherwise the case opens and something has to cancel it, which is th
 
 ---
 
-## 4. FOUR DECISIONS I CANNOT MAKE — they change what the system does for the business
+## 4. THE FOUR DECISIONS — ANSWERED BY THE OWNER 2026-08-03
+
+> **4a. Who may enter one? — JAMAICA + THE OWNER + COORDINATORS.** The three known cases went to
+> three different people; `filed_by` and `reported_to` carry the accountability.
+>
+> **4b. Immediate or on approval? — IMMEDIATELY.** *"A false report is small, visible, reversible;
+> a delayed suppression reproduces Niño's case exactly."*
+>
+> **4c. Undecided rows? — NEVER EXPIRES, ESCALATES.** Provisional and undecided past **5 working
+> days** goes loud: a daily Telegram line, red in pending, top of the future AWOL Cases tile — and
+> **keeps suppressing** until a human decides. *"Expiry is a machine decision and forbidden."*
+>
+> **4d. Is the worker told? — NOTHING BY G.** The report is his own act. Denial notification
+> belongs to the E decision flow, not to capture.
+
+The original framing and its concrete examples are kept below, because the reasoning is what a
+future reader will need if any of these is revisited.
+
+### The four decisions as originally put — they change what the system does for the business
 
 ### 4a. Who may enter one?
 
