@@ -109,8 +109,15 @@ end $$;
 create table if not exists public.awol_events (
   id            bigserial   primary key,
   employee_code text        not null,
-  event         text        not null,   -- suspended | suspended_manual | letter_received
+  event         text        not null,   -- detected | suspended_manual | letter_received
                                         -- | reinstated | kept_suspended | cancelled_leave_approved
+                                        -- | correction
+                                        -- 'suspended' is LEGACY — written by DETECTION before
+                                        -- 2026-08-03 (e.g. RSR 0015). It is never written again.
+                                        -- Historical rows keep it; the log is append-only.
+                                        -- 'correction' annotates an earlier row that stated
+                                        -- something the company no longer stands behind. It never
+                                        -- changes a case's state — see STEP 15.
   actor         text,
   note          text,
   at            timestamptz not null default now()
@@ -146,8 +153,16 @@ begin
       where employee_suspensions.active is distinct from true
   returning true into v_newly;
   if coalesce(v_newly, false) then
+    -- 'detected', NEVER 'suspended'. Detection OPENS A CASE and stops; it does not suspend anyone.
+    -- Writing 'suspended' here put a machine's name on a disciplinary act in the permanent log —
+    -- RSR 0015 carries such a row, actor 'detection', with no NTE ever issued. If that case is
+    -- contested, the log is the company's evidence, and it read as sentence-before-notice.
+    -- Per the 2026-07-29 case-lifecycle spec §2: 'detected' is system/automatic and the worker is
+    -- unaffected; 'nte_issued' and every later state are admin+PIN and are written elsewhere.
+    -- The only events naming a suspension are 'suspended_manual' (awol_manual_suspend, STEP 11,
+    -- actor = the named person) and the barring path behind the admin passcode.
     insert into awol_events(employee_code, event, actor, note)
-      values (p_code, 'suspended', 'detection', p_reason);
+      values (p_code, 'detected', 'detection', p_reason);
   end if;
   return coalesce(v_newly, false);
 end $$;
@@ -424,3 +439,49 @@ select conname, convalidated from pg_constraint where conname = 'employee_suspen
 -- select count(*) as events_remaining      from public.awol_events;            -- expect 0
 -- select conname, convalidated from pg_constraint where conname = 'employee_suspensions_no_pem';
 --   -- expect convalidated = t
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- ── STEP 15 — ONE-TIME RECORD CORRECTION: RSR 0015 ───────────────────────────
+-- The detector wrote event='suspended' actor='detection' for this worker (STEP 6, before the
+-- 2026-08-03 fix above). The log is append-only by design — anon holds no delete, and an audit
+-- trail a client can erase is not an audit trail — so the wrong row is NOT removed. It is
+-- annotated. This is the correct handling for a disciplinary record: the company shows what it
+-- recorded AND what it later established, and the gap between them is visible rather than tidied.
+--
+-- Safe to re-run with the rest of the file: the NOT EXISTS guard means a second run inserts
+-- nothing, and HAVING count(*) > 0 means nothing is inserted if no such rows exist at all.
+-- Code spelling drifts across sources ("RSR 0015" vs "RSR0015"), so matching is normalized and
+-- the note is stored under whatever spelling the existing rows actually use.
+-- ═══════════════════════════════════════════════════════════════════════════════
+insert into public.awol_events(employee_code, event, actor, note)
+select max(e.employee_code), 'correction', 'owner',
+       'Record correction entered ' || to_char(now() at time zone 'Asia/Manila', 'MM/DD/YYYY')
+    || '. The ' || count(*) || ' earlier entr(y/ies) for this worker dated '
+    || string_agg(to_char(e.at at time zone 'Asia/Manila', 'MM/DD/YYYY'), ', ' order by e.at)
+    || ', recording event=''suspended'' with actor=''detection'', were written automatically by '
+    || 'the AWOL detector on reaching three absent working days. They do not record a disciplinary '
+    || 'decision. No Notice to Explain was issued or served, no person authorised them, and the '
+    || 'detector does not set barred_at, so they did not themselves restrict this worker''s kiosk '
+    || 'access. The detector now records such a finding as ''detected''. The original entries are '
+    || 'retained unaltered: this log is corrected by addition, never by deletion.'
+  from public.awol_events e
+ where replace(upper(e.employee_code), ' ', '') = 'RSR0015'
+   and e.event = 'suspended'
+   and e.actor = 'detection'
+   and not exists (select 1 from public.awol_events c
+                    where replace(upper(c.employee_code), ' ', '') = 'RSR0015'
+                      and c.event = 'correction')
+having count(*) > 0;
+
+-- Verify: expect the original 'suspended' row(s) UNCHANGED plus exactly one 'correction' row.
+select id, employee_code, event, actor, at, note
+  from public.awol_events
+ where replace(upper(employee_code), ' ', '') = 'RSR0015'
+ order by at;
+-- Confirms the claim the note makes about access. EXPECT barred_at NULL — if it is NOT null this
+-- worker was barred by a human through awol_set_barred(), the note's wording does not fit the
+-- facts, and the inserted row must be corrected in turn before anyone relies on it.
+-- (Reads barred_at from awol-defect-cdf.sql STEP 1; run that first if the column is missing.)
+select employee_code, active, barred_at, manual, letter_received
+  from public.employee_suspensions
+ where replace(upper(employee_code), ' ', '') = 'RSR0015';
