@@ -95,7 +95,20 @@ when the row may not exist yet).
 | `coordinator_pin` | Coordinator / assistant app | `settings` (DB) | Dashboard → Assistant passcode, or `UPDATE settings SET value='…' WHERE key='coordinator_pin';` |
 | `issuance_pin` | Material-issuance app | `settings` (DB; may not exist yet) | Dashboard → Issuance passcode, or insert-if-absent + update on `key='issuance_pin'` |
 | Payroll passcode | Payroll app: unlock, Edit-times, week close, settings | `settings` row **`payroll_cfg`** — a JSON blob; the passcode is its `.pin` field (default `1234` from localStorage until first Settings save creates the row) | Payroll → Settings → *Change payroll passcode*, or the JSON-merge SQL below |
-| Kiosk `admin_password` / `assistant_password` | Kiosk Admin / Assistant panels | The kiosk gate reads its **device-local** copy (`localStorage['rsr_settings']`); rows also exist in `settings` but are not the kiosk's source of truth | Kiosk Admin → change password (device-local). A DB edit will **not** reliably change the kiosk gate. |
+| **Kiosk / dashboard admin PIN** | Kiosk Admin panel on every tablet, **and** every PIN-gated dashboard action: AWOL decisions, `awol_set_barred`, `set_non_punching`, `set_awol_clerk`, `leave_decide`, Edit-times | `kiosk_admin_credential.passcode_hash` — a **bcrypt hash** in the DB, REST-locked, read only by `admin_verify_passcode`. **Not** device-local, **not** in `settings` | Dashboard → Settings → change admin PIN (needs the current value). Lost entirely → **`kiosk-admin-passcode-reset.md`** |
+| Kiosk `assistant_password` | Kiosk Assistant panel | Device-local copy in `localStorage['rsr_settings']`; a row also exists in `settings` but is not the gate's source of truth | Kiosk Admin → change password (device-local) |
+
+> **Corrected 2026-07-30.** This table previously said the kiosk admin gate read a **device-local**
+> copy from `localStorage['rsr_settings']` and that "a DB edit will not reliably change the kiosk
+> gate." That was true until 2026-07-20, when the admin gate was replaced (`v2026-07-20g`, retiring
+> the client-side `admin123`) with the server-side bcrypt credential above. Since then the opposite
+> holds: **the database is the only source of truth, and a device-local edit changes nothing.**
+> The stale row was found during a real lockout — it would have sent the reader to `localStorage` at
+> exactly the moment they were locked out of a DB-backed credential.
+>
+> There is a **separate** `settings` row `key='admin_password'` left over from the old scheme. It is
+> **inert** — nothing reads it. Changing it has no effect on any gate. Do not use it to reset
+> anything.
 
 ### Payroll passcode is a JSON blob — reset it like this
 

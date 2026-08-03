@@ -48,6 +48,9 @@ const ROSTER = [
   { code: 'PEM9001', pin: '900001', name: 'PEM Niner Pedro',     dept: 'Electrical', home_site: 'Mandaue', shift: 8, daily_rate: 700 },
   { code: 'PEM9042', pin: '987654', name: 'PEM Band Bella',      dept: 'Instrument', home_site: 'Carmen',  shift: 8, daily_rate: 680 },
   { code: 'RSR0303', pin: '333333', name: 'Night-Owl Nardo',     dept: 'Blasting',   home_site: 'Mandaue', shift: 8, daily_rate: 560 },
+  // G15 fixtures (never-punched/30-day safety net + inactive skip):
+  { code: 'RSR0404', pin: '404040', name: 'Old-Punch Ofelia',    dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 510 },
+  { code: 'RSR0500', pin: '500500', name: 'Inactive Ising',      dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 510, is_active: false },
 ];
 const pinOf = (code) => ROSTER.find(r => r.code === code).pin;
 
@@ -63,8 +66,14 @@ const mock = {
   externalHits: {},    // host → count of external requests intercepted (all mocked)
   escaped: [],         // requests that reached an UNRECOGNISED external host (must stay empty)
   forbiddenHits: [],   // any contact with the live/abandoned Supabase refs (must stay empty)
+  suspensions: {},     // employee_code → row {employee_code,active,reason,suspended_on,absent_dates,awol_group_msg_id,awol_group_chat}
+  telegram: [],        // captured Telegram sends: {method, chat_id, text, hasButtons}
+  tgConfigured: false, // when true, /settings returns a live tg_token + tg_awol_group
+  awolGroupId: '',     // the mocked AWOL group chat id
+  tgMsgSeq: 1000,      // incrementing message_id source
+  rpcSuspendFail: false, // when true, /rpc/awol_set_suspended 500s (simulates offline for FIX 1 coverage)
 };
-const resetCapture = () => { mock.writes = []; };
+const resetCapture = () => { mock.writes = []; mock.telegram = []; };
 
 // ==============================================================================
 //  Tiny static file server (serves the repo over http://localhost so the kiosk
@@ -159,13 +168,113 @@ async function newKioskContext(browser, base, initMs) {
           return json(409, { code: '23505', message: 'duplicate key value violates unique constraint', details: '', hint: '' });
         return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify(Array.isArray(payload) ? payload : [payload]) });
       }
+      // AWOL: shared suspension table (read + msg-id patch)
+      if (p.endsWith('/rest/v1/employee_suspensions')) {
+        if (method === 'GET') {
+          const active = Object.values(mock.suspensions).filter(r => r.active);
+          return json(200, active);
+        }
+        if (method === 'PATCH') {
+          let body = null; try { body = JSON.parse(req.postData() || 'null'); } catch {}
+          const codeMatch = /employee_code=eq\.([^&]+)/.exec(new URL(url).search || '');
+          const code = codeMatch ? decodeURIComponent(codeMatch[1]) : null;
+          if (code && mock.suspensions[code] && body) Object.assign(mock.suspensions[code], body);
+          return json(200, code && mock.suspensions[code] ? [mock.suspensions[code]] : []);
+        }
+      }
+      // AWOL: dedup RPCs
+      if (p.endsWith('/rest/v1/rpc/awol_set_suspended')) {
+        if (mock.rpcSuspendFail) return json(500, { code: '500', message: 'injected failure (mock.rpcSuspendFail)', details: '', hint: '' });
+        let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+        if (/^PEM/i.test(String(b.p_code || '').replace(/\s/g, ''))) return json(200, false);
+        const ex = mock.suspensions[b.p_code];
+        if (ex && ex.active) return json(200, false);
+        mock.suspensions[b.p_code] = { employee_code: b.p_code, active: true, reason: b.p_reason,
+          suspended_on: b.p_on, absent_dates: b.p_dates, awol_group_msg_id: null, awol_group_chat: null };
+        return json(200, true);
+      }
+      if (p.endsWith('/rest/v1/rpc/awol_cancel_leave_approved')) {
+        // (2026-07-26) awol_reinstate was renamed to awol_cancel_leave_approved — this is now the
+        // ONLY kiosk-side un-suspension path (leave-approval auto-cancel); same shape, new name.
+        let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+        const r = mock.suspensions[b.p_code];
+        if (!r || !r.active) return json(200, { newly: false });
+        r.active = false; r.reinstated_by = b.p_by; r.reinstated_on = b.p_on;
+        return json(200, { newly: true, awol_group_msg_id: r.awol_group_msg_id, awol_group_chat: r.awol_group_chat });
+      }
+      // AWOL: dashboard two-step gate RPCs (Task 7 — mocked to mirror the real DB functions
+      // from Task 1: clerk ticks the letter, admin decides; approve is refused without the tick).
+      if (p.endsWith('/rest/v1/rpc/awol_letter_received')) {
+        let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+        const r = mock.suspensions[b.p_code];
+        if (!r || !r.active || r.letter_received) return json(200, { newly: false });
+        r.letter_received = true; r.letter_received_by = b.p_by;
+        return json(200, { newly: true });
+      }
+      if (p.endsWith('/rest/v1/rpc/awol_admin_decide')) {
+        let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+        const r = mock.suspensions[b.p_code];
+        if (!r || !r.active) return json(200, { newly: false, reason: 'not currently suspended' });
+        if (b.p_decision === 'approve') {
+          if (!r.letter_received) return json(200, { newly: false, reason: 'letter not yet confirmed' });
+          r.active = false; r.last_decision = 'approved'; r.reinstated_by = b.p_by;
+          return json(200, { newly: true, awol_group_msg_id: r.awol_group_msg_id, awol_group_chat: r.awol_group_chat });
+        }
+        r.letter_received = false; r.letter_received_by = null; r.last_decision = 'kept';
+        return json(200, { newly: true, kept: true });
+      }
+      if (p.endsWith('/rest/v1/rpc/awol_manual_suspend')) {
+        let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+        if (/^PEM/i.test(String(b.p_code || '').replace(/\s/g, '')))
+          return json(200, { newly: false, reason: 'PAKYAW/PEM workers are exempt from AWOL' });
+        if (!Array.isArray(b.p_dates) || !b.p_dates.length)
+          return json(200, { newly: false, reason: 'at least one absent date is required' });
+        const ex = mock.suspensions[b.p_code];
+        if (ex && ex.active) return json(200, { newly: false, reason: 'already suspended' });
+        mock.suspensions[b.p_code] = { employee_code: b.p_code, active: true, reason: b.p_reason,
+          suspended_on: '', absent_dates: b.p_dates, awol_group_msg_id: null, awol_group_chat: null,
+          letter_received: !!b.p_letter_on_file, manual: true, ref_note: b.p_ref_note || null };
+        return json(200, { newly: true });
+      }
+      // settings: tg config only when a scenario opts in (keeps existing scenarios' settings=[] behaviour)
+      if (p.endsWith('/rest/v1/settings') && method === 'GET') {
+        if (!mock.tgConfigured) return json(200, []);
+        return json(200, [
+          { key: 'tg_token', value: 'TESTTOKEN0000000000000000000000000000' },
+          { key: 'tg_awol_group', value: mock.awolGroupId || '' },
+          { key: 'mgr_ids', value: '111,222' },
+        ]);
+      }
       // every other table read (settings, leaves, approvals, late breaks, pending_approvals…)
       if (method === 'GET') return json(200, []);
       return route.fulfill({ status: 201, contentType: 'application/json', body: '[]' });
     }
 
-    // Telegram — should never be hit (no token configured) but stub defensively.
-    if (host === 'api.telegram.org') return json(200, { ok: true, result: {} });
+    // Telegram — mocked capture: sendMessage/editMessageText are recorded to mock.telegram.
+    if (host === 'api.telegram.org') {
+      const p = new URL(url).pathname;
+      let b = {}; try { b = JSON.parse(req.postData() || '{}'); } catch {}
+      if (p.endsWith('/sendMessage')) {
+        mock.telegram.push({ method: 'sendMessage', chat_id: String(b.chat_id), text: String(b.text || ''), hasButtons: !!b.reply_markup });
+        return json(200, { ok: true, result: { message_id: ++mock.tgMsgSeq } });
+      }
+      if (p.endsWith('/editMessageText')) {
+        mock.telegram.push({ method: 'editMessageText', chat_id: String(b.chat_id), text: String(b.text || ''), hasButtons: false });
+        return json(200, { ok: true, result: { message_id: b.message_id } });
+      }
+      if (p.includes('/getUpdates')) {
+        const cbs = mock.tgCallbacks || [];
+        mock.tgCallbacks = [];
+        return json(200, { ok: true, result: cbs.map((c, i) => ({ update_id: i + 1, callback_query: c })) });
+      }
+      if (p.endsWith('/answerCallbackQuery')) {
+        // Captured the same way as sendMessage/editMessageText — this is the only evidence that
+        // distinguishes "the handler branch ran and deliberately answered" from "nothing happened".
+        mock.telegram.push({ method: 'answerCallbackQuery', callback_query_id: String(b.callback_query_id || ''), text: String(b.text || ''), hasButtons: false });
+        return json(200, { ok: true, result: true });
+      }
+      return json(200, { ok: true, result: {} });
+    }
 
     // Anything else is an UNEXPECTED escape → record and hard-block it.
     mock.escaped.push(url);
@@ -193,7 +302,29 @@ async function bootstrap(page, activeSite = 'Carmen') {
   }, activeSite);
 }
 const setNow = (page, ms) => page.evaluate(ms => window.__setNow(ms), ms);
-const enterPin = (page, pin) => page.evaluate((p) => { kpClr(); for (const d of p) kp(d); return curEmp ? curEmp.code : null; }, pin);
+// enterPin is dual-signature (existing call sites everywhere pass (page, pin); AWOL scenarios
+// from later tasks call the single-arg enterPin(code) form — see currentPage below):
+//   enterPin(page, pin)  — legacy: drives the keypad on an explicit page, by PIN.
+//   enterPin(code)       — new: drives the keypad on the ACTIVE scenario page, by employee code.
+let currentPage = null; // set by scenario() to the in-flight page, for the single-arg enterPin(code) form
+async function enterPin(a, b) {
+  if (a && typeof a.evaluate === 'function') {
+    // legacy: enterPin(page, pin)
+    return a.evaluate((p) => { kpClr(); for (const d of p) kp(d); return curEmp ? curEmp.code : null; }, b);
+  }
+  // new: enterPin(code) — drive the REAL keypad so the kp() PIN-entry hooks (modal, preview) run.
+  // Drives currentPage (the scenario's PRIMARY page). For a multi-page scenario, drive the
+  // secondary page directly via page.evaluate(...) instead of this 1-arg helper.
+  const pin = pinOf(a);
+  return currentPage.evaluate((pn) => { kpClr(); for (const d of pn) kp(d); }, pin);
+}
+// Read whether the Bisaya modal is showing + its text.
+async function bisayaState() {
+  return await currentPage.evaluate(() => ({
+    show: document.getElementById('bisaya-modal').classList.contains('show'),
+    text: (document.getElementById('bisaya-text') || {}).textContent || '',
+  }));
+}
 const doPunch = (page, type) => page.evaluate(async (t) => { await punch(t); }, type);
 const recAt = (page, code, dateKey) => page.evaluate(([c, k]) => {
   const r = records[c + '_' + k];
@@ -254,8 +385,14 @@ console.log(`safety: all external traffic mocked; live host ${FORBIDDEN_HOST} is
 async function scenario(name, initMs, fn) {
   resetCapture();
   mock.attendanceMode = 'ok'; mock.attendanceDelayMs = 0; mock.poisonCodes = new Set();
+  mock.suspensions = {};
+  mock.tgCallbacks = [];
+  mock.tgConfigured = false;
+  mock.awolGroupId = '';
+  mock.rpcSuspendFail = false;
   const context = await newKioskContext(browser, base, initMs);
   const page = await context.newPage();
+  currentPage = page; // active page for the single-arg enterPin(code)/bisayaState() helpers
   page.on('pageerror', e => { if (!/classList/.test(e.message)) console.log(`        \x1b[33m[pageerror] ${e.message}\x1b[0m`); });
   try {
     await page.goto(kioskURL, { waitUntil: 'domcontentloaded' });
@@ -820,6 +957,714 @@ await scenario('F9 · swept-day PIN entry → heads-up modal, nothing recorded',
             && r.punches.timeout === '05:00:00 PM';                    // PIN entry changed nothing — still the swept 5:00
   report('F9 · swept-day PIN heads-up modal (display-only)', pass,
     `modal=${modalShown} toEnabled=${toEnabled} timeout=${r.punches.timeout}`, sends());
+});
+
+await scenario('G0 · AWOL group id loads from settings', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1001112223334';
+  await page.evaluate(() => loadTgFromCloud());
+  const g = await page.evaluate(() => tgAwolGroup);
+  report('G0 · tg_awol_group loaded', g === '-1001112223334', `tgAwolGroup=${g}`);
+});
+
+await scenario('G-load · poll surfaces a shared suspension', manila(2026,7,24,8,0), async (page) => {
+  mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'x', suspended_on:'07/24/2026',
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'] };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const has = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  report('G-load · shared suspension cached', has, `cached=${has}`);
+});
+
+// G1 — a suspended worker is fully blocked at PIN entry (identification time), on ANY punch
+// attempt, with the owner-approved Bisaya modal. No punch is recorded — dismiss (kpClr) clears
+// the PIN so the worker walks away; nothing writes to records/msMap.
+await scenario('G1 · suspended PIN → blocking modal, no punch', manila(2026,7,24,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL',
+    suspended_on:'07/24/2026', absent_dates:['2026-07-21','2026-07-22','2026-07-23'] };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  await enterPin('RSR0100');
+  const b = await bisayaState();
+  const r = await recAt(page, 'RSR0100', k);
+  const pass = b.show && /GI-SUSPEND/.test(b.text) && (!r || !r.punches.timein);
+  report('G1 · suspended PIN blocking modal', pass,
+    `modal=${b.show} text="${b.text.slice(0,22)}" timein=${r?.punches.timein||'(none)'}`, sends());
+});
+
+await scenario('G2 · 3 absences, no leave → suspend + letter alert', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1009998887776';
+  await page.evaluate(() => loadTgFromCloud());
+  // RSR0100 has no records for the recent absent window → absent; ensure not already suspended.
+  // Seeded a real timein 25 days back (outside collectAbsentDates' 21-day lookback, so it plays no
+  // part in the absence chain itself) so hasRecentPunchHistory() sees a worker WITH history who has
+  // since gone quiet — the G15 safety net is scoped to workers with NO punch in 30 days, and this
+  // worker must still be judged absent/suspended, unlike G15's never-punched Mandaue case.
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; });
+  await page.evaluate(() => checkAllAbsences());
+  const alert = mock.telegram.find(m => m.method === 'sendMessage' && m.chat_id === '-1009998887776' && /AWOL — Account Suspended/.test(m.text));
+  const hasLetter = alert && /awol-letter\.html\?name=/.test(alert.text) && /dates=/.test(alert.text);
+  const noButtons = alert && alert.hasButtons === false; // owner request: AWOL group alert is notification-only (coordinators are members)
+  const inDb = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
+  const msgIdPersisted = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].awol_group_msg_id);
+  report('G2 · suspend alert to group w/ letter, no buttons, msg-id persisted', !!alert && !!hasLetter && noButtons && !!inDb && msgIdPersisted,
+    `routed=${!!alert} letter=${!!hasLetter} buttons=${alert&&alert.hasButtons} db=${!!inDb} msgId=${mock.suspensions['RSR0100']&&mock.suspensions['RSR0100'].awol_group_msg_id}`);
+});
+
+await scenario('G3 · pending leave → HOLD, flag once', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1009998887776';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; // recent-enough history (see G2)
+    leaveRequests = [{ code:'RSR0100', status:'Pending', startDate:'2026-07-21', endDate:'2026-07-24' }]; });
+  await page.evaluate(() => checkAllAbsences());
+  await page.evaluate(() => checkAllAbsences()); // second run must NOT re-flag
+  const flags = mock.telegram.filter(m => /Pending leave — please decide/.test(m.text));
+  const notSuspended = !(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  report('G3 · hold + one-time flag', flags.length === 1 && notSuspended, `flags=${flags.length} suspended=${!notSuspended}`);
+});
+
+// (2026-07-26) reinstateEmployee is now the leave-approval auto-cancel ONLY (dashboard owns every
+// other reinstatement path) — it posts/edits "CANCELLED", never "Reinstated"/"RESOLVED".
+await scenario('G4 · leave-approval cancel → closing msg + CANCELLED edit, once', manila(2026,7,24,9,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1005554443332';
+  await page.evaluate(() => loadTgFromCloud());
+  mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'1234', awol_group_chat:'-1005554443332' };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator Bob'));
+  await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator Bob')); // second → {newly:false}, no dup
+  // (FINDING 6) Both messages say "CANCELLED", but the post (sendAwolCancelledMsg's sendMessage —
+  // the closing note to the AWOL target) and the edit (its editMessageText on the original group
+  // alert) have DISTINCT bodies. Match on text that appears in ONLY ONE of them, so a future edit
+  // that swaps or collapses the two message bodies is still caught — a bare /CANCELLED/ on both
+  // sides can't tell the two apart.
+  const posts = mock.telegram.filter(m => m.method === 'sendMessage' && /CANCELLED/.test(m.text) && /issued in error/.test(m.text));
+  const edits = mock.telegram.filter(m => m.method === 'editMessageText' && /CANCELLED/.test(m.text) && /: leave approved/.test(m.text));
+  const cleared = !(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  report('G4 · reinstate closing log once', posts.length === 1 && edits.length === 1 && cleared,
+    `posts=${posts.length} edits=${edits.length} cleared=${cleared}`);
+});
+
+// G5 — cross-device integration: a suspension made on simulated kiosk A (the scenario's
+// page) must be DB-SHARED — visible and blocking on a second simulated kiosk (its own
+// browser context/page, "kiosk B") — and a reinstate on A must clear the block on B's
+// next poll. Exercises already-built code only (Tasks 5–8); no kiosk changes.
+await scenario('G5 · cross-device block + clear', manila(2026,7,24,8,0), async (page) => {
+  // Kiosk A (the scenario's page) suspends the whole roster (no attendance records exist
+  // for the prior days in this fresh scenario) into the shared mocked store. Assert on
+  // RSR0100 specifically.
+  mock.tgConfigured = true; mock.awolGroupId = '-1006667778889';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // recent-enough history (see G2)
+  await page.evaluate(() => checkAllAbsences());
+  const inDb = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
+
+  // Kiosk B: a SEPARATE browser context/page against the same static server, sharing the
+  // same mocked "DB" (mock.suspensions) through the same intercepted Supabase endpoints.
+  // Driven directly via pageB.evaluate(...) — NOT the 1-arg enterPin() helper, which only
+  // drives the scenario's primary page (currentPage).
+  const ctxB = await newKioskContext(browser, base, manila(2026,7,24,8,5));
+  const pageB = await ctxB.newPage();
+  await pageB.goto(kioskURL, { waitUntil: 'domcontentloaded' });
+  await pageB.waitForFunction(() => typeof loadSuspensionsFromCloud === 'function' && typeof punch === 'function', null, { timeout: 8000 });
+  await pageB.evaluate(() => loadSuspensionsFromCloud());
+  const blockedOnB = await pageB.evaluate(() => !!suspendedEmployees['RSR0100']);
+
+  // Reinstate from A → B's next poll clears it.
+  await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator'));
+  await pageB.evaluate(() => loadSuspensionsFromCloud());
+  const clearedOnB = await pageB.evaluate(() => !suspendedEmployees['RSR0100']);
+  await ctxB.close();
+
+  report('G5 · cross-device block then clear', inDb && blockedOnB && clearedOnB,
+    `A_suspended=${inDb} B_blocked=${blockedOnB} B_cleared=${clearedOnB}`);
+});
+
+// G6 — FIX 1 lock: an offline suspend (RPC throws) must still block LOCALLY, survive a
+// loadSuspensionsFromCloud() poll (must NOT be wiped by the DB's empty active-rows set),
+// and sync + alert once connectivity returns via retryAwolUnsynced().
+await scenario('G6 · offline suspend survives poll + syncs on retry', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1002223334445'; mock.rpcSuspendFail = true;
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {};
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // recent-enough history (see G2)
+  await page.evaluate(() => checkAllAbsences());
+  const blockedOffline = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  const notInDbYet = mock.suspensions['RSR0100'] === undefined;
+
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const stillBlockedAfterPoll = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+
+  mock.rpcSuspendFail = false;
+  await page.evaluate(() => retryAwolUnsynced());
+  const syncedActive = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
+  const alerted = mock.telegram.some(m => m.method === 'sendMessage' && /AWOL — Account Suspended/.test(m.text) && /RSR0100/.test(m.text));
+
+  report('G6 · offline suspend survives poll, syncs+alerts on retry',
+    blockedOffline && notInDbYet && stillBlockedAfterPoll && syncedActive && alerted,
+    `blockedOffline=${blockedOffline} notInDbYet=${notInDbYet} stillBlockedAfterPoll=${stillBlockedAfterPoll} syncedActive=${!!syncedActive} alerted=${alerted}`);
+});
+
+// G7 — resurrection-bug lock: an offline suspend (never reached the DB, only tracked in
+// awolUnsynced) that gets reinstated BEFORE connectivity returns must NOT come back from
+// the dead when retryAwolUnsynced() finally runs — reinstateEmployee must also clear the
+// employee's awolUnsynced entry, or the deferred retry re-suspends + re-alerts on a worker
+// the admin already cleared.
+await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurrection)', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007778889990';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {};
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // recent-enough history (see G2)
+
+  // Offline suspend: RPC fails → local block only, never reaches the DB.
+  mock.rpcSuspendFail = true;
+  await page.evaluate(() => checkAllAbsences());
+  const blockedOffline = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  const notInDbYet = mock.suspensions['RSR0100'] === undefined;
+
+  // Admin reinstates while still offline (awol_cancel_leave_approved finds no active DB row → {newly:false}).
+  await page.evaluate(() => reinstateEmployee('RSR0100', 'Admin'));
+  const unsyncedCleared = await page.evaluate(() => !awolUnsynced['RSR0100']);
+  const localCleared = await page.evaluate(() => !suspendedEmployees['RSR0100']);
+
+  // Reconnect: retry must NOT resurrect the already-reinstated worker.
+  mock.rpcSuspendFail = false; mock.telegram = [];
+  await page.evaluate(async () => { await retryAwolUnsynced(); await loadSuspensionsFromCloud(); });
+  const notResurrectedInDb = !(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true);
+  // Scoped to RSR0100: other absent roster members legitimately sync+alert on this same retry
+  // (they were never reinstated), so a blanket "no AWOL alert at all" check would false-fail.
+  const noReAlert = !mock.telegram.some(m => m.method === 'sendMessage' && /AWOL — Account Suspended/.test(m.text) && /RSR0100/.test(m.text));
+  const stillClearedLocally = await page.evaluate(() => !suspendedEmployees['RSR0100']);
+
+  report('G7 · reinstate-before-reconnect: no resurrection',
+    blockedOffline && notInDbYet && unsyncedCleared && localCleared && notResurrectedInDb && noReAlert && stillClearedLocally,
+    `blockedOffline=${blockedOffline} notInDbYet=${notInDbYet} unsyncedCleared=${unsyncedCleared} localCleared=${localCleared} notResurrectedInDb=${notResurrectedInDb} noReAlert=${noReAlert} stillClearedLocally=${stillClearedLocally}`);
+});
+
+// G8 — REST-DAY POLICY (owner 2026-07-25): a no-punch Sunday must be TRANSPARENT — not counted as
+// absent, and does not break the consecutive-absence chain. Self-checked below via the REAL
+// dateKeyOffset()/isSundayKey() functions before each case runs.
+//   Case C (RSR0303, "today" = a real Monday) — THE OWNER'S EXACT REPORTED BUG, reproduced and locked:
+//     worked Thursday, absent Fri+Sat, no-punch Sunday. Back-scan i=1→Sun(skip), i=2→Sat(absent #1),
+//     i=3→Fri(absent #2), i=4→Thu(worked→break) = 2 working-day absences. MUST NOT suspend, and
+//     collectAbsentDates must be exactly [Sat,Fri] (length 2) with the Sunday date absent from it.
+//     Pre-fix, this identical setup counted Sunday as a 3rd absence and wrongly suspended the worker —
+//     this is the false positive the owner reported, not a derivative of it.
+//   Case A (RSR0100, "today" = the following Tuesday) — absent Fri+Sat+Mon, no-punch Sunday: MUST
+//     suspend on exactly the 3 working-day absences, with the Sunday date excluded from the run.
+//   Case B (RSR0207, same Tuesday) — same window but ALSO worked Monday: MUST NOT suspend — but this
+//     case tests a DIFFERENT thing than Case C (a punched day halting the chain outright at i=1, chain
+//     length 0), not "2 absences correctly not padded to 3". Kept as its own guard, relabeled accurately.
+await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', manila(2026,7,20,8,0), async (page) => {
+  // Self-check: confirm the harness clock really is a Monday and the offsets line up as documented,
+  // using the REAL kiosk functions (not a reimplementation) so this doubles as a function-level guard.
+  const dowMon = await page.evaluate(() => new Date().getDay()); // 1 = Monday
+  const keysMon = await page.evaluate(() => [1,2,3,4].map(i => dateKeyOffset(-i))); // [Sun,Sat,Fri,Thu]
+  const sundayFlagsMon = await page.evaluate(ks => ks.map(k => isSundayKey(k)), keysMon);
+  const offsetsOkMon = dowMon === 1 && JSON.stringify(sundayFlagsMon) === JSON.stringify([true, false, false, false]);
+  report('G8 · scenario clock is a real Monday; i=1..4 → Sun/Sat/Fri/Thu', offsetsOkMon,
+    `today.getDay()=${dowMon} keys(i=1..4)=${keysMon.join(', ')} isSunday=[${sundayFlagsMon.join(', ')}]`);
+  const [sunKey, satKey, friKey, thuKey] = keysMon;
+
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {}; });
+  mock.tgConfigured = true; mock.awolGroupId = '-1008889990001';
+  await page.evaluate(() => loadTgFromCloud());
+  // Snapshot the full roster once so each case can re-filter `employees` from the same starting
+  // point (filtering is destructive/reassigning, so re-filtering an already-filtered array would
+  // silently lose the other cases' codes).
+  await page.evaluate(() => { window.__g8Roster = employees.slice(); });
+
+  // ── Case C (RSR0303) — the owner's exact reported bug, on a real Monday ──────────────────────
+  // NOTE: deliberately an RSR code. This case used to use PEM9001; once PAKYAW/PEM workers became
+  // exempt from AWOL (G9), the exemption would fire FIRST and this scenario would pass without ever
+  // exercising the Sunday rest-day chain — silently gutting the owner's locked regression guard.
+  await page.evaluate(() => { employees = window.__g8Roster.filter(e => e.code === 'RSR0303'); });
+  await page.evaluate(thu => {
+    records['RSR0303_' + thu] = { punches: { timein: '08:00:00 AM' } }; // worked Thursday → caps the chain
+    // Fri/Sat intentionally unseeded → isAbsentOnDate() defaults to absent (no timein, no leave)
+    // Sunday intentionally unseeded → moot either way, transparent regardless of a record
+  }, thuKey);
+  const chainC = await page.evaluate(code => collectAbsentDates(code), 'RSR0303');
+  await page.evaluate(() => checkAllAbsences());
+  const susC = mock.suspensions['RSR0303'] && mock.suspensions['RSR0303'].active === true;
+  const exactlyTwoC = chainC.length === 2;
+  const noSundayInC = !chainC.includes(sunKey);
+  const hasFriSatC = [friKey, satKey].every(k => chainC.includes(k));
+  report('G8c · Monday, 2 real absences (Fri+Sat) + rest-day Sunday → NOT suspended (owner-reported bug, locked)',
+    !susC && exactlyTwoC && noSundayInC && hasFriSatC,
+    `suspended=${!!susC} chain=[${chainC.join(', ')}] Sunday(${sunKey})excluded=${noSundayInC} — pre-fix this setup counted Sunday as a 3rd absence and wrongly suspended`);
+
+  // ── advance the clock one day, to the following Tuesday, for Cases A + B ─────────────────────
+  await setNow(page, manila(2026,7,21,8,0));
+  const dowTue = await page.evaluate(() => new Date().getDay()); // 2 = Tuesday
+  const keysTue = await page.evaluate(() => [1,2,3,4,5].map(i => dateKeyOffset(-i))); // [Mon,Sun,Sat,Fri,Thu]
+  const sundayFlagsTue = await page.evaluate(ks => ks.map(k => isSundayKey(k)), keysTue);
+  const offsetsOkTue = dowTue === 2 && JSON.stringify(sundayFlagsTue) === JSON.stringify([false, true, false, false, false]);
+  report('G8 · clock advanced to a real Tuesday; i=1..5 → Mon/Sun/Sat/Fri/Thu', offsetsOkTue,
+    `today.getDay()=${dowTue} keys(i=1..5)=${keysTue.join(', ')} isSunday=[${sundayFlagsTue.join(', ')}]`);
+  const [monKey, sunKey2, satKey2, friKey2, thuKey2] = keysTue;
+
+  await page.evaluate(() => { employees = window.__g8Roster.filter(e => ['RSR0100','RSR0207'].includes(e.code)); });
+
+  // Seed BOTH workers' full history BEFORE running detection — checkAllAbsences() scans the whole
+  // (now 2-employee) roster in one pass, so a partially-seeded worker would look falsely absent if
+  // detection ran mid-seed.
+  await page.evaluate(([thu, mon]) => {
+    records['RSR0100_' + thu] = { punches: { timein: '08:00:00 AM' } }; // Case A: worked Thursday → caps the chain
+    // Fri/Sat/Mon intentionally unseeded → isAbsentOnDate() defaults to absent (no timein, no leave)
+    records['RSR0207_' + thu] = { punches: { timein: '08:00:00 AM' } }; // Case B: worked Thursday
+    records['RSR0207_' + mon] = { punches: { timein: '08:00:00 AM' } }; // Case B: worked Monday → halts the chain outright
+    // Fri/Sat intentionally unseeded → absent; Sunday unseeded either way (transparent regardless)
+  }, [thuKey2, monKey]);
+
+  const chainA = await page.evaluate(code => collectAbsentDates(code), 'RSR0100');
+  const chainB = await page.evaluate(code => collectAbsentDates(code), 'RSR0207');
+  await page.evaluate(() => checkAllAbsences());
+
+  const susA = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
+  const exactlyThreeA = chainA.length === 3;
+  const noSundayInA = !chainA.includes(sunKey2);
+  const hasFriSatMonA = [friKey2, satKey2, monKey].every(k => chainA.includes(k));
+  report('G8a · Fri+Sat+Mon absent, Sunday excluded → SUSPEND', !!susA && exactlyThreeA && noSundayInA && hasFriSatMonA,
+    `suspended=${!!susA} chain=[${chainA.join(', ')}] Sunday(${sunKey2})excluded=${noSundayInA}`);
+
+  const susB = mock.suspensions['RSR0207'] && mock.suspensions['RSR0207'].active === true;
+  const chainZeroB = chainB.length === 0;
+  report('G8b · a punched day (Monday) halts the chain outright → NOT suspended', !susB && chainZeroB,
+    `suspended=${!!susB} chain=[${chainB.join(', ')}] (worked Monday is i=1, the scan breaks before Fri/Sat are ever reached — distinct from G8c's real 2-absence run)`);
+});
+
+// G10 — PAKYAW/PEM EXEMPTION (owner 2026-07-26): piece-rate/casual workers have irregular
+// attendance by nature. They are skipped COMPLETELY — no suspension, no alert, no letter, and
+// no pending-leave HOLD note. The employee CODE PREFIX is the marker (coordinator.js empType).
+// NOTE: named G10, not G9 — an existing "G9" scenario (SMS/violation Sunday-guard) already
+// occupies that label further down in this file; reusing G9 here would collide in the report output.
+await scenario('G10 · PAKYAW/PEM workers are exempt from AWOL', manila(2026, 7, 21, 8, 0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007776665554';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {}; });
+
+  // PEM9001 with a 5+ working-day absence run and NO punches at all — far past the 3-day threshold.
+  await page.evaluate(() => { employees = employees.filter(e => e.code === 'PEM9001'); });
+  const chain = await page.evaluate(() => collectAbsentDates('PEM9001'));
+  await page.evaluate(() => checkAllAbsences());
+
+  const suspended = !!(mock.suspensions['PEM9001'] && mock.suspensions['PEM9001'].active);
+  const localBlock = await page.evaluate(() => !!suspendedEmployees['PEM9001']);
+  const anyTelegram = mock.telegram.length > 0;
+  report('G10a · PEM worker absent 5+ working days → never suspended, no alert, no letter',
+    !suspended && !localBlock && !anyTelegram && chain.length >= 5,
+    `absentChain=${chain.length} suspendedInDb=${suspended} blockedLocally=${localBlock} telegramSends=${mock.telegram.length}`);
+
+  // The space-separated live spelling must be exempt too ('PEM 0001' on the real roster).
+  const bothSpellings = await page.evaluate(() => [isPemCode('PEM 0001'), isPemCode('PEM9001'), isPemCode('RSR0100')]);
+  report('G10b · both PEM spellings exempt, RSR not',
+    JSON.stringify(bothSpellings) === JSON.stringify([true, true, false]),
+    `isPemCode(['PEM 0001','PEM9001','RSR0100']) = ${JSON.stringify(bothSpellings)}`);
+
+  // A PEM worker with a PENDING leave must not even generate the "please decide" HOLD note.
+  await page.evaluate(() => {
+    leaveRequests.push({ code: 'PEM9001', status: 'Pending', startDate: '07/15/2026', endDate: '07/20/2026' });
+  });
+  mock.telegram = [];
+  await page.evaluate(() => checkAllAbsences());
+  // Assert the pre-existing suspendedEmployees[code] guard did NOT shadow this check — a PEM
+  // worker must independently prove "no HOLD note" via the isPemCode skip, not by accident because
+  // it happened to already be suspended (it never should be).
+  const stillNotSuspended = await page.evaluate(() => !suspendedEmployees['PEM9001']);
+  const holdFlagged = await page.evaluate(() => !!awolPending['PEM9001']);
+  report('G10c · PEM worker with a pending leave gets no HOLD note either',
+    stillNotSuspended && mock.telegram.length === 0 && !holdFlagged,
+    `stillNotSuspended=${stillNotSuspended} telegramSends=${mock.telegram.length} holdFlagged=${holdFlagged}`);
+});
+
+// G11 — DASHBOARD IS THE ONLY DOOR (owner 2026-07-26): the kiosk keeps the 🚫 Suspended badge but
+// has NO reinstate control, and the Telegram reinstate/reject buttons are gone. The only remaining
+// kiosk-side un-suspension is the leave-approval auto-cancel, which must be labelled CANCELLED.
+await scenario('G11 · kiosk has no reinstate control; leave cancel is labelled CANCELLED', manila(2026, 7, 21, 8, 0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1005554443332';
+  await page.evaluate(() => loadTgFromCloud());
+  mock.suspensions['RSR0100'] = { employee_code: 'RSR0100', active: true, reason: 'AWOL',
+    suspended_on: '07/20/2026', absent_dates: ['2026-07-17','2026-07-18','2026-07-20'],
+    awol_group_msg_id: '9001', awol_group_chat: '-1005554443332', letter_received: false };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  await page.evaluate(() => renderRoster());
+
+  const rosterHtml = await page.evaluate(() => {
+    const c = document.getElementById('emp-roster');
+    return c ? c.innerHTML : '';
+  });
+  report('G11a · Staff roster shows the Suspended badge but NO reinstate button',
+    /Suspended/.test(rosterHtml) && !/reinstateEmployee\(/.test(rosterHtml) && /RSR Admin dashboard/.test(rosterHtml),
+    `hasBadge=${/Suspended/.test(rosterHtml)} hasButton=${/reinstateEmployee\(/.test(rosterHtml)}`);
+
+  // The Telegram callback handler must no longer act on approve_reinstate_* / reject_reinstate_*.
+  // A "still blocked afterwards" check alone is worthless here — that's equally true if the
+  // callback was silently dropped and never processed at all. Prove all three: the callback was
+  // actually CONSUMED (drained from the mock's delivery queue), the handler ANSWERED it with the
+  // new inert-branch text (the only signal that distinguishes "ran and deliberately refused" from
+  // "nothing happened"), and the worker is still blocked both locally and in the DB.
+  mock.telegram = [];
+  mock.tgCallbacks = [{ id: 'cb1', from: { id: 111, first_name: 'Boss' },
+    data: 'approve_reinstate_RSR0100_1', message: { chat: { id: -1005554443332 }, message_id: 9001 } }];
+  await page.evaluate(() => processTgCallbacks());
+  const callbacksDrained = mock.tgCallbacks.length === 0;
+  const answered = mock.telegram.some(m => m.method === 'answerCallbackQuery'
+    && /Reinstatement is now done on the RSR Admin dashboard\./.test(m.text));
+  const stillBlocked = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  report('G11b · Telegram approve_reinstate callback consumed, answered inert, still blocked',
+    callbacksDrained && answered && stillBlocked === true && mock.suspensions['RSR0100'].active === true,
+    `callbacksDrained=${callbacksDrained} answeredInert=${answered} stillBlockedLocally=${stillBlocked} stillActiveInDb=${mock.suspensions['RSR0100'].active}`);
+
+  // Leave approval still clears the block — and says CANCELLED, not reinstated.
+  mock.telegram = [];
+  await page.evaluate(() => reinstateEmployee('RSR0100', 'leave approved'));
+  const texts = mock.telegram.map(t => t.text || '').join(' || ');
+  report('G11c · leave-approval cancel posts CANCELLED and edits the original alert',
+    /CANCELLED/i.test(texts) && !/REINSTATED/i.test(texts) && mock.suspensions['RSR0100'].active === false,
+    `sends=${texts}`);
+});
+
+// G12 — FINDING 2 lock: the REAL Telegram approve_leave callback dispatch must still cancel a
+// matching active suspension. G4 and G11c above both call reinstateEmployee() directly, bypassing
+// the actual dispatch glue in processTgCallbacks() (~line 4115: `if(suspendedEmployees[req.code])
+// reinstateEmployee(req.code,'leave approved');`) — a future edit that dropped that one line would
+// slip past every other AWOL check in this file. This scenario delivers a genuine approve_leave_*
+// callback through mock.tgCallbacks (the same delivery pattern G11b already uses) and drives it
+// through processTgCallbacks() itself, not a direct function call.
+await scenario('G12 · real Telegram approve_leave callback cancels a matching suspension', manila(2026,7,24,9,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1004443332221';
+  await page.evaluate(() => loadTgFromCloud());
+
+  // Active suspension for a roster employee, seeded the same way G4/G11 seed it.
+  mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'5001', awol_group_chat:'-1004443332221' };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const suspendedBefore = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+
+  // A matching Pending leave request covering the absence window.
+  await page.evaluate(() => {
+    leaveRequests = [{ id: 777, code:'RSR0100', name:'Regular Rey', dept:'Painting', type:'Vacation Leave',
+      startDate:'2026-07-21', endDate:'2026-07-23', days:3, reason:'family emergency', status:'Pending', tgMsgIds:{} }];
+  });
+
+  // Deliver the genuine callback (from an authorized mgr id — settings mock supplies mgr_ids='111,222')
+  // and drive it through the REAL dispatch function, not reinstateEmployee() directly.
+  mock.telegram = [];
+  mock.tgCallbacks = [{ id:'cb-g12', from:{ id:111, first_name:'Boss' },
+    data:'approve_leave_777', message:{ chat:{ id:-1004443332221 }, message_id: 5001 } }];
+  await page.evaluate(() => processTgCallbacks());
+  const callbacksDrained = mock.tgCallbacks.length === 0;
+
+  // reinstateEmployee() is fired-and-forgotten by the dispatch branch (mirrors production — the real
+  // code does not await it either), so poll briefly for its detached work (DB cancel + Telegram post)
+  // to land instead of racing it.
+  let tries = 0; while (mock.telegram.length === 0 && tries < 40) { await page.waitForTimeout(20); tries++; }
+
+  const reqStatus = await page.evaluate(() => (leaveRequests.find(r => r.id === 777) || {}).status);
+  const dbCancelled = mock.suspensions['RSR0100'].active === false;
+  const localCleared = await page.evaluate(() => !suspendedEmployees['RSR0100']);
+  const texts = mock.telegram.map(t => t.text || '').join(' || ');
+  const saysCancelled = /CANCELLED/.test(texts) && !/REINSTATED/i.test(texts);
+  report('G12 · real approve_leave dispatch cancels the matching suspension',
+    callbacksDrained && suspendedBefore && reqStatus === 'Approved' && dbCancelled && localCleared && saysCancelled,
+    `callbacksDrained=${callbacksDrained} suspendedBefore=${suspendedBefore} reqStatus=${reqStatus} dbCancelled=${dbCancelled} localCleared=${localCleared} sends=${texts}`);
+});
+
+// G13 — FINDING 1/3 lock: the kiosk's OWN Admin-tab Approve button (approveLeave(id), reached from
+// renderAdminPanel()) must cancel a matching active suspension exactly like the Telegram path does.
+// This gap predates the AWOL feature (it is not a regression) — an admin approving a leave from the
+// tablet used to leave the worker blocked, contradicting the owner's locked rule. Finding 1 fixed it
+// by mirroring the Telegram approve_leave branch's cancel call into approveLeave() (~line 3480).
+await scenario('G13 · kiosk Admin-tab approveLeave() cancels a matching suspension', manila(2026,7,24,9,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1003332221110';
+  await page.evaluate(() => loadTgFromCloud());
+
+  mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'6001', awol_group_chat:'-1003332221110' };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const suspendedBefore = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+
+  await page.evaluate(() => {
+    leaveRequests = [{ id: 888, code:'RSR0100', name:'Regular Rey', dept:'Painting', type:'Vacation Leave',
+      startDate:'2026-07-21', endDate:'2026-07-23', days:3, reason:'family emergency', status:'Pending', tgMsgIds:{} }];
+  });
+
+  mock.telegram = [];
+  await page.evaluate(() => approveLeave(888)); // the kiosk Admin-tab Approve button's handler
+  let tries = 0; while (mock.telegram.length === 0 && tries < 40) { await page.waitForTimeout(20); tries++; }
+
+  const reqStatus = await page.evaluate(() => (leaveRequests.find(r => r.id === 888) || {}).status);
+  const dbCancelled = mock.suspensions['RSR0100'].active === false;
+  const localCleared = await page.evaluate(() => !suspendedEmployees['RSR0100']);
+  const texts = mock.telegram.map(t => t.text || '').join(' || ');
+  const saysCancelled = /CANCELLED/.test(texts);
+  report('G13 · kiosk Admin-tab approveLeave cancels the matching suspension',
+    suspendedBefore && reqStatus === 'Approved' && dbCancelled && localCleared && saysCancelled,
+    `suspendedBefore=${suspendedBefore} reqStatus=${reqStatus} dbCancelled=${dbCancelled} localCleared=${localCleared} sends=${texts}`);
+});
+
+// G9 — SMS/VIOLATION PATH REST-DAY GUARD (this branch's Fix A): checkAndSendAbsenceSMS() must mirror
+// collectAbsentDates' Sunday-transparent rule. Before the fix, a no-punch SUNDAY was always counted
+// as "today absent" (the +1), firing a false AWOL-warning SMS + a bogus violation-history entry on
+// the worker's rest day. semaphoreKey is unset in this harness (no settings row supplies it), so
+// sendSMS() short-circuits before any network fetch — the path is safely drivable end-to-end without
+// extending the external-host mock.
+await scenario('G9 · absence SMS/violation path is Sunday-aware (mirrors collectAbsentDates)', manila(2026,7,19,20,0), async (page) => {
+  // Case 1: "today" IS a real no-punch Sunday → must NOT send SMS / log a violation.
+  const dow = await page.evaluate(() => new Date().getDay()); // 0 = Sunday
+  const todayIsSunday = await page.evaluate(() => isSundayKey(todayKey()));
+  report('G9 · scenario clock is a real Sunday', dow === 0 && todayIsSunday,
+    `getDay()=${dow} isSundayKey(todayKey())=${todayIsSunday}`);
+
+  await page.evaluate(() => {
+    employees = employees.filter(e => e.code === 'RSR0100');
+    employees[0].phone = '09171234567'; // fixture roster has no phone; sendAbsenceSMS no-ops without one
+    smsLog = []; absenceViolations = {};
+  });
+  await page.evaluate(() => checkAndSendAbsenceSMS());
+  const smsCountSunday = await page.evaluate(() => smsLog.length);
+  const violSunday = await page.evaluate(() => absenceViolations['RSR0100']);
+  report('G9a · no-punch Sunday today → NO SMS, NO violation logged', smsCountSunday === 0 && !violSunday,
+    `smsLog.length=${smsCountSunday} violation=${JSON.stringify(violSunday)}`);
+
+  // Case 2: advance to a real non-Sunday day, break the absence chain at i=1 (worked yesterday) so
+  // today is the worker's ONLY absence (consecutive=1) → non-Sunday behavior must stay byte-identical
+  // to before the fix: Day-1 SMS still sent.
+  await setNow(page, manila(2026,7,21,20,0));
+  const dow2 = await page.evaluate(() => new Date().getDay()); // 2 = Tuesday
+  const yesterdayKey = await page.evaluate(() => dateKeyOffset(-1));
+  const yesterdayNotSunday = await page.evaluate(k => !isSundayKey(k), yesterdayKey);
+  report('G9 · scenario clock advanced to a real Tuesday (non-Sunday)', dow2 === 2 && yesterdayNotSunday,
+    `getDay()=${dow2} yesterday=${yesterdayKey} isSunday=${!yesterdayNotSunday}`);
+
+  await page.evaluate(k => {
+    records['RSR0100_' + k] = { punches: { timein: '08:00:00 AM' } }; // worked yesterday → chain breaks at i=1
+    smsLog = []; absenceViolations = {};
+  }, yesterdayKey);
+  await page.evaluate(() => checkAndSendAbsenceSMS());
+  const smsCountTue = await page.evaluate(() => smsLog.length);
+  const dayLogged = await page.evaluate(() => smsLog[0] && smsLog[0].day);
+  report('G9b · no-punch NON-Sunday today (Day 1) → SMS still sent (unaffected by the fix)',
+    smsCountTue === 1 && dayLogged === 1, `smsLog.length=${smsCountTue} day=${dayLogged}`);
+});
+
+// G14 — THE GATE, CROSS-DEVICE: an approval on the dashboard must lift the block on the kiosks
+// via the existing poller, and an approve attempted without the letter tick must be refused.
+await scenario('G14 · two-step gate lifts the block on every kiosk', manila(2026, 7, 21, 8, 0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1004443332221';
+  await page.evaluate(() => loadTgFromCloud());
+  mock.suspensions['RSR0100'] = { employee_code: 'RSR0100', active: true, reason: 'AWOL',
+    suspended_on: '07/20/2026', absent_dates: ['2026-07-17','2026-07-18','2026-07-20'],
+    awol_group_msg_id: '9100', awol_group_chat: '-1004443332221', letter_received: false };
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const blockedBefore = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+
+  // The dashboard's approve RPC, called without the letter tick, must be refused.
+  const refused = await page.evaluate(async () => {
+    const { data } = await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0100', p_by: 'Boss', p_decision: 'approve' });
+    return data;
+  });
+  report('G14a · approve refused before the letter is confirmed',
+    refused && refused.newly === false && /letter/i.test(refused.reason || ''),
+    `response=${JSON.stringify(refused)}`);
+  const stillBlocked = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  report('G14b · worker still blocked after the refused approval', blockedBefore && stillBlocked);
+
+  // Tick, then approve — the kiosk's own poller must clear the block with no kiosk-side action.
+  await page.evaluate(async () => { await sbClient.rpc('awol_letter_received', { p_code: 'RSR0100', p_by: 'Jamaica L. Batucan' }); });
+  await page.evaluate(async () => { await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0100', p_by: 'Boss', p_decision: 'approve' }); });
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const clearedAfter = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  report('G14c · after approval the poller clears the block on this kiosk',
+    !clearedAfter && mock.suspensions['RSR0100'].active === false,
+    `blockedLocally=${clearedAfter} activeInDb=${mock.suspensions['RSR0100'].active}`);
+
+  // Keep-suspended resets the tick and leaves the block in place.
+  mock.suspensions['RSR0207'] = { employee_code: 'RSR0207', active: true, reason: 'AWOL',
+    suspended_on: '07/20/2026', absent_dates: ['2026-07-17','2026-07-18','2026-07-20'],
+    awol_group_msg_id: '9101', awol_group_chat: '-1004443332221', letter_received: true };
+  await page.evaluate(async () => { await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0207', p_by: 'Boss', p_decision: 'keep' }); });
+  await page.evaluate(() => loadSuspensionsFromCloud());
+  const stillBlocked207 = await page.evaluate(() => !!suspendedEmployees['RSR0207']);
+  report('G14d · keep-suspended clears the tick and the worker stays blocked',
+    mock.suspensions['RSR0207'].active === true && mock.suspensions['RSR0207'].letter_received === false && stillBlocked207,
+    `activeInDb=${mock.suspensions['RSR0207'].active} letter=${mock.suspensions['RSR0207'].letter_received} blocked=${stillBlocked207}`);
+});
+
+// G15 — NEVER-PUNCHED / 30-DAY SAFETY NET + INACTIVE SKIP (Task 9, owner 2026-07-26): the owner's
+// ship-gate test ("point AWOL detection at real attendance, prove it suspends nobody") FAILED,
+// flagging 10 workers. Root causes: (1) the Mandaue yard has never had a working kiosk (goes live
+// this Tue/Wed) — its workers have ZERO punches on file, tracked on paper instead, and must never be
+// judged AWOL for a data gap that isn't their fault; (2) two workers no longer work here at all.
+// hasRecentPunchHistory() (kiosk/index.html) must skip anyone with no real Time In in the last 30
+// days, and checkAllAbsences() must also skip anyone flagged is_active === false — but a worker who
+// DOES have recent history and then racks up 3+ real absences must STILL be suspended (Case 3: the
+// check that matters most — this rule must not silently disable detection wholesale).
+await scenario('G15 · never-punched/30-day safety net + inactive skip (owner 2026-07-26)', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1003332221110';
+  await page.evaluate(() => loadTgFromCloud());
+  // Snapshot the full roster once so each case can re-filter `employees` from the same starting
+  // point, same pattern as G8/G10 above (filtering is destructive/reassigning).
+  await page.evaluate(() => { window.__g15Roster = employees.slice(); });
+
+  // ── Case 1 (RSR0002, Mandaue) — NO punches at all, ever. The exact Mandaue situation. ──────────
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    employees = window.__g15Roster.filter(e => e.code === 'RSR0002'); });
+  // Proves the OLD chain logic (collectAbsentDates, untouched by this fix) still sees a long
+  // absence run here — the ONLY thing standing between this worker and a wrongful suspension is the
+  // new hasRecentPunchHistory() skip inside checkAllAbsences.
+  const chain1 = await page.evaluate(() => collectAbsentDates('RSR0002'));
+  await page.evaluate(() => checkAllAbsences());
+  const susNever = !!(mock.suspensions['RSR0002'] && mock.suspensions['RSR0002'].active);
+  const alertedNever = mock.telegram.some(m => /RSR0002/.test(m.text));
+  report('G15a · never-punched worker (Mandaue case) → NOT suspended, no alert', !susNever && !alertedNever && chain1.length >= 3,
+    `chain=${chain1.length} suspended=${susNever} alerted=${alertedNever}`);
+
+  // ── Case 2 (RSR0404) — only punch on file is 40 days ago, nothing since. Too stale to judge. ───
+  mock.telegram = [];
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    employees = window.__g15Roster.filter(e => e.code === 'RSR0404');
+    records['RSR0404_06/14/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // 40 days before 07/24/2026
+  const historyStale = await page.evaluate(() => hasRecentPunchHistory('RSR0404'));
+  await page.evaluate(() => checkAllAbsences());
+  const susStale = !!(mock.suspensions['RSR0404'] && mock.suspensions['RSR0404'].active);
+  const alertedStale = mock.telegram.some(m => /RSR0404/.test(m.text));
+  report('G15b · only punch on file is 40+ days old → NOT suspended', !historyStale && !susStale && !alertedStale,
+    `hasRecentPunchHistory=${historyStale} suspended=${susStale} alerted=${alertedStale}`);
+
+  // ── Case 3 (RSR0100) — punched 10 days ago (inside the 30-day window), then went quiet and racked
+  // up 3+ real absences. THE CHECK THAT MATTERS MOST: proves the safety net does not disable
+  // detection wholesale — a worker with real recent history who is genuinely absent still suspends.
+  mock.telegram = [];
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    employees = window.__g15Roster.filter(e => e.code === 'RSR0100');
+    records['RSR0100_07/14/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // 10 days before 07/24/2026
+  const historyRecent = await page.evaluate(() => hasRecentPunchHistory('RSR0100'));
+  const chain3 = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  await page.evaluate(() => checkAllAbsences());
+  const susRecent = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alertedRecent = mock.telegram.some(m => /RSR0100/.test(m.text));
+  report('G15c · recent punch (10 days ago) + 3+ absences → STILL suspended (rule is not a blanket disable)',
+    historyRecent && chain3.length >= 3 && susRecent && alertedRecent,
+    `hasRecentPunchHistory=${historyRecent} chain=${chain3.length} suspended=${susRecent} alerted=${alertedRecent}`);
+
+  // ── Case 4 (RSR0500) — is_active=false on the mocked roster, WITH the same 10-day-ago recent
+  // punch as Case 3, so the recency check alone would NOT protect it — proving it is genuinely the
+  // is_active skip, not the recency skip, blocking the suspension.
+  mock.telegram = [];
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
+    employees = window.__g15Roster.filter(e => e.code === 'RSR0500');
+    records['RSR0500_07/14/2026'] = { punches: { timein: '08:00:00 AM' } }; });
+  const isActiveFlag = await page.evaluate(() => employees.find(e => e.code === 'RSR0500').isActive);
+  await page.evaluate(() => checkAllAbsences());
+  const susInactive = !!(mock.suspensions['RSR0500'] && mock.suspensions['RSR0500'].active);
+  const alertedInactive = mock.telegram.some(m => /RSR0500/.test(m.text));
+  report('G15d · is_active=false worker with a long absence → NOT suspended (recency alone would not have protected it)',
+    isActiveFlag === false && !susInactive && !alertedInactive,
+    `isActive=${isActiveFlag} suspended=${susInactive} alerted=${alertedInactive}`);
+});
+
+// G16 — APPROVED-LEAVE FORMAT/CODE MISMATCH (owner-reported near-miss, 2026-07-26): isAbsentOnDate()
+// compared a leave's startDate/endDate against the kiosk's dateStr as RAW STRINGS. Leave rows loaded
+// from Supabase carry start_date/end_date as YYYY-MM-DD (PostgREST DATE columns), but the kiosk's own
+// date keys (dateKeyOffset/todayKey) are MM/DD/YYYY (en-PH). "2026-07-21" <= "07/23/2026" is a
+// lexicographic compare of '2' vs '0' and is ALWAYS false, so a real, DB-sourced Approved leave could
+// never break the absence chain — a worker who filed and was approved got suspended anyway. Same
+// function also matched employee codes with exact ===, but codes drift by spacing across sources
+// (RSR0100 vs RSR 0100). Fix: normalize both sides with awolISO()/normCode() before comparing.
+// All four days below are real weekdays (Mon 07/20 .. Fri 07/24/2026), so no Sunday-transparency
+// (G8) or PEM-exemption (G10) rule is in play — this isolates ONLY the format/code bug.
+await scenario('G16a · Approved leave (Supabase YYYY-MM-DD) covers the absent run → chain broken, NOT suspended', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1006661112223';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => {
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; // recent-enough history (see G2)
+    // Approved leave stored exactly as PostgREST returns a DATE column: YYYY-MM-DD.
+    leaveRequests = [{ code: 'RSR0100', status: 'Approved', startDate: '2026-07-21', endDate: '2026-07-23' }];
+  });
+  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  await page.evaluate(() => checkAllAbsences());
+  const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  report('G16a · ISO-format approved leave breaks the chain, no suspension', chain.length === 0 && !sus && !alerted,
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+});
+
+await scenario('G16b · Approved leave (kiosk MM/DD/YYYY) also covers the absent run → chain broken, NOT suspended', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1006661112223';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => {
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } };
+    // Same leave, but stored as non-zero-padded M/D/YYYY (awolISO's own regex is \d{1,2} for month/day,
+    // i.e. it's explicitly built to handle this shape too — e.g. legacy/admin-entered rows). This is
+    // NOT a coincidental pass: a raw string compare of "7/21/2026" vs the zero-padded kiosk key
+    // "07/23/2026" is WRONG ('7' > '0' lexicographically), so this only passes once dates are run
+    // through awolISO() — unlike a same-length, same-month zero-padded MM/DD/YYYY pair, which can
+    // accidentally sort correctly as raw strings and would not prove anything.
+    leaveRequests = [{ code: 'RSR0100', status: 'Approved', startDate: '7/21/2026', endDate: '7/23/2026' }];
+  });
+  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  await page.evaluate(() => checkAllAbsences());
+  const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  report('G16b · MM/DD/YYYY-format approved leave breaks the chain, no suspension', chain.length === 0 && !sus && !alerted,
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+});
+
+await scenario('G16c · Approved leave covers only PART of the absent run → chain stops AT the leave', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1006661112223';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => {
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } };
+    // Leave covers ONLY Wed 07/22 — Thu 07/23 (closer to today) is a genuine unexcused absence, and
+    // Mon 07/20 / Tue 07/21 (further back) are ALSO unpunched. If the leave were ignored entirely
+    // (the old bug), the scan would run straight through 07/22 and keep collecting 07/21 and 07/20
+    // too — a 3+ day chain that gets suspended. Fixed, the scan must stop the instant it reaches the
+    // leave-covered day, so the chain is exactly the ONE real absence in front of it.
+    leaveRequests = [{ code: 'RSR0100', status: 'Approved', startDate: '2026-07-22', endDate: '2026-07-22' }];
+  });
+  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  await page.evaluate(() => checkAllAbsences());
+  const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  report('G16c · partial-coverage leave stops the chain at exactly 1 day, no suspension',
+    chain.length === 1 && chain[0] === '07/23/2026' && !sus && !alerted,
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+});
+
+await scenario('G16d · Approved leave code differs only by spacing (RSR 0100 vs RSR0100) → still recognized', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1006661112223';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => {
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } };
+    // Employee's real code is 'RSR0100' (no space); the leave row (as some Supabase/legacy paths do)
+    // stores it with a space. Must still match via normCode().
+    leaveRequests = [{ code: 'RSR 0100', status: 'Approved', startDate: '2026-07-21', endDate: '2026-07-23' }];
+  });
+  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  await page.evaluate(() => checkAllAbsences());
+  const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  report('G16d · spacing-mismatched code still recognized, chain broken, no suspension', chain.length === 0 && !sus && !alerted,
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+});
+
+await scenario('G16e · regression: worker with NO leave and 3+ absences → STILL suspended', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1006661112223';
+  await page.evaluate(() => loadTgFromCloud());
+  await page.evaluate(() => {
+    records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } };
+    leaveRequests = []; // no leave at all — the fix must not have disabled detection wholesale
+  });
+  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  await page.evaluate(() => checkAllAbsences());
+  const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  report('G16e · no leave + 3+ absences still suspends (detection not disabled)',
+    chain.length >= 3 && sus && alerted,
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
 });
 
 // ==============================================================================
