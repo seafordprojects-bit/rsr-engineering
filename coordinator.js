@@ -702,6 +702,107 @@ function Settings({ toast }) {
 }
 
 // ---------- App ----------
+// ---------- Defect G — REPORTED ABSENCE (provisional), coordinator surface ----------
+// Design: docs/superpowers/specs/2026-08-03-defect-g-provisional-absence-design.md
+// Owner decision 4a: Jamaica, the owner AND coordinators may enter one. This is the coordinator
+// half; the dashboard half is ReportedAbsence in home.js. Both write the same row.
+//
+// SEPARATE FROM FileLeave ON PURPOSE. Filing leave asks for a type, checks a balance, and refuses
+// when the balance is exhausted. NONE of that applies here: this is not a leave application, it is
+// the record that a man SAID he would be out. Routing it through the leave form would make it
+// slower than the thing it exists to be faster than, and a balance check could REFUSE to record
+// that someone spoke — which is how six days went unrecorded (rev2 §4.1).
+//
+// No PIN gate, for the same reason: friction on capture loses the report. filed_by and reported_to
+// carry accountability, the row is provisional and reversible, and the signature belongs on the
+// DECISION, not on writing down what was said.
+const REPORTED_HOW = ['In person', 'Call', 'Text', 'Via workmate'];
+
+function ReportedAbsence({ employees, toast }) {
+  const [emp, setEmp] = useState('');
+  const [start, setStart] = useState(todayYmd());
+  const [end, setEnd] = useState(todayYmd());
+  const [told, setTold] = useState('');
+  const [how, setHow] = useState('');
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  const picked = employees.find(e => e.code === emp);
+
+  const submit = async () => {
+    if (saving) return;
+    if (!picked) { toast('Select the worker', true); return; }
+    if (!start || !end) { toast('Both dates are required', true); return; }
+    if (end < start) { toast('The last day is before the first', true); return; }
+    if (!told.trim()) { toast('Record who he told — that is what this row is for', true); return; }
+    if (!how) { toast('Record how he reported', true); return; }
+    const days = Math.floor((new Date(end + 'T00:00:00') - new Date(start + 'T00:00:00')) / 86400000) + 1;
+    setSaving(true);
+    try {
+      await fileLeave({
+        employee_code: emp, employee_name: picked.name,
+        type: 'Reported Absence', start_date: start, end_date: end, days,
+        reason: reason.trim() || '', status: 'Provisional',
+        filed_by: 'Coordinator', filed_on: todayPH(),
+        reported_to: told.trim(), reported_how: how,
+      });
+      // Telegram carries NO approve/reject buttons, unlike FileLeave. This is capture, not a
+      // request — the decision is the owner's separate act, and offering it here would let a
+      // provisional record be approved from a notification before anyone has looked at it.
+      notifyTg(`📝 <b>Reported Absence</b>
+👤 ${picked.name} (${emp})
+📅 ${start} → ${end} (${days} day${days !== 1 ? 's' : ''})
+🗣 Told: ${told.trim()} · ${how}${reason.trim() ? `
+💬 "${reason.trim()}"` : ''}
+👷 Recorded by: Coordinator
+⏳ Provisional — waiting for a decision.`);
+      toast('Recorded for ' + picked.name + ' — he will not be flagged while this stands');
+      setEmp(''); setTold(''); setHow(''); setReason(''); setStart(todayYmd()); setEnd(todayYmd());
+    } catch (e) {
+      // LOUD. A silent failure reproduces the defect exactly: the man walks away believed, and
+      // nothing is stored.
+      toast('NOT SAVED — ' + e.message + '. Try again; do not walk away from this.', true);
+    } finally { setSaving(false); }
+  };
+
+  return html`
+    <div class="card">
+      <h3>Record a reported absence</h3>
+      <p class="sub">Someone told you he will be out. Enter it now — it stops him being flagged
+        while the owner decides, and it is the only proof he reported.</p>
+      <${Field} label="Worker">
+        <select value=${emp} onChange=${e => setEmp(e.target.value)}>
+          <option value="">— pick —</option>
+          ${employees.slice().sort((a, b) => String(a.name).localeCompare(String(b.name)))
+            .map(e => html`<option value=${e.code}>${e.name} · ${e.code}</option>`)}
+        </select>
+      </${Field}>
+      <${Field} label="First day out">
+        <input type="date" value=${start}
+               onChange=${e => { setStart(e.target.value); if (end < e.target.value) setEnd(e.target.value); }} />
+      </${Field}>
+      <${Field} label="Last day out">
+        <input type="date" value=${end} onChange=${e => setEnd(e.target.value)} />
+      </${Field}>
+      <${Field} label="Who did he tell?">
+        <input type="text" value=${told} placeholder="your name, Jamaica, Raffy…"
+               onInput=${e => setTold(e.target.value)} />
+      </${Field}>
+      <${Field} label="How did he report?">
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          ${REPORTED_HOW.map(h => html`
+            <button class=${how === h ? 'on' : ''} onClick=${() => setHow(h)}>${h}</button>`)}
+        </div>
+      </${Field}>
+      <${Field} label="Reason he gave (optional)">
+        <input type="text" value=${reason} placeholder="left blank is fine"
+               onInput=${e => setReason(e.target.value)} />
+      </${Field}>
+      <p class="sub">This does NOT approve anything. It records that he reported.</p>
+      <button disabled=${saving} onClick=${submit}>${saving ? 'Saving…' : 'Record it'}</button>
+    </div>`;
+}
+
 function FileLeave({ employees, toast }) {
   const [emp, setEmp] = useState('');
   const [type, setType] = useState('Sick Leave');
@@ -1821,7 +1922,7 @@ function App() {
   const [authed, setAuthed] = useState(sessionStorage.getItem('rsr_coord') === '1');
   const [area, setArea] = useState(null);          // null | 'vessels' | 'personnel' | 'expenses'
   const [liqTab, setLiqTab] = useState(null);       // null (menu) | fund | mat | tool | allow | cons | misc | sum
-  const [pdTab, setPdTab] = useState('personnel');  // personnel | leave | duty
+  const [pdTab, setPdTab] = useState('personnel');  // personnel | leave | duty | reported
   const [employees, setEmployees] = useState([]);
   const [voyages, setVoyages] = useState([]);
   const [sites, setSites] = useState([]);
@@ -1911,10 +2012,12 @@ function App() {
           <button class=${pdTab==='personnel'?'on':''} onClick=${() => setPdTab('personnel')}>Personnel</button>
           <button class=${pdTab==='leave'?'on':''}     onClick=${() => setPdTab('leave')}>Leave</button>
           <button class=${pdTab==='duty'?'on':''}      onClick=${() => setPdTab('duty')}>Duty</button>
+          <button class=${pdTab==='reported'?'on':''}  onClick=${() => setPdTab('reported')}>Reported absence</button>
         </div>
         ${pdTab==='personnel' && html`<${Personnel} employees=${employees} onReload=${loadEmployees} toast=${flash} />`}
         ${pdTab==='leave' && html`<${FileLeave} employees=${employees} toast=${flash} />`}
         ${pdTab==='duty' && html`<${FileDuty} employees=${employees} toast=${flash} />`}
+        ${pdTab==='reported' && html`<${ReportedAbsence} employees=${employees} toast=${flash} />`}
       `}
     </div>
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
