@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-08-02a</span>
+        <span id="version-stamp">v2026-08-03a</span>
       </div>
     </div>
   </div>
@@ -1376,7 +1376,22 @@ function nightArrivalHint(nowMs){
 // BUG FIX (2026-07-26): same defect family as isAbsentOnDate below — leave dates from Supabase are
 // YYYY-MM-DD while todayKey() is MM/DD/YYYY (en-PH), and codes drift by spacing across sources.
 // Normalize both sides with awolISO()/normCode() (awolISO is defined further down but hoisted).
-function onLeaveToday(code){const t=awolISO(todayKey()),n=normCode(code);return leaveRequests.some(r=>normCode(r.code)===n&&r.status==='Approved'&&awolISO(r.startDate)<=t&&awolISO(r.endDate)>=t);}
+// ── ONE DEFINITION OF "THIS DATE IS EXPLAINED" (spec 2026-08-03 Defect G, and Defect E with it) ──
+// Detection asks this in three places. It used to test status==='Approved' alone, which meant the
+// system could only see a date as explained AFTER someone signed it off — so a man who reported his
+// absence in advance, or filed and awaited a decision, was flagged exactly as if he had said nothing.
+// That is rev2 §4.1: six reported days, no row, a factually wrong NTE one hand-over from service.
+//   Approved    — decided yes. Unchanged behaviour.
+//   Provisional — DEFECT G. He told someone and it was recorded THAT DAY. Suppresses IMMEDIATELY
+//                 (owner 4b): a false report is small, visible and reversible, while a delayed
+//                 suppression reproduces the incident exactly. It NEVER expires (owner 4c) —
+//                 expiry would be a machine deciding a disciplinary matter. It escalates instead.
+//   Pending     — DEFECT E. Filed and awaiting the owner. Suppresses while it waits.
+// NOT for pay: onLWPToday and the isLWP check stay on 'Approved' alone, because those ask whether a
+// day is PAID, which only an approval can answer.
+const LEAVE_SUPPRESSES = new Set(['Approved','Provisional','Pending']);
+function leaveExplains(r){ return LEAVE_SUPPRESSES.has(r&&r.status); }
+function onLeaveToday(code){const t=awolISO(todayKey()),n=normCode(code);return leaveRequests.some(r=>normCode(r.code)===n&&leaveExplains(r)&&awolISO(r.startDate)<=t&&awolISO(r.endDate)>=t);}
 function onLWPToday(code){const t=awolISO(todayKey()),n=normCode(code);return leaveRequests.some(r=>normCode(r.code)===n&&r.status==='Approved'&&r.type==='Leave Without Pay'&&awolISO(r.startDate)<=t&&awolISO(r.endDate)>=t);}
 
 function isAwayDeployment(emp){return siteNorm(emp.homeSite)!==siteNorm(activeSite);}
@@ -2301,7 +2316,7 @@ function onLeaveToday_date(code,dateStr){
   // kiosk MM/DD/YYYY) and codes (spacing) before comparing, else a DB-sourced approved leave
   // never matches.
   const dISO=awolISO(dateStr),n=normCode(code);
-  return leaveRequests.some(r=>normCode(r.code)===n&&r.status==='Approved'&&awolISO(r.startDate)<=dISO&&awolISO(r.endDate)>=dISO);
+  return leaveRequests.some(r=>normCode(r.code)===n&&leaveExplains(r)&&awolISO(r.startDate)<=dISO&&awolISO(r.endDate)>=dISO);
 }
 
 // ── ABSENCE & SUSPENSION SYSTEM ──
@@ -2417,7 +2432,7 @@ function isAbsentOnDate(empCode,dateStr){
   // before comparing. Employee codes also drift by spacing across sources (RSR 0025 vs RSR0025), so
   // normCode() both sides too — see loadLeavesFromSupabase's own dedup check for the same pattern.
   const dISO=awolISO(dateStr),nCode=normCode(empCode);
-  const hasLeave=leaveRequests.some(r=>normCode(r.code)===nCode&&r.status==='Approved'&&awolISO(r.startDate)<=dISO&&awolISO(r.endDate)>=dISO);
+  const hasLeave=leaveRequests.some(r=>normCode(r.code)===nCode&&leaveExplains(r)&&awolISO(r.startDate)<=dISO&&awolISO(r.endDate)>=dISO);
   return !hasTimein&&!hasLeave;
 }
 // Sunday = the universal rest day (matches the Sunday-premium setup). dateStr is MM/DD/YYYY (en-PH).

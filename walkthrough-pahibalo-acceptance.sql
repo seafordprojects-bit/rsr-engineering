@@ -91,7 +91,8 @@ cls as (
       when exists (select 1 from public.leave_requests l
                     where upper(regexp_replace(l.employee_code,'[^A-Za-z0-9]','','g'))
                         = upper(regexp_replace(dd.code,'[^A-Za-z0-9]','','g'))
-                      and l.status = 'Approved'
+                      and l.status in ('Approved','Provisional','Pending')  -- one definition of
+                      -- "explained": Approved decided, Provisional reported (G), Pending filed (E)
                       and public.leave_try_date(l.start_date::text) <= dd.d
                       and public.leave_try_date(coalesce(l.end_date::text, l.start_date::text)) >= dd.d)
            then 'BREAK'

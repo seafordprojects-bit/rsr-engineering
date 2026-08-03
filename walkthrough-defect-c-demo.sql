@@ -6,11 +6,24 @@
 --      the barred man and not everyone. A DEMO does not need that proof, so it is dropped. BE AWARE
 --      OF WHAT YOU GIVE UP: with no control, a gate that refused EVERY worker would pass this run
 --      looking correct. Do not read a demo pass as a verification pass.
---    · ZZ WALK7 NEVER PUNCHES. This is the important one. The punch gate refuses only when there is
---      NO OPEN SHIFT (kiosk :2095). Punching first gives him an open shift, the bar then correctly
---      declines to refuse him, and the demo shows nothing. He enters his PIN, the card renders, and
---      that is the whole "a case does not bar" step. No punch window to wait for either — the PIN
---      gate fires at any hour, unlike Time In which is shut 10:00-12:40 and after 15:00.
+--    · PUNCH-THROUGH SHAPE (owner, 2026-08-01). The demo shows the WORKER EXPERIENCE and ends with
+--      a real punch recording. ORDER MATTERS AND IS NOT NEGOTIABLE:
+--          case opens -> alert in the DM -> BAR -> PIN -> GI-SUSPEND modal -> OK
+--          -> REINSTATE on the dashboard -> PIN -> Time In -> PUNCH RECORDS
+--      WHY THE BAR COMES FIRST, and why a reinstate must sit between the modal and the punch:
+--        · There is NO modal at PIN entry for an unbarred worker. The only showBisayaModal in the
+--          gate (:2102) is GI-SUSPEND, and it fires only when barred. A pure punch-through run
+--          shows no modal at all.
+--        · Once he has an OPEN SHIFT the gate deliberately stops refusing him (:2095), so barring
+--          AFTER a Time In shows nothing.
+--        · OK dismisses the modal but does NOT let him in. Only awol_set_barred(p_bar=false) does.
+--          That is the defect's whole point and the demo should not blur it.
+--      "Bar, then Time Out, then refuse" IS NOT AVAILABLE: getNext (:1214-1225) requires
+--      timein -> lunch_out -> lunch_in -> pm_out -> pm_in -> timeout, so Time Out cannot follow a
+--      Time In without straight-duty flags or a filed undertime (:1226-1228). Extra staging for no
+--      extra proof.
+--      TIME WINDOW: the Time In step needs 07:00-10:00 or 12:40-15:00 Manila (kiosk :1032). The
+--      bar/modal/reinstate steps fire at any hour.
 --
 --  IF ONLY THE SCREEN IS WANTED, DO NOT RUN THIS. In the kiosk console on localhost:
 --    showBisayaModal('GI-SUSPEND ANG IMONG ACCOUNT\n\nAbsent ka og 3+ ka adlaw nga sunod-sunod nga
@@ -76,7 +89,8 @@ cls as (
       when exists (select 1 from public.leave_requests l
                     where upper(regexp_replace(l.employee_code,'[^A-Za-z0-9]','','g'))
                         = upper(regexp_replace(dd.code,'[^A-Za-z0-9]','','g'))
-                      and l.status = 'Approved'
+                      and l.status in ('Approved','Provisional','Pending')  -- one definition of
+                      -- "explained": Approved decided, Provisional reported (G), Pending filed (E)
                       and public.leave_try_date(l.start_date::text) <= dd.d
                       and public.leave_try_date(coalesce(l.end_date::text, l.start_date::text)) >= dd.d)
            then 'BREAK'
@@ -250,18 +264,30 @@ select code, name, pin, employment_type, home_site,
 --      select employee_code, event, actor from public.awol_events where employee_code = 'ZZ WALK7';
 --      -- EXPECT: one row, 'suspended', actor 'detection'.
 --
---  7. ENTER PIN 977977 AT THE KIOSK. He is NOT barred, so the card renders normally.
---     THIS IS THE "a case does not bar" STEP. Do not punch anything.
---  8. Dashboard http://localhost:8080/ -> AWOL card -> "Bar from starting work" -> admin PIN.
---     Expect the GI-BAR message in the DM.
---  9. WAIT UP TO 45 SECONDS. setInterval(loadSuspensionsFromCloud, 45000) at :5468 is how the
---     kiosk learns. Testing at 5 seconds shows him passing, and that is not a failure. Reload to
---     skip the wait.
--- 10. ENTER PIN 977977 AGAIN -> REFUSED at PIN entry, "GI-SUSPEND ANG IMONG ACCOUNT". THE VISUAL.
--- 11. Dashboard -> "Reinstate — he can punch again" -> admin PIN. Expect GI-REINSTATE in the DM.
+--  7. OPTIONAL, 10 SECONDS: enter PIN 977977 now, before the bar. The card renders normally — a
+--     case is open and he is not stopped. It is the "a machine cannot bar" step, seen. Then dismiss.
+--  8. BAR HIM. Dashboard http://localhost:8080/ -> AWOL card -> "Bar from starting work"
+--     (home.js:583) -> admin PIN. Expect the GI-BAR message in the DM.
+--  9. WAIT UP TO 45 SECONDS. setInterval(loadSuspensionsFromCloud, 45000) at :5468 is how the kiosk
+--     learns he is barred. Testing at 5 seconds shows him passing, and that is NOT a failure.
+--     Reload the kiosk to skip the wait.
+-- 10. ENTER PIN 977977 -> REFUSED at PIN entry with "GI-SUSPEND ANG IMONG ACCOUNT". THE VISUAL.
+--     Press OK. HE IS STILL BARRED — dismissing the modal changes nothing, and if anyone expects
+--     him to punch now, that expectation is the defect being explained.
+-- 11. REINSTATE. Dashboard -> "Reinstate — he can punch again" (home.js:582/594) -> admin PIN.
+--     Expect GI-REINSTATE in the DM.
 -- 12. ENTER PIN 977977 -> accepted ON THE FIRST ATTEMPT. He is still in the kiosk's stale barred
---     map; the gate re-fetches BEFORE refusing and clears him. A refusal that only clears on the
+--     map; the gate re-fetches BEFORE refusing and clears him. A refusal that clears only on the
 --     SECOND try is a regression of the ordering fix — report it, do not retry past it.
+-- 13. PRESS TIME IN. THE PUNCH RECORDS. This is the end of the story and the reason for the
+--     punch-through shape. Needs 07:00-10:00 or 12:40-15:00 Manila; outside those the button is
+--     shut by the shift window, not by anything AWOL.
+--
+--     CONFIRM IT LANDED — and note the row is now REAL attendance for today:
+--         select employee_code, date, timein, site from public.attendance_records
+--          where employee_code = 'ZZ WALK7'
+--          order by date desc;
+--     EXPECT two rows: the backdated staging punch, and today's live one.
 
 
 -- ── C. TEARDOWN — same day, in this order ───────────────────────────────────────────────────
@@ -293,9 +319,12 @@ select count(*) filter (where skip) as skipped_must_be_10 from public.awol_skip_
 select key, value from public.settings where key = 'tg_awol_group';
 -- EXPECT: 10 (= 5 pakyaw + Jamaica + 4 Mandaue, as of 2026-08-01), and -5510566104.
 
--- C2. LOCAL CLEAR — ALWAYS BEFORE C3. A queued punch would re-push via syncFlush() and undo the
---     delete. In the kiosk console, then CLOSE THE TAB (no page, no syncFlush — the only airtight
---     guarantee). Re-runnable; uses var.
+-- C2. LOCAL CLEAR — ALWAYS BEFORE C3, AND NOW LOAD-BEARING. Under the punch-through shape a REAL
+--     punch was made on this device, so it sits in `records` AND in rsr_sync_pending. If C3 deletes
+--     the row while the page still holds it, syncFlush() re-pushes and the delete is silently
+--     undone. That is the resurrection rule, and this shape is exactly the case it was written for.
+--     Run the block in the kiosk console, assert the eight zeros, then CLOSE THE TAB — no page, no
+--     syncFlush, the only airtight guarantee. Re-runnable; uses var.
 --
 --       var Z = k => String(k||'').startsWith('ZZ WALK7');
 --       for (let i=employees.length-1;i>=0;i--) if (Z(employees[i].code)) employees.splice(i,1);
