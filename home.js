@@ -11,7 +11,7 @@ import { supabase } from './supabase.js';
 // one without opening devtools. Shown on the lock screen, the launcher and the admin header.
 // MUST be bumped in lockstep with the `home.js?v=` query string in admin/index.html, index.html
 // and preflight.html. A stamp that lags the query string is worse than none: it reads as proof.
-const BUILD = 'v2026-07-30a';
+const BUILD = 'v2026-08-03b';
 
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
 // The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
