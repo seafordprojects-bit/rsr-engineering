@@ -11,7 +11,7 @@ import { supabase } from './supabase.js';
 // one without opening devtools. Shown on the lock screen, the launcher and the admin header.
 // MUST be bumped in lockstep with the `home.js?v=` query string in admin/index.html, index.html
 // and preflight.html. A stamp that lags the query string is worse than none: it reads as proof.
-const BUILD = 'v2026-08-03b';
+const BUILD = 'v2026-08-04a';
 
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
 // The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
@@ -677,6 +677,7 @@ Makatrabaho na siya pag-usab. Desisyon ni ${actor} ${today}.`);
       <div class="name">${nameOf(r.employee_code)}</div>
       <div class="unit">${r.employee_code}${yardOf(r.employee_code) ? ' · ' + yardOf(r.employee_code) : ''} · suspended ${r.suspended_on || '—'}</div>
       <div class="unit">Absent: ${(Array.isArray(r.absent_dates) ? r.absent_dates : []).join(', ') || '—'}</div>
+      <div class="unit">Reason: ${r.reason || '—'}</div>
       ${r.letter_received ? html`<div class="unit">Letter confirmed by ${r.letter_received_by || '—'}</div>` : ''}
       ${r.ref_note ? html`<div class="unit" style="color:var(--hivis)">${r.ref_note}</div>` : ''}
       ${r.barred_at
