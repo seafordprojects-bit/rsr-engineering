@@ -82,10 +82,12 @@ authorized. The resulting lockout stopped him punching when he returned, which g
 further absences, which the detector read as escalation. He has worked four days with no
 attendance record and no pay data. **This happened on deployed `main`, which a previous
 revision of this spec described as safe.** Measured against live data, the detector would flag
-nine active regular workers today. **Exactly one of the nine — RSR 0015 — is a genuine
-unexcused absence.** The other eight are artefacts of yards without hardware, staff who do not
-punch, paperwork awaiting the owner's signature, permissions given by word of mouth, and a
-lockout the detector caused itself. One correct flag in nine.
+nine active regular workers today. **CORRECTED 2026-08-03: NONE of the nine is a genuine
+unexcused absence.** This paragraph originally read "exactly one — RSR 0015" and that is now known
+false: his absence was **reported in advance to Jamaica and never entered** (§4.1). The nine are
+artefacts of yards without hardware, staff who do not punch, paperwork awaiting the owner's
+signature, permissions given by word of mouth, a lockout the detector caused itself — and one
+absence that was reported and lost. **Zero correct flags in nine.**
 
 ---
 
@@ -115,7 +117,7 @@ Active, non-pakyaw, no attendance 07/28–07/30:
 | RSR 0025 | Jamaica L. Batucan | Carmen | Carmen | office-based, never punches | no |
 | RSR 0005 | Alvin H. Operio | Carmen | Carmen | leave filed, awaiting approval | no |
 | RSR 0035 | Allan Manos | Carmen | Carmen | absence verbally approved, then locked out | **no** |
-| RSR 0015 | Niño Nieto Panut | Carmen | Carmen | genuinely absent, unexcused | **yes** |
+| RSR 0015 | Niño Nieto Panut | Carmen | Carmen | ~~genuinely absent, unexcused~~ **CORRECTED 2026-08-03: REPORTED IN ADVANCE to Jamaica, never entered — see §4.1** | ~~yes~~ **NO** |
 
 `RSR 0023` is a named issuer for tool/material. `RSR 0025` is the sole authorized AWOL clerk —
 the only person who can perform the letter-received step of the reinstate flow this branch is
@@ -540,6 +542,43 @@ Jamaica or the yard coordinator, capturing who reported, who authorized, and whi
 must be faster than filing formal leave, or it will not be used and this recurs.
 
 This is not detector tuning. No threshold change fixes an absence the database cannot see.
+
+### 4.1 THE MOTIVATING INCIDENT — RSR 0015, and it went as far as a printed letter
+
+**2026-08-03. Niño Nieto Panut's six-day run was REPORTED IN ADVANCE to Jamaica and never entered.**
+The leave sat unfiled because the AWOL workflow was under construction — the very work this document
+describes. **The printed NTE is factually wrong and will not be served.**
+
+Remedy in progress: a signed statement from Niño and Jamaica recording the dates and how he reported,
+and the leave backfilled with an honest delayed-entry note.
+
+**This is E and G fused in one live case.** A reported absence produced no artifact (G), and the
+absence of an artifact left nothing to suppress detection (E). The detector was correct that he did
+not punch and wrong about everything that mattered.
+
+**IT REACHED PAPER.** Six dates were computed, verified against the chain, rendered, printed, and
+read for accuracy. The document was one hand-over from service. Everything downstream of the missing
+row worked exactly as designed — which is the point: **no amount of correctness after the gap
+compensates for the gap.**
+
+**And the letter's quality made it more dangerous, not less.** The deadline tied to receipt, the
+derived day count, the receipt signature line, the cut system-mechanics — all of that made a
+factually wrong notice look *more* defensible. A sloppy letter on false facts invites challenge; a
+well-formed one on false facts invites belief. The document work was right and would have made the
+error harder to catch.
+
+**G's requirement, hardened by this case:**
+
+> **ANY REPORTED ABSENCE MUST PRODUCE A DATED ROW THAT DAY** — even a one-tap provisional entry,
+> pending approval.
+
+Provisional and pending is enough. What cannot happen again is a man telling someone he will be out,
+being believed, and the system holding **nothing at all** six days later when a letter is drafted.
+The row is not the approval; it is the evidence that he spoke.
+
+**Nothing about C changes.** C is about what a case DOES to a man once opened, and it remains closed.
+This is about whether the case should have existed — which is E and G, and is why they are merge-gate
+items rather than improvements.
 
 ---
 
@@ -1193,7 +1232,7 @@ are still expected. Re-run the §2.2 query with C, D and F in and **expect exact
 
 | Code | Name | Why still flagged | Closed by |
 |---|---|---|---|
-| RSR 0015 | Niño Nieto Panut | genuine unexcused absence — the control case | nothing; must stay |
+| RSR 0015 | Niño Nieto Panut | ~~genuine unexcused absence — the control case~~ **REPORTED IN ADVANCE, never entered (§4.1)** | **the flag must GO** — no longer a control case |
 | RSR 0005 | Alvin H. Operio | pending leave not yet approved | Defect E |
 | RSR 0014 | Art Clenthon Tañola | absence agreed verbally, no artifact | Defect G |
 
@@ -1497,7 +1536,12 @@ centavo.
   payroll. This is the most urgent item in this document and does not wait for any software fix.
 - **Check whether Art Clenthon Tañola (RSR 0014) is also locked out.** His last punch reads
   07/18 and he works at Carmen. If he has been turned away, he needs the same reconstruction.
-- **Niño Nieto Panut (RSR 0015) is a genuine unexcused absence** — confirmed by the owner, and
+- **~~Niño Nieto Panut (RSR 0015) is a genuine unexcused absence~~ — WITHDRAWN 2026-08-03.** His
+  absence was REPORTED IN ADVANCE to Jamaica and never entered, because the AWOL workflow was under
+  construction (§4.1). **The printed NTE is factually wrong and will NOT be served.** In progress
+  instead: a signed statement from Niño and Jamaica recording the dates and how he reported, and the
+  leave backfilled with an honest delayed-entry note. The original text follows for the record —
+  confirmed by the owner, and
   the first real AWOL matter this system has surfaced. Handle through the proper twin-notice
   process on paper now, rather than waiting for the detector to be fixed. Absence dates are
   07/27, 07/28, 07/29 and 07/30 (07/26 was a Sunday), following his last punch on 07/25. The
