@@ -5,14 +5,30 @@
 --  Additive + idempotent. RLS-disabled project convention (anon read/write via PostgREST).
 -- ═══════════════════════════════════════════════════════════════════════════════
 --
---  ▓▓▓ NOT APPLIED. DO NOT RUN THIS UNTIL A PAYROLL-QUIET WINDOW. ▓▓▓
---  Two reasons, both from the plan's "Payroll-quiet windows" section:
+--  ▓▓▓ APPLIED AND VERIFIED IN PRODUCTION — 2026-08-05 (owner). GATE A PASSED. ▓▓▓
+--  STEP 9 passed seven-for-seven, TWICE, in separate editor tabs (the standing persistence check
+--  after the 2026-07-31 install that verified live and was later found in neither project):
+--    · attendance_time_edit  — exists, 0 rows
+--    · attendance_day_lock   — exists, 0 rows
+--    · the five additive attendance_edit_audit columns — live, all nullable
+--    · RSR 0025 Jamaica L. Batucan — the SOLE is_time_editor
+--  Client code may now name these objects. It could not before, and that gate is what STEP 9 was
+--  for; see the standing "verify SQL is actually applied" rule.
+--
+--  THIS FILE IS IDEMPOTENT AND SAFE TO RE-RUN — but re-running is still a payroll-quiet act:
 --    1. STEP 8 ends with `notify pgrst, 'reload schema';`, which bounces the PostgREST schema
 --       cache. A saveTimes() insert landing in that instant can fail.
---    2. STEP 3 adds columns to attendance_edit_audit — the table saveTimes writes to BEFORE it
+--    2. STEP 3's column adds touch attendance_edit_audit — the table saveTimes writes to BEFORE it
 --       touches any punch. A log failure aborts the write by design, so a mid-run migration can
 --       abort a live correction the owner is in the middle of making.
---  Run it when nobody is editing times.
+--  Re-run it only when nobody is editing times.
+--
+--  NOTE ON RE-RUNNING NOW THAT IT IS LIVE: STEP 7's seed is GUARDED — with Jamaica already flagged
+--  it will SKIP rather than re-seed, so a re-run can never revoke a second editor added later by a
+--  flag flip. STEP 1 drops and re-creates the one-pending index, which is momentary and safe on an
+--  empty or small table. Nothing else in the file rewrites data.
+--
+--  To undo: coordinator-time-correction-rollback.sql, beside this file.
 --
 -- ═══ RUNNING THIS — the standing rules (CLAUDE.md, owner 2026-08-03) ═══
 --   1. CLOSE the azfmpleswqixaslvcito (inventory) tab. It is the only reliable guard.

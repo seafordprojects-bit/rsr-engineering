@@ -148,17 +148,20 @@ Do these only when the owner is not running payroll and no payslip is being prin
 
 | Task | State |
 |---|---|
-| 1 — SQL migration | **written, NOT RUN.** `coordinator-time-correction.sql` + its rollback. Needs a payroll-quiet window. GATE A not yet passed |
-| 2 — `saveTimes` → `applyPunchEdit` | **built.** Owner-direct audit rows stay byte-identical on an un-migrated database (see the `auditHasNewCols()` probe), so this is safe to deploy before Task 1 runs. GATE B — the owner's before/after Edit-times comparison — still outstanding |
+| 1 — SQL migration | **APPLIED AND VERIFIED IN PRODUCTION 2026-08-05.** STEP 9 passed 7/7 twice, in separate tabs. Both tables exist and are empty, the five audit columns are live, RSR 0025 is the sole time editor. **GATE A PASSED** |
+| 2 — `saveTimes` → `applyPunchEdit` | **built. GATE B PASSED** — deployed `main` and this branch produce identical figures for Jul 25–30: net payout ₱112,466 · Elias Entero ₱3,250.00 · OT ₱15,555 · headcount 34 · missing punches 3 |
 | 3 — coordinator surface | **built** |
 | 4 — Time approvals tab | **built** — queue, approve / correct & approve / reject with presets, conflict guard, empty state, Decided section |
 | 5 — bulk day approve + lock | **built** — one date, log-first per item, shared `batch_id`, explicit partial-failure report, "Close day" |
-| 6 — missing-punch section | not built |
-| 7 — pending + unclosed banner | not built |
+| 6 — missing-punch section | **built** — `weekMissingPunches()`, beneath the queue. Rowless men remain deliberately out of scope with the binding AWOL-detector constraint recorded in the code comment |
+| 7 — pending + unclosed banner | **built** — `weekOutstanding()` is the single definition of outstanding; both halves independent; refreshed on the existing `_live` tick, no second timer |
 | 8 — Past-edits panel extension | not built (the approvals tab's Decided section, its other half, IS built) |
 | 9 — `home.js` badge | not built |
-| 10 — Telegram reminder | not built |
+| 10 — Telegram reminder | not built — **must call `weekOutstanding()`**, not re-derive the rule |
 | 11 — validate/stamp/preflight | payroll stamp `v2026-08-04a` + `preflight.html` EXPECT bumped in lockstep; re-run at the end |
+
+**Remaining gate: GATE C — the owner's localhost walkthrough.** Nothing pushes to `main` until it
+passes and the owner says push.
 
 ## Build sequence
 

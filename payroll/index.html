@@ -168,6 +168,9 @@ select.field-input{appearance:none}
     <div id="run-msg" class="msg"></div>
     <div id="live-banner" style="display:none;background:#FFF3CD;color:#633806;border-radius:10px;padding:10px 12px;font-size:13px;font-weight:600;margin-bottom:10px;text-align:center;cursor:pointer" onclick="runPayroll()">🔄 New punches arrived — tap to reload with latest data</div>
     <div id="live-stamp" style="display:none;color:#8a8a80;font-size:11px;text-align:right;margin:-4px 2px 8px"></div>
+    <!-- §10 — pending corrections + unclosed days. Both halves come from weekOutstanding(), the
+         single definition of "outstanding" that Task 10's Telegram reminder must also use. -->
+    <div id="wk-banner" style="display:none"></div>
 
     <div id="run-results" style="display:none">
       <div class="stats-grid">
@@ -235,6 +238,7 @@ select.field-input{appearance:none}
     <div id="appr-lock-banner" style="display:none"></div>
     <div id="appr-list"></div>
     <div id="appr-bulk" style="display:none"></div>
+    <div id="appr-missing"></div>
     <div id="appr-decided"></div>
   </div>
 
@@ -980,6 +984,12 @@ async function runPayroll(){
       else clearMsg('run-msg');
       renderRun(); populateWorkerPicker(); document.getElementById('run-results').style.display='block';
     }
+    // Coordinator queue state for THIS pay week — the §10 banner and the §8 missing-punch list.
+    // Deliberately AFTER the payroll render, and loadWeekApprovalState swallows its own errors, so
+    // a problem with the correction queue can never stop a payroll run from displaying.
+    await loadWeekApprovalState();
+    renderWeekBanner();
+    renderMissing();
   }catch(err){
     msg('run-msg','err','Error: '+err.message);
   }finally{
@@ -1565,6 +1575,10 @@ async function loadApprovals(){
       const rec = recs.find(r=>normCode(r.employee_code)===normCode(e.employee_code)) || null;
       return { edit:e, rec, conflict:_apprConflict(e,rec), handled:null, corrected:null };
     });
+    // The missing-punch section and the Run Payroll banner both read the whole loaded pay week,
+    // not the one selected day, so refresh that too whenever this tab is opened or reloaded.
+    await loadWeekApprovalState();
+    renderWeekBanner();
     renderApprovals();
   }catch(err){
     _apprItems=[]; _apprLock=null; _apprDecided=[];
@@ -1624,7 +1638,7 @@ function renderApprovals(){
     document.getElementById('appr-bulk').innerHTML=_apprLock?'':
       `<div class="card"><button class="btn-sm" style="margin-top:0" onclick="apprCloseDay()">Close ${fmtDate(iso)} anyway</button>
         <div style="font-size:11px;color:#94a3b8;margin-top:6px">Closing a day stops the coordinator editing it. A day with nothing filed does not need closing.</div></div>`;
-    renderDecided();
+    renderMissing(); renderDecided();
     return;
   }
 
@@ -1694,9 +1708,8 @@ function renderApprovals(){
          ${excludedN?excludedN+' excluded so far'+(conflicts?' ('+conflicts+' conflict — handle individually)':'')+'.':'Nothing is excluded.'}
          Approving one worker freezes only that worker; the day itself stays open until you approve the rest or close it.
        </div>`}
-      <div style="font-size:11px;color:#94a3b8;margin-top:8px">A worker missing entirely? Use “Backfill a worker not listed” on the Run Payroll tab.</div>
     </div>`;
-  renderDecided();
+  renderMissing(); renderDecided();
 }
 
 function renderDecided(){
@@ -1718,6 +1731,164 @@ function renderDecided(){
         <div style="color:#64748b">filed by ${_escAudit(e.filed_by_name||'—')} · decided by ${_escAudit(e.decided_by_name||'—')} · ${when}</div>
       </div>`;
     }).join('')+'</div>';
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  THE ONE DEFINITION OF "OUTSTANDING"  (spec §10, the owner's Q1 addition)
+//  Two conditions, both measured over the LOADED PAY WEEK:
+//    1. PENDING  — attendance_time_edit rows still awaiting a decision
+//    2. UNCLOSED — any date with coordinator activity but no attendance_day_lock row
+//  Condition 2 exists because an individual approve freezes only that worker (§9), so a day can
+//  reach cutoff with every item approved and still never have been CLOSED. That state has to be
+//  visible or it is invisible.
+//
+//  >>> Task 10's cutoff-day Telegram reminder MUST call weekOutstanding() too. <<<
+//  Two copies of this rule would drift, and then the banner and the Telegram message would tell
+//  the owner different things about the same Friday.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+let _wkEdits=[], _wkLocks=[];
+
+function weekDatesISO(from,to){
+  const out=[]; if(!from||!to||from>to) return out;
+  const p=from.split('-').map(Number); const cur=new Date(p[0],p[1]-1,p[2]);
+  let guard=0;
+  while(isoOf(cur)<=to && guard++<400){ out.push(isoOf(cur)); cur.setDate(cur.getDate()+1); }
+  return out;
+}
+
+async function loadWeekApprovalState(){
+  if(!curFrom||!curTo){ _wkEdits=[]; _wkLocks=[]; return; }
+  const dates=weekDatesISO(curFrom,curTo);
+  const vars=[]; dates.forEach(d=>vars.push(...dateVariants(d)));   // every spelling of every day
+  try{
+    const [e,l]=await Promise.all([
+      sb.from('attendance_time_edit').select('id,employee_code,employee_name,date,status,filed_by_name,filed_at').in('date',vars),
+      sb.from('attendance_day_lock').select('date').in('date',dates)   // this column IS stored ISO
+    ]);
+    if(e.error) throw e.error;
+    if(l.error) throw l.error;
+    const inWeek=r=>{ const i=toISO(r.date); return i>=curFrom && i<=curTo; };
+    _wkEdits=(e.data||[]).filter(inWeek);
+    _wkLocks=(l.data||[]).filter(inWeek);
+  }catch(err){
+    // Deliberately NOT fatal to a payroll run. If the queue tables cannot be read the banner stays
+    // silent and the missing-punch list says so — but the payroll the owner came here to run still
+    // renders. A correction queue must never be able to block payday.
+    _wkEdits=[]; _wkLocks=[];
+  }
+}
+
+function weekOutstanding(){
+  const pending=_wkEdits.filter(e=>e.status==='pending');
+  const active=new Set(_wkEdits.map(e=>toISO(e.date)));      // any activity: pending OR decided
+  const locked=new Set(_wkLocks.map(l=>toISO(l.date)));
+  const unclosed=Array.from(active).filter(d=>!locked.has(d)).sort();
+  return { pending, unclosed, any:(pending.length>0 || unclosed.length>0) };
+}
+
+function renderWeekBanner(){
+  const el=document.getElementById('wk-banner'); if(!el) return;
+  const o=weekOutstanding();
+  // No banner ONLY when pending = 0 AND unclosed = 0. Each half appears only when non-zero, and
+  // half two must appear even when pending = 0 — that is the entire point of the Q1 addition.
+  if(!o.any){ el.style.display='none'; el.innerHTML=''; return; }
+  const halves=[];
+  if(o.pending.length) halves.push(
+    `<div>⚠ <b>${o.pending.length} pending time correction${o.pending.length===1?'':'s'} in this pay week `+
+    `(${fmtDate(curFrom)} – ${fmtDate(curTo)}).</b> They are NOT in this payroll.</div>`);
+  if(o.unclosed.length) halves.push(
+    `<div style="margin-top:5px">⚠ <b>${o.unclosed.length} day${o.unclosed.length===1?'':'s'} not closed: `+
+    `${o.unclosed.map(d=>dowOf(d).slice(0,3)+' '+fmtDate(d)).join(', ')}.</b> `+
+    `Corrections were filed on ${o.unclosed.length===1?'it':'them'} and the day was never closed.</div>`);
+  el.style.display='block';
+  el.innerHTML=`<div style="background:#FFF3CD;color:#633806;border:1px solid #f0d68a;border-radius:10px;padding:10px 12px;font-size:13px;margin-bottom:10px">
+      ${halves.join('')}
+      <button class="btn-sm" style="margin-top:8px;width:auto;padding:6px 12px" onclick="apprReview()">Review →</button>
+    </div>`;
+}
+
+// Jump to the queue, landing on the first day that actually needs attention.
+function apprReview(){
+  const o=weekOutstanding();
+  const target=o.pending.length?toISO(o.pending[0].date):(o.unclosed[0]||curTo);
+  const dEl=document.getElementById('appr-date'); if(dEl) dEl.value=target;
+  tab('appr', document.getElementById('t-appr'));
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  §8 — MISSING PUNCHES WITH NO CORRECTION FILED
+//  The dangerous gap: a broken day that nobody has proposed a fix for. The queue only ever lists
+//  proposals, so without this section a day nobody noticed stays invisible until payday.
+//
+//  Contents, for the LOADED PAY WEEK, excluding any worker-day that already has a pending or
+//  approved edit (those belong to the queue above, not here):
+//    · anything prSessions HARD-flags — the days that pay ₱0
+//    · a half-open session — prSessions' own `missing` list, which is the same rule the payslip uses
+//    · a Time In with no Time Out
+//    · is_incomplete
+//
+//  >>> DELIBERATELY OUT OF SCOPE (owner, Q3): a man with NO ROW AT ALL. <<<
+//  He cannot be listed from data here, and deciding whether a rowless day is a missed punch or a
+//  legitimate absence needs the leave / reported-absence / AWOL cross-check.
+//  WHEN THAT IS BUILT IT MUST CALL THE AWOL DETECTOR'S EXISTING NEVER-PUNCHED LOGIC — the thing it
+//  already counts — and MUST NOT define "absent" a second time in this file. Two independent
+//  definitions would drift and eventually disagree about the same man on the same day: one screen
+//  flagging him, the other not. Whatever the detector treats as explained (approved leave, reported
+//  absence, Sunday) is what that list must treat as explained, by calling the same code path.
+//  Until then the pointer line below sends the owner to the backfill picker, which opens Edit-times
+//  for any active worker even with zero rows this week.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+function weekMissingPunches(){
+  const out=[];
+  const covered=new Set(_wkEdits
+    .filter(e=>e.status==='pending'||e.status==='approved')
+    .map(e=>normCode(e.employee_code)+'|'+toISO(e.date)));
+  computed.forEach((c,idx)=>{
+    if(c._picker) return;                                  // ephemeral backfill card, not a real run row
+    (c.days||[]).forEach(rec=>{
+      const iso=toISO(rec.date);
+      if(covered.has(normCode(c.code)+'|'+iso)) return;    // somebody has already proposed a fix
+      const S=prSessions(rec);
+      const why=[];
+      if(S.hardFlag)                          why.push((S.hardReasons||[]).join('; ')+' — pays ₱0');
+      if(S.missing && S.missing.length)       why.push('missing '+S.missing.join(', '));
+      if(rec.timein && !rec.timeout && !(S.missing||[]).includes('Time Out')) why.push('no Time Out');
+      if(rec.is_incomplete && !why.length)    why.push('marked incomplete');
+      if(!why.length) return;
+      out.push({ idx, code:c.code, name:c.name, iso, why:why.join(' · ') });
+    });
+  });
+  return out.sort((a,b)=>a.iso.localeCompare(b.iso)||String(a.name||'').localeCompare(String(b.name||'')));
+}
+
+const _MISSING_POINTER='A worker missing entirely? Use “Backfill a worker not listed” on the Run Payroll tab — it opens Edit-times for any active worker, even one with no rows this week.';
+
+function renderMissing(){
+  const el=document.getElementById('appr-missing'); if(!el) return;
+  if(!curFrom||!curTo||!computed.length){
+    el.innerHTML=`<div class="card"><div style="font-size:12px;color:#94a3b8">
+      Load a pay week on the Run Payroll tab to see broken days that nobody has filed a correction for.</div></div>`;
+    return;
+  }
+  const rows=weekMissingPunches();
+  if(!rows.length){
+    el.innerHTML=`<div class="card"><div style="font-size:12px;color:#475569">
+        ✓ No missing punches without a correction filed for ${fmtDate(curFrom)} – ${fmtDate(curTo)}.</div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:6px">${_MISSING_POINTER}</div></div>`;
+    return;
+  }
+  el.innerHTML=`<div class="card" style="border:1px solid #f0d68a;background:#FFFCF2">
+      <div style="font-weight:700;font-size:13px;color:#633806">⚠ Missing punches with no correction filed (${rows.length})</div>
+      <div style="font-size:11px;color:#8a6d3b;margin:3px 0 9px">These are not in the queue — nobody has proposed a fix. Pay week ${fmtDate(curFrom)} – ${fmtDate(curTo)}.</div>
+      ${rows.map(r=>`<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;padding:7px 0;border-top:1px solid #f0e3c0">
+          <div style="min-width:0">
+            <div style="font-size:12px;font-weight:600">${_escAudit(r.name||r.code)} <span style="color:#94a3b8;font-weight:500">· ${fmtDate(r.iso)} · ${dowOf(r.iso)}</span></div>
+            <div style="font-size:11px;color:#8a6d3b">${_escAudit(r.why)}</div>
+          </div>
+          <button class="btn-sm" style="margin-top:0;white-space:nowrap" onclick="editTimes(${r.idx})">Fix now</button>
+        </div>`).join('')}
+      <div style="font-size:11px;color:#94a3b8;margin-top:9px">Fixing one here is your own direct edit — self-approved, still logged. ${_MISSING_POINTER}</div>
+    </div>`;
 }
 
 const _apprFind=(id)=>_apprItems.find(it=>it.edit.id===id);
@@ -1943,6 +2114,13 @@ async function _liveCheck(){
       if(_live.dirty){ const b=document.getElementById('live-banner'); if(b)b.style.display='block'; }
       else runPayroll(); // no manual edits at risk — refresh silently
     }
+    // The signature above only sees PUNCHES. A coordinator filing a proposal, or a day being
+    // closed, changes neither attendance_records nor that signature — so the outstanding state has
+    // to be refreshed on its own every tick, or the banner would sit stale until the next punch.
+    // Same 30-second timer, deliberately: no second poll is added.
+    await loadWeekApprovalState();
+    renderWeekBanner();
+    renderMissing();
   }catch(e){ /* offline etc. — try again next tick */ }
   finally{ _live.checking=false; }
 }
