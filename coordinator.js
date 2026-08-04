@@ -158,11 +158,41 @@ async function getRecentLeaves() {
   return data || [];
 }
 // ---- kiosk attendance (read-only view) ----
+// `attendance_records.date` is TEXT in MIXED formats — `MM/DD/YYYY` and `YYYY-MM-DD` — and the
+// slash form is not reliably zero-padded. This function used `.eq('date', dateStr)` with a single
+// MM/DD/YYYY spelling, so every row stored the other way was silently dropped and the Attendance
+// view showed a half-empty day with no error. Same landmine as the payroll fetches.
+//
+// Fix: ask for EVERY spelling of the one requested day, then normalise and filter client-side with
+// toISO(). An enumerated `.in()` on one day is not the banned pattern — what breaks on this column
+// is a single-spelling `.eq()` and gte/lte RANGE filters, which compare TEXT lexically. Keeping the
+// query bounded to one day also avoids an unbounded fetch silently hitting PostgREST's row cap.
+function toISO(s) {
+  if (!s) return '';
+  s = String(s).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (m) return m[3] + '-' + m[1].padStart(2, '0') + '-' + m[2].padStart(2, '0');
+  return s;
+}
+// Every way one calendar day can be spelled in this column: ISO, plus the four padded/unpadded
+// combinations of the slash form.
+function dateVariants(dateStr) {
+  const iso = toISO(dateStr);
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) return [dateStr];
+  const [, y, mo, d] = m;
+  const mu = String(Number(mo)), du = String(Number(d));
+  return [...new Set([iso, `${mo}/${d}/${y}`, `${mu}/${du}/${y}`, `${mo}/${du}/${y}`, `${mu}/${d}/${y}`])];
+}
 async function getAttendance(dateStr) {
+  const want = toISO(dateStr);
   const { data, error } = await supabase.from('attendance_records')
-    .select('*').eq('date', dateStr).order('employee_name', { ascending: true });
+    .select('*').in('date', dateVariants(dateStr)).order('employee_name', { ascending: true });
   if (error) throw error;
-  return data || [];
+  // Belt and braces: the `.in()` already restricts to the one day, but normalising again means a
+  // spelling nobody anticipated can never reach the table as if it belonged to this date.
+  return (data || []).filter(r => toISO(r.date) === want);
 }
 // --- roll-call (READ-ONLY for the coordinator) ---------------------------------
 // Roll-call ENTRY is exclusive to the registered roll-call phone. Everything below is a
