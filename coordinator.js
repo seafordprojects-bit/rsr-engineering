@@ -194,6 +194,48 @@ async function getAttendance(dateStr) {
   // spelling nobody anticipated can never reach the table as if it belonged to this date.
   return (data || []).filter(r => toISO(r.date) === want);
 }
+
+// ---- time correction (coordinator proposes, admin approves) --------------------
+// Spec: docs/superpowers/specs/2026-08-03-coordinator-time-correction.md
+// Plan: docs/superpowers/plans/2026-08-04-coordinator-time-correction.md (Task 3)
+//
+// THE INVARIANT THIS WHOLE SECTION EXISTS TO PROTECT:
+//   the punch columns of attendance_records — timein / lunch_out / lunch_in / pm_out / pm_in /
+//   timeout — are written in exactly ONE file, payroll/index.html. Nothing here writes them, ever.
+//   Everything below either READS attendance_records or WRITES attendance_time_edit. That is
+//   grep-checkable, and it is checked at every review.
+//
+// Deliberately an EXPLICIT column list, not select('*'). No rate, no peso figure, no derived pay
+// may reach this surface — and a client-side select is readable in devtools whether or not it is
+// ever rendered, so the guard has to be at the query, not at the render. Adding a column here is
+// therefore a decision, not a convenience.
+const TC_PUNCH = ['timein', 'lunch_out', 'lunch_in', 'pm_out', 'pm_in', 'timeout'];
+const TC_COLS = 'id,employee_code,employee_name,date,site,status,worked_ms,is_late,is_incomplete,' +
+                'night_duty,' + TC_PUNCH.join(',');
+async function getAttendanceForCorrection(dateStr) {
+  const want = toISO(dateStr);
+  const { data, error } = await supabase.from('attendance_records')
+    .select(TC_COLS).in('date', dateVariants(dateStr)).order('employee_name', { ascending: true });
+  if (error) throw error;
+  return (data || []).filter(r => toISO(r.date) === want);
+}
+// Proposals for one day. Same enumerated-spellings rule: attendance_time_edit.date carries the
+// spelling of the row it points at, so a single .eq() would miss half of them.
+async function getTimeEdits(dateStr) {
+  const want = toISO(dateStr);
+  const { data, error } = await supabase.from('attendance_time_edit')
+    .select('*').in('date', dateVariants(dateStr)).order('filed_at', { ascending: false });
+  if (error) throw error;
+  return (data || []).filter(r => toISO(r.date) === want);
+}
+// attendance_day_lock.date is stored NORMALIZED to ISO — a lock is about a calendar day, not about
+// one row's spelling — so this one is a plain .eq() on the ISO form and that is correct.
+async function getDayLock(dateStr) {
+  const { data, error } = await supabase.from('attendance_day_lock')
+    .select('*').eq('date', toISO(dateStr)).maybeSingle();
+  if (error) throw error;
+  return data || null;
+}
 // --- roll-call (READ-ONLY for the coordinator) ---------------------------------
 // Roll-call ENTRY is exclusive to the registered roll-call phone. Everything below is a
 // double-check surface: SELECTs only, never a write. Do not add insert/update/delete here.
@@ -1948,6 +1990,412 @@ function AwolLetters({ toast, employees }) {
     </div>`;
 }
 
+// ---------- Time correction (coordinator surface) ----------
+// Spec: docs/superpowers/specs/2026-08-03-coordinator-time-correction.md §5
+// Plan: docs/superpowers/plans/2026-08-04-coordinator-time-correction.md, Task 3
+//
+// Everything typed here is a PROPOSAL. This component writes exactly one table,
+// attendance_time_edit, and never a punch column of attendance_records — payroll/index.html is the
+// only file in the repo that writes those, and keeping it that way is what stops a second, drifting
+// copy of the pay math from existing. If you are about to add an attendance_records write below,
+// that is a change to the architecture, not to this file.
+//
+// The admin's approval queue (payroll/index.html, "Time approvals") is what turns a row here into a
+// real punch. Until that ships, proposals filed on this screen have no approver — which is why the
+// plan gates shipping this surface on Task 4 being live.
+
+const codeNorm = (c) => String(c == null ? '' : c).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+// Pay week runs SATURDAY → FRIDAY. This MIRRORS payroll/index.html setWeek() exactly, INCLUDING
+// its reference from *yesterday* — so that on payday Saturday "this week" is the week that just
+// ended rather than the one starting that morning. The two screens must never disagree about
+// which days belong to which pay week, and they cannot share code (payroll's week arithmetic lives
+// in a classic inline <script>; this file is an ES module).
+function payWeek(offset) {
+  const ref = new Date(); ref.setDate(ref.getDate() - 1); ref.setHours(0, 0, 0, 0);
+  const sinceSat = (ref.getDay() + 1) % 7;                 // Sat=0, Sun=1, … Fri=6
+  const sat = new Date(ref); sat.setDate(ref.getDate() - sinceSat + offset * 7);
+  const fri = new Date(sat); fri.setDate(sat.getDate() + 6);
+  return { from: isoOf(sat), to: isoOf(fri) };
+}
+// Owner decision Q7: the reachable window is the CURRENT pay week, plus the PREVIOUS week only
+// until Friday's cutoff. Nothing older is offered — and landing outside it does not silently
+// refuse, it names the other door (a payroll adjustment).
+function correctionWindow() {
+  const cur = payWeek(0), prev = payWeek(-1);
+  const prevOpen = todayYmd() <= cur.to;                   // cur.to IS the coming Friday cutoff
+  return { from: prevOpen ? prev.from : cur.from, to: cur.to, cur, prev, prevOpen };
+}
+
+// --- clock formatting -----------------------------------------------------------
+// Copies of payroll/index.html's parseClock / toInputVal / fromInputVal / milFmt / milTo24 (408).
+// They are copies for the same reason siteNorm above is a copy: payroll's are inside a classic
+// inline <script> and cannot be imported by an ES module. They are pure formatters — no pay rules
+// live in them — so the copy is safe, but they must stay byte-identical in behaviour to Edit-times
+// or the coordinator and the owner would be typing into two subtly different editors.
+function tcParse(str) {
+  if (str == null) return null;
+  const s = String(str).trim();
+  let m = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?\s*([AaPp][Mm])$/);
+  if (m) { let h = (+m[1]) % 12; if (/[Pp]/.test(m[3])) h += 12; return { h, m: +m[2] }; }
+  m = s.match(/^(\d{1,2}):(\d{2})(?::\d{2})?$/);
+  if (m) return { h: +m[1], m: +m[2] };
+  return null;                     // legacy '(auto-deducted)' / '(skipped)' literals land here
+}
+// stored '08:03 AM' → '08:03' for the input box
+const to24 = (str) => { const c = tcParse(str); return c ? String(c.h).padStart(2, '0') + ':' + String(c.m).padStart(2, '0') : ''; };
+// '08:03' → '08:03 AM' — the format the kiosk and payroll actually store
+function from24(v) {
+  if (!v) return null;
+  const p = String(v).split(':'); const H = +p[0], M = +p[1];
+  if (isNaN(H) || isNaN(M)) return null;
+  const ap = H >= 12 ? 'PM' : 'AM'; let h = H % 12; if (h === 0) h = 12;
+  return String(h).padStart(2, '0') + ':' + String(M).padStart(2, '0') + ' ' + ap;
+}
+// progressive digits-as-you-type, exactly as Edit-times does it: 0800 → 08:00
+function milFmt(v) { const d = String(v || '').replace(/\D/g, '').slice(0, 4); return d.length <= 2 ? d : d.slice(0, d.length - 2) + ':' + d.slice(d.length - 2); }
+function milTo24(v) {
+  if (!v) return '';
+  const m = String(v).trim().match(/^(\d{1,2}):?(\d{2})$/); if (!m) return '';
+  const H = +m[1], M = +m[2]; if (H > 23 || M > 59) return '';
+  return String(H).padStart(2, '0') + ':' + String(M).padStart(2, '0');
+}
+
+const TC_CELLS = [['timein', 'Time In'], ['lunch_out', 'Lunch Out'], ['lunch_in', 'Lunch In'],
+                  ['pm_out', 'PM Out'], ['pm_in', 'PM In'], ['timeout', 'Time Out']];
+
+// Worked hours for the times AS TYPED. Owner decision Q2: hours are shown (rates and any derived
+// peso figure are not) so she can catch her own typos.
+//
+// THIS IS NOT THE PAY ENGINE AND MUST NEVER BECOME IT. It is plain interval arithmetic over the six
+// punches: three sessions, each counted only when both its ends exist, plus payroll's own
+// close-fallback (a Time Out closes whichever session is still open). It deliberately implements
+// NONE of the pay rules — no grace snapping at 12:00/1:00/5:00/6:00, no night-shift timeline, no
+// legacy '(auto-deducted)' handling, no OT, no hard flags. So it can differ from the payroll figure
+// by a few minutes on a graced day, which is why every number it produces is shown with a '≈' and
+// the screen says outright that the admin's payroll does the real calculation.
+// If you find yourself wanting to make it agree exactly, the answer is to stop showing it here —
+// not to port recomputeDay/prSessions into this file.
+function estHours(d) {
+  const mins = (v) => { const m = milTo24(v).match(/^(\d{2}):(\d{2})$/); return m ? (+m[1]) * 60 + (+m[2]) : null; };
+  const T = {}; TC_PUNCH.forEach(k => { T[k] = mins(d[k]); });
+  let mClose = T.lunch_out, aOpen = T.lunch_in, aClose = T.pm_out, eOpen = T.pm_in, eClose = T.timeout;
+  if (T.timeout != null) {
+    if (eOpen != null) eClose = T.timeout;
+    else if (aOpen != null && aClose == null) aClose = T.timeout;
+    else if (T.timein != null && mClose == null && aOpen == null) mClose = T.timeout;
+  }
+  const span = (o, c) => (o == null || c == null) ? 0 : Math.max(0, (c >= o ? c : c + 1440) - o);
+  return ((span(T.timein, mClose) + span(aOpen, aClose) + span(eOpen, eClose)) / 60).toFixed(2);
+}
+
+function TimeCorrection({ toast, employees }) {
+  const W = correctionWindow();
+  const [date, setDate] = useState(() => { const t = todayYmd(); return t < W.from ? W.from : (t > W.to ? W.to : t); });
+  const [recs, setRecs] = useState(null);
+  const [edits, setEdits] = useState([]);
+  const [lock, setLock] = useState(null);
+  const [extra, setExtra] = useState([]);      // days she added by hand (attendance_id stays null)
+  const [draft, setDraft] = useState({});      // { [normalized code]: { timein:'08:00', … } }
+  const [open, setOpen] = useState({});
+  const [reason, setReason] = useState('');
+  const [addCode, setAddCode] = useState('');
+  const [pinOpen, setPinOpen] = useState(false);
+  const [pin, setPin] = useState('');
+  const [err, setErr] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState('');
+
+  const load = useCallback(async (d) => {
+    setRecs(null); setEdits([]); setLock(null); setDraft({}); setExtra([]); setErr('');
+    try {
+      // All three or none, deliberately. If the proposals or the day lock cannot be read, the
+      // punches must not be shown as editable either: she would be typing into a day that may
+      // already be approved and locked, and would file a proposal nobody can apply. One reload
+      // costs nothing; a correction filed against unknown state is a real problem for the admin.
+      const [a, e, l] = await Promise.all([getAttendanceForCorrection(d), getTimeEdits(d), getDayLock(d)]);
+      setRecs(a); setEdits(e); setLock(l);
+    } catch (ex) {
+      setRecs([]);
+      toast('Could not load that day — pull down to reload. (' + (ex.message || ex) + ')', true);
+    }
+  }, []);
+  useEffect(() => { load(date); }, [date]);
+
+  const inWindow = date >= W.from && date <= W.to;
+  const step = (n) => {
+    const p = date.split('-').map(Number);
+    const d = new Date(p[0], p[1] - 1, p[2]); d.setDate(d.getDate() + n);
+    const iso = isoOf(d);
+    if (iso < W.from || iso > W.to) return;
+    setDate(iso);
+  };
+
+  const rows = [...(recs || []), ...extra];
+  const editsFor = (code) => edits.filter(e => codeNorm(e.employee_code) === codeNorm(code));
+  const pendingFor = (code) => editsFor(code).find(e => e.status === 'pending') || null;
+  const dayLocked = !!lock;
+  // Owner decision Q1: an individual approve freezes ONLY that worker. Approving Ricky's Friday
+  // leaves the other four men on Friday fully editable — the whole day freezes only on
+  // "Approve remaining" or an explicit "Close day", both of which write attendance_day_lock.
+  const workerLocked = (code) => dayLocked || editsFor(code).some(e => e.status === 'approved');
+
+  // What the boxes show when the day loads: the open proposal if there is one (so re-editing
+  // continues from what she last sent), otherwise the punches as recorded.
+  const baseline = (row) => {
+    const p = pendingFor(row.employee_code);
+    const src = (p && p.after) ? p.after : row;
+    const o = {}; TC_PUNCH.forEach(k => { o[k] = to24(src[k]); }); return o;
+  };
+  const cellVal = (row, k) => { const d = draft[codeNorm(row.employee_code)]; return (d && d[k] !== undefined) ? d[k] : baseline(row)[k]; };
+  const setCell = (row, k, v) => {
+    const key = codeNorm(row.employee_code);
+    setDraft({ ...draft, [key]: { ...(draft[key] || baseline(row)), [k]: v } });
+  };
+  // Dirty = she touched it since the day loaded. Deliberately measured against the baseline and
+  // NOT against the record: a worker who already has a pending proposal would otherwise read as
+  // dirty forever and be re-sent on every submit.
+  const isDirty = (row) => {
+    const d = draft[codeNorm(row.employee_code)]; if (!d) return false;
+    const b = baseline(row);
+    return TC_PUNCH.some(k => (milTo24(d[k] || '') || '') !== (milTo24(b[k] || '') || ''));
+  };
+  // Cells that differ from what the kiosk actually recorded — highlighted, so a proposal is
+  // readable at a glance for what it changes.
+  const changedCells = (row) => new Set(TC_PUNCH.filter(k => (milTo24(cellVal(row, k) || '') || '') !== (to24(row[k]) || '')));
+
+  const chipFor = (row) => {
+    if (dayLocked) return { t: 'LOCKED', c: '#6b7d8f', ink: '#fff' };
+    const l = editsFor(row.employee_code);
+    if (l.some(e => e.status === 'approved')) return { t: 'APPROVED', c: '#12B89E', ink: '#fff' };
+    if (l.some(e => e.status === 'pending')) return { t: 'PENDING', c: 'var(--hivis)', ink: '#000' };
+    const rej = l.find(e => e.status === 'rejected');
+    if (rej) return { t: 'REJECTED', c: '#D64045', ink: '#fff', note: rej.decision_note || '' };
+    return null;
+  };
+
+  const dirtyRows = rows.filter(r => !workerLocked(r.employee_code) && isDirty(r));
+
+  const addDay = () => {
+    const emp = (employees || []).find(e => e.code === addCode);
+    if (!emp) return;
+    const p = date.split('-');
+    setExtra([...extra, {
+      id: null, _new: true, employee_code: emp.code, employee_name: emp.name,
+      date: `${p[1]}/${p[2]}/${p[0]}`,          // MM/DD/YYYY padded — the spelling Edit-times uses
+      site: siteNorm(emp.home_site) || '', worked_ms: 0,
+      timein: null, lunch_out: null, lunch_in: null, pm_out: null, pm_in: null, timeout: null,
+    }]);
+    setOpen({ ...open, [codeNorm(emp.code)]: true });
+    setAddCode('');
+  };
+
+  const startSubmit = () => {
+    if (!dirtyRows.length) { setErr('Nothing changed yet — type a time first.'); return; }
+    if (!reason.trim()) { setErr('A reason is required. The admin reads it with your correction.'); return; }
+    setErr(''); setPin(''); setPinOpen(true);
+  };
+
+  const confirmSend = async () => {
+    if (busy) return;
+    setBusy(true); setErr('');
+    let n = 0;
+    try {
+      const { data: who, error: e1 } = await supabase.rpc('time_editor_for_pin', { p_pin: pin });
+      if (e1) throw e1;
+      // A throttled state is deliberately indistinguishable from a wrong PIN, server-side. Do not
+      // try to tell them apart here — the whole point is that a caller cannot.
+      if (!who || who.ok !== true) { setErr('This passcode is not authorised for time corrections.'); setPin(''); return; }
+      const stamp = new Date().toISOString();
+      for (const row of dirtyRows) {
+        const before = {}, after = {};
+        TC_PUNCH.forEach(k => {
+          before[k] = row[k] || null;                        // as it stands in attendance_records
+          after[k] = from24(milTo24(cellVal(row, k) || '')); // what she proposes
+        });
+        const payload = {
+          employee_code: row.employee_code, employee_name: row.employee_name || null,
+          date: row.date, attendance_id: row.id || null,
+          before, after, reason: reason.trim(), status: 'pending',
+          filed_by_code: who.code, filed_by_name: who.name,
+          filed_at: stamp, updated_at: stamp,
+        };
+        // Re-editing the same worker-day before approval UPDATES the open proposal rather than
+        // stacking a second one — the partial unique index enforces that, and this is the path
+        // that satisfies it. It cannot be an upsert: PostgREST's onConflict emits no WHERE
+        // predicate, so it can never match a PARTIAL index.
+        const pend = pendingFor(row.employee_code);
+        if (pend) {
+          const { error } = await supabase.from('attendance_time_edit')
+            .update(payload).eq('id', pend.id).eq('status', 'pending');
+          if (error) throw error;
+        } else {
+          const { error } = await supabase.from('attendance_time_edit').insert(payload);
+          if (error) throw error;
+        }
+        n++;
+      }
+      setPinOpen(false); setPin(''); setReason('');
+      setSent(`Sent to the admin — filed by ${who.name}`);
+      toast(`${n} correction${n === 1 ? '' : 's'} sent to the admin`);
+      await load(date);
+    } catch (ex) {
+      // Partial failure is reported, never swallowed: she has to know which of her corrections
+      // actually reached the admin before she walks away from the screen.
+      setErr(n > 0
+        ? `Sent ${n} of ${dirtyRows.length}, then it failed. The rest were NOT sent — try again.`
+        : 'Could not send — check the connection and try again.');
+    } finally { setBusy(false); }
+  };
+
+  const dayLabel = (() => { const p = date.split('-'); return `${p[1]}/${p[2]}/${p[0]}`; })();
+
+  return html`
+    <div class="card">
+      ${stepHead(1, 'Pick a day', 'Fix or fill the clock times — the admin approves before anything changes')}
+      <${Field} label="Date">
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="ret" onClick=${() => step(-1)} disabled=${date <= W.from}>◀</button>
+          <input type="date" value=${date} min=${W.from} max=${W.to}
+            onInput=${e => { const v = e.target.value; if (v >= W.from && v <= W.to) setDate(v); }} />
+          <button class="ret" onClick=${() => step(1)} disabled=${date >= W.to}>▶</button>
+        </div>
+      <//>
+      <p class="note" style="margin:0">
+        You can correct ${W.prevOpen ? 'this pay week and last week' : 'this pay week'} — ${W.from} to ${W.to}.
+        Anything older is already paid. Report it to the admin: it is fixed as a pay adjustment, not a time edit.
+      </p>
+    </div>
+
+    ${!inWindow && html`
+      <div class="card" style="border-color:var(--warn)">
+        <p class="note" style="margin:0;color:#ffc7c0">
+          This week is already paid. Report it to the admin — it is fixed as a pay adjustment, not a time edit.
+        </p>
+      </div>`}
+
+    ${dayLocked && html`
+      <div class="card" style="border-color:var(--hivis)">
+        <p class="note" style="margin:0">
+          <b style="color:var(--ink)">${dayLabel} is closed.</b> The admin approved and locked this day${lock.locked_by_name ? ' (' + lock.locked_by_name + ')' : ''}.
+          Ask the admin for any further change.
+        </p>
+      </div>`}
+
+    ${sent && html`
+      <div class="card" style="border-color:var(--ok)">
+        <p class="note" style="margin:0;color:var(--ok)"><b>${sent}</b></p>
+      </div>`}
+
+    <div class="card">
+      <label>${dayLabel} — tap a name to fix the times</label>
+      ${recs == null ? html`<div class="empty">Loading…</div>`
+        : rows.length === 0 ? html`<div class="empty">No punches recorded for this day. Use "Add a missing day" below.</div>`
+        : rows.map(row => {
+            const key = codeNorm(row.employee_code);
+            const chip = chipFor(row);
+            const wl = workerLocked(row.employee_code);
+            const isOpen = !!open[key];
+            const dirty = isDirty(row);
+            const ch = changedCells(row);
+            const est = dirty ? estHours(draft[key] || baseline(row)) : null;
+            return html`
+              <div class="row" key=${key} style="flex-direction:column;align-items:stretch;gap:0">
+                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;cursor:pointer"
+                     onClick=${() => setOpen({ ...open, [key]: !isOpen })}>
+                  <div style="min-width:0">
+                    <div class="name">${isOpen ? '▾' : '▸'} ${row.employee_name || row.employee_code}${row._new ? ' · added' : ''}</div>
+                    <div class="sub">
+                      In ${row.timein || '—'} · Out ${row.timeout || '—'} · ${row._new ? '—' : msToH(row.worked_ms) + ' h'}
+                      ${est != null ? ' → ≈' + est + ' h' : ''}
+                    </div>
+                  </div>
+                  <span style="display:flex;gap:6px;align-items:center;flex:none">
+                    ${dirty && html`<span class="pill" style="background:var(--hivis);color:#000">EDITED</span>`}
+                    ${chip && html`<span class="pill" style=${'background:' + chip.c + ';color:' + chip.ink}>${chip.t}</span>`}
+                  </span>
+                </div>
+                ${isOpen && html`
+                  <div style="padding:10px 0 4px">
+                    ${wl && html`<p class="note" style="margin:0 0 10px;color:var(--ink-dim)">
+                      Approved and locked. Ask the admin for any further change.</p>`}
+                    ${chip && chip.t === 'REJECTED' && chip.note && html`<p class="note" style="margin:0 0 10px;color:var(--warn)">
+                      The admin rejected this: "${chip.note}"</p>`}
+                    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+                      ${TC_CELLS.map(([k, lbl]) => html`
+                        <div key=${k}>
+                          <label style="font-size:10px;margin-bottom:4px">${lbl}</label>
+                          <input inputmode="numeric" maxlength="5" placeholder="--:--" disabled=${wl}
+                            style=${'padding:9px 6px;font-size:15px;text-align:center;font-family:"JetBrains Mono",monospace' + (ch.has(k) ? ';border-color:var(--hivis);color:var(--hivis);font-weight:700' : '')}
+                            value=${cellVal(row, k)}
+                            onInput=${e => setCell(row, k, milFmt(e.target.value))}
+                            onBlur=${e => setCell(row, k, milTo24(e.target.value))} />
+                        </div>`)}
+                    </div>
+                    <p class="note" style="margin:8px 0 0">
+                      24-hour time — 1:05 PM is 13:05. Leave a box empty for a punch that was never made.
+                      ${est != null ? ' The ≈ hours are an estimate to check your typing; the admin’s payroll does the real calculation.' : ''}
+                    </p>
+                  </div>`}
+              </div>`;
+          })}
+    </div>
+
+    ${!dayLocked && recs != null && html`
+      <div class="card">
+        <label>Add a missing day</label>
+        <p class="note" style="margin:0 0 10px">For a man who never punched at all on ${dayLabel}.</p>
+        <${Field} label="Employee">
+          <select value=${addCode} onChange=${e => setAddCode(e.target.value)}>
+            <option value="">Select employee…</option>
+            ${(() => {
+              const have = new Set(rows.map(r => codeNorm(r.employee_code)));
+              return (employees || []).filter(e => !have.has(codeNorm(e.code)))
+                .map(e => html`<option value=${e.code} key=${e.id}>${e.name} · ${e.code}</option>`);
+            })()}
+          </select>
+        <//>
+        <button class="btn ghost" disabled=${!addCode} onClick=${addDay}>Add this day</button>
+      </div>`}
+
+    ${!dayLocked && recs != null && html`
+      <div class="card">
+        ${stepHead(2, 'Reason & send', 'Say why, then send it to the admin for approval')}
+        <${Field} label="Reason (required)">
+          <textarea rows="2" value=${reason} onInput=${e => setReason(e.target.value)}
+            placeholder="e.g. forgot to punch out, confirmed with foreman"></textarea>
+        <//>
+        <p class="note" style="margin:0 0 10px">
+          ${dirtyRows.length
+            ? `${dirtyRows.length} worker${dirtyRows.length === 1 ? '' : 's'} changed: ${dirtyRows.map(r => r.employee_name || r.employee_code).join(', ')}.`
+            : 'Nothing changed yet.'}
+          Nothing is applied until the admin approves it.
+        </p>
+        <button class="btn" disabled=${!dirtyRows.length || busy} onClick=${startSubmit}>Send to the admin</button>
+        ${err && !pinOpen && html`<p class="note" style="margin-top:10px;color:var(--warn)">${err}</p>`}
+      </div>`}
+
+    ${pinOpen && html`
+      <div class="card" style="border-color:var(--hivis)">
+        <label>Confirm with your own passcode</label>
+        <p class="note" style="margin:0 0 10px">
+          Your name is recorded on every correction you send, so the admin knows who filed it.
+          The passcode that opened this page is not enough.
+        </p>
+        <${Field} label="Your passcode">
+          <input type="password" inputmode="numeric" value=${pin}
+            onInput=${e => setPin(e.target.value)}
+            onKeyDown=${e => { if (e.key === 'Enter') confirmSend(); }} />
+        <//>
+        <div style="display:flex;gap:8px">
+          <button class="btn" disabled=${busy} onClick=${confirmSend}>${busy ? 'Sending…' : 'Send'}</button>
+          <button class="btn ghost" disabled=${busy} onClick=${() => { setPinOpen(false); setPin(''); setErr(''); }}>Cancel</button>
+        </div>
+        ${err && html`<p class="note" style="margin-top:10px;color:var(--warn)">${err}</p>`}
+      </div>`}`;
+}
+
 function App() {
   const [authed, setAuthed] = useState(sessionStorage.getItem('rsr_coord') === '1');
   const [area, setArea] = useState(null);          // null | 'vessels' | 'personnel' | 'expenses'
@@ -2010,6 +2458,10 @@ function App() {
           <div style="font-size:24px">🕒</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Attendance</div>
           <div class="sub" style="font-size:12px;color:var(--ink-dim)">Kiosk time in / time out by day</div>
         </div>
+        <div class="card" style="cursor:pointer;margin:0;grid-column:1/-1" onClick=${() => setArea('timefix')}>
+          <div style="font-size:24px">🕒</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Time correction</div>
+          <div class="sub" style="font-size:12px;color:var(--ink-dim)">Fix or fill missing clock times · admin approves</div>
+        </div>
         <div class="card" style="cursor:pointer;margin:0;grid-column:1/-1" onClick=${() => setArea('approvals')}>
           <div style="font-size:24px">✅</div><div class="name" style="font-size:15px;margin-top:6px;font-weight:700">Approvals</div>
           <div class="sub" style="font-size:12px;color:var(--ink-dim)">Late breaks & straight duty</div>
@@ -2028,11 +2480,12 @@ function App() {
 
   // ---- areas ----
   return html`
-    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'attendance' ? 'ATTENDANCE' : area === 'rollcall' ? 'ROLL-CALL (VIEW ONLY)' : area === 'approvals' ? 'APPROVALS' : area === 'awol' ? 'AWOL — LETTERS' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISCELLANEOUS':'SUMMARY') : '')) : 'PERSONNEL DATA')}
+    ${Header(area === 'vessels' ? 'VESSEL SCHEDULE' : area === 'expenses' ? 'EXPENSES' : area === 'attendance' ? 'ATTENDANCE' : area === 'timefix' ? 'TIME CORRECTION' : area === 'rollcall' ? 'ROLL-CALL (VIEW ONLY)' : area === 'approvals' ? 'APPROVALS' : area === 'awol' ? 'AWOL — LETTERS' : area === 'liquidation' ? ('LIQUIDATION' + (liqTab ? ' · ' + (liqTab==='fund'?'FUND':liqTab==='mat'?'MATERIALS':liqTab==='tool'?'TOOLS':liqTab==='allow'?'ALLOWANCE':liqTab==='cons'?'CONSUMABLES':liqTab==='misc'?'MISCELLANEOUS':'SUMMARY') : '')) : 'PERSONNEL DATA')}
     <div class="wrap">
       ${area === 'vessels' && html`<${Vessels} voyages=${voyages} sites=${sites} onReload=${loadVoyages} toast=${flash} />`}
       ${area === 'expenses' && html`<${Expenses} voyages=${voyages} toast=${flash} />`}
       ${area === 'attendance' && html`<${Attendance} toast=${flash} />`}
+      ${area === 'timefix' && html`<${TimeCorrection} toast=${flash} employees=${employees} />`}
       ${area === 'rollcall' && html`<${RollCall} employees=${employees} toast=${flash} />`}
       ${area === 'approvals' && html`<${Approvals} toast=${flash} />`}
       ${area === 'awol' && html`<${AwolLetters} toast=${flash} employees=${employees} />`}
