@@ -152,7 +152,14 @@ Do these only when the owner is not running payroll and no payslip is being prin
 
 **Produces (names later tasks depend on):** table `attendance_time_edit` (columns exactly per spec
 §3.1, `status` in `pending|approved|rejected|superseded`, unique partial index on
-`(employee_code, date) where status='pending'`); table `attendance_day_lock` (`date` text PK,
+**`(employee_code, att_date_iso(date)) where status='pending'`** — keyed on the ISO-NORMALISED
+date, not the raw mixed-format column, or a spelling difference walks straight past the
+one-proposal-per-worker-day guarantee); immutable helper `att_date_iso(text)`; **BEFORE UPDATE
+trigger `attendance_time_edit_freeze_trg`** — a row whose `old.status` is not `pending` can never
+be updated again, so Task 4's approve/reject moves a row out of pending exactly once and Task 5's
+bulk retry is forced to skip already-approved items by the database rather than by client
+bookkeeping; **BEFORE UPDATE trigger `attendance_time_edit_touch_trg`** owning `updated_at` (no
+client may set it); table `attendance_day_lock` (`date` text PK,
 `locked_at`, `locked_by_code`, `locked_by_name`); additive nullable columns on
 `attendance_edit_audit`: `source`, `filed_by_code`, `filed_by_name`, `edit_id`, `batch_id`; flag
 `employees.is_time_editor`; RPC `time_editor_for_pin(p_pin text) returns jsonb` → `{ok:true,code,name}`

@@ -60,6 +60,8 @@ select count(*) as audit_rows_using_new_cols
 -- ── STEP 2 — SNAPSHOT FIRST. Nothing below drops anything that isn't copied here ──
 -- Suffixed with the date so a second rollback attempt cannot silently overwrite the first one's
 -- copy. If you re-run this on a different day, change the suffix in STEP 2 AND STEP 4 together.
+-- The freeze trigger does not obstruct this: it is BEFORE UPDATE only, and `create table as
+-- select` reads. Decided rows copy exactly as they stand.
 create table if not exists public.bak_attendance_time_edit_20260804 as
   select * from public.attendance_time_edit;
 create table if not exists public.bak_attendance_day_lock_20260804 as
@@ -92,6 +94,26 @@ drop function if exists public.time_editor_for_pin(text);
 drop table    if exists public.time_editor_throttle;
 
 
+-- ── STEP 3b — the trigger functions ──────────────────────────────────────────
+-- DROPPING A TABLE DROPS ITS TRIGGERS BUT NOT THE FUNCTIONS THOSE TRIGGERS CALL. Without these
+-- two lines, STEP 4 would leave attendance_time_edit_freeze() and attendance_time_edit_touch()
+-- behind as orphans — harmless, but they are debris from a feature that is supposed to be gone,
+-- and the next person reading pg_proc would have to work out whether anything still used them.
+--
+-- Order matters: these must come AFTER the triggers are gone, and the triggers go with the table
+-- in STEP 4 — so this block is written to run before STEP 4 only because `drop function` on a
+-- function still referenced by a live trigger FAILS. It is therefore guarded: try, and if the
+-- table (and thus the trigger) is still there, defer to STEP 4b.
+do $$
+begin
+  drop function if exists public.attendance_time_edit_freeze();
+  drop function if exists public.attendance_time_edit_touch();
+  raise notice 'trigger functions dropped';
+exception when dependent_objects_still_exist then
+  raise notice 'trigger functions still in use by a live trigger — STEP 4b will drop them after the table';
+end $$;
+
+
 -- ── STEP 4 — the two new tables ──────────────────────────────────────────────
 -- GUARDED. This refuses to drop a table whose backup is missing or short. There is no client
 -- delete on either table precisely so no audit trail can be erased from a screen — this script
@@ -112,7 +134,7 @@ begin
     raise exception 'REFUSING TO DROP attendance_day_lock: backup has % rows, table has %. Run STEP 2 first.', v_bak, v_live;
   end if;
 
-  -- Both indexes on attendance_time_edit and the sequence go with the table.
+  -- Both indexes on attendance_time_edit, its two triggers and the sequence go with the table.
   drop table public.attendance_time_edit;
   drop table public.attendance_day_lock;
   raise notice 'attendance_time_edit and attendance_day_lock dropped; backups kept.';
@@ -120,10 +142,37 @@ end $$;
 -- The Supabase editor swallows RAISE NOTICE. Do not trust the notice above — re-query in STEP 7.
 
 
+-- ── STEP 4b — trigger functions, second pass ─────────────────────────────────
+-- Unconditional now: the triggers went with the table in STEP 4, so nothing references these.
+-- No-ops if STEP 3b already got them.
+drop function if exists public.attendance_time_edit_freeze();
+drop function if exists public.attendance_time_edit_touch();
+
+
+-- ── STEP 4c — the date normaliser ────────────────────────────────────────────
+-- att_date_iso() was created by this migration solely to key the one-pending unique index, and
+-- that index went with the table.
+--
+-- NO CASCADE, deliberately. If some object added after this migration has come to depend on
+-- att_date_iso(), this statement FAILS LOUDLY and the rollback stops with the function intact —
+-- which is the right outcome. `drop ... cascade` would quietly delete that other object's index
+-- or constraint as collateral, and nobody would find out until the thing it protected was needed.
+-- If it fails: read what depends on it, decide deliberately, do not reach for cascade.
+drop function if exists public.att_date_iso(text);
+
+
 -- ── STEP 5 — employees.is_time_editor ────────────────────────────────────────
 -- The flag is cleared unconditionally: with the RPC gone nothing reads it, but a stale `true`
 -- sitting on a live employee row is exactly the kind of thing that quietly grants access when a
 -- future migration re-creates the function. Clear it, always.
+--
+-- NOTE THE ASYMMETRY WITH THE MIGRATION, WHICH IS DELIBERATE. The migration's STEP 7 seed is
+-- GUARDED — it refuses to touch the flag if anyone already holds it, so that re-running the
+-- migration can never revoke an editor the owner flag-flipped on later. This rollback is the
+-- opposite: it is an explicit instruction to remove the feature, so clearing every flag is the
+-- point, not a side effect. Record who held it before you run this — after STEP 4 the
+-- attendance_time_edit rows that would have told you are in bak_attendance_time_edit_20260804.
+select code, name from public.employees where is_time_editor;   -- read this BEFORE the update
 update public.employees set is_time_editor = false where is_time_editor = true;
 
 -- ▓▓▓ OPTIONAL — the column itself. Leaving it costs nothing (it is boolean not null default
@@ -162,9 +211,12 @@ select table_name from information_schema.tables
  where table_schema = 'public'
    and table_name in ('attendance_time_edit', 'attendance_day_lock', 'time_editor_throttle');
 
--- expect 0 rows: the RPC gone
+-- expect 0 rows: the RPC, both trigger functions and the date normaliser all gone.
+-- att_date_iso appearing here means STEP 4c failed on a dependency — go and read what needs it.
 select proname from pg_proc p join pg_namespace n on n.oid = p.pronamespace
- where n.nspname = 'public' and p.proname = 'time_editor_for_pin';
+ where n.nspname = 'public'
+   and p.proname in ('time_editor_for_pin', 'attendance_time_edit_freeze',
+                     'attendance_time_edit_touch', 'att_date_iso');
 
 -- expect 0 — nobody is flagged, whether or not the column was dropped in STEP 5
 select count(*) as time_editors_must_be_0 from public.employees where is_time_editor;

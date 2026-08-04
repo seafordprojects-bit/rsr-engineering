@@ -228,6 +228,26 @@ async function getTimeEdits(dateStr) {
   if (error) throw error;
   return (data || []).filter(r => toISO(r.date) === want);
 }
+// The open proposal for ONE worker-day, looked up THE WAY THE DATABASE INDEXES IT.
+//
+// This must mirror `attendance_time_edit_one_pending` exactly — that index is
+//   unique (employee_code, att_date_iso(date)) where status = 'pending'
+// so the lookup keys on the RAW employee_code (as the index does) and on the ISO-NORMALISED date
+// (as att_date_iso does, and as toISO does here). If the two ever disagree, the client looks for
+// an open row, misses it on a spelling, inserts, and takes a 23505 the coordinator sees as an
+// unexplained "could not send".
+//
+// Deliberately NOT read off the day-array the screen already loaded. That array comes from an
+// ENUMERATED list of five spellings; a sixth spelling nobody anticipated would be absent from it
+// while still colliding in the index — which is the exact case this function has to get right.
+// Bounded by employee_code + status='pending', so it is a handful of rows, never a broad fetch.
+async function getOpenPending(code, dateStr) {
+  const want = toISO(dateStr);
+  const { data, error } = await supabase.from('attendance_time_edit')
+    .select('id,date,status').eq('employee_code', code).eq('status', 'pending').limit(200);
+  if (error) throw error;
+  return (data || []).find(r => toISO(r.date) === want) || null;
+}
 // attendance_day_lock.date is stored NORMALIZED to ISO — a lock is about a calendar day, not about
 // one row's spelling — so this one is a plain .eq() on the ISO form and that is correct.
 async function getDayLock(dateStr) {
@@ -2235,19 +2255,34 @@ function TimeCorrection({ toast, employees }) {
           date: row.date, attendance_id: row.id || null,
           before, after, reason: reason.trim(), status: 'pending',
           filed_by_code: who.code, filed_by_name: who.name,
-          filed_at: stamp, updated_at: stamp,
+          filed_at: stamp,
+          // updated_at is NOT sent: the attendance_time_edit_touch_trg trigger owns it. A
+          // timestamp from this tablet's clock is not evidence of anything.
         };
         // Re-editing the same worker-day before approval UPDATES the open proposal rather than
         // stacking a second one — the partial unique index enforces that, and this is the path
         // that satisfies it. It cannot be an upsert: PostgREST's onConflict emits no WHERE
         // predicate, so it can never match a PARTIAL index.
-        const pend = pendingFor(row.employee_code);
+        //
+        // The lookup is a fresh read keyed the way the index is (raw employee_code + ISO date),
+        // NOT the day-array on screen: that array enumerates five spellings, and a sixth would be
+        // missing from it while still colliding in the index.
+        const pend = await getOpenPending(row.employee_code, row.date);
         if (pend) {
+          // .eq('status','pending') as well as the id: if the admin decided this row in the
+          // seconds since the read, the update matches nothing instead of racing the freeze
+          // trigger, and she is told rather than silently overwriting a decision.
           const { error } = await supabase.from('attendance_time_edit')
             .update(payload).eq('id', pend.id).eq('status', 'pending');
           if (error) throw error;
         } else {
           const { error } = await supabase.from('attendance_time_edit').insert(payload);
+          // 23505 here means an open proposal for this worker-day exists that the lookup above
+          // could not see — the index and the client disagreed about the key. Name it plainly:
+          // a bare "could not send" would send her round the same loop forever.
+          if (error && error.code === '23505') {
+            throw new Error(`${row.employee_name || row.employee_code} already has a correction waiting for the admin on this day. Reload the screen and edit that one.`);
+          }
           if (error) throw error;
         }
         n++;
@@ -2258,10 +2293,13 @@ function TimeCorrection({ toast, employees }) {
       await load(date);
     } catch (ex) {
       // Partial failure is reported, never swallowed: she has to know which of her corrections
-      // actually reached the admin before she walks away from the screen.
+      // actually reached the admin before she walks away from the screen. The reason is carried
+      // through too — the one-proposal-per-worker-day collision has a message that tells her what
+      // to do, and flattening it to "could not send" would send her round the same loop forever.
+      const why = (ex && ex.message) ? ' ' + ex.message : '';
       setErr(n > 0
-        ? `Sent ${n} of ${dirtyRows.length}, then it failed. The rest were NOT sent — try again.`
-        : 'Could not send — check the connection and try again.');
+        ? `Sent ${n} of ${dirtyRows.length}, then it failed. The rest were NOT sent — try again.${why}`
+        : `Could not send — check the connection and try again.${why}`);
     } finally { setBusy(false); }
   };
 

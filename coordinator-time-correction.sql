@@ -79,17 +79,66 @@ alter table public.attendance_time_edit drop constraint if exists attendance_tim
 alter table public.attendance_time_edit add constraint attendance_time_edit_status_chk
   check (status in ('pending', 'approved', 'rejected', 'superseded'));
 
+-- ── the date normaliser the unique index keys on ─────────────────────────────
+-- MUST be IMMUTABLE: Postgres will not build an index on a stable or volatile expression.
+-- Written with regexp/substring only for exactly that reason — to_date/to_char are STABLE
+-- (they read locale and TimeZone) and could not be used here.
+--
+-- Deliberately NOT leave_try_date(): that one is used by the AWOL work and returns a real `date`,
+-- and its volatility is not guaranteed immutable. An index needs its own frozen contract, so this
+-- feature owns a small one rather than borrowing a function it does not control.
+--
+-- Mirrors the client's toISO() exactly, including the MM/DD/YYYY field order (month, day, year).
+--
+-- THE FALLBACK IS LOAD-BEARING: an unrecognised spelling returns the trimmed input, NEVER null.
+-- If it returned null, every unparseable row would key as null in the unique index — and null is
+-- not equal to null, so unlimited duplicates would be allowed on exactly the rows nobody can read
+-- properly. Returning the raw text keeps such a row uniquely keyed to itself.
+create or replace function public.att_date_iso(p_date text)
+returns text language sql immutable strict as $$
+  select case
+    when btrim(p_date) ~ '^\d{4}-\d{2}-\d{2}'
+      then substring(btrim(p_date) from 1 for 10)
+    when btrim(p_date) ~ '^\d{1,2}/\d{1,2}/\d{4}'
+      then (regexp_match(btrim(p_date), '^(\d{1,2})/(\d{1,2})/(\d{4})'))[3] || '-' ||
+           lpad((regexp_match(btrim(p_date), '^(\d{1,2})/(\d{1,2})/(\d{4})'))[1], 2, '0') || '-' ||
+           lpad((regexp_match(btrim(p_date), '^(\d{1,2})/(\d{1,2})/(\d{4})'))[2], 2, '0')
+    else btrim(p_date)
+  end;
+$$;
+
 -- ONE live proposal per worker-day. Re-editing the same worker-day before approval UPDATES the
 -- open pending row; it never stacks a second one. Partial, so approved/rejected history accumulates
 -- freely — a worker-day can be corrected, approved, and corrected again later.
 --
+-- KEYED ON att_date_iso(date), NOT ON THE RAW COLUMN. `date` carries the same mixed spellings as
+-- attendance_records.date, so a raw key made '08/01/2026' and '2026-08-01' two different keys and
+-- the constraint could be walked straight past by a spelling difference — precisely the guarantee
+-- it exists to give. The kiosk writes MM/DD/YYYY and other paths write ISO for the same calendar
+-- day, so this was not hypothetical.
+--
+-- The drop below is here so a re-run replaces an index built by an EARLIER version of this file:
+-- `create unique index if not exists` sees the old name, does nothing, and would silently leave
+-- the raw-date key in place. Dropping first is what makes the fix actually land on a second run.
+drop index if exists public.attendance_time_edit_one_pending;
+create unique index if not exists attendance_time_edit_one_pending
+  on public.attendance_time_edit (employee_code, public.att_date_iso(date))
+  where status = 'pending';
+
 -- NOTE for the client: because this index is PARTIAL, PostgREST's `upsert(..., onConflict:
 -- 'employee_code,date')` CANNOT use it — that syntax emits no WHERE predicate, so Postgres will not
 -- match it and the write fails. The coordinator client therefore reads the open pending row and
 -- UPDATEs it by id, or INSERTs when there is none. This index is the backstop, not the mechanism.
-create unique index if not exists attendance_time_edit_one_pending
-  on public.attendance_time_edit (employee_code, date)
-  where status = 'pending';
+-- The client's lookup must key the SAME WAY this index does — raw employee_code, ISO-normalised
+-- date — or it will look for an open row, miss it on a spelling, insert, and take a 23505 here.
+--
+-- KNOWN RESIDUAL, deliberately not changed in this pass: the first key column is the RAW
+-- employee_code. Codes drift by spacing across sources ('RSR 0015' vs 'RSR0015' — see
+-- awol-punch-history.sql), so two spellings of the same worker can still hold one open proposal
+-- each on the same day. Closing it is one line —
+--   on public.attendance_time_edit (upper(regexp_replace(employee_code,'[^A-Za-z0-9]','','g')),
+--                                   public.att_date_iso(date))
+-- — and the client would have to match it. Flagged for the owner rather than changed unasked.
 
 create index if not exists attendance_time_edit_date_idx   on public.attendance_time_edit (date);
 create index if not exists attendance_time_edit_status_idx on public.attendance_time_edit (status);
@@ -218,12 +267,87 @@ grant execute on function public.time_editor_for_pin(text) to anon, authenticate
 -- cannot silently miss the intended person.
 --
 -- OWNER, Q6: adding a second time editor later is a FLAG FLIP, NOT A BUILD —
---   update public.employees set is_time_editor = true where employee_code = '…';
+--   update public.employees set is_time_editor = true where code = 'RSR 0026';
+-- (The column on `employees` is `code`. An earlier draft of this comment said `employee_code`,
+-- which is the column name used on attendance_records / attendance_time_edit, NOT on the roster —
+-- running it verbatim would have failed with "column employee_code does not exist". Corrected so
+-- the one-liner can be copied straight out of this file and run.)
+-- To be spelling-proof, the normalised form works for any code:
+--   update public.employees set is_time_editor = true
+--    where upper(regexp_replace(code, '\s', '', 'g')) = 'RSR0026';
 -- No code change, no deploy, no stamp bump, no walkthrough. Cover for Jamaica being out sick is a
 -- one-line statement on the day.
-update public.employees set is_time_editor = false where is_time_editor = true;
-update public.employees set is_time_editor = true
- where upper(regexp_replace(code, '\s', '', 'g')) = 'RSR0025';
+--
+-- SEEDS ONLY WHEN NOBODY IS FLAGGED YET. The previous version opened with an unconditional
+--   update public.employees set is_time_editor = false where is_time_editor = true;
+-- which made this file a REVOKE for anyone added after it first ran. Re-running a migration is a
+-- normal thing to do — after a schema-cache problem, or to re-verify an install — and doing so
+-- would have silently switched off a second editor the owner had flag-flipped on, with no error
+-- and nothing on screen. The next time Jamaica was off sick, her cover would just stop working.
+-- An idempotent migration must converge on the same state, not undo the owner's later decisions.
+do $$
+begin
+  if exists (select 1 from public.employees where is_time_editor) then
+    raise notice 'is_time_editor already set for at least one employee — seed SKIPPED, existing editors left alone';
+  else
+    update public.employees set is_time_editor = true
+     where upper(regexp_replace(code, '\s', '', 'g')) = 'RSR0025';
+    raise notice 'seeded is_time_editor for RSR0025';
+  end if;
+end $$;
+-- The Supabase editor swallows RAISE NOTICE. Do not trust the notice — STEP 9 re-queries.
+--
+-- To deliberately RESET the roster of editors back to Jamaica alone, run this by hand first:
+--   update public.employees set is_time_editor = false where is_time_editor = true;
+-- then re-run the block above. That is now an explicit act, not a side effect of a re-run.
+
+
+-- ── STEP 7b — triggers on attendance_time_edit ───────────────────────────────
+-- attendance_time_edit is a WORKFLOW table, so it must be updatable — but only while the proposal
+-- is still open. These two triggers make that a database rule instead of a client convention.
+--
+-- BEFORE UPDATE trigger firing order is ALPHABETICAL BY TRIGGER NAME, so `..._freeze_trg` runs
+-- before `..._touch_trg`. That is the order we want (refuse first, stamp second) and it is not an
+-- accident of naming — do not rename one without checking it still sorts ahead.
+
+-- (a) FREEZE — a decided row can never be changed again.
+-- Without this, anon holds UPDATE on the whole table (it needs it to revise an open proposal), so
+-- a stale screen, a replayed request or a future bug could rewrite an APPROVED row's `after` or
+-- `applied` — the record of what the admin actually authorised — long after the punch was written.
+-- Nothing legitimate needs to: an approve/reject moves a row OUT of 'pending' exactly once, and
+-- from then on it is history. Corrections after that are a NEW proposal, which is the whole design.
+create or replace function public.attendance_time_edit_freeze()
+returns trigger language plpgsql as $$
+begin
+  if old.status is distinct from 'pending' then
+    raise exception
+      'attendance_time_edit id % is already % — a decided correction cannot be changed. File a new one.',
+      old.id, old.status
+      using errcode = '42501';       -- insufficient_privilege: reads as "not allowed", not "bad data"
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists attendance_time_edit_freeze_trg on public.attendance_time_edit;
+create trigger attendance_time_edit_freeze_trg
+  before update on public.attendance_time_edit
+  for each row execute function public.attendance_time_edit_freeze();
+
+-- (b) TOUCH — updated_at is owned by the database, not by whoever sent the write.
+-- A client-supplied timestamp is worth nothing on an audit-adjacent table: it comes from the
+-- tablet's clock, which is not trusted anywhere else in this system, and a caller that simply
+-- omits the field leaves the column reading as if the row had never been revised.
+create or replace function public.attendance_time_edit_touch()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at := now();
+  return new;
+end $$;
+
+drop trigger if exists attendance_time_edit_touch_trg on public.attendance_time_edit;
+create trigger attendance_time_edit_touch_trg
+  before update on public.attendance_time_edit
+  for each row execute function public.attendance_time_edit_touch();
 
 
 -- ── STEP 8 — grants + schema reload ──────────────────────────────────────────
@@ -234,7 +358,15 @@ update public.employees set is_time_editor = true
 -- a lock. Rejections are part of the record.
 grant select, insert, update on public.attendance_time_edit to anon, authenticated;
 grant usage, select on sequence public.attendance_time_edit_id_seq to anon, authenticated;
-grant select, insert, update on public.attendance_day_lock  to anon, authenticated;
+
+-- attendance_day_lock is INSERT-ONCE. A lock is a fact — "this day was closed, by this person, at
+-- this time" — not a setting. UPDATE is revoked rather than merely unused: with it granted, any
+-- client could rewrite locked_by_name and locked_at and quietly reassign who closed a pay day.
+-- Re-opening a day is deliberately NOT a client action; it is an owner decision made in SQL.
+-- The revoke is explicit as well as the grant being narrower, so a re-run over a database that
+-- already got the wider grant from an earlier version of this file actually takes it away.
+grant select, insert on public.attendance_day_lock to anon, authenticated;
+revoke update on public.attendance_day_lock from anon, authenticated;
 
 notify pgrst, 'reload schema';
 
@@ -255,9 +387,58 @@ select column_name, data_type, is_nullable
 -- expect exactly ONE row: RSR 0025, Jamaica L. Batucan
 select code, name, is_time_editor from public.employees where is_time_editor;
 
--- expect the partial unique index to exist, WITH its WHERE clause
+-- expect the partial unique index to exist, and its indexdef to show BOTH
+--   att_date_iso(date)   (not a bare `date`)  AND   WHERE (status = 'pending'::text)
+-- A bare `date` here means an older version of this file built the index and the drop-then-create
+-- did not run — the one-proposal-per-worker-day guarantee would then be defeated by a spelling.
 select indexname, indexdef from pg_indexes
  where schemaname = 'public' and tablename = 'attendance_time_edit';
+
+-- expect all three the same: the normaliser agrees with the client's toISO() on every spelling.
+select public.att_date_iso('08/01/2026')  as slash_padded,
+       public.att_date_iso('8/1/2026')    as slash_unpadded,
+       public.att_date_iso('2026-08-01')  as iso;
+-- expect the input back, NOT null — the fallback that keeps an unreadable spelling uniquely keyed
+select public.att_date_iso('not a date') as junk_must_echo;
+
+-- expect exactly two triggers: attendance_time_edit_freeze_trg then attendance_time_edit_touch_trg
+-- (alphabetical = firing order; freeze must sort first)
+select tgname, tgenabled from pg_trigger
+ where tgrelid = 'public.attendance_time_edit'::regclass and not tgisinternal
+ order by tgname;
+
+-- FREEZE PROOF. Inserts a pending row, decides it, then tries to change the decided row.
+-- The third update MUST fail. Everything is rolled back — nothing is kept.
+begin;
+  insert into public.attendance_time_edit
+    (employee_code, employee_name, date, reason, filed_by_code, filed_by_name)
+  values ('ZZ FREEZEPROBE', 'probe', '08/01/2026', 'probe', 'ZZ', 'probe');
+
+  -- (i) a PENDING row may be revised, and updated_at must move on its own
+  update public.attendance_time_edit set reason = 'revised while pending'
+   where employee_code = 'ZZ FREEZEPROBE';
+  select (updated_at > filed_at) as touch_trigger_must_be_true
+    from public.attendance_time_edit where employee_code = 'ZZ FREEZEPROBE';
+
+  -- (ii) deciding it is allowed exactly once (old.status is still 'pending' here)
+  update public.attendance_time_edit set status = 'approved', decided_by_name = 'probe'
+   where employee_code = 'ZZ FREEZEPROBE';
+
+  -- (iii) THIS MUST RAISE: "id N is already approved — a decided correction cannot be changed."
+  -- If it SUCCEEDS, the freeze trigger is not attached and an approved record is still rewritable.
+  update public.attendance_time_edit set applied = '{"tampered":true}'::jsonb
+   where employee_code = 'ZZ FREEZEPROBE';
+rollback;
+
+select count(*) as freeze_probe_must_be_0 from public.attendance_time_edit
+ where employee_code = 'ZZ FREEZEPROBE';
+-- expect 0 — the rollback held. (Run the block above as ONE block, or the transaction stays open.)
+
+-- expect attendance_day_lock to carry SELECT and INSERT for anon, and NO UPDATE
+select grantee, privilege_type from information_schema.role_table_grants
+ where table_schema = 'public' and table_name = 'attendance_day_lock'
+   and grantee in ('anon', 'authenticated')
+ order by grantee, privilege_type;
 
 -- expect {"ok": false} — a PIN that belongs to nobody
 select public.time_editor_for_pin('000000') as wrong_pin_must_be_ok_false;
