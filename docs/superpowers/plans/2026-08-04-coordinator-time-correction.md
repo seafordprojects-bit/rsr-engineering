@@ -155,13 +155,19 @@ Do these only when the owner is not running payroll and no payslip is being prin
 | 5 — bulk day approve + lock | **built** — one date, log-first per item, shared `batch_id`, explicit partial-failure report, "Close day" |
 | 6 — missing-punch section | **built** — `weekMissingPunches()`, beneath the queue. Rowless men remain deliberately out of scope with the binding AWOL-detector constraint recorded in the code comment |
 | 7 — pending + unclosed banner | **built** — `weekOutstanding()` is the single definition of outstanding; both halves independent; refreshed on the existing `_live` tick, no second timer |
-| 8 — Past-edits panel extension | not built (the approvals tab's Decided section, its other half, IS built) |
-| 9 — `home.js` badge | not built |
-| 10 — Telegram reminder | not built — **must call `weekOutstanding()`**, not re-derive the rule |
-| 11 — validate/stamp/preflight | payroll stamp `v2026-08-04a` + `preflight.html` EXPECT bumped in lockstep; re-run at the end |
+| 8 — Past-edits panel extension | **built** — coordinator-sourced rows name who proposed them; owner-direct rows render exactly as before. Decided section was already built |
+| 9 — `home.js` badge | **built** — read-only pending count on the Payroll tile, deep-linking to `../payroll/?tab=appr`. Appears only when non-zero |
+| 10 — Telegram reminder | **written, NOT RUN.** `coordinator-time-reminder.sql` + its rollback. STEP 8 (the cron) is deliberately separated and must not run until STEP 7's forced-guard test passes |
+| 11 — validate/stamp/preflight | payroll `v2026-08-04a`, `home.js` `v2026-08-05a`, coordinator `v2026-08-04c` — all four `preflight.html` EXPECT entries in lockstep |
 
-**Remaining gate: GATE C — the owner's localhost walkthrough.** Nothing pushes to `main` until it
-passes and the owner says push.
+**GATE C PASSED (2026-08-05).** Proposal id 1 approved; audit row 748 carries
+`source='coordinator-approved'`, `filed_by_code='RSR 0025'`, `edit_id=1`, `batch_id` null; and
+`attendance_day_lock` stayed empty on the individual approve — confirming §9/Q1, that an individual
+approve freezes only that worker-day.
+
+**Remaining before push:** a second localhost walkthrough covering Tasks 8/9/10 (the badge, the
+extended Past-edits line, and the reminder's forced-guard test), then the owner's explicit "push".
+Task 10's SQL is run separately by the owner and is not part of the deploy.
 
 ## Build sequence
 

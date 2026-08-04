@@ -727,6 +727,13 @@ async function init(){
   await loadEmployees();
   await loadAdvances();
   await loadDeductAllowances();
+  // Deep link from the dashboard's Payroll tile when corrections are waiting (home.js badge).
+  // Runs at the END of init so the tab it opens has employees and advances already loaded.
+  try{
+    if(new URLSearchParams(location.search).get('tab')==='appr'){
+      const b=document.getElementById('t-appr'); if(b) tab('appr', b);
+    }
+  }catch(e){ /* a malformed query string must never stop the page loading */ }
 }
 
 async function loadEmployees(){
@@ -1499,9 +1506,28 @@ async function loadEditHistory(code){
     const rows=data.map(r=>{
       const ch=(r.changes||[]).map(x=>`${_escAudit(x.field)}: ${_escAudit(x.old)||'—'} → ${_escAudit(x.new)||'—'}`).join(' · ');
       let when=r.created_at; try{ when=new Date(r.created_at).toLocaleString(); }catch(e){}
-      return `<div style="border-left:2px solid #cbd5e1;padding:4px 8px;margin-bottom:5px;font-size:11px">
+      // §11 — a row that came through the coordinator says WHO PROPOSED IT, by name.
+      // `actor` keeps its old meaning (who APPLIED it); filed_by_* is the new half of the story.
+      // OWNER-DIRECT ROWS RENDER EXACTLY AS THEY DID BEFORE: every field below is additive and
+      // nullable, so a pre-2026-08 row — and any row the owner keys in themselves — falls straight
+      // through to the same one-line "reason · actor · when" it has always shown. That is the point;
+      // the panel must not suddenly look different for edits the owner made by hand.
+      const src=r.source||'';
+      const viaCoordinator = !!r.filed_by_name || (src==='coordinator-approved') || (src==='admin-corrected');
+      let trail='';
+      if(viaCoordinator){
+        trail = ` · filed by <b>${_escAudit(r.filed_by_name||'—')}</b>`
+              + (r.filed_by_code?` (${_escAudit(r.filed_by_code)})`:'')
+              + ` · approved by ${_escAudit(r.actor||'owner')}`
+              + (src==='admin-corrected'?' <span style="color:#b45309">(corrected before approving)</span>':'')
+              + (r.batch_id?' · <span style="color:#94a3b8">batch</span>':'');
+      }
+      const line2 = viaCoordinator
+        ? `${_escAudit(r.reason)}${trail} · ${when}`
+        : `${_escAudit(r.reason)} · ${_escAudit(r.actor)} · ${when}`;
+      return `<div style="border-left:2px solid ${viaCoordinator?'#12B89E':'#cbd5e1'};padding:4px 8px;margin-bottom:5px;font-size:11px">
         <div><b>${fmtDate(toISO(r.date))}</b> — ${ch||'(no field diff)'}</div>
-        <div style="color:#64748b">${_escAudit(r.reason)} · ${_escAudit(r.actor)} · ${when}</div>
+        <div style="color:#64748b">${line2}</div>
       </div>`;
     }).join('');
     el.innerHTML='<div style="font-weight:600;font-size:12px;margin:4px 0 6px">Past edits ('+data.length+')</div>'+rows;

@@ -11,7 +11,7 @@ import { supabase } from './supabase.js';
 // one without opening devtools. Shown on the lock screen, the launcher and the admin header.
 // MUST be bumped in lockstep with the `home.js?v=` query string in admin/index.html, index.html
 // and preflight.html. A stamp that lags the query string is worse than none: it reads as proof.
-const BUILD = 'v2026-08-04b';
+const BUILD = 'v2026-08-05a';
 
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
 // The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
@@ -1526,7 +1526,7 @@ function App() {
     if (!authed || !onAdminPage) return;
     const iso30 = new Date(Date.now() - 30 * 864e5).toISOString();
     (async () => {
-      const [toolsOut, inRepair, issued30, vessels, people, pendingReqs, poInbox] = await Promise.all([
+      const [toolsOut, inRepair, issued30, vessels, people, pendingReqs, poInbox, timePending] = await Promise.all([
         countRows('borrow_issuance', q => q.eq('txn_type', 'borrow').eq('status', 'out')),
         countRows('item_units', q => q.eq('active', true).eq('status', 'repair')),
         countRows('issuances', q => q.gte('created_at', iso30)),
@@ -1534,8 +1534,19 @@ function App() {
         countRows('employees', q => q),
         countRows('requests', q => q.eq('status', 'Pending')),
         countRows('requisitions', q => q.eq('status', 'for_purchase')),
+        // Coordinator time corrections waiting for the admin. READ-ONLY, and deliberately the ONLY
+        // thing this dashboard knows about the feature: no pay math, no punch write, no second copy
+        // of anything. Approving happens on the payroll Time-approvals tab, because that is where
+        // the recompute engine lives (spec §4).
+        //
+        // Counted with NO date filter, on purpose. The payroll banner counts pending items INSIDE
+        // the loaded pay week — it answers "is this payroll run complete?". This tile has no pay
+        // week; it answers "is anything waiting for me at all?", and a proposal stranded on an older
+        // week is exactly what a week-scoped count would hide. The two numbers can legitimately
+        // differ, so the tile links through to the queue rather than claiming to be the same figure.
+        countRows('attendance_time_edit', q => q.eq('status', 'pending')),
       ]);
-      setM({ toolsOut, inRepair, issued30, vessels, people, pendingReqs, poInbox });
+      setM({ toolsOut, inRepair, issued30, vessels, people, pendingReqs, poInbox, timePending });
       try {
         const recs = await getAttendance(todayPH());
         const c = (f) => recs.filter(f).length;
@@ -2422,7 +2433,15 @@ function App() {
           // is preserved as warehouse/app.offline.html. The admin-only Warehouse view inside this
           // dashboard (adminTab === 'warehouse') is UNAFFECTED and stays — it sits behind the admin PIN.
           { ico:'🛒', num:m.poInbox, unit:'to purchase', title:'Purchasing', href:'../purchasing/' },
-          { ico:'💵', num:null, unit:'weekly', title:'Payroll', href:'../payroll/' },
+          // The Payroll tile carries the time-approvals badge. A separate tile would sit at zero
+          // almost every day; the number belongs where the owner already looks for payroll work.
+          // A clean week reads exactly as before ("weekly", no number) — the badge appears only when
+          // something is actually waiting, and then it deep-links straight to the queue.
+          // countRows returns null on an un-migrated database, which renders as a dim "—"; that is
+          // treated here as "nothing to show", never as zero.
+          (Number(m.timePending) > 0
+            ? { ico:'💵', num:m.timePending, unit:'time corrections waiting', title:'Payroll', href:'../payroll/?tab=appr' }
+            : { ico:'💵', num:null, unit:'weekly', title:'Payroll', href:'../payroll/' }),
           { ico:'📊', num:null, unit:'close & approve jobs', title:'Job Monitoring', onClick:() => setAdminTab('monitoring') },
         ].map(t => html`<${Tile} ...${t} />`)}
       </div>
