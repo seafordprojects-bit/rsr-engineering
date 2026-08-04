@@ -11,7 +11,7 @@ import { supabase } from './supabase.js';
 // one without opening devtools. Shown on the lock screen, the launcher and the admin header.
 // MUST be bumped in lockstep with the `home.js?v=` query string in admin/index.html, index.html
 // and preflight.html. A stamp that lags the query string is worse than none: it reads as proof.
-const BUILD = 'v2026-08-04a';
+const BUILD = 'v2026-08-04b';
 
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
 // The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
@@ -542,7 +542,13 @@ function AwolSuspensions({ emps, flash }) {
   const [rows, setRows] = useState(null);
   const [closedRows, setClosedRows] = useState([]);
   const [closed, setClosed] = useState([]);
-  const [ask, setAsk] = useState(null);   // {code, name, decision:'approve'|'keep'|'tick'}
+  const [muted, setMuted] = useState([]);
+  const [ask, setAsk] = useState(null);   // {code, name, decision:'approve'|'keep'|'tick'|'void'|'release', kind?}
+  // The void reason is picked BEFORE the PIN, in its own step, because the two reasons say
+  // different things about a man's standing and the audit log has to record which was actually
+  // meant. Deliberately not a dropdown with one of them pre-selected — a default here is a decision
+  // nobody made (spec §4.3).
+  const [voidAsk, setVoidAsk] = useState(null);
   const [manual, setManual] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
@@ -568,6 +574,16 @@ function AwolSuspensions({ emps, flash }) {
       const { data } = await supabase.from('employee_suspensions').select('*').eq('active', false).limit(50);
       setClosedRows(data || []);
     } catch (_) { setClosedRows([]); }
+    // Voided-and-muted cases. A separate read rather than a filter over closedRows, because these
+    // are not "closed" in the sense that section means — nothing was decided, the case was pulled.
+    // The `reason` and `absent_dates` on these rows are REFRESHED by every sweep (awol-void-mute.sql
+    // STEP 3), so what this section shows is tonight's count, not the count that was on screen the
+    // day it was voided. That is the whole reason the mute freezes nothing.
+    try {
+      const { data } = await supabase.from('employee_suspensions').select('*')
+        .not('voided_at', 'is', null).order('voided_at', { ascending: false }).limit(50);
+      setMuted(data || []);
+    } catch (_) { setMuted([]); }
     try {
       const { data } = await supabase.from('awol_events').select('*')
         .in('event', ['reinstated', 'kept_suspended', 'cancelled_leave_approved'])
@@ -649,6 +665,34 @@ Makapunch pa siya sa Time Out kung naabli pa ang adlaw niya.`);
 Makatrabaho na siya pag-usab. Desisyon ni ${actor} ${today}.`);
           flash(nm + ' can punch again');
         }
+      } else if (ask.decision === 'void') {
+        // Voiding pulls the case AND mutes it: awol_set_suspended will refuse to re-open this row
+        // on any later sweep, which is what stops the nightly re-detection (RSR 0015, 08/04 07:53).
+        // Nothing is frozen — the sweep keeps refreshing what it computes onto the row, so the
+        // count in the muted section below stays live.
+        const { data: res, error: eV } = await supabase.rpc('awol_void_case', {
+          p_code: code, p_passcode: typed, p_reason_kind: ask.kind, p_actor: actor,
+          p_note: ask.note || null,
+        });
+        if (eV) { setErr('Could not save — check the connection and try again.'); return; }
+        if (!res || res.ok !== true) { setErr((res && res.reason) || 'Refused.'); return; }
+        const why = ask.kind === 'counted_wrong'
+          ? 'the count was wrong' : 'real absence — the owner is handling it';
+        await notifyAwol(`🚫 <b>Case VOIDED</b>\n👤 ${nm} (${code}) — by ${actor} on ${today}\nReason: ${why}\nNo new case and no message will open for him until the mute is released.`);
+        await editAwolMsg(res.awol_group_chat, res.awol_group_msg_id, `🚫 VOIDED — ${nm}, ${today} (${why})`);
+        setVoidAsk(null);
+        flash(nm + ' — case voided, detection muted');
+      } else if (ask.decision === 'release') {
+        // Releasing does NOT re-open anything. It clears the mute and leaves the case closed, so the
+        // next sweep decides on the facts as they stand that night: still absent → a fresh case
+        // opens and the group is told; back at work → nothing happens.
+        const { data: res, error: eR } = await supabase.rpc('awol_release_mute', {
+          p_code: code, p_passcode: typed, p_actor: actor,
+        });
+        if (eR) { setErr('Could not save — check the connection and try again.'); return; }
+        if (!res || res.ok !== true) { setErr((res && res.reason) || 'Refused.'); return; }
+        await notifyAwol(`🔔 <b>Mute released</b>\n👤 ${nm} (${code}) — by ${actor} on ${today}\nDetection may open a new case for him again from the next sweep.`);
+        flash(nm + ' — detection is watching him again');
       } else if (ask.decision === 'manual') {
         const dates = String(ask.dates || '').split(',').map(s => s.trim()).filter(Boolean);
         if (!dates.length) { setErr('at least one absent date is required'); return; }
@@ -686,6 +730,12 @@ Makatrabaho na siya pag-usab. Desisyon ni ${actor} ${today}.`);
       <a class="unit" href=${letterUrl(r)} target="_blank" rel="noopener">Open / print letter →</a>
     </div>`;
 
+  // Same button in both open sections — a case can be wrong before the letter arrives just as
+  // easily as after it, and the 08/03 hand-void happened while the case was still waiting.
+  const voidBtn = (r) => html`
+    <button class="btn ghost" disabled=${busy}
+      onClick=${() => { setVoidAsk({ code: r.employee_code, name: nameOf(r.employee_code) }); setErr(''); }}>🗑️ Void this case</button>`;
+
   return html`
     <div class="card" style=${needsDecision.length ? 'border-color:var(--hivis)' : ''}>
       <label>AWOL — suspensions</label>
@@ -700,6 +750,7 @@ Makatrabaho na siya pag-usab. Desisyon ni ${actor} ${today}.`);
             ${r.barred_at
               ? html`<button class="btn" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'unbar' }); setErr(''); }}>↩️ Reinstate — he can punch again</button>`
               : html`<button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'bar' }); setErr(''); }}>🚫 Bar from starting work</button>`}
+            ${voidBtn(r)}
           </span>
         </div>`)
         : html`<div class="empty">Nothing waiting on you.</div>`}
@@ -711,9 +762,29 @@ Makatrabaho na siya pag-usab. Desisyon ni ${actor} ${today}.`);
           <span style="display:flex;gap:6px;flex-wrap:wrap">
             <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'tick' }); setErr(''); }}>Tick letter received (admin)</button>
             ${r.barred_at ? html`<button class="btn" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'unbar' }); setErr(''); }}>↩️ Reinstate — he can punch again</button>` : ''}
+            ${voidBtn(r)}
           </span>
         </div>`)
         : html`<div class="empty">Nobody outstanding.</div>`}
+
+      <div class="sectlabel">Voided — detection muted (${muted.length})</div>
+      ${muted.length ? muted.map(r => html`
+        <div class="row" key=${r.employee_code} style="align-items:flex-start">
+          <div>
+            <div class="name">${nameOf(r.employee_code)}</div>
+            <div class="unit">${r.employee_code}${yardOf(r.employee_code) ? ' · ' + yardOf(r.employee_code) : ''}</div>
+            <div class="unit">Voided by ${r.voided_by || '—'} on ${r.voided_at ? new Date(r.voided_at).toLocaleDateString('en-PH') : '—'} · ${
+              r.voided_reason === 'counted_wrong' ? 'the count was wrong'
+                : r.voided_reason === 'handled_by_owner' ? 'real absence — you are handling it' : '—'}</div>
+            ${r.voided_note ? html`<div class="unit">${r.voided_note}</div>` : ''}
+            <div class="unit" style="color:var(--hivis)">As of the last check: ${r.reason || '—'}</div>
+            <div class="unit">Absent: ${(Array.isArray(r.absent_dates) ? r.absent_dates : []).join(', ') || '—'}</div>
+            <div class="unit" style="color:var(--ink-dim)">No new case and no AWOL-group message for him until you release this.
+              The count above is re-checked every night, so it stays current.</div>
+          </div>
+          <button class="btn ghost" disabled=${busy} onClick=${() => { setAsk({ code: r.employee_code, name: nameOf(r.employee_code), decision: 'release' }); setErr(''); }}>🔔 Release — watch him again</button>
+        </div>`)
+        : html`<div class="empty">No voided cases.</div>`}
 
       <div class="sectlabel">Recently closed</div>
       ${closed.length ? closed.map(e => html`
@@ -760,15 +831,38 @@ Makatrabaho na siya pag-usab. Desisyon ni ${actor} ${today}.`);
           </div>`}
     </div>
 
+    ${voidAsk && !ask && html`
+      <div class="card" style="border-color:var(--hivis)">
+        <label>Void the case for ${voidAsk.name}</label>
+        <p class="note" style="margin:0 0 4px">Which is it? The two mean different things about this
+          man's standing, and the record keeps whichever you pick.</p>
+        <p class="note" style="margin:0 0 10px">Either way the result is the same: no new case and no
+          message in the AWOL group for him until you release it. He stays on this screen the whole
+          time, with the count re-checked every night.</p>
+        <div style="display:grid;gap:8px;max-width:460px">
+          <button class="btn" disabled=${busy} onClick=${() => { setAsk({ ...voidAsk, decision: 'void', kind: 'counted_wrong' }); setErr(''); }}>
+            Counted wrong — this case should never have opened</button>
+          <button class="btn" disabled=${busy} onClick=${() => { setAsk({ ...voidAsk, decision: 'void', kind: 'handled_by_owner' }); setErr(''); }}>
+            Real absence — I am handling it myself</button>
+          <button class="btn ghost" disabled=${busy} onClick=${() => { setVoidAsk(null); setErr(''); }}>Cancel</button>
+        </div>
+        ${err && html`<p class="note" style="margin-top:10px;color:var(--warn)">${err}</p>`}
+      </div>`}
+
     ${ask && html`<${PinPad}
       title=${ask.decision === 'unbar' ? 'Reinstate ' + ask.name + ' — he can punch again'
         : ask.decision === 'bar' ? 'Bar ' + ask.name + ' from starting work'
         : ask.decision === 'approve' ? 'Approve ' + ask.name
         : ask.decision === 'keep' ? 'Keep ' + ask.name + ' suspended'
+        : ask.decision === 'void' ? 'Void ' + ask.name + '’s case — ' + (ask.kind === 'counted_wrong' ? 'counted wrong' : 'you are handling it')
+        : ask.decision === 'release' ? 'Release the mute on ' + ask.name
         : ask.decision === 'manual' ? (ask.letterOnFile ? 'Re-suspend ' + ask.name : 'Suspend ' + ask.name)
         : 'Confirm the letter for ' + ask.name}
+      note=${ask.decision === 'release'
+        ? 'Enter the 6-digit admin PIN. After this, the next nightly check can open a new case for him and message the group.'
+        : undefined}
       busy=${busy} err=${err} onSubmit=${run}
-      onCancel=${() => { setAsk(null); setErr(''); }} />`}`;
+      onCancel=${() => { setAsk(null); setVoidAsk(null); setErr(''); }} />`}`;
 }
 
 function Tile({ ico, num, unit, title, href, onClick }) {

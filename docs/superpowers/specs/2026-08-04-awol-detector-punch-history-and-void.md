@@ -1,6 +1,41 @@
 # AWOL detector — server-side punch history, and re-detection after a void — Design
 
-**Status: DESIGN ONLY. Nothing built. No source file touched. No SQL applied.**
+> ## AMENDED 2026-08-04 — BUILD ORDER REVERSED, AND §4.2 IS NOT WHAT WAS BUILT
+>
+> The owner asked to build Defect 2 first. The watermark in §4.2 is **not safe in that order** and
+> was replaced by a **mute**. Read this before implementing anything in §4.
+>
+> **Why the watermark fails if it goes first.** It seals a date permanently — nothing on or before it
+> is ever counted again for that worker. But Defect 1 is still live, so the detector still invents
+> absences; every void issued now would burn a permanent mark derived from a fabricated count, and
+> afterwards nobody could tell which marks were real adjudications and which were bug-silencing.
+> Concretely: voiding RSR 0015 sets his watermark to 08/03, so detection reports **zero** for him
+> forever — destroying the verification in §6 step 4, which is the only case whose true answer
+> (7 days, 07/27–08/03) is known.
+>
+> **What was built instead — the mute.** `voided_at / voided_by / voided_reason / voided_note` on
+> `employee_suspensions`. `awol_set_suspended` refuses to re-activate a voided row and returns
+> `false`, which is also what suppresses the kiosk's group alert (`kiosk/index.html:2560`) — one
+> return closes both halves of the defect, and every caller (nightly sweep, offline retry queue,
+> migration path) goes through it. The muted row still has its `reason` and `absent_dates`
+> **refreshed by every sweep**, so the dashboard shows tonight's number, not the number that was on
+> screen the day it was voided. **Nothing is frozen**: when Defect 1 ships, RSR 0015's muted card
+> goes from 10 days to 7 by itself, with no migration and nothing to unwind.
+>
+> **Owner decision, 2026-08-04, verbatim:** *"No new case, no group message until I clear the mute.
+> The case stays on the dashboard, that's enough."* Release is therefore **manual only**. There is
+> deliberately no auto-release: the only honest trigger is "has he punched since?", and that cannot
+> be answered truthfully until Defect 1 lands. This also means the two void reasons from §5 Q1
+> (`counted_wrong` / `handled_by_owner`) are **recorded but behave identically** for now — their
+> only mechanical difference is auto-resume vs suppress-until-punch, which needs Defect 1.
+>
+> **Revised sequence:** mute (`awol-void-mute.sql`, done) → Defect 1 (§3) → cap 10→21 (§5 Q3) →
+> optionally upgrade the mute to the full §4.2 watermark, on data that can be trusted.
+>
+> §4.2 and §4.3 below are kept as written — they remain the right destination, not the right
+> first step.
+
+**Status: §3 (Defect 1) DESIGN ONLY. §4 (Defect 2) BUILT as the mute — see the amendment above.**
 Requires the owner's confirmation before any build. Two defects, one document, because the second
 one is only survivable once the first is fixed.
 
