@@ -40,9 +40,11 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // conflicts on this line — main's value must name what is DEPLOYED, this branch's must name what
 // is being tested. Neither is wrong; they answer different questions. Resolve in favour of the
 // branch while the branch is unshipped.
-// payroll from main (v2026-07-25a — the mini-slip print fix that IS live); kiosk from this
-// branch (v2026-08-03a — the AWOL build, which is NOT live and must not be until it is decided).
-const EXPECT = { 'payroll/index.html':'v2026-07-25a', 'kiosk/index.html':'v2026-08-03a',
+// payroll from THIS branch (v2026-08-04a — the Time-approvals tab, NOT live, walkthrough pending);
+// kiosk from the AWOL branch (v2026-08-03a — also NOT live).
+// Live on main today: payroll v2026-07-25a. Bumped here in lockstep with the stamp at
+// payroll/index.html:141 — these two move together or the stale-build guard misfires.
+const EXPECT = { 'payroll/index.html':'v2026-08-04a', 'kiosk/index.html':'v2026-08-03a',
                  'monitoring/roll-call.html':'v2026-07-18a', 'monitoring/borrow.html':'v2026-07-16c',
                  'tools/index.html':'v2026-07-19b', 'monitoring/index.html':'v2026-07-16c',
                  'monitoring/job-order.html':'v2026-07-19a', 'monitoring/efficiency.html':'v2026-07-18a',

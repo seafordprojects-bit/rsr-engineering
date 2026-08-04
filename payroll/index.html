@@ -138,12 +138,13 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub" id="build-stamp">Weekly Payroll · v2026-07-25a</div>
+    <div class="app-sub" id="build-stamp">Weekly Payroll · v2026-08-04a</div>
   </div>
 
   <div class="tabs">
     <button class="tab active" id="t-run" onclick="tab('run',this)">Run Payroll</button>
     <button class="tab" id="t-today" onclick="tab('today',this)">Today</button>
+    <button class="tab" id="t-appr" onclick="tab('appr',this)">Time approvals</button>
     <button class="tab" id="t-adv" onclick="tab('adv',this)">Cash Advances</button>
     <button class="tab" id="t-set" onclick="tab('set',this)">Settings</button>
   </div>
@@ -207,6 +208,34 @@ select.field-input{appearance:none}
       <input type="text" id="today-search" oninput="renderToday()" placeholder="Search name or code…" autocomplete="off" style="width:100%;padding:9px 11px;border:1px solid #ddd;border-radius:10px;font-size:14px;margin-bottom:10px;box-sizing:border-box">
       <div id="today-list"></div>
     </div>
+  </div>
+
+  <!-- TIME APPROVALS (coordinator proposals) -->
+  <!-- Spec: docs/superpowers/specs/2026-08-03-coordinator-time-correction.md §6, §7, §8, §9.
+       This tab lives HERE, not on the dashboard, because approving a proposal means writing punches
+       AND recomputing worked_ms/ot_ms/is_late/is_incomplete/status — and that engine
+       (recomputeDay/prSessions/nightND) is in this file's classic inline script. Putting the queue
+       anywhere else would mean a second copy of the pay math. -->
+  <div id="sec-appr" class="section">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h4 style="margin:0">Time approvals</h4>
+        <button class="btn-sm" style="margin-top:0" onclick="loadApprovals()">↻ Refresh</button>
+      </div>
+      <div style="font-size:11px;color:#888;margin-bottom:10px">
+        Corrections the coordinator has proposed. Nothing here has changed anyone's punches — payroll
+        still reads what the kiosk recorded until you approve.
+      </div>
+      <div class="toolbar">
+        <div class="fld"><label class="field-label">Day</label>
+          <input type="date" id="appr-date" class="field-input" autocomplete="off" onchange="loadApprovals()"></div>
+      </div>
+    </div>
+    <div id="appr-msg" class="msg"></div>
+    <div id="appr-lock-banner" style="display:none"></div>
+    <div id="appr-list"></div>
+    <div id="appr-bulk" style="display:none"></div>
+    <div id="appr-decided"></div>
   </div>
 
   <!-- CASH ADVANCES -->
@@ -674,6 +703,7 @@ function tab(name,btn){
   document.getElementById('sec-'+name).classList.add('active');
   btn.classList.add('active');
   if(name==='adv') renderAdvances();
+  if(name==='appr') loadApprovals();
   if(name==='today') startToday(); else stopToday();
 }
 
@@ -1319,11 +1349,98 @@ function addEditDay(){
   c.days.push({ id:'NEW-'+Date.now(), _new:true, employee_code:c.code, employee_name:c.name, date:m+'/'+d+'/'+y, site:siteNorm((c.days[0]&&c.days[0].site)||c.homeSite)||'Carmen', timein:null,lunch_out:null,lunch_in:null,pm_out:null,pm_in:null,timeout:null, straight_duty_lunch:false, straight_duty_pm:false });
   renderEditArea();
 }
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  THE ONE PUNCH-WRITE PATH
+//  Every change to timein/lunch_out/lunch_in/pm_out/pm_in/timeout in this system goes through
+//  applyPunchEdit. Three callers, one function:
+//    saveTimes()      — the owner's Edit-times modal      actor 'owner'  source 'owner-direct'
+//    apprApplyOne()   — approving a coordinator proposal  actor 'owner'  source 'coordinator-approved'
+//    apprApplyOne()   — …one the admin corrected first    actor 'owner'  source 'admin-corrected'
+//  coordinator.js never writes these columns at all; it writes proposals to attendance_time_edit
+//  and nothing else. That invariant is grep-checkable and is the whole architecture.
+//
+//  ORDER IS LOAD-BEARING: diff → LOG → write → recompute. A failed log aborts before any punch
+//  moves, so a change can never land unlogged. Do not reorder.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+const PUNCH_FIELDS=['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'];
+
+// Does attendance_edit_audit carry the coordinator-approval columns yet?
+// coordinator-time-correction.sql adds source/filed_by_code/filed_by_name/edit_id/batch_id as
+// additive nullable columns. Until it has been RUN, naming them in an insert 400s — and this is
+// the table saveTimes logs to BEFORE it writes punches, so a blind insert would break the owner's
+// live Edit-times flow on a database that has not been migrated yet. Probe once, cache, and send
+// the extra fields only when they exist. Owner-direct saves are therefore byte-identical to
+// today's on an un-migrated database, which is what makes this refactor safe to deploy first.
+let _auditNewCols=null;
+async function auditHasNewCols(){
+  if(_auditNewCols!==null) return _auditNewCols;
+  try{
+    const { error } = await sb.from('attendance_edit_audit').select('source,filed_by_code,filed_by_name,edit_id,batch_id').limit(1);
+    _auditNewCols = !error;
+  }catch(e){ _auditNewCols=false; }
+  return _auditNewCols;
+}
+
+function diffPunches(orig, rec){
+  const o=orig||{}, changes=[];
+  PUNCH_FIELDS.forEach(k=>{ const ov=o[k]||null, nv=rec[k]||null; if((ov||'')!==(nv||'')) changes.push({field:k, old:ov, new:nv}); });
+  return changes;
+}
+
+// days : records ALREADY carrying their new punch values and ALREADY passed through recomputeDay
+// orig : { [rec.id]: {the six punches as they stood before} }
+// opt  : {code, name, homeSite, reason, actor, source, filedByCode, filedByName, editId, batchId, recompute}
+// Returns {applied:N}. Throws on any failure — the caller reports it; nothing is swallowed here.
+async function applyPunchEdit(days, orig, opt){
+  const o=opt||{};
+  const extra = await auditHasNewCols();
+  const auditRows=[];
+  days.forEach(rec=>{
+    const changes=diffPunches(orig[rec.id], rec);
+    if(!changes.length) return;                       // unchanged days are not logged, as before
+    const row={ employee_code:o.code, date:rec.date, changes, reason:o.reason, actor:o.actor||'owner' };
+    if(extra){
+      row.source        = o.source || 'owner-direct';
+      row.filed_by_code = o.filedByCode || null;      // who PROPOSED it; null for owner-direct
+      row.filed_by_name = o.filedByName || null;
+      row.edit_id       = o.editId  || null;
+      row.batch_id      = o.batchId || null;
+    }
+    auditRows.push(row);
+  });
+  if(!auditRows.length) return {applied:0};
+  // 1) LOG FIRST — append-only audit. If this fails, nothing touches attendance_records.
+  const { error:aerr } = await sb.from('attendance_edit_audit').insert(auditRows);
+  if(aerr) throw aerr;
+  // 2) apply the punch changes to attendance_records
+  for(const rec of days){
+    const payload={
+      timein:rec.timein, lunch_out:rec.lunch_out, lunch_in:rec.lunch_in,
+      pm_out:rec.pm_out, pm_in:rec.pm_in, timeout:rec.timeout,
+      worked_ms:rec.worked_ms, ot_ms:rec.ot_ms, is_incomplete:rec.is_incomplete,
+      status:rec.status, is_late:rec.is_late, late_ms:rec.late_ms,
+      straight_duty_lunch:rec.straight_duty_lunch, straight_duty_pm:rec.straight_duty_pm
+    };
+    if(rec._new){
+      const full=Object.assign({employee_code:o.code, employee_name:o.name, date:rec.date, site:siteNorm(rec.site)||siteNorm(o.homeSite)||'Carmen'}, payload);
+      const { error } = await sb.from('attendance_records').upsert(full,{onConflict:'employee_code,date'});
+      if(error) throw error;
+    } else {
+      const { error } = await sb.from('attendance_records').update(payload).eq('id', rec.id);
+      if(error) throw error;
+    }
+  }
+  // 3) recompute. A bulk approve passes recompute:false and runs it ONCE at the end instead of
+  //    re-fetching the whole pay week per item — same final state, one round of work.
+  if(o.recompute!==false) await runPayroll();
+  return {applied:auditRows.length};
+}
+
 async function saveTimes(i){
   if(_buildStale){ alert('OUTDATED BUILD — hard reload (open reset.html) before saving. This save was blocked to prevent a silent no-op that looks successful but persists nothing.'); return; }
   const c=computed[i]; const emp=employees.find(e=>e.code===c.code); const shiftHrs=emp?emp.shift:8;
   const days=c.days||[];
-  const PF=['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'];
+  const PF=PUNCH_FIELDS;
   const reasonEl=document.getElementById('edit-reason'), errEl=document.getElementById('edit-reason-err');
   const reason=(reasonEl?reasonEl.value:'').trim();
   if(errEl) errEl.textContent='';
@@ -1338,41 +1455,20 @@ async function saveTimes(i){
     });
     recomputeDay(rec, shiftHrs);
   });
-  // per-day diff of changed punch fields → append-only audit rows (skip unchanged days)
-  const auditRows=[];
-  days.forEach(rec=>{
-    const o=orig[rec.id]||{}, changes=[];
-    PF.forEach(k=>{ const ov=o[k]||null, nv=rec[k]||null; if((ov||'')!==(nv||'')) changes.push({field:k, old:ov, new:nv}); });
-    if(changes.length) auditRows.push({ employee_code:c.code, date:rec.date, changes, reason, actor:'owner' });
-  });
-  if(!auditRows.length){ if(errEl) errEl.textContent='No changes to save.'; return; }
-  const nDays=auditRows.length;
+  // per-day diff, only to decide whether there is anything to save and to size the confirm
+  // message. applyPunchEdit diffs again itself — it is the one that builds the audit rows.
+  const nDays=days.filter(rec=>diffPunches(orig[rec.id], rec).length).length;
+  if(!nDays){ if(errEl) errEl.textContent='No changes to save.'; return; }
   openConfirm('Save time corrections',
     `${nDays} day${nDays===1?'':'s'} for ${c.name} will be changed and logged.\nReason: "${reason}"\nEnter passcode to confirm.`,
     async()=>{
       const sv=document.getElementById('edit-save'); if(sv){ sv.disabled=true; sv.textContent='Saving…'; }
       try{
-        // 1) LOG FIRST — append-only audit. If this fails, nothing touches attendance_records.
-        const { error:aerr } = await sb.from('attendance_edit_audit').insert(auditRows);
-        if(aerr) throw aerr;
-        // 2) apply the punch changes to attendance_records
-        for(const rec of days){
-          const payload={
-            timein:rec.timein, lunch_out:rec.lunch_out, lunch_in:rec.lunch_in,
-            pm_out:rec.pm_out, pm_in:rec.pm_in, timeout:rec.timeout,
-            worked_ms:rec.worked_ms, ot_ms:rec.ot_ms, is_incomplete:rec.is_incomplete,
-            status:rec.status, is_late:rec.is_late, late_ms:rec.late_ms,
-            straight_duty_lunch:rec.straight_duty_lunch, straight_duty_pm:rec.straight_duty_pm
-          };
-          if(rec._new){
-            const full=Object.assign({employee_code:c.code, employee_name:c.name, date:rec.date, site:siteNorm(rec.site)||siteNorm(c.homeSite)||'Carmen'}, payload);
-            const { error } = await sb.from('attendance_records').upsert(full,{onConflict:'employee_code,date'});
-            if(error) throw error;
-          } else {
-            const { error } = await sb.from('attendance_records').update(payload).eq('id', rec.id);
-            if(error) throw error;
-          }
-        }
+        await applyPunchEdit(days, orig, {
+          code:c.code, name:c.name, homeSite:c.homeSite, reason,
+          actor:'owner', source:'owner-direct', filedByCode:null, filedByName:null,
+          editId:null, batchId:null, recompute:false
+        });
         document.getElementById('edit-bg').classList.remove('show');
         msg('run-msg','ok','Times saved & logged — recomputing payroll…');
         await runPayroll();
@@ -1403,6 +1499,392 @@ async function loadEditHistory(code){
     el.innerHTML='<div style="font-size:11px;color:#94a3b8">Edit history unavailable (run the attendance_edit_audit SQL to enable).</div>';
   }
 }
+// ══════════════════════════════════════════════════════════════════════════════════════════
+//  TIME APPROVALS — the coordinator's proposals, and the only thing that turns one into a punch
+//  Spec: docs/superpowers/specs/2026-08-03-coordinator-time-correction.md §6 §7 §8 §9
+//
+//  ONE-WAY FLOW (§9): a pending edit NEVER touches attendance_records. The original value is what
+//  payroll pays until an approval lands. Every approve goes through applyPunchEdit — the same
+//  function the owner's own Edit-times uses — so there is exactly one punch-write path.
+//
+//  LOCKING (§9, owner Q1):
+//    · an INDIVIDUAL approve freezes THAT WORKER-DAY only. It writes no lock row — the coordinator
+//      derives it from the approved edit existing, so approving Ricky's Friday leaves the other
+//      four men on Friday fully editable.
+//    · a BULK day approve, or the explicit "Close day" button, writes attendance_day_lock for the
+//      whole date and the coordinator's entire view for that day goes read-only.
+//  Because nothing closes a day implicitly, a day can end up fully approved and never CLOSED.
+//  That is deliberate and is what the Run Payroll banner (a later task) has to surface.
+// ══════════════════════════════════════════════════════════════════════════════════════════
+let _apprItems=[], _apprLock=null, _apprDecided=[], _apprBusy=false;
+// What the admin has handled on THIS date in this sitting. A rejected or corrected-and-approved
+// item stops being pending the moment it is decided, so it vanishes from _apprItems on the next
+// load — but §7's confirmation dialog promises counts of what was EXCLUDED, and those counts have
+// to describe the session's work, not what happens to be left in the queue. Reset on date change.
+let _apprTally={date:null, rejected:0, corrected:0};
+function _apprTallyFor(iso){
+  if(_apprTally.date!==iso) _apprTally={date:iso, rejected:0, corrected:0};
+  return _apprTally;
+}
+
+// attendance_time_edit.date carries the same mixed spellings as attendance_records.date, so ask
+// for every spelling of the wanted day and normalise client-side. Never .eq() one spelling, never
+// a lexical gte/lte range on the TEXT column.
+function dateVariants(iso){
+  const m=String(iso||'').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(!m) return [iso];
+  const [,y,mo,d]=m, mu=String(Number(mo)), du=String(Number(d));
+  return Array.from(new Set([iso,`${mo}/${d}/${y}`,`${mu}/${du}/${y}`,`${mo}/${du}/${y}`,`${mu}/${d}/${y}`]));
+}
+const _apprPunchVals=(src)=>{ const o={}; PUNCH_FIELDS.forEach(k=>o[k]=(src&&src[k])||null); return o; };
+
+async function loadApprovals(){
+  const dEl=document.getElementById('appr-date');
+  if(dEl && !dEl.value) dEl.value = curTo || isoOf(new Date());
+  const iso = dEl ? dEl.value : isoOf(new Date());
+  if(!iso) return;
+  clearMsg('appr-msg');
+  document.getElementById('appr-list').innerHTML='<div style="color:#888;font-size:13px;padding:8px 2px">Loading…</div>';
+  document.getElementById('appr-bulk').style.display='none';
+  try{
+    if(!employees.length) await loadEmployees();
+    const vars=dateVariants(iso);
+    const [eRes,lRes,rRes]=await Promise.all([
+      sb.from('attendance_time_edit').select('*').in('date',vars).order('filed_at',{ascending:true}),
+      sb.from('attendance_day_lock').select('*').eq('date',iso).maybeSingle(),
+      sb.from('attendance_records').select('*').in('date',vars)
+    ]);
+    if(eRes.error) throw eRes.error;
+    if(rRes.error) throw rRes.error;
+    const edits=(eRes.data||[]).filter(r=>toISO(r.date)===iso);
+    const recs =(rRes.data||[]).filter(r=>toISO(r.date)===iso);
+    _apprLock = (lRes && lRes.data) || null;
+    _apprDecided = edits.filter(e=>e.status==='approved'||e.status==='rejected')
+                        .sort((a,b)=>String(b.decided_at||'').localeCompare(String(a.decided_at||'')));
+    _apprItems = edits.filter(e=>e.status==='pending').map(e=>{
+      const rec = recs.find(r=>normCode(r.employee_code)===normCode(e.employee_code)) || null;
+      return { edit:e, rec, conflict:_apprConflict(e,rec), handled:null, corrected:null };
+    });
+    renderApprovals();
+  }catch(err){
+    _apprItems=[]; _apprLock=null; _apprDecided=[];
+    document.getElementById('appr-list').innerHTML='';
+    msg('appr-msg','err','Could not load approvals: '+((err&&err.message)||err)+
+        ' — if this says the table does not exist, coordinator-time-correction.sql has not been run yet.');
+  }
+}
+
+// CONFLICT GUARD (§6). Kiosk punches sync on a 30-second retry queue, so attendance_records can
+// move between the moment the coordinator typed and the moment you approve. Compare the row as it
+// stands NOW against the `before` she saw. Any drifted field and the item is handled individually,
+// never silently overwritten with a stale proposal.
+function _apprConflict(edit, rec){
+  const before=edit.before||{};
+  const filedAgainstARow = !!edit.attendance_id;
+  if(!rec){
+    // The row she filed against is gone. Nothing in this system deletes attendance rows, so this
+    // means something happened that nobody planned for — treat it as drift and make it a manual
+    // decision rather than upserting a fresh row from a proposal written against a vanished one.
+    return filedAgainstARow ? PUNCH_FIELDS.filter(k=>(before[k]||'')!=='') : [];
+  }
+  if(!filedAgainstARow){
+    // She filed "this man has no row at all today", and a row now exists. If it carries any punch,
+    // the kiosk spoke after she did.
+    return PUNCH_FIELDS.filter(k=>(rec[k]||'')!=='');
+  }
+  return PUNCH_FIELDS.filter(k=>(before[k]||'')!==(rec[k]||''));
+}
+
+function _apprRow(label, vals, changedSet, tone){
+  const cells=PUNCH_FIELDS.map(k=>{
+    const on=changedSet&&changedSet.has(k);
+    const style = on ? 'color:#111;font-weight:700;background:#FFF8E1' : 'color:#b0b7bd';
+    return `<td style="padding:4px 5px;text-align:center;font-size:12px;font-variant-numeric:tabular-nums;${style}">${fmtClock(vals[k])}</td>`;
+  }).join('');
+  return `<tr><td style="padding:4px 6px;font-size:10px;letter-spacing:.4px;color:${tone||'#64748b'};font-weight:700;white-space:nowrap">${label}</td>${cells}</tr>`;
+}
+
+function renderApprovals(){
+  const iso=document.getElementById('appr-date').value;
+  const lockEl=document.getElementById('appr-lock-banner');
+  if(_apprLock){
+    lockEl.style.display='block';
+    lockEl.innerHTML=`<div style="background:#EEF2F7;border:1px solid #cbd5e1;color:#334155;border-radius:10px;padding:10px 12px;font-size:12px;margin-bottom:10px">
+      🔒 <b>${fmtDate(iso)} is closed.</b> The coordinator can no longer edit this day. Edit-times still works here, and is still logged.</div>`;
+  } else lockEl.style.display='none';
+
+  const list=document.getElementById('appr-list');
+  if(!_apprItems.length){
+    // §8 — a day with no edits must look NORMAL. No worker list, no empty rows, no lock written.
+    list.innerHTML=`<div class="card"><div style="font-size:13px;color:#475569">
+        <b>No time corrections filed for ${fmtDate(iso)}.</b><br>Payroll will use the kiosk times as recorded.
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:8px">A worker missing entirely? Use “Backfill a worker not listed” on the Run Payroll tab.</div></div>`;
+    document.getElementById('appr-bulk').style.display=_apprLock?'none':'block';
+    document.getElementById('appr-bulk').innerHTML=_apprLock?'':
+      `<div class="card"><button class="btn-sm" style="margin-top:0" onclick="apprCloseDay()">Close ${fmtDate(iso)} anyway</button>
+        <div style="font-size:11px;color:#94a3b8;margin-top:6px">Closing a day stops the coordinator editing it. A day with nothing filed does not need closing.</div></div>`;
+    renderDecided();
+    return;
+  }
+
+  list.innerHTML=_apprItems.map((it,idx)=>{
+    const e=it.edit, before=_apprPunchVals(e.before), after=_apprPunchVals(it.corrected||e.after);
+    const changed=new Set(PUNCH_FIELDS.filter(k=>(before[k]||'')!==(after[k]||'')));
+    const now=it.rec?_apprPunchVals(it.rec):null;
+    const conf=it.conflict&&it.conflict.length;
+    let when=e.filed_at; try{ when=new Date(e.filed_at).toLocaleString(); }catch(x){}
+    const head=`<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;flex-wrap:wrap">
+        <div style="font-weight:700;font-size:13px">${_escAudit(e.employee_name||e.employee_code)}
+          <span style="color:#94a3b8;font-weight:500">· ${_escAudit(e.employee_code)} · ${fmtDate(toISO(e.date))}</span></div>
+        <div style="font-size:11px;color:#64748b">filed by <b>${_escAudit(e.filed_by_name||'—')}</b> · ${when}</div>
+      </div>`;
+    const table=`<table style="width:100%;border-collapse:collapse;margin:8px 0 6px">
+        <tr><td></td>${PUNCH_FIELDS.map(k=>`<td style="padding:2px 5px;text-align:center;font-size:9px;color:#94a3b8;letter-spacing:.3px">${({timein:'IN',lunch_out:'L-OUT',lunch_in:'L-IN',pm_out:'PM-OUT',pm_in:'PM-IN',timeout:'OUT'})[k]}</td>`).join('')}</tr>
+        ${_apprRow('ORIGINAL', before, null)}
+        ${_apprRow(it.corrected?'CORRECTED':'EDITED', after, changed, '#1e40af')}
+        ${conf?_apprRow('NOW', now||{}, new Set(it.conflict), '#b91c1c'):''}
+      </table>`;
+    const confBanner=conf?`<div style="background:#FEF2F2;border:1px solid #fecaca;color:#991b1b;border-radius:8px;padding:7px 9px;font-size:11px;margin-bottom:6px">
+        ⚠ <b>CONFLICT — the kiosk sent a punch after this was filed.</b> Handle this one on its own; it is excluded from “Approve remaining”. Never overwrite a real punch with a stale proposal.</div>`:'';
+    const editUI=(it.handled==='editing')?`<div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:8px;padding:8px;margin-bottom:6px">
+        <div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:6px">Correct the times, then approve. 24-hour (0800, 1300, 1700).</div>
+        <div class="et-punch-row">${PUNCH_FIELDS.map(k=>`<div class="et-punch-cell">
+            <label style="font-size:10px;color:#888">${({timein:'Time In',lunch_out:'Lunch Out',lunch_in:'Lunch In',pm_out:'PM Out',pm_in:'PM In',timeout:'Time Out'})[k]}</label>
+            <input type="text" inputmode="numeric" maxlength="5" id="ap_${e.id}_${k}" value="${toInputVal(after[k])}" oninput="milFmt(this)" onkeydown="milKey(event,this)" placeholder="HH:MM" style="padding:7px;border:1px solid #ddd;border-radius:7px;font-size:13px;letter-spacing:1px">
+          </div>`).join('')}</div>
+        <button class="btn-sm" style="margin-top:8px" onclick="apprApprove(${e.id},true)">Approve with these times</button>
+        <button class="btn-sm" style="margin-top:6px;background:#eef0f2;color:#333" onclick="apprCancelEdit(${e.id})">Cancel</button>
+      </div>`:'';
+    const rejUI=(it.handled==='rejecting')?`<div style="background:#fff7f7;border:1px dashed #fecaca;border-radius:8px;padding:8px;margin-bottom:6px">
+        <div style="font-size:11px;color:#991b1b;font-weight:600;margin-bottom:6px">Why is this rejected? The coordinator sees this word for word.</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px">
+          ${['He was on approved leave','Punch is correct as recorded','Wrong worker','Wrong date']
+            .map(p=>`<button class="btn-sm" style="margin-top:0;padding:5px 8px;font-size:11px;background:#eef0f2;color:#333" onclick="apprPreset(${e.id},this.textContent)">${p}</button>`).join('')}
+        </div>
+        <input type="text" id="ap_note_${e.id}" maxlength="160" oninput="apprNoteChanged(${e.id})" placeholder="…or type your own reason" style="width:100%;padding:8px;border:1px solid #ddd;border-radius:7px;font-size:12px;box-sizing:border-box">
+        <button class="btn-sm" id="ap_rejbtn_${e.id}" disabled style="margin-top:8px;background:#D64045;color:#fff" onclick="apprReject(${e.id})">Reject this correction</button>
+        <button class="btn-sm" style="margin-top:6px;background:#eef0f2;color:#333" onclick="apprCancelEdit(${e.id})">Cancel</button>
+      </div>`:'';
+    const buttons=(_apprLock||it.handled==='editing'||it.handled==='rejecting')?'':
+      `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">
+        <button class="btn-sm" style="margin-top:0" onclick="apprApprove(${e.id},false)">Approve</button>
+        <button class="btn-sm" style="margin-top:0;background:#eef0f2;color:#333" onclick="apprStartEdit(${e.id})">Correct &amp; approve</button>
+        <button class="btn-sm" style="margin-top:0;background:#eef0f2;color:#991b1b" onclick="apprStartReject(${e.id})">Reject</button>
+      </div>`;
+    return `<div class="card" style="padding:12px">
+      ${head}${confBanner}${table}
+      <div style="font-size:12px;color:#475569">Reason: “${_escAudit(e.reason)}”</div>
+      ${editUI}${rejUI}${buttons}
+    </div>`;
+  }).join('');
+
+  // ── BULK (§7) — strictly one day. No multi-day approve, no "approve everything pending". ──
+  const t=_apprTallyFor(iso);
+  const conflicts=_apprItems.filter(it=>it.conflict.length).length;
+  const excludedN=conflicts+t.rejected+t.corrected;
+  const remaining=_apprItems.filter(it=>!it.conflict.length&&!it.handled);
+  const b=document.getElementById('appr-bulk');
+  b.style.display='block';
+  b.innerHTML=`<div class="card">
+      ${_apprLock?'<div style="font-size:12px;color:#64748b">This day is closed.</div>':
+      `<button class="btn-primary" ${remaining.length?'':'disabled'} onclick="apprBulk()">Approve remaining (${remaining.length})</button>
+       <button class="btn-sm" style="margin-top:8px" onclick="apprCloseDay()">Close day (lock ${fmtDate(iso)} for the coordinator)</button>
+       <div style="font-size:11px;color:#94a3b8;margin-top:8px">
+         ${excludedN?excludedN+' excluded so far'+(conflicts?' ('+conflicts+' conflict — handle individually)':'')+'.':'Nothing is excluded.'}
+         Approving one worker freezes only that worker; the day itself stays open until you approve the rest or close it.
+       </div>`}
+      <div style="font-size:11px;color:#94a3b8;margin-top:8px">A worker missing entirely? Use “Backfill a worker not listed” on the Run Payroll tab.</div>
+    </div>`;
+  renderDecided();
+}
+
+function renderDecided(){
+  const el=document.getElementById('appr-decided');
+  if(!_apprDecided.length){ el.innerHTML=''; return; }
+  el.innerHTML=`<div class="card"><h4 style="margin:0 0 8px">Decided (${_apprDecided.length})</h4>`+
+    _apprDecided.map(e=>{
+      let when=e.decided_at; try{ when=new Date(e.decided_at).toLocaleString(); }catch(x){}
+      const ok=e.status==='approved';
+      const applied=_apprPunchVals(e.applied||e.after), before=_apprPunchVals(e.before);
+      const ch=PUNCH_FIELDS.filter(k=>(before[k]||'')!==(applied[k]||''))
+        .map(k=>`${k}: ${fmtClock(before[k])} → ${fmtClock(applied[k])}`).join(' · ');
+      return `<div style="border-left:3px solid ${ok?'#12B89E':'#D64045'};padding:5px 9px;margin-bottom:6px;font-size:11px">
+        <div><b>${_escAudit(e.employee_name||e.employee_code)}</b> · ${fmtDate(toISO(e.date))} —
+          <span style="color:${ok?'#0f766e':'#991b1b'};font-weight:700">${ok?'APPROVED':'REJECTED'}</span>
+          ${e.batch_id?'<span style="color:#94a3b8"> · batch</span>':''}</div>
+        ${ok&&ch?`<div style="color:#475569">${_escAudit(ch)}</div>`:''}
+        ${!ok&&e.decision_note?`<div style="color:#991b1b">“${_escAudit(e.decision_note)}”</div>`:''}
+        <div style="color:#64748b">filed by ${_escAudit(e.filed_by_name||'—')} · decided by ${_escAudit(e.decided_by_name||'—')} · ${when}</div>
+      </div>`;
+    }).join('')+'</div>';
+}
+
+const _apprFind=(id)=>_apprItems.find(it=>it.edit.id===id);
+function apprStartEdit(id){ const it=_apprFind(id); if(!it) return; it.handled='editing'; renderApprovals(); }
+function apprStartReject(id){ const it=_apprFind(id); if(!it) return; it.handled='rejecting'; renderApprovals(); }
+function apprCancelEdit(id){ const it=_apprFind(id); if(!it) return; it.handled=null; renderApprovals(); }
+function apprPreset(id,txt){ const el=document.getElementById('ap_note_'+id); if(el){ el.value=txt; apprNoteChanged(id); } }
+// A bare reject stays blocked: no preset, no text, no button (owner Q8).
+function apprNoteChanged(id){
+  const v=(document.getElementById('ap_note_'+id).value||'').trim();
+  const b=document.getElementById('ap_rejbtn_'+id); if(b) b.disabled=!v;
+}
+
+// Apply ONE approved proposal. Builds the day record, recomputes it, and hands it to the single
+// punch-write path. Returns nothing; throws on failure so the caller can report exactly how far a
+// batch got.
+async function apprApplyOne(it, source, batchId, afterOverride){
+  const e=it.edit;
+  const emp=employees.find(x=>normCode(x.code)===normCode(e.employee_code));
+  const shiftHrs=emp?emp.shift:8;
+  const after=_apprPunchVals(afterOverride||e.after);
+  let rec, orig={};
+  if(it.rec){
+    rec=Object.assign({}, it.rec);
+    orig[it.rec.id]=_apprPunchVals(it.rec);
+    PUNCH_FIELDS.forEach(k=>{ rec[k]=after[k]||null; });
+  } else {
+    const nid='NEW-'+e.id;
+    rec={ id:nid, _new:true, employee_code:e.employee_code, employee_name:e.employee_name,
+          date:e.date, site:(emp&&emp.homeSite)||'', straight_duty_lunch:false, straight_duty_pm:false };
+    orig[nid]=_apprPunchVals(null);
+    PUNCH_FIELDS.forEach(k=>{ rec[k]=after[k]||null; });
+  }
+  recomputeDay(rec, shiftHrs);
+  await applyPunchEdit([rec], orig, {
+    code:e.employee_code, name:e.employee_name, homeSite:(emp&&emp.homeSite)||'',
+    reason:e.reason, actor:'owner', source,
+    filedByCode:e.filed_by_code, filedByName:e.filed_by_name,
+    editId:e.id, batchId:batchId||null, recompute:false
+  });
+  // Mark the proposal decided. .eq('status','pending') so a row someone else already decided in
+  // the meantime matches nothing rather than being re-decided. From here the freeze trigger makes
+  // the row immutable — any further correction is a NEW proposal, which is the design.
+  const { error, data } = await sb.from('attendance_time_edit').update({
+    status:'approved', decided_by_code:'owner', decided_by_name:'Owner',
+    decided_at:new Date().toISOString(), applied:after, batch_id:batchId||null
+  }).eq('id',e.id).eq('status','pending').select('id');
+  if(error) throw error;
+  if(!data||!data.length){
+    // The punch IS written and logged. Say so plainly — the alternative is an owner who retries
+    // and double-applies.
+    throw new Error('The punch for '+(e.employee_name||e.employee_code)+' was written and logged, but the proposal could not be marked approved. Do NOT re-approve it — tell the developer.');
+  }
+}
+
+async function apprApprove(id, corrected){
+  if(_buildStale){ alert('OUTDATED BUILD — hard reload (open reset.html) before approving.'); return; }
+  const it=_apprFind(id); if(!it||_apprBusy) return;
+  let override=null;
+  if(corrected){
+    override={};
+    PUNCH_FIELDS.forEach(k=>{ const el=document.getElementById('ap_'+id+'_'+k); const mv=el?milTo24(el.value):''; override[k]= mv?fromInputVal(mv):null; });
+  }
+  const e=it.edit;
+  const src=corrected?'admin-corrected':'coordinator-approved';
+  openConfirm(corrected?'Approve with your corrections':'Approve time correction',
+    `${e.employee_name||e.employee_code} · ${fmtDate(toISO(e.date))}\nThis writes the punches and recomputes pay.\nOnly this worker-day is frozen for the coordinator.\nEnter passcode to confirm.`,
+    async()=>{
+      _apprBusy=true; clearMsg('appr-msg');
+      try{
+        await apprApplyOne(it, src, null, override);
+        if(corrected) _apprTallyFor(toISO(e.date)).corrected++;
+        msg('appr-msg','ok','Approved — recomputing payroll…');
+        await runPayroll();
+        await loadApprovals();
+      }catch(err){ msg('appr-msg','err','Approve failed: '+((err&&err.message)||err)); }
+      finally{ _apprBusy=false; }
+    });
+}
+
+async function apprReject(id){
+  const it=_apprFind(id); if(!it||_apprBusy) return;
+  const note=(document.getElementById('ap_note_'+id).value||'').trim();
+  if(!note) return;                                    // belt and braces; the button is disabled
+  _apprBusy=true; clearMsg('appr-msg');
+  try{
+    // Nothing touches attendance_records on a reject. The proposal simply never becomes a punch.
+    const { error } = await sb.from('attendance_time_edit').update({
+      status:'rejected', decided_by_code:'owner', decided_by_name:'Owner',
+      decided_at:new Date().toISOString(), decision_note:note
+    }).eq('id',id).eq('status','pending');
+    if(error) throw error;
+    _apprTallyFor(toISO(it.edit.date)).rejected++;
+    msg('appr-msg','ok','Rejected — the coordinator will see your reason.');
+    await loadApprovals();
+  }catch(err){ msg('appr-msg','err','Reject failed: '+((err&&err.message)||err)); }
+  finally{ _apprBusy=false; }
+}
+
+// ── BULK DAY APPROVE (§7) ──
+// Item-by-item, LOG-FIRST PER ITEM, sharing one batch_id. Bulk is a UI convenience, never one
+// lumped log entry — a bulk-approved item and an individually-approved item are identical in
+// attendance_edit_audit except for the presence of batch_id.
+// There is no cross-item transaction over PostgREST, so partial failure is REPORTED, not rolled
+// back: stop at the first failure and say exactly how far it got. Re-running skips what is already
+// approved, because loadApprovals only ever re-queues rows still marked pending.
+async function apprBulk(){
+  if(_buildStale){ alert('OUTDATED BUILD — hard reload (open reset.html) before approving.'); return; }
+  if(_apprBusy) return;
+  const iso=document.getElementById('appr-date').value;
+  const todo=_apprItems.filter(it=>!it.conflict.length&&!it.handled);
+  if(!todo.length) return;
+  const t=_apprTallyFor(iso);
+  const rej=t.rejected, cor=t.corrected, con=_apprItems.filter(it=>it.conflict.length).length;
+  const exc=rej+cor+con;
+  const parts=[]; if(rej)parts.push(rej+' rejected'); if(cor)parts.push(cor+' corrected & approved'); if(con)parts.push(con+' conflict');
+  openConfirm(`Approve ${todo.length} time correction${todo.length===1?'':'s'} for ${fmtDate(iso)}?`,
+    `${todo.length} will be approved${exc?' · '+exc+' excluded ('+parts.join(', ')+')':''}\nThis also CLOSES the day: the coordinator can no longer edit ${fmtDate(iso)}.\nEnter passcode to confirm.`,
+    async()=>{
+      _apprBusy=true; clearMsg('appr-msg');
+      const batchId=(crypto&&crypto.randomUUID)?crypto.randomUUID():String(Date.now());
+      let done=0;
+      try{
+        for(const it of todo){
+          await apprApplyOne(it,'coordinator-approved',batchId,null);
+          done++;
+        }
+        await apprWriteLock(iso);
+        msg('appr-msg','ok',`Applied ${done} of ${todo.length} · day closed — recomputing payroll…`);
+      }catch(err){
+        msg('appr-msg','err',`Applied ${done} of ${todo.length}. Item${done+1===todo.length?'':'s'} ${done+1}`+
+          (done+1<todo.length?`–${todo.length}`:'')+` ${done+1===todo.length?'is':'are'} still pending — retry. `+
+          `The day was NOT closed. (${(err&&err.message)||err})`);
+      }
+      finally{
+        _apprBusy=false;
+        try{ await runPayroll(); }catch(e){}
+        await loadApprovals();
+      }
+    });
+}
+
+// attendance_day_lock is INSERT-ONCE — anon holds no UPDATE on it, deliberately, so a lock cannot
+// be rewritten to reassign who closed a pay day. A duplicate insert (23505) means it is already
+// locked, which is success as far as this function is concerned.
+async function apprWriteLock(iso){
+  const { error } = await sb.from('attendance_day_lock')
+    .insert({ date:iso, locked_by_code:'owner', locked_by_name:'Owner' });
+  if(error && error.code!=='23505') throw error;
+}
+
+function apprCloseDay(){
+  if(_apprBusy) return;
+  const iso=document.getElementById('appr-date').value;
+  const stillPending=_apprItems.filter(it=>!it.handled).length;
+  openConfirm(`Close ${fmtDate(iso)}?`,
+    `The coordinator will no longer be able to edit any worker on this day.`+
+    (stillPending?`\n\n⚠ ${stillPending} correction${stillPending===1?'':'s'} on this day ${stillPending===1?'is':'are'} still waiting for a decision. Closing does NOT approve them — they stay pending and unapplied.`:'')+
+    `\n\nEnter passcode to confirm.`,
+    async()=>{
+      _apprBusy=true; clearMsg('appr-msg');
+      try{ await apprWriteLock(iso); msg('appr-msg','ok','Day closed.'); await loadApprovals(); }
+      catch(err){ msg('appr-msg','err','Could not close the day: '+((err&&err.message)||err)); }
+      finally{ _apprBusy=false; }
+    });
+}
+
 function slipMini(r){
   const net=netOf(r);
   const basicHrs=Math.max(0, r.totalHrs - r.otHrs);
