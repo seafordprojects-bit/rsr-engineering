@@ -228,25 +228,53 @@ async function getTimeEdits(dateStr) {
   if (error) throw error;
   return (data || []).filter(r => toISO(r.date) === want);
 }
+// Canonical employee-code form: strip every non-alphanumeric, THEN upper-case.
+// 'rsr 0025' / 'RSR-0025' / 'RSR0025' all collapse to 'RSR0025'.
+//
+// This mirrors the database's own authority on whether two spellings are the same worker — the
+// generated column employees.code_norm = upper(regexp_replace(code,'[^A-Za-z0-9]','','g')), backed
+// by unique index employees_code_norm_uniq — and it is the client-side twin of the first key
+// column of attendance_time_edit_one_pending. ORDER MATTERS and is deliberate: SQL strips first
+// then upper-cases, so this does the same. The reverse order silently disagrees on characters
+// whose upper-case form is alphanumeric when the original is not ('ß' -> 'SS', 'ﬁ' -> 'FI'), and
+// the client would then compute a different key than the database.
+//
+// (Personnel() further down has its own local copy for the add-employee path, with a longer note
+// about why a row already on the roster must read e.code_norm rather than recompute it.)
+const codeNorm = (c) => String(c == null ? '' : c).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+
 // The open proposal for ONE worker-day, looked up THE WAY THE DATABASE INDEXES IT.
 //
 // This must mirror `attendance_time_edit_one_pending` exactly — that index is
-//   unique (employee_code, att_date_iso(date)) where status = 'pending'
-// so the lookup keys on the RAW employee_code (as the index does) and on the ISO-NORMALISED date
-// (as att_date_iso does, and as toISO does here). If the two ever disagree, the client looks for
-// an open row, misses it on a spelling, inserts, and takes a 23505 the coordinator sees as an
-// unexplained "could not send".
+//   unique (upper(regexp_replace(employee_code,'[^A-Za-z0-9]','','g')), att_date_iso(date))
+//   where status = 'pending'
+// so the lookup matches on codeNorm() and toISO(), the client-side twins of those two expressions.
+// If either pair drifts apart, the client looks for an open row, misses it on a spelling, inserts,
+// and takes a 23505 — which the coordinator experiences as being unable to re-send a correction
+// she has already filed.
 //
-// Deliberately NOT read off the day-array the screen already loaded. That array comes from an
-// ENUMERATED list of five spellings; a sixth spelling nobody anticipated would be absent from it
-// while still colliding in the index — which is the exact case this function has to get right.
-// Bounded by employee_code + status='pending', so it is a handful of rows, never a broad fetch.
+// Deliberately NOT read off the day-array the screen already loaded, and deliberately NOT filtered
+// by employee_code or date server-side. Both of those would have to enumerate spellings — the
+// array uses five for the date, and a code filter would need its own list — and any spelling
+// nobody anticipated would be absent from the result while still colliding in the index, which is
+// the exact case this function exists to get right. So: filter on the one thing that is exact
+// (status), normalise both keys client-side.
+//
+// The fetch is bounded by design, not by hope: the index permits at most ONE pending row per
+// worker-day, so the whole pending set is bounded by roster x days-not-yet-approved. Anything
+// approaching the limit means the admin has stopped draining the queue, which is itself the
+// problem — so it is reported rather than silently truncated.
+const OPEN_PENDING_LIMIT = 1000;
 async function getOpenPending(code, dateStr) {
-  const want = toISO(dateStr);
+  const want = toISO(dateStr), wantCode = codeNorm(code);
   const { data, error } = await supabase.from('attendance_time_edit')
-    .select('id,date,status').eq('employee_code', code).eq('status', 'pending').limit(200);
+    .select('id,employee_code,date,status').eq('status', 'pending').limit(OPEN_PENDING_LIMIT);
   if (error) throw error;
-  return (data || []).find(r => toISO(r.date) === want) || null;
+  const rows = data || [];
+  if (rows.length >= OPEN_PENDING_LIMIT) {
+    throw new Error('There are too many corrections waiting for the admin to check this safely. Tell the admin before sending more.');
+  }
+  return rows.find(r => codeNorm(r.employee_code) === wantCode && toISO(r.date) === want) || null;
 }
 // attendance_day_lock.date is stored NORMALIZED to ISO — a lock is about a calendar day, not about
 // one row's spelling — so this one is a plain .eq() on the ISO form and that is correct.
@@ -2024,7 +2052,6 @@ function AwolLetters({ toast, employees }) {
 // real punch. Until that ships, proposals filed on this screen have no approver — which is why the
 // plan gates shipping this surface on Task 4 being live.
 
-const codeNorm = (c) => String(c == null ? '' : c).replace(/[^A-Za-z0-9]/g, '').toUpperCase();
 const isoOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 // Pay week runs SATURDAY → FRIDAY. This MIRRORS payroll/index.html setWeek() exactly, INCLUDING

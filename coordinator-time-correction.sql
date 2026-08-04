@@ -120,25 +120,46 @@ $$;
 -- The drop below is here so a re-run replaces an index built by an EARLIER version of this file:
 -- `create unique index if not exists` sees the old name, does nothing, and would silently leave
 -- the raw-date key in place. Dropping first is what makes the fix actually land on a second run.
+-- BOTH key columns are normalised, for the same reason. Codes drift by spacing and case across
+-- sources — 'RSR 0015' and 'RSR0015' are the same man, and awol-punch-history.sql had to handle
+-- exactly that drift — so a raw employee_code let two spellings each hold an open proposal on the
+-- same day, which is the guarantee this index exists to give.
+--
+-- The expression is copied CHARACTER FOR CHARACTER from the system's existing authority on whether
+-- two spellings are the same worker: the generated column
+--   employees.code_norm = upper(regexp_replace(code, '[^A-Za-z0-9]', '', 'g'))
+-- backed by unique index employees_code_norm_uniq. Copying it exactly means this index can never
+-- disagree with the roster about worker identity. It also proves immutability by precedent: a
+-- GENERATED ALWAYS column will not accept a non-immutable expression, so Postgres has already
+-- accepted this one.
+--
+-- ORDER OF OPERATIONS IS DELIBERATE: strip first, THEN upper-case — same as the generated column
+-- and same as the client's codeNorm. The reverse order disagrees on characters whose upper-case
+-- form is alphanumeric when the original is not ('ß' -> 'SS', 'ﬁ' -> 'FI'), which would let the
+-- client compute a different key than the database.
+--
+-- (STEP 7's seed below uses the weaker '\s'-only idiom instead. That is the shape used by
+-- awol-reinstate-flow.sql and named-issuer-access.sql, and it resolves 'RSR 0025' identically, so
+-- it is harmless here. Aligning those three files on the stricter form is a tracked follow-up,
+-- not this migration's job.)
 drop index if exists public.attendance_time_edit_one_pending;
 create unique index if not exists attendance_time_edit_one_pending
-  on public.attendance_time_edit (employee_code, public.att_date_iso(date))
+  on public.attendance_time_edit (upper(regexp_replace(employee_code, '[^A-Za-z0-9]', '', 'g')),
+                                  public.att_date_iso(date))
   where status = 'pending';
 
 -- NOTE for the client: because this index is PARTIAL, PostgREST's `upsert(..., onConflict:
 -- 'employee_code,date')` CANNOT use it — that syntax emits no WHERE predicate, so Postgres will not
 -- match it and the write fails. The coordinator client therefore reads the open pending row and
 -- UPDATEs it by id, or INSERTs when there is none. This index is the backstop, not the mechanism.
--- The client's lookup must key the SAME WAY this index does — raw employee_code, ISO-normalised
--- date — or it will look for an open row, miss it on a spelling, insert, and take a 23505 here.
+-- The client's lookup must key the SAME WAY this index does — NORMALISED code, NORMALISED date —
+-- or it will look for an open row, miss it on a spelling, insert, and take a 23505 here.
+-- getOpenPending() in coordinator.js is that lookup; it matches on codeNorm() + toISO(), which are
+-- the client-side twins of the two expressions above. If either pair ever drifts apart, the
+-- symptom is a coordinator who cannot re-send a correction she has already filed.
 --
--- KNOWN RESIDUAL, deliberately not changed in this pass: the first key column is the RAW
--- employee_code. Codes drift by spacing across sources ('RSR 0015' vs 'RSR0015' — see
--- awol-punch-history.sql), so two spellings of the same worker can still hold one open proposal
--- each on the same day. Closing it is one line —
---   on public.attendance_time_edit (upper(regexp_replace(employee_code,'[^A-Za-z0-9]','','g')),
---                                   public.att_date_iso(date))
--- — and the client would have to match it. Flagged for the owner rather than changed unasked.
+-- The client still STORES the raw employee_code it read off the attendance row, deliberately: the
+-- record should say what was actually there, and the index is what makes two spellings collide.
 
 create index if not exists attendance_time_edit_date_idx   on public.attendance_time_edit (date);
 create index if not exists attendance_time_edit_status_idx on public.attendance_time_edit (status);
@@ -387,12 +408,29 @@ select column_name, data_type, is_nullable
 -- expect exactly ONE row: RSR 0025, Jamaica L. Batucan
 select code, name, is_time_editor from public.employees where is_time_editor;
 
--- expect the partial unique index to exist, and its indexdef to show BOTH
---   att_date_iso(date)   (not a bare `date`)  AND   WHERE (status = 'pending'::text)
--- A bare `date` here means an older version of this file built the index and the drop-then-create
--- did not run — the one-proposal-per-worker-day guarantee would then be defeated by a spelling.
+-- expect the partial unique index to exist, and its indexdef to show ALL THREE of
+--   upper(regexp_replace(employee_code, ...))   (not a bare `employee_code`)
+--   att_date_iso(date)                          (not a bare `date`)
+--   WHERE (status = 'pending'::text)
+-- A bare column on either side means an older version of this file built the index and the
+-- drop-then-create did not run — the one-proposal-per-worker-day guarantee would then be
+-- defeated by a spelling difference on whichever column was left raw.
 select indexname, indexdef from pg_indexes
  where schemaname = 'public' and tablename = 'attendance_time_edit';
+
+-- expect all four to be 'RSR0015' — the code normaliser agrees with the client's codeNorm(), and
+-- every spelling of one worker collapses to a single index key.
+select upper(regexp_replace('RSR 0015', '[^A-Za-z0-9]', '', 'g')) as spaced,
+       upper(regexp_replace('RSR0015',  '[^A-Za-z0-9]', '', 'g')) as unspaced,
+       upper(regexp_replace('rsr 0015', '[^A-Za-z0-9]', '', 'g')) as lower_spaced,
+       upper(regexp_replace('RSR-0015', '[^A-Za-z0-9]', '', 'g')) as hyphenated;
+
+-- expect 0 rows — this index must agree with the roster's own authority on worker identity.
+-- Any row here is a code whose two normalisers disagree, which would mean the roster and this
+-- queue could hold different opinions about who a proposal belongs to.
+select code, code_norm, upper(regexp_replace(code, '[^A-Za-z0-9]', '', 'g')) as index_form
+  from public.employees
+ where code_norm is distinct from upper(regexp_replace(code, '[^A-Za-z0-9]', '', 'g'));
 
 -- expect all three the same: the normaliser agrees with the client's toISO() on every spelling.
 select public.att_date_iso('08/01/2026')  as slash_padded,
