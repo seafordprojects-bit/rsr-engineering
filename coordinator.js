@@ -2019,13 +2019,29 @@ function payWeek(offset) {
   const fri = new Date(sat); fri.setDate(sat.getDate() + 6);
   return { from: isoOf(sat), to: isoOf(fri) };
 }
-// Owner decision Q7: the reachable window is the CURRENT pay week, plus the PREVIOUS week only
-// until Friday's cutoff. Nothing older is offered — and landing outside it does not silently
+// Owner decision Q7 — AMENDED by the owner 2026-08-04 to option (b): a week closes to her the
+// moment it is PAID. Nothing older is offered, and landing outside the window does not silently
 // refuse, it names the other door (a payroll adjustment).
+//
+// The amendment collapses the window to exactly payWeek(0) — the same week payroll's "This week"
+// button loads — and that is the whole rule. The previous week never appears any more, because
+// payWeek() references from *yesterday*: on payday Saturday "this week" is still the week that
+// just ended, so the week being paid that morning IS the current week, right through Saturday.
+// It rolls to the new week on Sunday, which is exactly when the paid week must close.
+//
+// Concretely, for the week Sat 08/01 – Fri 08/07 paid on Saturday 08/08:
+//   Fri 08/07 (cutoff)  → she can still correct 08/01–08/07
+//   Sat 08/08 (payday)  → still 08/01–08/07, so an error caught on payday morning is fixable
+//                         BEFORE the run, which is when errors actually surface
+//   Sun 08/09           → the window moves to 08/08–08/14 and 08/01–08/07 is CLOSED to her.
+// The superseded rule re-opened 08/01–08/07 on that Sunday as "last week". That is the hole this
+// closes: a week she could still edit after its payslips were printed and paid.
+//
+// One definition, shared with payroll's own week arithmetic, so the two screens can never disagree
+// about which days are still correctable.
 function correctionWindow() {
-  const cur = payWeek(0), prev = payWeek(-1);
-  const prevOpen = todayYmd() <= cur.to;                   // cur.to IS the coming Friday cutoff
-  return { from: prevOpen ? prev.from : cur.from, to: cur.to, cur, prev, prevOpen };
+  const cur = payWeek(0);
+  return { from: cur.from, to: cur.to, cur };
 }
 
 // --- clock formatting -----------------------------------------------------------
@@ -2263,8 +2279,8 @@ function TimeCorrection({ toast, employees }) {
         </div>
       <//>
       <p class="note" style="margin:0">
-        You can correct ${W.prevOpen ? 'this pay week and last week' : 'this pay week'} — ${W.from} to ${W.to}.
-        Anything older is already paid. Report it to the admin: it is fixed as a pay adjustment, not a time edit.
+        You can correct this pay week — ${W.from} to ${W.to}. Once a week is paid it closes here.
+        Anything older is already paid: report it to the admin, it is fixed as a pay adjustment, not a time edit.
       </p>
     </div>
 

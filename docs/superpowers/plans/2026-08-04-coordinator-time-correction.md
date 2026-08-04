@@ -56,6 +56,16 @@ Every task inherits these. They are not repeated per task.
   tab, lead every migration with the canary `select count(*) from public.attendance_records;`.
 - **"Applied" is not evidence.** After the owner runs SQL, re-query one thing that touches the NEW
   object before any client code names it.
+- **EVERY SQL MIGRATION SHIPS WITH ITS ROLLBACK, WRITTEN AT THE SAME TIME** (owner rule, 2026-08-04).
+  A migration file is not finished until `<name>-rollback.sql` exists beside it, in the same commit.
+  It is not optional and it is not "later": the moment a migration is worth writing down is the only
+  moment its author still holds every reason each object exists, and a rollback improvised during an
+  incident is written by someone who does not. The rollback must: lead with the same STEP 0 canary;
+  **snapshot into `bak_` tables before dropping anything that can hold real work, and refuse to drop
+  when the snapshot is missing**; leave additive nullable columns in place by default (dropping them
+  is the one act that loses data, and keeping them costs nothing); and end with a re-query block
+  proving the undo landed. Anything genuinely destructive is commented out with the reason to run it
+  spelled out above the line. This applies to every migration from here, not just this feature.
 
 ---
 
@@ -75,6 +85,7 @@ Every task inherits these. They are not repeated per task.
 | File | Status | Responsibility in this feature |
 |---|---|---|
 | `coordinator-time-correction.sql` | **create** (repo root, alongside `awol-suspensions.sql`) | All DDL: `attendance_time_edit`, `attendance_day_lock`, additive `attendance_edit_audit` columns, `employees.is_time_editor`, `time_editor_for_pin` + throttle table, RSR0025 seed, grants, schema reload, verification block |
+| `coordinator-time-correction-rollback.sql` | **create** (repo root, beside the migration) | Undo for the above, written in the same commit per the standing rollback rule. Snapshots `attendance_time_edit` / `attendance_day_lock` / the new audit columns into `bak_*_20260804` and refuses to drop when a snapshot is short; drops the RPC, throttle and both tables; clears `is_time_editor`. Column drops (`employees.is_time_editor`, the five `attendance_edit_audit` columns) are commented out — additive nullable columns cost nothing to leave and are the only thing here that loses data |
 | `coordinator-time-reminder.sql` | **create** (repo root) | Cutoff-day Telegram reminder: outstanding-count function, send-once guard table, `cron.schedule`. Separate file so the reminder can be re-run/retuned without re-running the feature DDL |
 | `payroll/index.html` | **modify** | `saveTimes` (1322) → shared `applyPunchEdit`; new "Time approvals" tab (tab row 144–148); missing-punch section; pending/unclosed banner on Run Payroll; extended Past-edits panel (`loadEditHistory` 1385); stamp at line 141 |
 | `coordinator.js` | **modify** | New Time-correction tile on the `App()` grid (1951) + component + PIN submit. Writes only `attendance_time_edit` |
@@ -211,10 +222,18 @@ Consumed by Tasks 4 and 5.
 - [ ] Show worked **hours** per day. **Never fetch a rate column.**
 - [ ] "Add a missing day" → pending row with `attendance_id = NULL`.
 - [ ] Required Reason per submission; blank blocks submit.
-- [ ] Reachable window (owner, Q7): current pay week + previous week **until Friday's cutoff**. Dates
-      outside it are **not offered**, and landing on one shows, by name, the other door:
-      *"This week is already paid. Report it to the admin — it is fixed as a pay adjustment, not a
-      time edit."*
+- [ ] Reachable window — **Q7 AMENDED by the owner 2026-08-04 to option (b): a week closes to her the
+      moment it is PAID.** The original answer (current week + previous week until Friday's cutoff)
+      had a hole: because "previous week" rolls forward with the calendar, the week paid on Saturday
+      re-opened to her the following Sunday, which contradicts the spec's own "an already-paid week
+      is a pay-adjustment matter" rule. (b) closes it.
+      **The window is therefore exactly `payWeek(0)` — the same week payroll's "This week" button
+      loads, one shared definition so the two screens can never disagree.** She keeps payday
+      Saturday (payroll's week reference is *yesterday*, so the week being paid that morning is
+      still "this week"), which is when a last error actually surfaces; it closes at the Sunday roll.
+      Dates outside the window are **not offered**, and landing on one shows, by name, the other
+      door: *"This week is already paid. Report it to the admin — it is fixed as a pay adjustment,
+      not a time edit."*
 - [ ] Submit → PIN prompt → `time_editor_for_pin` → on `ok:true` upsert the pending row(s) with her
       code and name; confirmation reads back *"Sent to the admin — filed by Jamaica L. Batucan"*.
       Re-editing the same worker-day before approval **updates** the open pending row.
