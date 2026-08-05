@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-08-06a</span>
+        <span id="version-stamp">v2026-08-06b</span>
       </div>
     </div>
   </div>
@@ -2509,6 +2509,14 @@ function awolRowsToMap(rows){
   return m;
 }
 async function awolLoadPunchHistory(){
+  // THE GUARD'S MAP CAN NEVER BE OLDER THAN THE DETECTOR'S. Refreshing punch history invalidates
+  // the never-punched map too, so the two always describe the same moment.
+  // Without this the cache is cleared by checkAllAbsences but CONSUMED by hasRecentPunchHistory,
+  // so any caller that refreshes punch history WITHOUT going through the sweep silently gets a
+  // stale second opinion. Today the sweep is the only such caller and production is unaffected —
+  // but "safe only because of who happens to call it" is exactly the shape of the defect this
+  // whole change is about, and a test caught it inside a day.
+  awolHistory=null; awolHistoryErr=null;
   try{
     const {data,error}=await sbClient.rpc('awol_punch_days',{p_days:AWOL_FETCH_DAYS});
     if(error)throw error;
