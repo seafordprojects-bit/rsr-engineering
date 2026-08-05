@@ -40,10 +40,12 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // conflicts on this line — main's value must name what is DEPLOYED, this branch's must name what
 // is being tested. Neither is wrong; they answer different questions. Resolve in favour of the
 // branch while the branch is unshipped.
-// payroll from main (v2026-07-25a — the mini-slip print fix that IS live); kiosk from this
-// branch (v2026-08-05a — the AWOL detection-data-source build, NOT live and must not be until the
-// amended awol-punch-history.sql has been run: the kiosk now REFUSES to judge unless the RPC
-// reports the window it served, so shipping the page ahead of the SQL turns detection off).
+// payroll v2026-07-25a — the mini-slip print fix, IS live.
+// kiosk v2026-08-05a — the AWOL detection-data-source build. MERGED to main, NOT YET PUSHED:
+// awaiting the owner's localhost walkthrough. Its prerequisite awol-punch-history.sql IS APPLIED
+// AND VERIFIED in production (2026-08-05), which is what makes this build safe to deploy — the
+// kiosk refuses to judge unless awol_punch_days() reports the window it served, so the SQL had to
+// land first. Once pushed, this line names what is deployed and the branch rule below is moot.
 const EXPECT = { 'payroll/index.html':'v2026-07-25a', 'kiosk/index.html':'v2026-08-05a',
                  'monitoring/roll-call.html':'v2026-07-18a', 'monitoring/borrow.html':'v2026-07-16c',
                  'tools/index.html':'v2026-07-19b', 'monitoring/index.html':'v2026-07-16c',
