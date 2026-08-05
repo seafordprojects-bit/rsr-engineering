@@ -72,6 +72,18 @@ const mock = {
   awolGroupId: '',     // the mocked AWOL group chat id
   tgMsgSeq: 1000,      // incrementing message_id source
   rpcSuspendFail: false, // when true, /rpc/awol_set_suspended 500s (simulates offline for FIX 1 coverage)
+  // ── Defect 1 (2026-08-04): the sweep reads punch history from the DATABASE, not `records` ──
+  punchDaysFail: false,  // when true, /rpc/awol_punch_days 500s → the sweep must abandon detection
+  punchDaysEmpty: false, // when true, it returns [] → ALSO an outage (empty is never an answer)
+  punchDaysExtra: {},    // {code: [ISO,…]} days the SERVER knows about that `records` does not —
+                         // the only way to model the actual defect, where the tablet has pruned a
+                         // punch the database still holds
+  // ── 2026-08-05 §4.2: a read that SUCCEEDS but covers less ground than the lookback ──
+  // The 08-04 fix made an unreadable server fail open. It did not cover a server that answers
+  // cheerfully with a SHORTER window than the detector walks — which is the original defect
+  // exactly (lookback longer than the store), just moved server-side. When set to N, the mock
+  // serves only the last N days and reports the window it used, the way the real function does.
+  punchDaysWindow: null,
 };
 const resetCapture = () => { mock.writes = []; mock.telegram = []; };
 
@@ -181,6 +193,58 @@ async function newKioskContext(browser, base, initMs) {
           if (code && mock.suspensions[code] && body) Object.assign(mock.suspensions[code], body);
           return json(200, code && mock.suspensions[code] ? [mock.suspensions[code]] : []);
         }
+      }
+      // AWOL: authoritative punch history (Defect 1, spec 2026-08-04 §3).
+      // The kiosk no longer asks its own `records` map "did he punch that day?" — it asks the
+      // database. Scenarios still seed punches into `records`, so this mock PROJECTS that seeded
+      // world back as the server's answer, which keeps every existing scenario meaning what it
+      // meant. mock.punchDaysExtra adds days the SERVER holds and the tablet does not — the only
+      // way to model the real defect, where `records` has been pruned to 10 days.
+      // It returns EVERY roster worker, punched or not: an empty ROW SET is the client's outage
+      // signal, while an empty DAY LIST is a legitimate "this man has not punched".
+      if (p.endsWith('/rest/v1/rpc/awol_punch_days')) {
+        if (mock.punchDaysFail)
+          return json(500, { code: '500', message: 'injected failure (mock.punchDaysFail)', details: '', hint: '' });
+        if (mock.punchDaysEmpty) return json(200, []);
+        let seeded = {};
+        try {
+          seeded = await currentPage.evaluate(() => {
+            const out = {};
+            const iso = (s) => { s = String(s || '').trim();
+              if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+              const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+              return m ? m[3] + '-' + m[1].padStart(2, '0') + '-' + m[2].padStart(2, '0') : null; };
+            // Same four marker literals the real awol_punch_days() excludes.
+            const bad = new Set(['(auto-skipped)', '(auto-deducted)', '(missing)', '(skipped)']);
+            for (const k of Object.keys(records || {})) {
+              const i = k.lastIndexOf('_'); if (i < 0) continue;
+              const c = k.slice(0, i), d = iso(k.slice(i + 1));
+              const t = records[k] && records[k].punches && records[k].punches.timein;
+              if (!d || !t || bad.has(t)) continue;
+              (out[c] = out[c] || []).push(d);
+            }
+            return out;
+          });
+        } catch { seeded = {}; }
+        // The window the server actually served. The real function derives from_date from p_days
+        // and the MANILA date; the mock mirrors that, and mock.punchDaysWindow lets a scenario
+        // serve a narrower one than was asked for.
+        let reqDays = 31;
+        try { const b = JSON.parse(req.postData() || '{}'); if (Number(b.p_days) > 0) reqDays = Number(b.p_days); } catch {}
+        const servedDays = mock.punchDaysWindow != null ? Number(mock.punchDaysWindow) : reqDays;
+        let today = null;
+        try { today = await currentPage.evaluate(() => { const d = new Date();
+          return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }); } catch {}
+        const from = today ? new Date(new Date(today + 'T00:00:00Z').getTime() - servedDays * 86400000)
+          .toISOString().slice(0, 10) : null;
+        const rows = ROSTER.map(r => {
+          const days = new Set([...(seeded[r.code] || []), ...(mock.punchDaysExtra[r.code] || [])]);
+          // Clip to the served window — a short window does not merely under-report, it makes the
+          // days beyond it indistinguishable from "he was absent".
+          const kept = [...days].filter(d => !from || d >= from).sort();
+          return { code: r.code, days: kept, window_from: from };
+        });
+        return json(200, rows);
       }
       // AWOL: dedup RPCs
       if (p.endsWith('/rest/v1/rpc/awol_set_suspended')) {
@@ -331,6 +395,17 @@ const recAt = (page, code, dateKey) => page.evaluate(([c, k]) => {
   return r ? { punches: r.punches, nightShift: !!r.nightShift, isLate: !!r.isLate, lateTimeOut: !!r.lateTimeOut,
                afternoonStart: !!r.afternoonStart, autoTimeout: !!r.autoTimeout } : null;
 }, [code, dateKey]);
+// ── Defect 1 (2026-08-04) ─────────────────────────────────────────────────────
+// collectAbsentDates()/isAbsentOnDate()/hasRecentPunchHistory() no longer read the tablet's
+// `records` map — they read `awolPunched`, which checkAllAbsences() fetches once per sweep from
+// awol_punch_days(). A scenario that inspects the chain WITHOUT running a sweep must therefore
+// load that history first, or every worker reads as never-judged (the fail-open direction).
+// These helpers call the REAL production loader, so the assertion still exercises the shipped path
+// rather than a test-only shortcut.
+const chainOf = (page, code) => page.evaluate(async (c) => {
+  await awolLoadPunchHistory(); return collectAbsentDates(c); }, code);
+const historyOf = (page, code) => page.evaluate(async (c) => {
+  await awolLoadPunchHistory(); return await hasRecentPunchHistory(c); }, code);
 const dateKeyFor = (page) => page.evaluate(() => todayKey());
 const pendingKeys = (page) => page.evaluate(() => Object.keys(syncPending));
 // punch() fires saveData()→syncFlush() detached (not awaited), so tests must
@@ -390,6 +465,9 @@ async function scenario(name, initMs, fn) {
   mock.tgConfigured = false;
   mock.awolGroupId = '';
   mock.rpcSuspendFail = false;
+  mock.punchDaysFail = false; mock.punchDaysEmpty = false; mock.punchDaysExtra = {};
+  mock.punchDaysWindow = null;   // MUST be reset: a leaked short window silently starves every
+                                 // later scenario's history read and reads as a code failure
   const context = await newKioskContext(browser, base, initMs);
   const page = await context.newPage();
   currentPage = page; // active page for the single-arg enterPin(code)/bisayaState() helpers
@@ -1185,7 +1263,7 @@ await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', mani
     // Fri/Sat intentionally unseeded → isAbsentOnDate() defaults to absent (no timein, no leave)
     // Sunday intentionally unseeded → moot either way, transparent regardless of a record
   }, thuKey);
-  const chainC = await page.evaluate(code => collectAbsentDates(code), 'RSR0303');
+  const chainC = await chainOf(page, 'RSR0303');
   await page.evaluate(() => checkAllAbsences());
   const susC = mock.suspensions['RSR0303'] && mock.suspensions['RSR0303'].active === true;
   const exactlyTwoC = chainC.length === 2;
@@ -1218,8 +1296,8 @@ await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', mani
     // Fri/Sat intentionally unseeded → absent; Sunday unseeded either way (transparent regardless)
   }, [thuKey2, monKey]);
 
-  const chainA = await page.evaluate(code => collectAbsentDates(code), 'RSR0100');
-  const chainB = await page.evaluate(code => collectAbsentDates(code), 'RSR0207');
+  const chainA = await chainOf(page, 'RSR0100');
+  const chainB = await chainOf(page, 'RSR0207');
   await page.evaluate(() => checkAllAbsences());
 
   const susA = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
@@ -1247,7 +1325,7 @@ await scenario('G10 · PAKYAW/PEM workers are exempt from AWOL', manila(2026, 7,
 
   // PEM9001 with a 5+ working-day absence run and NO punches at all — far past the 3-day threshold.
   await page.evaluate(() => { employees = employees.filter(e => e.code === 'PEM9001'); });
-  const chain = await page.evaluate(() => collectAbsentDates('PEM9001'));
+  const chain = await chainOf(page, 'PEM9001');
   await page.evaluate(() => checkAllAbsences());
 
   const suspended = !!(mock.suspensions['PEM9001'] && mock.suspensions['PEM9001'].active);
@@ -1515,7 +1593,7 @@ await scenario('G15 · never-punched/30-day safety net + inactive skip (owner 20
   // Proves the OLD chain logic (collectAbsentDates, untouched by this fix) still sees a long
   // absence run here — the ONLY thing standing between this worker and a wrongful suspension is the
   // new hasRecentPunchHistory() skip inside checkAllAbsences.
-  const chain1 = await page.evaluate(() => collectAbsentDates('RSR0002'));
+  const chain1 = await chainOf(page, 'RSR0002');
   await page.evaluate(() => checkAllAbsences());
   const susNever = !!(mock.suspensions['RSR0002'] && mock.suspensions['RSR0002'].active);
   const alertedNever = mock.telegram.some(m => /RSR0002/.test(m.text));
@@ -1527,7 +1605,7 @@ await scenario('G15 · never-punched/30-day safety net + inactive skip (owner 20
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
     employees = window.__g15Roster.filter(e => e.code === 'RSR0404');
     records['RSR0404_06/14/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // 40 days before 07/24/2026
-  const historyStale = await page.evaluate(() => hasRecentPunchHistory('RSR0404'));
+  const historyStale = await historyOf(page, 'RSR0404');
   await page.evaluate(() => checkAllAbsences());
   const susStale = !!(mock.suspensions['RSR0404'] && mock.suspensions['RSR0404'].active);
   const alertedStale = mock.telegram.some(m => /RSR0404/.test(m.text));
@@ -1541,8 +1619,8 @@ await scenario('G15 · never-punched/30-day safety net + inactive skip (owner 20
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
     employees = window.__g15Roster.filter(e => e.code === 'RSR0100');
     records['RSR0100_07/14/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // 10 days before 07/24/2026
-  const historyRecent = await page.evaluate(() => hasRecentPunchHistory('RSR0100'));
-  const chain3 = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  const historyRecent = await historyOf(page, 'RSR0100');
+  const chain3 = await chainOf(page, 'RSR0100');
   await page.evaluate(() => checkAllAbsences());
   const susRecent = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   const alertedRecent = mock.telegram.some(m => /RSR0100/.test(m.text));
@@ -1584,7 +1662,7 @@ await scenario('G16a · Approved leave (Supabase YYYY-MM-DD) covers the absent r
     // Approved leave stored exactly as PostgREST returns a DATE column: YYYY-MM-DD.
     leaveRequests = [{ code: 'RSR0100', status: 'Approved', startDate: '2026-07-21', endDate: '2026-07-23' }];
   });
-  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  const chain = await chainOf(page, 'RSR0100');
   await page.evaluate(() => checkAllAbsences());
   const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
@@ -1605,7 +1683,7 @@ await scenario('G16b · Approved leave (kiosk MM/DD/YYYY) also covers the absent
     // accidentally sort correctly as raw strings and would not prove anything.
     leaveRequests = [{ code: 'RSR0100', status: 'Approved', startDate: '7/21/2026', endDate: '7/23/2026' }];
   });
-  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  const chain = await chainOf(page, 'RSR0100');
   await page.evaluate(() => checkAllAbsences());
   const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
@@ -1625,7 +1703,7 @@ await scenario('G16c · Approved leave covers only PART of the absent run → ch
     // leave-covered day, so the chain is exactly the ONE real absence in front of it.
     leaveRequests = [{ code: 'RSR0100', status: 'Approved', startDate: '2026-07-22', endDate: '2026-07-22' }];
   });
-  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  const chain = await chainOf(page, 'RSR0100');
   await page.evaluate(() => checkAllAbsences());
   const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
@@ -1643,7 +1721,7 @@ await scenario('G16d · Approved leave code differs only by spacing (RSR 0100 vs
     // stores it with a space. Must still match via normCode().
     leaveRequests = [{ code: 'RSR 0100', status: 'Approved', startDate: '2026-07-21', endDate: '2026-07-23' }];
   });
-  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  const chain = await chainOf(page, 'RSR0100');
   await page.evaluate(() => checkAllAbsences());
   const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
@@ -1658,13 +1736,186 @@ await scenario('G16e · regression: worker with NO leave and 3+ absences → STI
     records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } };
     leaveRequests = []; // no leave at all — the fix must not have disabled detection wholesale
   });
-  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  const chain = await chainOf(page, 'RSR0100');
   await page.evaluate(() => checkAllAbsences());
   const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
   report('G16e · no leave + 3+ absences still suspends (detection not disabled)',
     chain.length >= 3 && sus && alerted,
     `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+});
+
+// G17 — DEFECT 1 (2026-08-04): PUNCH HISTORY COMES FROM THE DATABASE, NOT `records`.
+// Live evidence: RSR 0015's count went 6 -> 10 overnight on 08/04, adding 07/23, 07/24 and 07/25 —
+// two of which he demonstrably worked (07/24 08:55–12:00, 07/25 08:15–17:00). Nothing changed but
+// the calendar. `records` is localStorage pruned to 10 days (cleanupOldData :1871, loadData :4800),
+// both of which run BEFORE detection, while the chain looks back 21 days. Past the horizon
+// records[key] is undefined, hasTimein is false, and MISSING DATA READS AS ABSENCE — an error that
+// only ever runs against the worker, and only ever on long chains, i.e. the cases that end in a
+// letter. Spec: docs/superpowers/specs/2026-08-04-awol-detector-punch-history-and-void.md §2–3.
+//
+// mock.punchDaysExtra is what makes this testable: it gives the SERVER a day the tablet's `records`
+// map does not have. That gap IS the defect — no scenario that seeds `records` can express it.
+await scenario('G17a · a punch the tablet pruned but the SERVER still holds breaks the chain', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007778889990';
+  await page.evaluate(() => loadTgFromCloud());
+  // 07/14 is 10 days back: recent enough to clear the 30-day safety net, and the exact age at which
+  // the tablet's own retention starts deleting rows. It lives ONLY on the server here.
+  // 07/22 is 2 days back and likewise server-only — this is the day that must stop the chain.
+  mock.punchDaysExtra = { RSR0100: ['2026-07-14', '2026-07-22'] };
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; leaveRequests = [];
+    records = {}; });   // the tablet knows NOTHING — exactly the state after a 10-day prune
+  const chain = await chainOf(page, 'RSR0100');
+  await page.evaluate(() => checkAllAbsences());
+  const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  // Chain walks back from 07/23 and must stop dead at 07/22. One absent day, so no case at all.
+  // Before this fix the same setup produced a 10-day run and a suspension off an empty local map.
+  report('G17a · server-side punch stops the chain the tablet could not see',
+    chain.length === 1 && chain[0] === '07/23/2026' && !sus && !alerted,
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+});
+
+await scenario('G17b · a real absence run is still visible in server history', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007778889990';
+  await page.evaluate(() => loadTgFromCloud());
+  // The counterpart to G17a, and the one that matters most: reading the server must not become a
+  // blanket amnesty. Only punch on file is 07/14, so 07/15 onward is a genuine absence run.
+  //
+  // ASSERTS THE CHAIN, NOT THE SUSPENSION, deliberately. checkAllAbsences() bails at its FIRST
+  // gate in this harness — awol_skip_list() is not mocked, so it reads empty and the sweep fails
+  // open before punch history is ever consulted. That is the standing gap behind the G1/G15c/G16e
+  // family of failures, not something this change introduced; asserting a suspension here would
+  // only add a 20th failure with the same single cause. The chain and the safety net ARE reachable,
+  // and they are what this defect is about.
+  mock.punchDaysExtra = { RSR0100: ['2026-07-14'] };
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; leaveRequests = [];
+    records = {}; });
+  const chain = await chainOf(page, 'RSR0100');
+  const hist = await historyOf(page, 'RSR0100');
+  report('G17b · genuine absence run off server history still counts, history recognised',
+    hist === true && chain.length >= 3 && chain[chain.length - 1] === '07/15/2026',
+    `hasRecentPunchHistory=${hist} chain=${chain.length} oldest=${chain[chain.length - 1]}`);
+});
+
+// FAIL OPEN, BINDING (owner rule): a man always gets to punch and the owner gets TOLD; never a
+// silent block. Unreadable punch history must leave NO map behind — the three read sites then
+// resolve to "do not judge" in both directions (awolPunchedOn → present, hasRecentPunchHistory →
+// false), and checkAllAbsences abandons the sweep on the returned reason.
+// Tested against awolLoadPunchHistory() directly for the same reason as G17b: the sweep never
+// reaches this fetch while awol_skip_list() is unmocked, so a sweep-level assertion would pass
+// vacuously — it would go green whether or not the fail-open branch existed at all.
+await scenario('G17c · punch-history RPC error → no map, a reason returned, nothing judgeable', manila(2026,7,24,8,0), async (page) => {
+  await page.evaluate(() => { records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; });
+  mock.punchDaysFail = true;          // the RPC 500s
+  const r = await page.evaluate(async () => {
+    const why = await awolLoadPunchHistory();
+    return { why, map: awolPunched, chain: collectAbsentDates('RSR0100'), hist: await hasRecentPunchHistory('RSR0100') };
+  });
+  report('G17c · RPC failure yields a reason, a null map, and no absences',
+    typeof r.why === 'string' && r.why.length > 0 && r.map === null && r.chain.length === 0 && r.hist === false,
+    `reason=${JSON.stringify(r.why)} map=${r.map} chain=${r.chain.length} history=${r.hist}`);
+});
+
+await scenario('G17d · empty punch-history result is an OUTAGE, not "nobody punched"', manila(2026,7,24,8,0), async (page) => {
+  await page.evaluate(() => { records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; });
+  // awol_punch_days() returns EVERY non-separated worker precisely so that zero rows can only mean
+  // the read went wrong. Read as a legitimate answer it would say "nobody in the yard has punched
+  // in a month" and flag the entire roster.
+  mock.punchDaysEmpty = true;
+  const r = await page.evaluate(async () => {
+    const why = await awolLoadPunchHistory();
+    return { why, map: awolPunched };
+  });
+  report('G17d · empty result is treated as a failure, not an answer',
+    /empty/.test(String(r.why)) && r.map === null,
+    `reason=${JSON.stringify(r.why)} map=${r.map}`);
+});
+
+// The load path must also SUCCEED cleanly — otherwise G17c/G17d would pass against a function that
+// is broken in every state. Proves the map is populated, keyed by normCode, and ISO-valued.
+await scenario('G17e · a successful load populates the map, normCode-keyed and ISO-valued', manila(2026,7,24,8,0), async (page) => {
+  mock.punchDaysExtra = { RSR0100: ['2026-07-14', '2026-07-22'] };
+  await page.evaluate(() => { records = {}; });
+  const r = await page.evaluate(async () => {
+    const why = await awolLoadPunchHistory();
+    const s = awolPunched && awolPunched['RSR0100'];
+    return { why, codes: awolPunched ? Object.keys(awolPunched).length : 0,
+             days: s ? [...s].sort() : null,
+             spacedLookupWorks: awolPunchedOn('RSR 0100', '07/22/2026') };
+  });
+  report('G17e · load succeeds, map keyed by normCode, spacing drift resolves',
+    r.why === null && r.codes === 9 && JSON.stringify(r.days) === '["2026-07-14","2026-07-22"]' && r.spacedLookupWorks === true,
+    `reason=${r.why} codes=${r.codes} days=${JSON.stringify(r.days)} spacedLookup=${r.spacedLookupWorks}`);
+});
+
+// ==============================================================================
+// G18 — THE 2026-08-05 INCIDENT: ten false cases in a twelve-second burst.
+// Spec: docs/superpowers/specs/2026-08-05-awol-detection-data-source.md
+//
+// awol_events 41–50, 2026-08-04 23:59:55 → 2026-08-05 00:00:07, each reading "Absent 10
+// consecutive days without approved leave". All ten false; four of them (RSR 0019, 0027, 0030,
+// 0033) were present all 10 of 10 days their case named. attendance_records held every punch the
+// whole time. The tablet's site data had been cleared via reset.html the evening before, so the
+// local map rebuilt near-empty and the next sweep hit the 10-day cap for ten men at once.
+// ==============================================================================
+
+// G18a is the incident itself, reduced. It is the REGRESSION GUARD for the 08-04 fix: run this
+// same scenario against main's kiosk (git checkout main -- kiosk/index.html) and it fails with a
+// full chain per worker, which is how the failure was reproduced before any of this was written.
+await scenario('G18a · empty local cache + full server history → nobody is judged absent', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007778889990';
+  await page.evaluate(() => loadTgFromCloud());
+  // Four workers, present every working day the chain would walk. Exactly the shape of the four
+  // men who were present 10 of 10.
+  const days = ['2026-07-13','2026-07-14','2026-07-15','2026-07-16','2026-07-17','2026-07-20',
+                '2026-07-21','2026-07-22','2026-07-23'];
+  mock.punchDaysExtra = { RSR0100: days, RSR0101: days, RSR0102: days, RSR0103: days };
+  // reset.html has just been through here. The tablet knows nothing at all.
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; leaveRequests = []; records = {}; });
+  const chains = await page.evaluate(() => ['RSR0100','RSR0101','RSR0102','RSR0103']
+    .map(c => ({ c, n: collectAbsentDates(c).length })));
+  const worst = Math.max(...chains.map(x => x.n));
+  report('G18a · an empty tablet cache invents no absences when the server has the punches',
+    worst === 0,
+    `chains=${chains.map(x => x.c + ':' + x.n).join(' ')} (each must be 0; main\'s build gives 10)`);
+});
+
+// G18b — §4.2. THE NEW HOLE. A server that answers successfully but covers less ground than the
+// detector walks is the original defect with a different store. The 08-04 fix guards failure and
+// emptiness; it does not guard a SHORT window, and nothing about a short window looks wrong.
+await scenario('G18b · server window shorter than the lookback must abandon the sweep', manila(2026,7,24,8,0), async (page) => {
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; leaveRequests = []; records = {}; });
+  // He punched 20 days back. The chain walks 21 days, so that punch is what ends it — but the
+  // server is only serving 5 days, so from the client's side he looks absent throughout.
+  mock.punchDaysExtra = { RSR0100: ['2026-07-04', '2026-07-23'] };
+  mock.punchDaysWindow = 5;
+  const r = await page.evaluate(async () => {
+    const why = await awolLoadPunchHistory();
+    return { why, map: awolPunched ? Object.keys(awolPunched).length : 0,
+             chain: collectAbsentDates('RSR0100').length };
+  });
+  // A short window must be refused the same way an outage is: a reason back, no map, nothing judged.
+  report('G18b · a short server window is refused, not silently judged on',
+    typeof r.why === 'string' && r.why.length > 0 && r.map === 0 && r.chain === 0,
+    `reason=${JSON.stringify(r.why)} mapCodes=${r.map} chain=${r.chain}`);
+});
+
+// G18c — §4.3. The never-punched guard must be a SECOND OPINION. Sharing the detector's map means
+// it cannot contradict it: whatever truncated or corrupted the detector's view is already inside
+// the guard. Here the detector's map is deliberately wiped after loading while the server can
+// still answer — a guard that queries on its own says "he has history", a shared one says nothing.
+await scenario('G18c · the never-punched guard queries independently of the detector map', manila(2026,7,24,8,0), async (page) => {
+  await page.evaluate(() => { records = {}; });
+  mock.punchDaysExtra = { RSR0100: ['2026-07-14', '2026-07-22'] };
+  const r = await page.evaluate(async () => {
+    await awolLoadPunchHistory();
+    awolPunched = null;                       // the detector's view is gone; the SERVER still knows
+    return { hist: await hasRecentPunchHistory('RSR0100') };
+  });
+  report('G18c · hasRecentPunchHistory answers from its own read, not the detector\'s map',
+    r.hist === true,
+    `hasRecentPunchHistory=${r.hist} (shared-map implementation returns false here)`);
 });
 
 // ==============================================================================
