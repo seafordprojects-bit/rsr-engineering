@@ -41,12 +41,12 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // is being tested. Neither is wrong; they answer different questions. Resolve in favour of the
 // branch while the branch is unshipped.
 // payroll v2026-07-25a — the mini-slip print fix, IS live.
-// kiosk v2026-08-05a — the AWOL detection-data-source build. MERGED to main, NOT YET PUSHED:
+// kiosk v2026-08-06a — the AWOL detection-data-source build. MERGED to main, NOT YET PUSHED:
 // awaiting the owner's localhost walkthrough. Its prerequisite awol-punch-history.sql IS APPLIED
 // AND VERIFIED in production (2026-08-05), which is what makes this build safe to deploy — the
 // kiosk refuses to judge unless awol_punch_days() reports the window it served, so the SQL had to
 // land first. Once pushed, this line names what is deployed and the branch rule below is moot.
-const EXPECT = { 'payroll/index.html':'v2026-07-25a', 'kiosk/index.html':'v2026-08-05a',
+const EXPECT = { 'payroll/index.html':'v2026-07-25a', 'kiosk/index.html':'v2026-08-06a',
                  'monitoring/roll-call.html':'v2026-07-18a', 'monitoring/borrow.html':'v2026-07-16c',
                  'tools/index.html':'v2026-07-19b', 'monitoring/index.html':'v2026-07-16c',
                  'monitoring/job-order.html':'v2026-07-19a', 'monitoring/efficiency.html':'v2026-07-18a',

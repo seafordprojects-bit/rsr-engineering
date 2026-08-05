@@ -1918,6 +1918,40 @@ await scenario('G18c · the never-punched guard queries independently of the det
     `hasRecentPunchHistory=${r.hist} (shared-map implementation returns false here)`);
 });
 
+// G18d — §4.2 / §6.3: THE VISIBLE NOTICE MUST NAME WHAT WAS SKIPPED, IN THE PAST TENSE.
+// "A silent skip is not acceptable; a silent skip is how this went unnoticed for two days."
+// The card was hardcoded to "the exemption list could not be read" — written when that was the
+// only authority that could fail. It now fires for punch history and the never-punched guard too,
+// so on two of three paths it named the wrong cause and sent the owner to check a list that was
+// fine. sendAwolDetectionSkipped() always named it correctly on Telegram; the tablet's own card,
+// which is the surface §4.2 requires, was the one lying.
+await scenario('G18d · the skip notice names the authority that actually failed', manila(2026,7,24,8,0), async (page) => {
+  const r = await page.evaluate(async () => {
+    const read = () => (document.getElementById('awol-skip-msg') || {}).textContent || '';
+    // (a) END TO END on the one path this harness can reach. awol_skip_list is unmocked, so the
+    //     sweep always fails open at its FIRST gate — which makes this the real wiring, not a stub.
+    await checkAllAbsences();
+    const viaSweep = { shown: (document.getElementById('awol-skip-card') || {}).style.display !== 'none',
+                       text: read() };
+    // (b) THE PATH THAT WAS WRONG. Rendering is asserted directly because the sweep cannot reach
+    //     the punch-history gate while the skip list is unmocked (the standing G1/G15c/G16e gap).
+    awolDetectionSkipped = true;
+    awolSkipWhat = 'punch history';
+    awolSkipWhy  = 'covers only 5 days but 21 are needed';
+    renderAwolCards();
+    return { viaSweep, punchText: read() };
+  });
+  const pastTense = /did not run/.test(r.punchText);
+  const namesPunch = /punch history/.test(r.punchText);
+  const blamesWrongThing = /exemption list/.test(r.punchText);
+  const carriesReason = /covers only 5 days/.test(r.punchText);
+  const sweepNamesSkipList = /exemption list/.test(r.viaSweep.text) && /did not run/.test(r.viaSweep.text);
+  report('G18d · notice is past-tense, names the right authority, and carries the reason',
+    pastTense && namesPunch && !blamesWrongThing && carriesReason && r.viaSweep.shown && sweepNamesSkipList,
+    `pastTense=${pastTense} namesPunchHistory=${namesPunch} stillBlamesSkipList=${blamesWrongThing} `
+    + `carriesReason=${carriesReason} sweepCardShown=${r.viaSweep.shown} sweepNamesSkipList=${sweepNamesSkipList}`);
+});
+
 // ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================

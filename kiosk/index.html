@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-08-05a</span>
+        <span id="version-stamp">v2026-08-06a</span>
       </div>
     </div>
   </div>
@@ -2339,6 +2339,11 @@ let awolUnknownTypeCount=0;
 // LEVEL: the last sweep abandoned detection entirely because awol_skip_list() failed or came back
 // empty. Recomputed every sweep, so a recovered tablet clears it by itself.
 let awolDetectionSkipped=false;
+// WHICH authority could not be read, and why — rendered on the tablet's skip card. Three things
+// can now stop a sweep (exemption list, punch history, never-punched history) and they are fixed in
+// completely different places, so a notice that does not say which is a notice that sends the owner
+// to the wrong one. Set at every site that sets awolDetectionSkipped, BEFORE renderAwolCards().
+let awolSkipWhat='', awolSkipWhy='';
 // PIN entry is re-checking a bar against the server. Held for the duration so no punch button is live
 // while the answer is in flight. A REAL flag, checked explicitly by updBtns - not the accident that
 // updBtns() with no argument happens to disable everything, which means "no record" and would be
@@ -2364,7 +2369,18 @@ function renderAwolCards(codes){
   const dr=document.getElementById('awol-dropped-card'), drm=document.getElementById('awol-dropped-msg');
   if(sk&&skm){
     if(awolDetectionSkipped){
-      skm.textContent='AWOL detection did not run on this tablet: the exemption list could not be read. Nobody was judged and nobody is blocked — this is the safe direction. It clears itself once the tablet can reach the server.';
+      // NAMES WHICH AUTHORITY FAILED (spec 2026-08-05 §4.2). This card used to be hardcoded to
+      // "the exemption list could not be read" — written when that was the only thing that could
+      // fail. Punch history became a second, independent authority in the 08-04 fix, and the
+      // never-punched guard a third in the 08-05 one, so the card was naming the wrong cause on
+      // two of the three paths and sending the owner to check a list that was fine.
+      // sendAwolDetectionSkipped() has always named it correctly in the log and on Telegram; the
+      // tablet's own card is the surface §4.2 actually requires, and it was the one lying.
+      // Past tense throughout, deliberately: "did not run" describes what already happened.
+      skm.textContent='AWOL detection did not run on this tablet: the '+(awolSkipWhat||'exemption list')+
+        ' could not be read'+(awolSkipWhy?' ('+awolSkipWhy+')':'')+
+        '. Nobody was judged and nobody is blocked — this is the safe direction.'+
+        ' It clears once the tablet gets a complete answer from the server.';
       sk.style.display='';
     } else { sk.style.display='none'; skm.textContent=''; }
   }
@@ -2624,6 +2640,7 @@ async function checkAllAbsences(){
     data.forEach(r=>{ _skip[normCode(r.code)]={skip:r.skip===true,reason:r.reason||null}; });
   }catch(e){
     awolDetectionSkipped=true;
+    awolSkipWhat='exemption list'; awolSkipWhy=(e&&e.message)||'';
     awolUnknownTypeCount=0;          // a DIFFERENT condition — never conflate the two
     renderAwolCards();
     await sendAwolDetectionSkipped(e&&e.message);
@@ -2644,9 +2661,11 @@ async function checkAllAbsences(){
   // Both reads are refreshed per sweep. Clearing the guard's map here is what keeps it a genuinely
   // independent second opinion rather than a cache that outlives the run it was fetched for.
   awolHistory=null; awolHistoryErr=null;
+  awolSkipWhat=''; awolSkipWhy='';   // a stale cause must not ride on the next sweep's notice
   const _punchErr=await awolLoadPunchHistory();
   if(_punchErr){
     awolDetectionSkipped=true;
+    awolSkipWhat='punch history'; awolSkipWhy=_punchErr;
     awolUnknownTypeCount=0;          // a DIFFERENT condition — never conflate the two
     renderAwolCards();
     await sendAwolDetectionSkipped(_punchErr,'punch history');
