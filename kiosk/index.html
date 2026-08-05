@@ -235,7 +235,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-08-04a</span>
+        <span id="version-stamp">v2026-08-05a</span>
       </div>
     </div>
   </div>
@@ -2436,23 +2436,69 @@ async function sendAwolTypeUnknown(codes){
 //
 // `records` is NOT deleted and the 10-day pruning stays. It is still the right structure for the
 // day's punching UI. It simply stops being evidence in a disciplinary decision.
-let awolPunched=null;   // {NORMCODE: Set('YYYY-MM-DD')} — server-sourced, refreshed once per sweep
+// ── LOOKBACK CONSTANTS — ONE PLACE (spec 2026-08-05 §4.2) ──────────────────────────────────
+// The 08-05 incident was a lookback longer than the store it read. Both numbers used to sit inline
+// in the two functions that walk them, so nothing connected "the chain walks 21 days" to "we asked
+// the server for 31". They live here now, together, and the fetch is CHECKED against them at
+// runtime — a future edit that widens a lookback without widening the fetch turns detection off
+// loudly instead of quietly inventing absences again.
+const AWOL_CHAIN_DAYS   = 21;   // collectAbsentDates walks this far back
+const AWOL_HISTORY_DAYS = 30;   // hasRecentPunchHistory's never-punched safety net
+const AWOL_FETCH_DAYS   = 31;   // what we ask the server for; must cover BOTH of the above
+
+// Strict code key for the AWOL read path ONLY — matches awol_punch_days()'s server-side
+// upper(regexp_replace(code,'[^A-Za-z0-9]','','g')) EXACTLY, and employees.code_norm with it.
+// Deliberately NOT the global normCode(), which strips whitespace only: 'RSR-0100' would key as
+// 'RSR-0100' here and 'RSR0100' on the server, the lookup would miss, and a missed lookup on this
+// path reads as "never punched" — i.e. it INVENTS an absence. Kept separate rather than widening
+// normCode() because that one also drives leave matching and roster sync, where a broader collapse
+// would change unrelated behaviour.
+function awolCodeKey(c){ return String(c==null?'':c).replace(/[^A-Za-z0-9]/g,'').toUpperCase(); }
+
+let awolPunched=null;   // {CODEKEY: Set('YYYY-MM-DD')} — server-sourced, refreshed once per sweep
 // Fetch the whole roster's punch history in ONE call, exactly as the skip list is fetched.
 // Returns null on success, or a reason string — the caller treats any reason as "abandon the sweep".
 // EMPTY IS A FAILURE, not an answer: awol_punch_days() returns every non-separated worker, punched
 // or not, precisely so that a zero-row result can only mean the read went wrong.
+// How many days back does an answer actually reach? Returns null when the server did not say.
+// awol_punch_days() reports window_from precisely so this is knowable — see that file's §STEP 1.
+function awolWindowCovers(rows){
+  const raw=rows&&rows.length?rows[0].window_from:null;
+  const from=raw?awolISO(raw):null;
+  if(!from) return null;
+  const today=awolISO(todayKey());
+  if(!today) return null;
+  return Math.round((Date.parse(today+'T00:00:00Z')-Date.parse(from+'T00:00:00Z'))/86400000);
+}
+// Shared shape check for both reads. Returns a reason string, or null when the answer is usable.
+// EMPTY IS A FAILURE, and so is a SHORT WINDOW: a worker with no days returned looks exactly the
+// same whether he was absent or simply outside the window the server served. That ambiguity is the
+// 08-05 defect, and the only safe reading of it is "do not judge".
+function awolAnswerProblem(rows,needDays,what){
+  if(!Array.isArray(rows)||!rows.length) return what+' empty';
+  const covered=awolWindowCovers(rows);
+  if(covered===null)
+    return what+' did not report its window (awol-punch-history.sql must be re-run — it now returns window_from)';
+  if(covered<needDays)
+    return what+' covers only '+covered+' days but '+needDays+' are needed';
+  return null;
+}
+function awolRowsToMap(rows){
+  const m={};
+  rows.forEach(r=>{
+    const set=new Set();
+    (Array.isArray(r.days)?r.days:[]).forEach(d=>{const iso=awolISO(d);if(iso)set.add(iso);});
+    m[awolCodeKey(r.code)]=set;
+  });
+  return m;
+}
 async function awolLoadPunchHistory(){
   try{
-    const {data,error}=await sbClient.rpc('awol_punch_days',{p_days:31});
+    const {data,error}=await sbClient.rpc('awol_punch_days',{p_days:AWOL_FETCH_DAYS});
     if(error)throw error;
-    if(!Array.isArray(data)||!data.length)throw new Error('punch history empty');
-    const m={};
-    data.forEach(r=>{
-      const set=new Set();
-      (Array.isArray(r.days)?r.days:[]).forEach(d=>{const iso=awolISO(d);if(iso)set.add(iso);});
-      m[normCode(r.code)]=set;
-    });
-    awolPunched=m;
+    const bad=awolAnswerProblem(data,AWOL_CHAIN_DAYS,'punch history');
+    if(bad)throw new Error(bad);
+    awolPunched=awolRowsToMap(data);
     return null;
   }catch(e){
     awolPunched=null;                       // never leave a stale map behind a failed refresh
@@ -2460,7 +2506,7 @@ async function awolLoadPunchHistory(){
   }
 }
 // The worker's punched-day set, or null when this tablet has no server answer for him.
-function awolPunchSet(empCode){ return awolPunched?(awolPunched[normCode(empCode)]||null):null; }
+function awolPunchSet(empCode){ return awolPunched?(awolPunched[awolCodeKey(empCode)]||null):null; }
 // Did he punch in on this date key? UNKNOWN COUNTS AS PUNCHED — the fail-open direction, because
 // "punched" is what ENDS an absence chain. A tablet that cannot answer must never invent an absence.
 function awolPunchedOn(empCode,dateKey){
@@ -2518,10 +2564,42 @@ function getConsecutiveAbsences(empCode){ return collectAbsentDates(empCode).len
 // Note the direction of the unknown case here is the OPPOSITE of awolPunchedOn's, and for the same
 // reason: no server answer -> return false -> the worker is SKIPPED, never judged. Both readings
 // resolve to "do not suspend".
-function hasRecentPunchHistory(empCode){
-  const s=awolPunchSet(empCode);
+// ── §4.3 — THE GUARD IS NOW A SECOND OPINION, FROM ITS OWN READ ────────────────────────────
+// It used to share awolPunched. That is what let the 08-05 incident through: this function exists
+// to say "there is no history here worth judging", but drawing that conclusion from the SAME data
+// the detector used means whatever truncated or emptied the detector's view is already inside the
+// guard. When the local map held only today, it found today, said "yes, he has history", and waved
+// detection through against a history that was not there. A guard that shares the defect it guards
+// against cannot fire.
+//
+// So: its own RPC call, its own map, its own window check. Loaded lazily and cached for the sweep
+// (checkAllAbsences clears it), so this costs ONE extra round trip per sweep, not one per worker.
+//
+// UNKNOWN → false → the worker is SKIPPED, never judged. That is the opposite direction to
+// awolPunchedOn's unknown-means-punched, and deliberately so: both resolve to "do not suspend".
+let awolHistory=null;   // {CODEKEY: Set('YYYY-MM-DD')} — INDEPENDENT of awolPunched
+let awolHistoryErr=null;
+async function awolLoadRecentHistory(){
+  try{
+    const {data,error}=await sbClient.rpc('awol_punch_days',{p_days:AWOL_HISTORY_DAYS+1});
+    if(error)throw error;
+    const bad=awolAnswerProblem(data,AWOL_HISTORY_DAYS,'never-punched history');
+    if(bad)throw new Error(bad);
+    awolHistory=awolRowsToMap(data);
+    awolHistoryErr=null;
+    return null;
+  }catch(e){
+    awolHistory=null;
+    awolHistoryErr=(e&&e.message)||'never-punched history unreadable';
+    return awolHistoryErr;
+  }
+}
+async function hasRecentPunchHistory(empCode){
+  if(!awolHistory) await awolLoadRecentHistory();
+  if(!awolHistory) return false;            // unreadable → skip this worker, never suspend
+  const s=awolHistory[awolCodeKey(empCode)];
   if(!s) return false;
-  for(let i=0;i<=30;i++){ if(s.has(awolISO(dateKeyOffset(-i)))) return true; }
+  for(let i=0;i<=AWOL_HISTORY_DAYS;i++){ if(s.has(awolISO(dateKeyOffset(-i)))) return true; }
   return false;
 }
 async function checkAllAbsences(){
@@ -2563,6 +2641,9 @@ async function checkAllAbsences(){
   // retry push. This is STRICTLY SAFER than today: right now a tablet that cannot reach Supabase
   // still runs detection against stale local data and can open a case on it. After this change, no
   // punch history means no judgement.
+  // Both reads are refreshed per sweep. Clearing the guard's map here is what keeps it a genuinely
+  // independent second opinion rather than a cache that outlives the run it was fetched for.
+  awolHistory=null; awolHistoryErr=null;
   const _punchErr=await awolLoadPunchHistory();
   if(_punchErr){
     awolDetectionSkipped=true;
@@ -2605,7 +2686,7 @@ async function checkAllAbsences(){
     if(emp.isActive===false){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; } // inactive (owner 2026-07-26): no longer works here — never judge AWOL
     if(suspendedEmployees[emp.code])continue;
     if(onLeaveToday(emp.code))continue;
-    if(!hasRecentPunchHistory(emp.code)){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; } // never-punched / 30-day safety net — see helper above
+    if(!(await hasRecentPunchHistory(emp.code))){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; } // never-punched / 30-day safety net — see helper above
     const dates=collectAbsentDates(emp.code);
     if(dates.length<3){ if(awolPending[emp.code]){awolPending[emp.code]=false;saveAwolPending();} continue; }
     const iso=dates.map(awolISO);

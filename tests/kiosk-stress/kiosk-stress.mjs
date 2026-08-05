@@ -78,6 +78,12 @@ const mock = {
   punchDaysExtra: {},    // {code: [ISO,…]} days the SERVER knows about that `records` does not —
                          // the only way to model the actual defect, where the tablet has pruned a
                          // punch the database still holds
+  // ── 2026-08-05 §4.2: a read that SUCCEEDS but covers less ground than the lookback ──
+  // The 08-04 fix made an unreadable server fail open. It did not cover a server that answers
+  // cheerfully with a SHORTER window than the detector walks — which is the original defect
+  // exactly (lookback longer than the store), just moved server-side. When set to N, the mock
+  // serves only the last N days and reports the window it used, the way the real function does.
+  punchDaysWindow: null,
 };
 const resetCapture = () => { mock.writes = []; mock.telegram = []; };
 
@@ -220,9 +226,23 @@ async function newKioskContext(browser, base, initMs) {
             return out;
           });
         } catch { seeded = {}; }
+        // The window the server actually served. The real function derives from_date from p_days
+        // and the MANILA date; the mock mirrors that, and mock.punchDaysWindow lets a scenario
+        // serve a narrower one than was asked for.
+        let reqDays = 31;
+        try { const b = JSON.parse(req.postData() || '{}'); if (Number(b.p_days) > 0) reqDays = Number(b.p_days); } catch {}
+        const servedDays = mock.punchDaysWindow != null ? Number(mock.punchDaysWindow) : reqDays;
+        let today = null;
+        try { today = await currentPage.evaluate(() => { const d = new Date();
+          return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }); } catch {}
+        const from = today ? new Date(new Date(today + 'T00:00:00Z').getTime() - servedDays * 86400000)
+          .toISOString().slice(0, 10) : null;
         const rows = ROSTER.map(r => {
           const days = new Set([...(seeded[r.code] || []), ...(mock.punchDaysExtra[r.code] || [])]);
-          return { code: r.code, days: [...days].sort() };
+          // Clip to the served window — a short window does not merely under-report, it makes the
+          // days beyond it indistinguishable from "he was absent".
+          const kept = [...days].filter(d => !from || d >= from).sort();
+          return { code: r.code, days: kept, window_from: from };
         });
         return json(200, rows);
       }
@@ -385,7 +405,7 @@ const recAt = (page, code, dateKey) => page.evaluate(([c, k]) => {
 const chainOf = (page, code) => page.evaluate(async (c) => {
   await awolLoadPunchHistory(); return collectAbsentDates(c); }, code);
 const historyOf = (page, code) => page.evaluate(async (c) => {
-  await awolLoadPunchHistory(); return hasRecentPunchHistory(c); }, code);
+  await awolLoadPunchHistory(); return await hasRecentPunchHistory(c); }, code);
 const dateKeyFor = (page) => page.evaluate(() => todayKey());
 const pendingKeys = (page) => page.evaluate(() => Object.keys(syncPending));
 // punch() fires saveData()→syncFlush() detached (not awaited), so tests must
@@ -446,6 +466,8 @@ async function scenario(name, initMs, fn) {
   mock.awolGroupId = '';
   mock.rpcSuspendFail = false;
   mock.punchDaysFail = false; mock.punchDaysEmpty = false; mock.punchDaysExtra = {};
+  mock.punchDaysWindow = null;   // MUST be reset: a leaked short window silently starves every
+                                 // later scenario's history read and reads as a code failure
   const context = await newKioskContext(browser, base, initMs);
   const page = await context.newPage();
   currentPage = page; // active page for the single-arg enterPin(code)/bisayaState() helpers
@@ -1788,7 +1810,7 @@ await scenario('G17c · punch-history RPC error → no map, a reason returned, n
   mock.punchDaysFail = true;          // the RPC 500s
   const r = await page.evaluate(async () => {
     const why = await awolLoadPunchHistory();
-    return { why, map: awolPunched, chain: collectAbsentDates('RSR0100'), hist: hasRecentPunchHistory('RSR0100') };
+    return { why, map: awolPunched, chain: collectAbsentDates('RSR0100'), hist: await hasRecentPunchHistory('RSR0100') };
   });
   report('G17c · RPC failure yields a reason, a null map, and no absences',
     typeof r.why === 'string' && r.why.length > 0 && r.map === null && r.chain.length === 0 && r.hist === false,
@@ -1825,6 +1847,75 @@ await scenario('G17e · a successful load populates the map, normCode-keyed and 
   report('G17e · load succeeds, map keyed by normCode, spacing drift resolves',
     r.why === null && r.codes === 9 && JSON.stringify(r.days) === '["2026-07-14","2026-07-22"]' && r.spacedLookupWorks === true,
     `reason=${r.why} codes=${r.codes} days=${JSON.stringify(r.days)} spacedLookup=${r.spacedLookupWorks}`);
+});
+
+// ==============================================================================
+// G18 — THE 2026-08-05 INCIDENT: ten false cases in a twelve-second burst.
+// Spec: docs/superpowers/specs/2026-08-05-awol-detection-data-source.md
+//
+// awol_events 41–50, 2026-08-04 23:59:55 → 2026-08-05 00:00:07, each reading "Absent 10
+// consecutive days without approved leave". All ten false; four of them (RSR 0019, 0027, 0030,
+// 0033) were present all 10 of 10 days their case named. attendance_records held every punch the
+// whole time. The tablet's site data had been cleared via reset.html the evening before, so the
+// local map rebuilt near-empty and the next sweep hit the 10-day cap for ten men at once.
+// ==============================================================================
+
+// G18a is the incident itself, reduced. It is the REGRESSION GUARD for the 08-04 fix: run this
+// same scenario against main's kiosk (git checkout main -- kiosk/index.html) and it fails with a
+// full chain per worker, which is how the failure was reproduced before any of this was written.
+await scenario('G18a · empty local cache + full server history → nobody is judged absent', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007778889990';
+  await page.evaluate(() => loadTgFromCloud());
+  // Four workers, present every working day the chain would walk. Exactly the shape of the four
+  // men who were present 10 of 10.
+  const days = ['2026-07-13','2026-07-14','2026-07-15','2026-07-16','2026-07-17','2026-07-20',
+                '2026-07-21','2026-07-22','2026-07-23'];
+  mock.punchDaysExtra = { RSR0100: days, RSR0101: days, RSR0102: days, RSR0103: days };
+  // reset.html has just been through here. The tablet knows nothing at all.
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; leaveRequests = []; records = {}; });
+  const chains = await page.evaluate(() => ['RSR0100','RSR0101','RSR0102','RSR0103']
+    .map(c => ({ c, n: collectAbsentDates(c).length })));
+  const worst = Math.max(...chains.map(x => x.n));
+  report('G18a · an empty tablet cache invents no absences when the server has the punches',
+    worst === 0,
+    `chains=${chains.map(x => x.c + ':' + x.n).join(' ')} (each must be 0; main\'s build gives 10)`);
+});
+
+// G18b — §4.2. THE NEW HOLE. A server that answers successfully but covers less ground than the
+// detector walks is the original defect with a different store. The 08-04 fix guards failure and
+// emptiness; it does not guard a SHORT window, and nothing about a short window looks wrong.
+await scenario('G18b · server window shorter than the lookback must abandon the sweep', manila(2026,7,24,8,0), async (page) => {
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; leaveRequests = []; records = {}; });
+  // He punched 20 days back. The chain walks 21 days, so that punch is what ends it — but the
+  // server is only serving 5 days, so from the client's side he looks absent throughout.
+  mock.punchDaysExtra = { RSR0100: ['2026-07-04', '2026-07-23'] };
+  mock.punchDaysWindow = 5;
+  const r = await page.evaluate(async () => {
+    const why = await awolLoadPunchHistory();
+    return { why, map: awolPunched ? Object.keys(awolPunched).length : 0,
+             chain: collectAbsentDates('RSR0100').length };
+  });
+  // A short window must be refused the same way an outage is: a reason back, no map, nothing judged.
+  report('G18b · a short server window is refused, not silently judged on',
+    typeof r.why === 'string' && r.why.length > 0 && r.map === 0 && r.chain === 0,
+    `reason=${JSON.stringify(r.why)} mapCodes=${r.map} chain=${r.chain}`);
+});
+
+// G18c — §4.3. The never-punched guard must be a SECOND OPINION. Sharing the detector's map means
+// it cannot contradict it: whatever truncated or corrupted the detector's view is already inside
+// the guard. Here the detector's map is deliberately wiped after loading while the server can
+// still answer — a guard that queries on its own says "he has history", a shared one says nothing.
+await scenario('G18c · the never-punched guard queries independently of the detector map', manila(2026,7,24,8,0), async (page) => {
+  await page.evaluate(() => { records = {}; });
+  mock.punchDaysExtra = { RSR0100: ['2026-07-14', '2026-07-22'] };
+  const r = await page.evaluate(async () => {
+    await awolLoadPunchHistory();
+    awolPunched = null;                       // the detector's view is gone; the SERVER still knows
+    return { hist: await hasRecentPunchHistory('RSR0100') };
+  });
+  report('G18c · hasRecentPunchHistory answers from its own read, not the detector\'s map',
+    r.hist === true,
+    `hasRecentPunchHistory=${r.hist} (shared-map implementation returns false here)`);
 });
 
 // ==============================================================================

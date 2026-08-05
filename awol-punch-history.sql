@@ -70,8 +70,22 @@ select coalesce(btrim(timein),'(null/empty)') as timein_value, count(*) as rows
 --     sweep runs. 31 days would absorb the slip, but a detector must not depend on slack.
 --  6. Default 31 days = the 21-day chain lookback plus the 30-day never-punched safety net,
 --     one fetch serving both (30 days back inclusive of today = 31 dates).
+-- (AMENDED 2026-08-05, spec 2026-08-05-awol-detection-data-source §4.2.) The function now also
+-- returns `window_from` — the first date it actually covered.
+--
+-- WHY THE CLIENT NEEDS TO BE TOLD: the 08-04 fix made an unreadable server fail open, but a server
+-- that answers cheerfully with a SHORTER window than the detector walks is the ORIGINAL defect with
+-- a different store — a lookback longer than the thing it reads, where the missing days are
+-- indistinguishable from absence. The client cannot detect that from the rows alone: a worker with
+-- no days returned looks identical whether he was absent or simply outside the window. So the
+-- window has to come back with the answer, and the client refuses to judge when it is too narrow.
+--
+-- DROP FIRST: `create or replace` cannot change a function's return type. This is safe here because
+-- this migration has never been run — if it HAS been run in some environment, the drop+create is
+-- still fine (nothing holds a dependency on it but the kiosk, which calls it by name at runtime).
+drop function if exists public.awol_punch_days(int);
 create or replace function public.awol_punch_days(p_days int default 31)
-returns table (code text, days jsonb)
+returns table (code text, days jsonb, window_from date)
 language sql stable security definer set search_path = public as $$
   with win as (
     select ((now() at time zone 'Asia/Manila')::date
@@ -92,7 +106,8 @@ language sql stable security definer set search_path = public as $$
            (select jsonb_agg(distinct to_char(p.d, 'YYYY-MM-DD'))
               from punched p
              where p.code_norm = e.code_norm),
-           '[]'::jsonb)
+           '[]'::jsonb),
+         (select from_date from win)
     from public.employees e
    where e.separated_at is null
    order by e.code;
