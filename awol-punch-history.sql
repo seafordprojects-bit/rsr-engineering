@@ -4,6 +4,14 @@
 --  Read-only, additive, idempotent. Creates ONE function. Touches no data, no table, no grant
 --  that anything else depends on.
 --
+--  ▓▓▓ NOTHING IN THIS FILE WRITES TO attendance_records. NOT EVEN TO TEST. ▓▓▓
+--  Not an insert, not inside a transaction, not "rolled back afterwards". That table is the input
+--  this detector judges men on, so a fabricated row in it — however briefly — is a fabricated
+--  absence in front of the thing deciding who gets a letter. STEP 2d used to probe by inserting
+--  and rolling back; it now proves the same two properties against literals. If you are editing
+--  this file and reach for an insert to test something, that is the signal to test it another way.
+--  Grep-checkable: this file contains no `insert into`, `update`, `delete from`, or `begin;`.
+--
 --  IN ONE LINE: the kiosk decides "did he punch that day?" from its own localStorage `records`
 --  map, which is pruned to 10 days, while the absence chain looks back 21 and the safety net 30.
 --  Past the horizon `records[key]` is undefined, and MISSING DATA READS AS ABSENCE. That is how
@@ -147,33 +155,65 @@ select (select count(*) from public.attendance_records
 -- EXPECT: days_returned >= rows_spaced + rows_unspaced restricted to the 31-day window.
 -- The point of the check is that days_returned is NOT zero when either spelling has rows.
 
--- 2d. Markers can never read as a punch. Probe rows, then rolled back — nothing is kept.
-begin;
-  insert into public.attendance_records (employee_code, date, timein, site)
-  values ('ZZ PUNCHPROBE', to_char((now() at time zone 'Asia/Manila')::date - 2, 'MM/DD/YYYY'),
-          '(missing)', 'Carmen'),
-         ('ZZ PUNCHPROBE', to_char((now() at time zone 'Asia/Manila')::date - 3, 'YYYY-MM-DD'),
-          '(auto-skipped)', 'Carmen'),
-         ('ZZ PUNCHPROBE', to_char((now() at time zone 'Asia/Manila')::date - 4, 'MM/DD/YYYY'),
-          '08:15 AM', 'Carmen');
-  -- ZZ PUNCHPROBE is not on the roster, so it will not appear in awol_punch_days()'s output.
-  -- Test the predicate directly instead, over the probe rows only.
-  select a.date, a.timein,
-         (a.timein is not null and btrim(a.timein) <> ''
-          and btrim(a.timein) not in ('(auto-skipped)','(auto-deducted)','(missing)','(skipped)'))
-           as counts_as_punch,
-         public.leave_try_date(a.date) as parses_to
-    from public.attendance_records a
-   where a.employee_code = 'ZZ PUNCHPROBE'
-   order by a.date;
-  -- EXPECT: '(missing)' false · '(auto-skipped)' false · '08:15 AM' TRUE
-  -- EXPECT parses_to non-null on ALL THREE — including the ISO-spelled row. A null there means
-  -- the mixed-format normaliser is not doing its job and real punches would vanish.
-rollback;
+-- 2d. Markers can never read as a punch, and both date spellings parse.
+--
+-- ▓▓▓ REWRITTEN 2026-08-05. THE PREVIOUS VERSION OF THIS STEP INSERTED INTO attendance_records. ▓▓▓
+-- It wrote three 'ZZ PUNCHPROBE' rows inside begin/rollback. Two things were wrong with it, and the
+-- second is the serious one:
+--
+--   1. It failed outright: attendance_records.employee_name is NOT NULL and the insert omitted it.
+--      Nothing was applied. (Take the general lesson — this table has NOT NULL columns beyond the
+--      obvious ones, which is one more reason a VERIFICATION step has no business writing to it.)
+--
+--   2. Far worse, it wrote a fabricated absent row into attendance_records — THE TABLE THIS VERY
+--      FUNCTION READS TO DECIDE WHO IS AWOL — on a date already disputed in RSR 0015's case. The
+--      rollback was supposed to make that safe. It is not good enough here:
+--        · this file's own convention is that multi-statement blocks get run one statement at a
+--          time; a begin/rollback split that way leaves the rows sitting in an open transaction,
+--        · the Supabase editor's transaction handling across separate runs is not something a
+--          verification step should be betting the detector's input table on,
+--        · and any trigger on attendance_records fires on the insert regardless of the rollback.
+--      A probe that could, in any circumstance, put a fake absence in front of the AWOL detector is
+--      not an acceptable way to test the AWOL detector.
+--
+-- WHAT IT TESTS NOW: exactly the same two things, with NO write, NO transaction, and no dependence
+-- on a rollback holding. Both are pure functions of the values, so literals prove them just as well
+-- — and this version is strictly stronger: it covers all FOUR marker literals (the old one tested
+-- two), empty and null, the unpadded slash spelling, and both spellings for the parse.
+--
+-- KEEP IN STEP WITH THE FUNCTION: the exclusion list below is a copy of the one in STEP 1. If one
+-- changes, change the other in the same commit.
+select v.spelling, coalesce(v.timein, '(null)') as timein_value,
+       (v.timein is not null and btrim(v.timein) <> ''
+        and btrim(v.timein) not in ('(auto-skipped)','(auto-deducted)','(missing)','(skipped)'))
+         as counts_as_punch,
+       public.leave_try_date(v.spelling) as parses_to
+  from (values
+    ('08/03/2026', '(missing)'),
+    ('2026-08-03', '(auto-skipped)'),
+    ('08/02/2026', '(auto-deducted)'),
+    ('2026-08-02', '(skipped)'),
+    ('08/01/2026', ''),
+    ('08/01/2026', null),
+    ('08/01/2026', '08:15 AM'),
+    ('2026-08-01', '08:15 AM'),
+    ('8/1/2026',   '08:15 AM')
+  ) as v(spelling, timein);
+-- EXPECT counts_as_punch = false on the first SIX rows (four markers, empty, null)
+-- EXPECT counts_as_punch = TRUE on the last THREE (a real clock time, in all three spellings)
+-- EXPECT parses_to NON-NULL on EVERY row, including the ISO-spelled and unpadded ones. A null
+-- there means the mixed-format normaliser is not doing its job and real punches would vanish —
+-- which is the whole defect this migration exists to fix.
 
-select count(*) as probe_must_be_0 from public.attendance_records
- where employee_code = 'ZZ PUNCHPROBE';
--- EXPECT: 0   (the rollback held; nothing was written to a live pay table)
+-- Guard, not cleanup: nothing in this file writes to attendance_records any more, so this must
+-- already be 0. It is here because an EARLIER version of STEP 2d did attempt an insert, and a
+-- stray probe row would sit in the detector's input as a fabricated absence. Matched on the
+-- normalised code so a spacing variant cannot hide.
+select count(*) as stray_probe_rows_must_be_0
+  from public.attendance_records
+ where upper(regexp_replace(employee_code, '[^A-Za-z0-9]', '', 'g')) like 'ZZ%';
+-- EXPECT: 0. If it is NOT 0, do not proceed — read the rows and remove them deliberately before
+-- running detection again, or the next sweep judges a man against a probe.
 
 -- 2e. The window really is a window. Nothing older than p_days may come back.
 select code, d as oldest_day_returned,

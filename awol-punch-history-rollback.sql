@@ -93,6 +93,22 @@ select p.oid::regprocedure as still_here
 select (select count(*) from public.attendance_records) as attendance_rows_unchanged,
        (select count(*) from public.employees)          as employee_rows_unchanged,
        (select count(*) from public.awol_skip_list())   as skip_list_still_works;
+
+-- 3c. Same guard as the migration's STEP 2d, and here for the same reason (2026-08-05).
+--     An earlier version of that step probed by INSERTING 'ZZ PUNCHPROBE' rows into
+--     attendance_records inside begin/rollback. It failed on a NOT NULL column so nothing landed —
+--     but a rollback is the moment to confirm that, not assume it. A stray probe row left in
+--     attendance_records is a FABRICATED ABSENCE sitting in the detector's input, and it would be
+--     read as fact by the next sweep on a date that is already disputed.
+--     Matched on the normalised code so a spacing variant cannot hide.
+select count(*) as stray_probe_rows_must_be_0
+  from public.attendance_records
+ where upper(regexp_replace(employee_code, '[^A-Za-z0-9]', '', 'g')) like 'ZZ%';
+-- EXPECT: 0. Anything else: read the rows and remove them deliberately. Do not leave them for the
+-- next sweep to find.
+--
+-- ▓▓▓ THIS FILE ALSO NEVER WRITES TO attendance_records. ▓▓▓ It drops one function and reads.
+-- Same rule as the migration: not even to test, not even inside a transaction.
 -- EXPECT: ~1039 · 41-ish · 41
 -- If skip_list_still_works ERRORS, something beyond this rollback has gone wrong — awol_skip_list
 -- is a separate object and nothing in this file goes near it.
