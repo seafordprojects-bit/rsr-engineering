@@ -41,16 +41,22 @@ const DAY = 86400000;
 // ── Roster returned by the mocked /rest/v1/employees (snake_case, as the real
 //    loadEmployeesFromSupabase reads: se.pin, se.home_site, se.daily_rate…) ────
 const ROSTER = [
-  { code: 'RSR0001', pin: '000123', name: 'Leading-Zero Larry',  dept: 'Welding',    home_site: 'Carmen',  shift: 8, daily_rate: 600 },
-  { code: 'RSR0002', pin: '007007', name: 'Double-Zero Zeny',    dept: 'Fitting',    home_site: 'Mandaue', shift: 8, daily_rate: 520 },
-  { code: 'RSR0100', pin: '100200', name: 'Regular Rey',         dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 500 },
-  { code: 'RSR0207', pin: '246810', name: 'Midday Manny',        dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 540 },
-  { code: 'PEM9001', pin: '900001', name: 'PEM Niner Pedro',     dept: 'Electrical', home_site: 'Mandaue', shift: 8, daily_rate: 700 },
-  { code: 'PEM9042', pin: '987654', name: 'PEM Band Bella',      dept: 'Instrument', home_site: 'Carmen',  shift: 8, daily_rate: 680 },
-  { code: 'RSR0303', pin: '333333', name: 'Night-Owl Nardo',     dept: 'Blasting',   home_site: 'Mandaue', shift: 8, daily_rate: 560 },
+  // employment_type models a FULLY SYNCED tablet, which is the correct default for a fixture.
+  // The kiosk gates AWOL on it twice — awolExemptState(emp) must read 'regular' before a worker is
+  // judged at all — so a roster without it puts every worker in the "employment type has not synced"
+  // bucket and no detection scenario can reach the code it means to test. That is a second, LOCAL
+  // exemption layer sitting behind the server's skip list, and §6.5 asks for both to be proven.
+  // A scenario wanting the unsynced case sets it explicitly (see mock.nonPunching / G16 fixtures).
+  { code: 'RSR0001', pin: '000123', name: 'Leading-Zero Larry',  dept: 'Welding',    home_site: 'Carmen',  shift: 8, daily_rate: 600, employment_type: 'regular' },
+  { code: 'RSR0002', pin: '007007', name: 'Double-Zero Zeny',    dept: 'Fitting',    home_site: 'Mandaue', shift: 8, daily_rate: 520, employment_type: 'regular' },
+  { code: 'RSR0100', pin: '100200', name: 'Regular Rey',         dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 500, employment_type: 'regular' },
+  { code: 'RSR0207', pin: '246810', name: 'Midday Manny',        dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 540, employment_type: 'regular' },
+  { code: 'PEM9001', pin: '900001', name: 'PEM Niner Pedro',     dept: 'Electrical', home_site: 'Mandaue', shift: 8, daily_rate: 700, employment_type: 'pakyaw' },
+  { code: 'PEM9042', pin: '987654', name: 'PEM Band Bella',      dept: 'Instrument', home_site: 'Carmen',  shift: 8, daily_rate: 680, employment_type: 'pakyaw' },
+  { code: 'RSR0303', pin: '333333', name: 'Night-Owl Nardo',     dept: 'Blasting',   home_site: 'Mandaue', shift: 8, daily_rate: 560, employment_type: 'regular' },
   // G15 fixtures (never-punched/30-day safety net + inactive skip):
-  { code: 'RSR0404', pin: '404040', name: 'Old-Punch Ofelia',    dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 510 },
-  { code: 'RSR0500', pin: '500500', name: 'Inactive Ising',      dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 510, is_active: false },
+  { code: 'RSR0404', pin: '404040', name: 'Old-Punch Ofelia',    dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 510, employment_type: 'regular' },
+  { code: 'RSR0500', pin: '500500', name: 'Inactive Ising',      dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 510, is_active: false, employment_type: 'regular' },
 ];
 const pinOf = (code) => ROSTER.find(r => r.code === code).pin;
 
@@ -84,6 +90,19 @@ const mock = {
   // exactly (lookback longer than the store), just moved server-side. When set to N, the mock
   // serves only the last N days and reports the window it used, the way the real function does.
   punchDaysWindow: null,
+  // ── awol_skip_list: the sweep's FIRST gate (mocked 2026-08-06) ──
+  // Until now this RPC was unmocked, so it read empty, and checkAllAbsences fails open on an empty
+  // skip list — every AWOL scenario bailed before reaching the code it meant to test. That is the
+  // single cause of the long-standing 19-failure baseline, and it made two of the spec's own
+  // verification items (a genuine absence is still detected; PEM is exempt at BOTH layers)
+  // impossible to assert end-to-end.
+  //
+  // Defaults model a WORKING yard — every site has a kiosk — so the site gate skips nobody and
+  // scenarios exercise detection itself. The knobs below turn each exemption on deliberately.
+  skipListFail: false,   // RPC 500s → sweep must abandon detection (fail open)
+  skipListEmpty: false,  // returns [] → ALSO an outage; empty is never "nobody is exempt"
+  siteHasKiosk: { Carmen: true, Mandaue: true },
+  nonPunching: new Set(),
 };
 const resetCapture = () => { mock.writes = []; mock.telegram = []; };
 
@@ -193,6 +212,39 @@ async function newKioskContext(browser, base, initMs) {
           if (code && mock.suspensions[code] && body) Object.assign(mock.suspensions[code], body);
           return json(200, code && mock.suspensions[code] ? [mock.suspensions[code]] : []);
         }
+      }
+      // AWOL: the exemption list — the sweep's FIRST gate, and the only authority that can stop it
+      // before punch history is even fetched.
+      //
+      // MIRRORS THE REAL PREDICATE, awol-detector-*.sql:
+      //   awol_skip_detection(code) = awol_is_exempt(code)          -- pakyaw OR non-punching
+      //                               OR NOT site_has_kiosk(awol_effective_site(code))
+      //   awol_skip_reason(code)    = pakyaw | non-punching | no site known
+      //                               | site not configured: X | no kiosk at X | null
+      // Returns EVERY roster worker with skip true/false, exactly as the real one does, so that an
+      // empty ROW SET is unambiguously an outage rather than "nobody is exempt".
+      //
+      // ONE DELIBERATE SIMPLIFICATION, stated so no scenario leans on it by accident: the real
+      // awol_effective_site() resolves a worker's site from his most recent punch ACROSS ALL SITES,
+      // falling back to home_site. This mock uses home_site alone. That is right for a fixture —
+      // every scenario here punches at one site — but it means the SITE GATE itself is not modelled
+      // faithfully, and a scenario testing cross-site behaviour must not rely on this mock to prove
+      // it. The exemptions that ARE modelled faithfully are pakyaw and non-punching.
+      if (p.endsWith('/rest/v1/rpc/awol_skip_list')) {
+        if (mock.skipListFail)
+          return json(500, { code: '500', message: 'injected failure (mock.skipListFail)', details: '', hint: '' });
+        if (mock.skipListEmpty) return json(200, []);
+        const rows = ROSTER.map(r => {
+          const norm = String(r.code || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+          if (/^PEM/.test(norm))            return { code: r.code, skip: true,  reason: 'pakyaw' };
+          if (mock.nonPunching.has(r.code)) return { code: r.code, skip: true,  reason: 'non-punching' };
+          const site = r.home_site || null;
+          if (!site)                        return { code: r.code, skip: true,  reason: 'no site known' };
+          if (!(site in mock.siteHasKiosk)) return { code: r.code, skip: true,  reason: 'site not configured: ' + site };
+          if (!mock.siteHasKiosk[site])     return { code: r.code, skip: true,  reason: 'no kiosk at ' + site };
+          return { code: r.code, skip: false, reason: null };
+        });
+        return json(200, rows);
       }
       // AWOL: authoritative punch history (Defect 1, spec 2026-08-04 §3).
       // The kiosk no longer asks its own `records` map "did he punch that day?" — it asks the
@@ -468,6 +520,9 @@ async function scenario(name, initMs, fn) {
   mock.punchDaysFail = false; mock.punchDaysEmpty = false; mock.punchDaysExtra = {};
   mock.punchDaysWindow = null;   // MUST be reset: a leaked short window silently starves every
                                  // later scenario's history read and reads as a code failure
+  mock.skipListFail = false; mock.skipListEmpty = false;
+  mock.siteHasKiosk = { Carmen: true, Mandaue: true };
+  mock.nonPunching = new Set();
   const context = await newKioskContext(browser, base, initMs);
   const page = await context.newPage();
   currentPage = page; // active page for the single-arg enterPin(code)/bisayaState() helpers
@@ -1773,7 +1828,8 @@ await scenario('G17a · a punch the tablet pruned but the SERVER still holds bre
   // Before this fix the same setup produced a 10-day run and a suspension off an empty local map.
   report('G17a · server-side punch stops the chain the tablet could not see',
     chain.length === 1 && chain[0] === '07/23/2026' && !sus && !alerted,
-    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`
+    + (alerted ? ` matched=${JSON.stringify(mock.telegram.filter(m => /RSR0100/.test(m.text)).map(m => m.text.slice(0, 120)))}` : ''));
 });
 
 await scenario('G17b · a real absence run is still visible in server history', manila(2026,7,24,8,0), async (page) => {
@@ -1926,10 +1982,13 @@ await scenario('G18c · the never-punched guard queries independently of the det
 // fine. sendAwolDetectionSkipped() always named it correctly on Telegram; the tablet's own card,
 // which is the surface §4.2 requires, was the one lying.
 await scenario('G18d · the skip notice names the authority that actually failed', manila(2026,7,24,8,0), async (page) => {
+  // The skip list is mocked and healthy by default now, so the failure is INJECTED rather than
+  // relied upon. That is the better test anyway: it proves the exemption-list branch specifically,
+  // instead of passing because the gate happened to be broken for everyone.
+  mock.skipListFail = true;
   const r = await page.evaluate(async () => {
     const read = () => (document.getElementById('awol-skip-msg') || {}).textContent || '';
-    // (a) END TO END on the one path this harness can reach. awol_skip_list is unmocked, so the
-    //     sweep always fails open at its FIRST gate — which makes this the real wiring, not a stub.
+    // (a) END TO END on the exemption-list path, with the RPC forced to 500.
     await checkAllAbsences();
     const viaSweep = { shown: (document.getElementById('awol-skip-card') || {}).style.display !== 'none',
                        text: read() };
@@ -1950,6 +2009,40 @@ await scenario('G18d · the skip notice names the authority that actually failed
     pastTense && namesPunch && !blamesWrongThing && carriesReason && r.viaSweep.shown && sweepNamesSkipList,
     `pastTense=${pastTense} namesPunchHistory=${namesPunch} stillBlamesSkipList=${blamesWrongThing} `
     + `carriesReason=${carriesReason} sweepCardShown=${r.viaSweep.shown} sweepNamesSkipList=${sweepNamesSkipList}`);
+});
+
+// G18e — §6.4: A GENUINE ABSENCE RUN IS STILL DETECTED. THE ONLY POSITIVE TEST IN THE SUITE.
+//
+// Every other AWOL scenario asserts the SAFE direction — not suspended, not alerted, not barred.
+// That is right, and it is also why a fix that simply switched detection off would have passed the
+// entire suite. Nothing anywhere proved the detector still fires. This does.
+//
+// Runnable only now that awol_skip_list is mocked: the sweep used to abandon at its first gate, so
+// it never reached awol_set_suspended and a suspension could not be observed end to end.
+await scenario('G18e · a real 3-day absence run is still detected and a case opened', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007778889990';
+  await page.evaluate(() => loadTgFromCloud());
+  // 07/20 is his last punch. 07/21, 07/22, 07/23 are absent working days — a genuine run of three,
+  // which is the threshold (dates.length < 3 continues). 07/19 is a Sunday and transparent either
+  // way. He has recent history, so the never-punched net does not shield him.
+  mock.punchDaysExtra = { RSR0100: ['2026-07-14', '2026-07-17', '2026-07-20'] };
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; leaveRequests = []; records = {}; });
+  const chain = await chainOf(page, 'RSR0100');
+  await page.evaluate(() => checkAllAbsences());
+  const c = mock.suspensions['RSR0100'];
+  const opened = !!(c && c.active);
+  const reasonOk = !!(c && /Absent 3 consecutive days without approved leave/.test(c.reason || ''));
+  const datesOk = !!(c && Array.isArray(c.absent_dates) && c.absent_dates.length === 3
+    && c.absent_dates.includes('2026-07-23') && c.absent_dates.includes('2026-07-21'));
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  // A case is OPENED. He is NOT barred — Defect C: the sweep never writes the punch gate, so he
+  // can still clock in tomorrow. Both halves matter; proving only the first would be proving the
+  // thing that hurt people.
+  const barred = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  report('G18e · genuine 3-day run → case opened, alert sent, worker NOT barred from punching',
+    chain.length === 3 && opened && reasonOk && datesOk && alerted && !barred,
+    `chain=${chain.length} opened=${opened} reason="${(c && c.reason) || ''}" `
+    + `dates=${JSON.stringify((c && c.absent_dates) || [])} alerted=${alerted} barredLocally=${barred}`);
 });
 
 // ==============================================================================
