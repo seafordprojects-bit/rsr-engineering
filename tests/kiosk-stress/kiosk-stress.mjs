@@ -441,6 +441,30 @@ async function bisayaState() {
     text: (document.getElementById('bisaya-text') || {}).textContent || '',
   }));
 }
+// The BARRED refusal is deliberately asynchronous: kiosk/index.html:2117 re-reads suspensions from
+// the server BEFORE refusing, so that a man reinstated seconds ago is not turned away on his first
+// attempt ("a reinstate that fails the first time is not a reinstate"). The modal therefore appears
+// a tick or two after the PIN is keyed, and reading bisayaState() straight after enterPin() catches
+// the state before the refusal has rendered. Wait for it, with a bounded timeout so a genuine
+// no-modal case still fails rather than hanging.
+async function bisayaStateSettled(expectShown = true, ms = 2000) {
+  try {
+    await currentPage.waitForFunction(
+      (want) => document.getElementById('bisaya-modal').classList.contains('show') === want,
+      expectShown, { timeout: ms });
+  } catch { /* fall through — report the state as it actually is */ }
+  return await bisayaState();
+}
+// retryAwolUnsynced(skipList) TAKES THE SKIP LIST (owner 2026-07-30) so a queued case is not
+// re-pushed for a worker who has since become exempt. Called bare, skipList is undefined, every
+// queued case falls into the "not in skip list" branch and is DROPPED rather than retried — which
+// is why G6/G7 reported syncedActive=false even with connectivity restored. Fetch it the way
+// checkAllAbsences does. Only possible now that awol_skip_list is mocked.
+const retryWithSkipList = (page) => page.evaluate(async () => {
+  const { data } = await sbClient.rpc('awol_skip_list');
+  const s = {}; (data || []).forEach(r => { s[normCode(r.code)] = { skip: r.skip === true, reason: r.reason || null }; });
+  await retryAwolUnsynced(s);
+});
 const doPunch = (page, type) => page.evaluate(async (t) => { await punch(t); }, type);
 const recAt = (page, code, dateKey) => page.evaluate(([c, k]) => {
   const r = records[c + '_' + k];
@@ -1099,9 +1123,27 @@ await scenario('G0 · AWOL group id loads from settings', manila(2026,7,24,8,0),
   report('G0 · tg_awol_group loaded', g === '-1001112223334', `tgAwolGroup=${g}`);
 });
 
-await scenario('G-load · poll surfaces a shared suspension', manila(2026,7,24,8,0), async (page) => {
+// ── FIXTURES UPDATED 2026-08-06 FOR DEFECT C ────────────────────────────────────────────────
+// Before 2026-08-04 an active suspension row WAS the punch gate, so these scenarios seeded
+// {active:true} and expected the worker blocked. That is no longer what an active row means.
+// The sweep now OPENS A CASE AND STOPS — it never writes suspendedEmployees, because that map is
+// the punch gate and a machine must not be able to reach it. Two maps come off one fetch
+// (kiosk/index.html:2855): rows with barred_at SET drive the gate; active rows with barred_at NULL
+// are open cases and gate NOTHING.
+//
+// So every fixture below that means "this man has been BARRED" now says barred_at, which is set
+// only by awol_set_barred() behind the admin passcode. The tests' intent is unchanged — a barred
+// worker is stopped at PIN entry — and they now assert it against the real contract instead of a
+// coincidence of the old design.
+//
+// DELIBERATELY NOT ADDED to the rows the mocked awol_set_suspended RPC writes (see its handler):
+// those are what the SWEEP creates, and the sweep must never produce a barred row. If barred_at
+// ever appears there, that is the defect these tests exist to catch.
+const BARRED_AT = '2026-07-24T00:10:00Z';   // "a human barred him", in the scenarios' frozen clock
+
+await scenario('G-load · poll surfaces a shared BARRED suspension', manila(2026,7,24,8,0), async (page) => {
   mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'x', suspended_on:'07/24/2026',
-    absent_dates:['2026-07-21','2026-07-22','2026-07-23'] };
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   const has = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
   report('G-load · shared suspension cached', has, `cached=${has}`);
@@ -1113,10 +1155,10 @@ await scenario('G-load · poll surfaces a shared suspension', manila(2026,7,24,8
 await scenario('G1 · suspended PIN → blocking modal, no punch', manila(2026,7,24,8,0), async (page) => {
   const k = await dateKeyFor(page);
   mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL',
-    suspended_on:'07/24/2026', absent_dates:['2026-07-21','2026-07-22','2026-07-23'] };
+    suspended_on:'07/24/2026', absent_dates:['2026-07-21','2026-07-22','2026-07-23'], barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   await enterPin('RSR0100');
-  const b = await bisayaState();
+  const b = await bisayaStateSettled(true);
   const r = await recAt(page, 'RSR0100', k);
   const pass = b.show && /GI-SUSPEND/.test(b.text) && (!r || !r.punches.timein);
   report('G1 · suspended PIN blocking modal', pass,
@@ -1151,9 +1193,23 @@ await scenario('G3 · pending leave → HOLD, flag once', manila(2026,7,24,8,0),
     leaveRequests = [{ code:'RSR0100', status:'Pending', startDate:'2026-07-21', endDate:'2026-07-24' }]; });
   await page.evaluate(() => checkAllAbsences());
   await page.evaluate(() => checkAllAbsences()); // second run must NOT re-flag
+  // REWRITTEN 2026-08-06. This asserted the "⏸ Pending leave — please decide" HOLD note, which was
+  // the behaviour BEFORE Defect E. LEAVE_SUPPRESSES now includes 'Pending' (kiosk:1392 — "Filed and
+  // awaiting the owner. Suppresses while it waits"), so a pending leave explains the days outright:
+  // the chain breaks at the first covered day, no case is opened, and the HOLD note never arises.
+  //
+  // >>> CONSEQUENCE WORTH THE OWNER'S ATTENTION: that makes the HOLD-note branch UNREACHABLE. <<<
+  // It fires only when a chain of 3+ EXISTS and a pending leave overlaps one of those chain days —
+  // but any pending leave overlapping a chain day breaks the chain at that day, so the two
+  // conditions cannot both hold. sendAwolPendingFlag() is dead code under Defect E. Left in the
+  // kiosk untouched: removing an abandoned disciplinary workflow is the owner's call, not a test's.
   const flags = mock.telegram.filter(m => /Pending leave — please decide/.test(m.text));
   const notSuspended = !(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
-  report('G3 · hold + one-time flag', flags.length === 1 && notSuspended, `flags=${flags.length} suspended=${!notSuspended}`);
+  const d = await page.evaluate(() => ({ chain: collectAbsentDates('RSR0100').length,
+    onLeave: onLeaveToday('RSR0100') }));
+  report('G3 · a PENDING leave suppresses the absence entirely (Defect E) — no case, no HOLD note',
+    d.onLeave === true && d.chain === 0 && flags.length === 0 && notSuspended,
+    `onLeaveToday=${d.onLeave} chain=${d.chain} holdNotes=${flags.length} suspended=${!notSuspended}`);
 });
 
 // (2026-07-26) reinstateEmployee is now the leave-approval auto-cancel ONLY (dashboard owns every
@@ -1162,7 +1218,7 @@ await scenario('G4 · leave-approval cancel → closing msg + CANCELLED edit, on
   mock.tgConfigured = true; mock.awolGroupId = '-1005554443332';
   await page.evaluate(() => loadTgFromCloud());
   mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
-    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'1234', awol_group_chat:'-1005554443332' };
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'1234', awol_group_chat:'-1005554443332', barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator Bob'));
   await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator Bob')); // second → {newly:false}, no dup
@@ -1202,41 +1258,56 @@ await scenario('G5 · cross-device block + clear', manila(2026,7,24,8,0), async 
   await pageB.goto(kioskURL, { waitUntil: 'domcontentloaded' });
   await pageB.waitForFunction(() => typeof loadSuspensionsFromCloud === 'function' && typeof punch === 'function', null, { timeout: 8000 });
   await pageB.evaluate(() => loadSuspensionsFromCloud());
-  const blockedOnB = await pageB.evaluate(() => !!suspendedEmployees['RSR0100']);
+  // DEFECT C (2026-08-04): a SWEEP-created case has barred_at NULL, so what reaches kiosk B is an
+  // OPEN CASE — the informational notice — and NOT a block. This used to assert B_blocked, which is
+  // exactly the behaviour that let a machine bar a man across every tablet in the yard. Assert both
+  // halves now: the case DOES travel, and it does NOT bar.
+  const caseOnB = await pageB.evaluate(() => !!openCases['RSR0100']);
+  const notBarredOnB = await pageB.evaluate(() => !suspendedEmployees['RSR0100']);
 
   // Reinstate from A → B's next poll clears it.
   await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator'));
   await pageB.evaluate(() => loadSuspensionsFromCloud());
-  const clearedOnB = await pageB.evaluate(() => !suspendedEmployees['RSR0100']);
+  const clearedOnB = await pageB.evaluate(() => !suspendedEmployees['RSR0100'] && !openCases['RSR0100']);
   await ctxB.close();
 
-  report('G5 · cross-device block then clear', inDb && blockedOnB && clearedOnB,
-    `A_suspended=${inDb} B_blocked=${blockedOnB} B_cleared=${clearedOnB}`);
+  report('G5 · sweep case travels cross-device as a NOTICE, never a block, and clears',
+    inDb && caseOnB && notBarredOnB && clearedOnB,
+    `A_caseInDb=${inDb} B_hasOpenCase=${caseOnB} B_notBarred=${notBarredOnB} B_cleared=${clearedOnB}`);
 });
 
-// G6 — FIX 1 lock: an offline suspend (RPC throws) must still block LOCALLY, survive a
-// loadSuspensionsFromCloud() poll (must NOT be wiped by the DB's empty active-rows set),
-// and sync + alert once connectivity returns via retryAwolUnsynced().
-await scenario('G6 · offline suspend survives poll + syncs on retry', manila(2026,7,24,8,0), async (page) => {
+// G6 — REWRITTEN 2026-08-06 FOR DEFECT C. Its original premise was "an offline suspend must still
+// block LOCALLY", which is the precise behaviour that was removed: a failed RPC used to bar a man
+// locally with barred_at NULL everywhere and no human at either end (kiosk/index.html:2858 — "the
+// awolUnsynced merge is GONE"). The sweep's own catch says it: "Queue the CASE for retry. NEVER
+// bar." So the assertion is inverted, and the valuable half is kept and strengthened: the case is
+// QUEUED, it does not reach the DB while offline, a poll does not invent a block, and on reconnect
+// it syncs and alerts.
+await scenario('G6 · offline case is queued, never bars, and syncs on retry', manila(2026,7,24,8,0), async (page) => {
   mock.tgConfigured = true; mock.awolGroupId = '-1002223334445'; mock.rpcSuspendFail = true;
   await page.evaluate(() => loadTgFromCloud());
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {};
     records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // recent-enough history (see G2)
   await page.evaluate(() => checkAllAbsences());
-  const blockedOffline = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  const notBarredOffline = await page.evaluate(() => !suspendedEmployees['RSR0100']);
+  const queued = await page.evaluate(() => !!awolUnsynced['RSR0100']);
   const notInDbYet = mock.suspensions['RSR0100'] === undefined;
 
   await page.evaluate(() => loadSuspensionsFromCloud());
-  const stillBlockedAfterPoll = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  const stillNotBarredAfterPoll = await page.evaluate(() => !suspendedEmployees['RSR0100']);
 
   mock.rpcSuspendFail = false;
-  await page.evaluate(() => retryAwolUnsynced());
+  await retryWithSkipList(page);
   const syncedActive = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
   const alerted = mock.telegram.some(m => m.method === 'sendMessage' && /AWOL — Account Suspended/.test(m.text) && /RSR0100/.test(m.text));
+  // And what synced must STILL be an open case, not a bar — the retry path must not do what the
+  // sweep is forbidden from doing.
+  const syncedUnbarred = !!(mock.suspensions['RSR0100'] && !mock.suspensions['RSR0100'].barred_at);
 
-  report('G6 · offline suspend survives poll, syncs+alerts on retry',
-    blockedOffline && notInDbYet && stillBlockedAfterPoll && syncedActive && alerted,
-    `blockedOffline=${blockedOffline} notInDbYet=${notInDbYet} stillBlockedAfterPoll=${stillBlockedAfterPoll} syncedActive=${!!syncedActive} alerted=${alerted}`);
+  report('G6 · offline case queued not barred, survives poll, syncs+alerts unbarred on retry',
+    notBarredOffline && queued && notInDbYet && stillNotBarredAfterPoll && syncedActive && alerted && syncedUnbarred,
+    `notBarredOffline=${notBarredOffline} queued=${queued} notInDbYet=${notInDbYet} `
+    + `stillNotBarredAfterPoll=${stillNotBarredAfterPoll} syncedActive=${!!syncedActive} alerted=${alerted} syncedUnbarred=${syncedUnbarred}`);
 });
 
 // G7 — resurrection-bug lock: an offline suspend (never reached the DB, only tracked in
@@ -1250,10 +1321,12 @@ await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurre
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {};
     records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // recent-enough history (see G2)
 
-  // Offline suspend: RPC fails → local block only, never reaches the DB.
+  // Offline: the RPC fails, so the CASE is queued and never reaches the DB. It does NOT bar —
+  // see G6's note; the original "local block only" is the Defect C behaviour that was removed.
   mock.rpcSuspendFail = true;
   await page.evaluate(() => checkAllAbsences());
-  const blockedOffline = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  const notBarredOffline = await page.evaluate(() => !suspendedEmployees['RSR0100']);
+  const queuedOffline = await page.evaluate(() => !!awolUnsynced['RSR0100']);
   const notInDbYet = mock.suspensions['RSR0100'] === undefined;
 
   // Admin reinstates while still offline (awol_cancel_leave_approved finds no active DB row → {newly:false}).
@@ -1263,7 +1336,8 @@ await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurre
 
   // Reconnect: retry must NOT resurrect the already-reinstated worker.
   mock.rpcSuspendFail = false; mock.telegram = [];
-  await page.evaluate(async () => { await retryAwolUnsynced(); await loadSuspensionsFromCloud(); });
+  await retryWithSkipList(page);
+  await page.evaluate(async () => { await loadSuspensionsFromCloud(); });
   const notResurrectedInDb = !(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true);
   // Scoped to RSR0100: other absent roster members legitimately sync+alert on this same retry
   // (they were never reinstated), so a blanket "no AWOL alert at all" check would false-fail.
@@ -1271,8 +1345,8 @@ await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurre
   const stillClearedLocally = await page.evaluate(() => !suspendedEmployees['RSR0100']);
 
   report('G7 · reinstate-before-reconnect: no resurrection',
-    blockedOffline && notInDbYet && unsyncedCleared && localCleared && notResurrectedInDb && noReAlert && stillClearedLocally,
-    `blockedOffline=${blockedOffline} notInDbYet=${notInDbYet} unsyncedCleared=${unsyncedCleared} localCleared=${localCleared} notResurrectedInDb=${notResurrectedInDb} noReAlert=${noReAlert} stillClearedLocally=${stillClearedLocally}`);
+    notBarredOffline && queuedOffline && notInDbYet && unsyncedCleared && localCleared && notResurrectedInDb && noReAlert && stillClearedLocally,
+    `notBarredOffline=${notBarredOffline} queuedOffline=${queuedOffline} notInDbYet=${notInDbYet} unsyncedCleared=${unsyncedCleared} localCleared=${localCleared} notResurrectedInDb=${notResurrectedInDb} noReAlert=${noReAlert} stillClearedLocally=${stillClearedLocally}`);
 });
 
 // G8 — REST-DAY POLICY (owner 2026-07-25): a no-punch Sunday must be TRANSPARENT — not counted as
@@ -1379,7 +1453,10 @@ await scenario('G10 · PAKYAW/PEM workers are exempt from AWOL', manila(2026, 7,
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {}; });
 
   // PEM9001 with a 5+ working-day absence run and NO punches at all — far past the 3-day threshold.
-  await page.evaluate(() => { employees = employees.filter(e => e.code === 'PEM9001'); });
+  // Stash the full roster before narrowing: G10b checks the LOCAL employment_type layer for both a
+  // PEM and an RSR worker, and the RSR one is filtered out of `employees` by the line below.
+  await page.evaluate(() => { window.__g10Roster = employees.slice();
+    employees = employees.filter(e => e.code === 'PEM9001'); });
   const chain = await chainOf(page, 'PEM9001');
   await page.evaluate(() => checkAllAbsences());
 
@@ -1390,11 +1467,36 @@ await scenario('G10 · PAKYAW/PEM workers are exempt from AWOL', manila(2026, 7,
     !suspended && !localBlock && !anyTelegram && chain.length >= 5,
     `absentChain=${chain.length} suspendedInDb=${suspended} blockedLocally=${localBlock} telegramSends=${mock.telegram.length}`);
 
-  // The space-separated live spelling must be exempt too ('PEM 0001' on the real roster).
-  const bothSpellings = await page.evaluate(() => [isPemCode('PEM 0001'), isPemCode('PEM9001'), isPemCode('RSR0100')]);
-  report('G10b · both PEM spellings exempt, RSR not',
-    JSON.stringify(bothSpellings) === JSON.stringify([true, true, false]),
-    `isPemCode(['PEM 0001','PEM9001','RSR0100']) = ${JSON.stringify(bothSpellings)}`);
+  // REWRITTEN 2026-08-06. This asserted isPemCode(), a CODE-PREFIX predicate that no longer exists:
+  // the marker moved to employees.employment_type (owner 2026-07-29) precisely because a converted
+  // worker keeps his old code, so the prefix stopped being the truth. The ReferenceError it threw
+  // aborted the rest of this scenario, taking G10c with it.
+  //
+  // Exemption is now proven at BOTH layers, which is what spec §6.5 asks for and what the prefix
+  // check never covered:
+  //   SERVER — awol_skip_list reports skip=true, reason 'pakyaw' (mirrors awol_is_pem)
+  //   LOCAL  — awolExemptState(emp) reads 'exempt' from employment_type, the second gate the sweep
+  //            applies before judging anyone
+  // Code spelling is still exercised: PEM9001 is looked up as 'PEM 0001' too, so the normalisation
+  // the old test cared about is still covered — just at the layer that now decides.
+  const bothLayers = await page.evaluate(async () => {
+    const { data } = await sbClient.rpc('awol_skip_list');
+    const byCode = {}; (data || []).forEach(r => { byCode[normCode(r.code)] = r; });
+    const srv = (c) => { const r = byCode[normCode(c)]; return r ? { skip: r.skip === true, reason: r.reason } : null; };
+    const loc = (c) => awolExemptState(employees.find(e => normCode(e.code) === normCode(c))
+      || (window.__g10Roster || []).find(e => normCode(e.code) === normCode(c)));
+    return {
+      serverPemSpaced: srv('PEM 0001') ? null : srv('PEM9001'),   // 'PEM 0001' is not on this roster
+      serverPem: srv('PEM9001'), serverRsr: srv('RSR0100'),
+      localPem: loc('PEM9001'), localRsr: loc('RSR0100'),
+    };
+  });
+  report('G10b · PEM exempt at BOTH layers (server skip list + local employment_type), RSR at neither',
+    !!bothLayers.serverPem && bothLayers.serverPem.skip === true && bothLayers.serverPem.reason === 'pakyaw'
+    && !!bothLayers.serverRsr && bothLayers.serverRsr.skip === false
+    && bothLayers.localPem === 'exempt' && bothLayers.localRsr === 'regular',
+    `server PEM9001=${JSON.stringify(bothLayers.serverPem)} RSR0100=${JSON.stringify(bothLayers.serverRsr)} `
+    + `· local PEM9001=${bothLayers.localPem} RSR0100=${bothLayers.localRsr}`);
 
   // A PEM worker with a PENDING leave must not even generate the "please decide" HOLD note.
   await page.evaluate(() => {
@@ -1420,7 +1522,7 @@ await scenario('G11 · kiosk has no reinstate control; leave cancel is labelled 
   await page.evaluate(() => loadTgFromCloud());
   mock.suspensions['RSR0100'] = { employee_code: 'RSR0100', active: true, reason: 'AWOL',
     suspended_on: '07/20/2026', absent_dates: ['2026-07-17','2026-07-18','2026-07-20'],
-    awol_group_msg_id: '9001', awol_group_chat: '-1005554443332', letter_received: false };
+    awol_group_msg_id: '9001', awol_group_chat: '-1005554443332', letter_received: false, barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   await page.evaluate(() => renderRoster());
 
@@ -1472,7 +1574,7 @@ await scenario('G12 · real Telegram approve_leave callback cancels a matching s
 
   // Active suspension for a roster employee, seeded the same way G4/G11 seed it.
   mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
-    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'5001', awol_group_chat:'-1004443332221' };
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'5001', awol_group_chat:'-1004443332221', barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   const suspendedBefore = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
 
@@ -1515,7 +1617,7 @@ await scenario('G13 · kiosk Admin-tab approveLeave() cancels a matching suspens
   await page.evaluate(() => loadTgFromCloud());
 
   mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
-    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'6001', awol_group_chat:'-1003332221110' };
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'6001', awol_group_chat:'-1003332221110', barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   const suspendedBefore = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
 
@@ -1579,8 +1681,14 @@ await scenario('G9 · absence SMS/violation path is Sunday-aware (mirrors collec
   await page.evaluate(() => checkAndSendAbsenceSMS());
   const smsCountTue = await page.evaluate(() => smsLog.length);
   const dayLogged = await page.evaluate(() => smsLog[0] && smsLog[0].day);
-  report('G9b · no-punch NON-Sunday today (Day 1) → SMS still sent (unaffected by the fix)',
-    smsCountTue === 1 && dayLogged === 1, `smsLog.length=${smsCountTue} day=${dayLogged}`);
+  // INVERTED 2026-08-06. checkAndSendAbsenceSMS() was DISABLED by the owner on 2026-07-30
+  // (kiosk/index.html:5108 — an unconditional `return;` at the top of the function). This scenario
+  // asserted the SMS still goes out, so it has been asserting removed behaviour ever since. The
+  // check is kept rather than deleted, pointing the other way: it now LOCKS the disable, so if that
+  // `return;` is ever removed by a merge the suite says so instead of going quietly green.
+  report('G9b · absence SMS stays DISABLED (owner 2026-07-30) — nothing is sent',
+    smsCountTue === 0 && dayLogged === undefined,
+    `smsLog.length=${smsCountTue} day=${dayLogged} (both must show nothing was sent)`);
 });
 
 // G14 — THE GATE, CROSS-DEVICE: an approval on the dashboard must lift the block on the kiosks
@@ -1590,7 +1698,7 @@ await scenario('G14 · two-step gate lifts the block on every kiosk', manila(202
   await page.evaluate(() => loadTgFromCloud());
   mock.suspensions['RSR0100'] = { employee_code: 'RSR0100', active: true, reason: 'AWOL',
     suspended_on: '07/20/2026', absent_dates: ['2026-07-17','2026-07-18','2026-07-20'],
-    awol_group_msg_id: '9100', awol_group_chat: '-1004443332221', letter_received: false };
+    awol_group_msg_id: '9100', awol_group_chat: '-1004443332221', letter_received: false, barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   const blockedBefore = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
 
@@ -1617,7 +1725,7 @@ await scenario('G14 · two-step gate lifts the block on every kiosk', manila(202
   // Keep-suspended resets the tick and leaves the block in place.
   mock.suspensions['RSR0207'] = { employee_code: 'RSR0207', active: true, reason: 'AWOL',
     suspended_on: '07/20/2026', absent_dates: ['2026-07-17','2026-07-18','2026-07-20'],
-    awol_group_msg_id: '9101', awol_group_chat: '-1004443332221', letter_received: true };
+    awol_group_msg_id: '9101', awol_group_chat: '-1004443332221', letter_received: true, barred_at: BARRED_AT };
   await page.evaluate(async () => { await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0207', p_by: 'Boss', p_decision: 'keep' }); });
   await page.evaluate(() => loadSuspensionsFromCloud());
   const stillBlocked207 = await page.evaluate(() => !!suspendedEmployees['RSR0207']);
