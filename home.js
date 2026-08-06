@@ -11,7 +11,7 @@ import { supabase } from './supabase.js';
 // one without opening devtools. Shown on the lock screen, the launcher and the admin header.
 // MUST be bumped in lockstep with the `home.js?v=` query string in admin/index.html, index.html
 // and preflight.html. A stamp that lags the query string is worse than none: it reads as proof.
-const BUILD = 'v2026-08-04b';
+const BUILD = 'v2026-08-07a';
 
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
 // The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
@@ -552,6 +552,11 @@ function AwolSuspensions({ emps, flash }) {
   const [manual, setManual] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  // Voided cases are history, not a to-do list — they need no decision and the section grows
+  // without bound, pushing the outstanding cases that DO need attention off the screen. Collapsed
+  // by default; display only. The rows themselves, the Release buttons and the nightly re-check
+  // are untouched — expanding renders exactly what rendered before.
+  const [showMuted, setShowMuted] = useState(false);
   // Synchronous guard for run() — `busy` (state) only takes effect on re-render, which cannot
   // happen until the currently-scheduled run() has already started executing (see the comment
   // on `run` below). A second tap in that window would read a still-false `busy` from its own
@@ -767,8 +772,12 @@ Makatrabaho na siya pag-usab. Desisyon ni ${actor} ${today}.`);
         </div>`)
         : html`<div class="empty">Nobody outstanding.</div>`}
 
-      <div class="sectlabel">Voided — detection muted (${muted.length})</div>
-      ${muted.length ? muted.map(r => html`
+      <div class="sectlabel" style="cursor:pointer;user-select:none"
+        onClick=${() => setShowMuted(!showMuted)}>
+        Voided — detection muted (${muted.length})
+        <span style="text-transform:none;font-weight:700">${showMuted ? '▾ hide' : '▸ show'}</span>
+      </div>
+      ${!showMuted ? '' : muted.length ? muted.map(r => html`
         <div class="row" key=${r.employee_code} style="align-items:flex-start">
           <div>
             <div class="name">${nameOf(r.employee_code)}</div>
