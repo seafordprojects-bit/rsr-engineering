@@ -46,7 +46,7 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // AND VERIFIED in production (2026-08-05), which is what makes this build safe to deploy — the
 // kiosk refuses to judge unless awol_punch_days() reports the window it served, so the SQL had to
 // land first. Once pushed, this line names what is deployed and the branch rule below is moot.
-const EXPECT = { 'payroll/index.html':'v2026-07-25a', 'kiosk/index.html':'v2026-08-06b',
+const EXPECT = { 'payroll/index.html':'v2026-07-25a', 'kiosk/index.html':'v2026-08-06c',
                  'monitoring/roll-call.html':'v2026-07-18a', 'monitoring/borrow.html':'v2026-07-16c',
                  'tools/index.html':'v2026-07-19b', 'monitoring/index.html':'v2026-07-16c',
                  'monitoring/job-order.html':'v2026-07-19a', 'monitoring/efficiency.html':'v2026-07-18a',
