@@ -11,7 +11,7 @@ import { supabase } from './supabase.js';
 // one without opening devtools. Shown on the lock screen, the launcher and the admin header.
 // MUST be bumped in lockstep with the `home.js?v=` query string in admin/index.html, index.html
 // and preflight.html. A stamp that lags the query string is worse than none: it reads as proof.
-const BUILD = 'v2026-08-07a';
+const BUILD = 'v2026-08-07b';
 
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
 // The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
@@ -1919,6 +1919,15 @@ function App() {
           busy=${leaveBusy} err=${leaveErr} onSubmit=${runLeaveDecision}
           onCancel=${() => { setLeaveAsk(null); setLeaveErr(''); }} />` : '',
         ...hrRows.map(r => {
+        // 'Provisional' is decidable here too (2026-08-08). It is what ReportedAbsence writes — a
+        // man told someone he would be out and it was recorded THAT DAY (Defect G). It suppresses
+        // detection immediately and NEVER expires, and until now nothing anywhere read it back for
+        // a decision, so every reported absence sat undecidable forever. The status pill stays on
+        // (rendered unconditionally below), and statusPill already colours the two differently —
+        // Pending amber, Provisional grey — so a reported-absence hold is still distinguishable
+        // from an ordinary pending leave at a glance.
+        // The RPC has its own guard and must accept 'Provisional' as well, or these buttons return
+        // "Already Provisional": docs/leave-decide-accept-provisional.sql.
         const ask = (st) => { setLeaveErr(''); setLeaveAsk({ row: r, status: st }); };
         const note = leaveNotes[r.id];
         return html`
@@ -1934,7 +1943,7 @@ function App() {
               <button class="btn ghost" style="padding:4px 10px;font-size:12px;margin-top:6px"
                 onClick=${() => setLeaveNotes(n => { const c = { ...n }; delete c[r.id]; return c; })}>Dismiss</button>
             </div>` : ''}
-            ${r.status === 'Pending' ? html`<div style="display:flex;gap:8px;margin-top:8px">
+            ${(r.status === 'Pending' || r.status === 'Provisional') ? html`<div style="display:flex;gap:8px;margin-top:8px">
               <button class="btn" style="padding:6px 14px;font-size:13px" onClick=${() => ask('Approved')}>✅ Approve</button>
               <button class="btn ghost" style="padding:6px 14px;font-size:13px" onClick=${() => ask('Rejected')}>❌ Reject</button>
             </div>` : ''}
