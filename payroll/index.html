@@ -1996,22 +1996,42 @@ async function apprApprove(id, corrected){
 }
 
 async function apprReject(id){
+  // Same stale-build guard Approve carries. A reject writes no punch, but it does write a DECISION:
+  // status, decided_by_*, decided_at and the note the coordinator reads. A cached build stamping
+  // that under a payload shape the table has since moved on from is the same silent-no-op failure
+  // the guard was added for — it just fails on the record instead of on a punch.
+  if(_buildStale){ alert('OUTDATED BUILD — hard reload (open reset.html) before rejecting. This rejection was blocked to prevent a silent no-op that looks successful but records nothing.'); return; }
   const it=_apprFind(id); if(!it||_apprBusy) return;
   const note=(document.getElementById('ap_note_'+id).value||'').trim();
   if(!note) return;                                    // belt and braces; the button is disabled
-  _apprBusy=true; clearMsg('appr-msg');
-  try{
-    // Nothing touches attendance_records on a reject. The proposal simply never becomes a punch.
-    const { error } = await sb.from('attendance_time_edit').update({
-      status:'rejected', decided_by_code:'owner', decided_by_name:'Owner',
-      decided_at:new Date().toISOString(), decision_note:note
-    }).eq('id',id).eq('status','pending');
-    if(error) throw error;
-    _apprTallyFor(toISO(it.edit.date)).rejected++;
-    msg('appr-msg','ok','Rejected — the coordinator will see your reason.');
-    await loadApprovals();
-  }catch(err){ msg('appr-msg','err','Reject failed: '+((err&&err.message)||err)); }
-  finally{ _apprBusy=false; }
+  const e=it.edit;
+  // PASSCODE-GATED, exactly like Approve (openConfirm 1586 → doConfirm, which checks cfg.pin).
+  // A rejection is a DECISION, not a dismissal: it stamps decided_by_*, closes the proposal so the
+  // coordinator must file a fresh one, and sends her a reason in the owner's name. It used to apply
+  // on the button press alone, which meant anyone at an unlocked payroll screen could refuse a
+  // man's correction and have the record say the owner did it. Approve and Reject now cost the
+  // same, which is the point — the gate is on deciding, not on the direction of the decision.
+  //
+  // The note is read BEFORE the modal opens and captured in this closure: openConfirm swaps the
+  // dialog in and loadApprovals() re-renders the panel afterwards, so re-reading the input inside
+  // the callback would race the element it came from.
+  openConfirm('Reject time correction',
+    `${e.employee_name||e.employee_code} · ${fmtDate(toISO(e.date))}\nReason the coordinator will see: "${note}"\nNothing is written to attendance_records.\nEnter passcode to confirm.`,
+    async()=>{
+      _apprBusy=true; clearMsg('appr-msg');
+      try{
+        // Nothing touches attendance_records on a reject. The proposal simply never becomes a punch.
+        const { error } = await sb.from('attendance_time_edit').update({
+          status:'rejected', decided_by_code:'owner', decided_by_name:'Owner',
+          decided_at:new Date().toISOString(), decision_note:note
+        }).eq('id',id).eq('status','pending');
+        if(error) throw error;
+        _apprTallyFor(toISO(e.date)).rejected++;
+        msg('appr-msg','ok','Rejected — the coordinator will see your reason.');
+        await loadApprovals();
+      }catch(err){ msg('appr-msg','err','Reject failed: '+((err&&err.message)||err)); }
+      finally{ _apprBusy=false; }
+    });
 }
 
 // ── BULK DAY APPROVE (§7) ──
