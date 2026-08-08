@@ -4,7 +4,7 @@
 //  cache fallback for offline. Cross-origin calls (Supabase, AWS,
 //  Telegram, CDNs) are NOT intercepted — they pass straight through.
 // ============================================================
-const CACHE = 'rsr-kiosk-runtime-v1';
+const CACHE = 'rsr-kiosk-runtime-v2';
 
 self.addEventListener('install', () => {
   // take over right away instead of waiting for old tabs to close
@@ -41,8 +41,13 @@ self.addEventListener('fetch', (e) => {
     e.respondWith((async () => {
       try {
         const fresh = await fetch(req, { cache: 'no-store' });
-        const cache = await caches.open(CACHE);
-        cache.put(req, fresh.clone());
+        // Only a good response is worth keeping. Caching unconditionally meant a 404, a 500 or a
+        // captive-portal interception overwrote the last known-good page, and the offline fallback
+        // below then served THAT back for as long as the tablet stayed offline.
+        if (fresh.ok) {
+          const cache = await caches.open(CACHE);
+          cache.put(req, fresh.clone());
+        }
         return fresh;
       } catch (err) {
         const cached = await caches.match(req);

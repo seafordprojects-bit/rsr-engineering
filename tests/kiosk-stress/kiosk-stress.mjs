@@ -41,16 +41,22 @@ const DAY = 86400000;
 // ── Roster returned by the mocked /rest/v1/employees (snake_case, as the real
 //    loadEmployeesFromSupabase reads: se.pin, se.home_site, se.daily_rate…) ────
 const ROSTER = [
-  { code: 'RSR0001', pin: '000123', name: 'Leading-Zero Larry',  dept: 'Welding',    home_site: 'Carmen',  shift: 8, daily_rate: 600 },
-  { code: 'RSR0002', pin: '007007', name: 'Double-Zero Zeny',    dept: 'Fitting',    home_site: 'Mandaue', shift: 8, daily_rate: 520 },
-  { code: 'RSR0100', pin: '100200', name: 'Regular Rey',         dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 500 },
-  { code: 'RSR0207', pin: '246810', name: 'Midday Manny',        dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 540 },
-  { code: 'PEM9001', pin: '900001', name: 'PEM Niner Pedro',     dept: 'Electrical', home_site: 'Mandaue', shift: 8, daily_rate: 700 },
-  { code: 'PEM9042', pin: '987654', name: 'PEM Band Bella',      dept: 'Instrument', home_site: 'Carmen',  shift: 8, daily_rate: 680 },
-  { code: 'RSR0303', pin: '333333', name: 'Night-Owl Nardo',     dept: 'Blasting',   home_site: 'Mandaue', shift: 8, daily_rate: 560 },
+  // employment_type models a FULLY SYNCED tablet, which is the correct default for a fixture.
+  // The kiosk gates AWOL on it twice — awolExemptState(emp) must read 'regular' before a worker is
+  // judged at all — so a roster without it puts every worker in the "employment type has not synced"
+  // bucket and no detection scenario can reach the code it means to test. That is a second, LOCAL
+  // exemption layer sitting behind the server's skip list, and §6.5 asks for both to be proven.
+  // A scenario wanting the unsynced case sets it explicitly (see mock.nonPunching / G16 fixtures).
+  { code: 'RSR0001', pin: '000123', name: 'Leading-Zero Larry',  dept: 'Welding',    home_site: 'Carmen',  shift: 8, daily_rate: 600, employment_type: 'regular' },
+  { code: 'RSR0002', pin: '007007', name: 'Double-Zero Zeny',    dept: 'Fitting',    home_site: 'Mandaue', shift: 8, daily_rate: 520, employment_type: 'regular' },
+  { code: 'RSR0100', pin: '100200', name: 'Regular Rey',         dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 500, employment_type: 'regular' },
+  { code: 'RSR0207', pin: '246810', name: 'Midday Manny',        dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 540, employment_type: 'regular' },
+  { code: 'PEM9001', pin: '900001', name: 'PEM Niner Pedro',     dept: 'Electrical', home_site: 'Mandaue', shift: 8, daily_rate: 700, employment_type: 'pakyaw' },
+  { code: 'PEM9042', pin: '987654', name: 'PEM Band Bella',      dept: 'Instrument', home_site: 'Carmen',  shift: 8, daily_rate: 680, employment_type: 'pakyaw' },
+  { code: 'RSR0303', pin: '333333', name: 'Night-Owl Nardo',     dept: 'Blasting',   home_site: 'Mandaue', shift: 8, daily_rate: 560, employment_type: 'regular' },
   // G15 fixtures (never-punched/30-day safety net + inactive skip):
-  { code: 'RSR0404', pin: '404040', name: 'Old-Punch Ofelia',    dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 510 },
-  { code: 'RSR0500', pin: '500500', name: 'Inactive Ising',      dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 510, is_active: false },
+  { code: 'RSR0404', pin: '404040', name: 'Old-Punch Ofelia',    dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 510, employment_type: 'regular' },
+  { code: 'RSR0500', pin: '500500', name: 'Inactive Ising',      dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 510, is_active: false, employment_type: 'regular' },
 ];
 const pinOf = (code) => ROSTER.find(r => r.code === code).pin;
 
@@ -72,6 +78,31 @@ const mock = {
   awolGroupId: '',     // the mocked AWOL group chat id
   tgMsgSeq: 1000,      // incrementing message_id source
   rpcSuspendFail: false, // when true, /rpc/awol_set_suspended 500s (simulates offline for FIX 1 coverage)
+  // ── Defect 1 (2026-08-04): the sweep reads punch history from the DATABASE, not `records` ──
+  punchDaysFail: false,  // when true, /rpc/awol_punch_days 500s → the sweep must abandon detection
+  punchDaysEmpty: false, // when true, it returns [] → ALSO an outage (empty is never an answer)
+  punchDaysExtra: {},    // {code: [ISO,…]} days the SERVER knows about that `records` does not —
+                         // the only way to model the actual defect, where the tablet has pruned a
+                         // punch the database still holds
+  // ── 2026-08-05 §4.2: a read that SUCCEEDS but covers less ground than the lookback ──
+  // The 08-04 fix made an unreadable server fail open. It did not cover a server that answers
+  // cheerfully with a SHORTER window than the detector walks — which is the original defect
+  // exactly (lookback longer than the store), just moved server-side. When set to N, the mock
+  // serves only the last N days and reports the window it used, the way the real function does.
+  punchDaysWindow: null,
+  // ── awol_skip_list: the sweep's FIRST gate (mocked 2026-08-06) ──
+  // Until now this RPC was unmocked, so it read empty, and checkAllAbsences fails open on an empty
+  // skip list — every AWOL scenario bailed before reaching the code it meant to test. That is the
+  // single cause of the long-standing 19-failure baseline, and it made two of the spec's own
+  // verification items (a genuine absence is still detected; PEM is exempt at BOTH layers)
+  // impossible to assert end-to-end.
+  //
+  // Defaults model a WORKING yard — every site has a kiosk — so the site gate skips nobody and
+  // scenarios exercise detection itself. The knobs below turn each exemption on deliberately.
+  skipListFail: false,   // RPC 500s → sweep must abandon detection (fail open)
+  skipListEmpty: false,  // returns [] → ALSO an outage; empty is never "nobody is exempt"
+  siteHasKiosk: { Carmen: true, Mandaue: true },
+  nonPunching: new Set(),
 };
 const resetCapture = () => { mock.writes = []; mock.telegram = []; };
 
@@ -181,6 +212,91 @@ async function newKioskContext(browser, base, initMs) {
           if (code && mock.suspensions[code] && body) Object.assign(mock.suspensions[code], body);
           return json(200, code && mock.suspensions[code] ? [mock.suspensions[code]] : []);
         }
+      }
+      // AWOL: the exemption list — the sweep's FIRST gate, and the only authority that can stop it
+      // before punch history is even fetched.
+      //
+      // MIRRORS THE REAL PREDICATE, awol-detector-*.sql:
+      //   awol_skip_detection(code) = awol_is_exempt(code)          -- pakyaw OR non-punching
+      //                               OR NOT site_has_kiosk(awol_effective_site(code))
+      //   awol_skip_reason(code)    = pakyaw | non-punching | no site known
+      //                               | site not configured: X | no kiosk at X | null
+      // Returns EVERY roster worker with skip true/false, exactly as the real one does, so that an
+      // empty ROW SET is unambiguously an outage rather than "nobody is exempt".
+      //
+      // ONE DELIBERATE SIMPLIFICATION, stated so no scenario leans on it by accident: the real
+      // awol_effective_site() resolves a worker's site from his most recent punch ACROSS ALL SITES,
+      // falling back to home_site. This mock uses home_site alone. That is right for a fixture —
+      // every scenario here punches at one site — but it means the SITE GATE itself is not modelled
+      // faithfully, and a scenario testing cross-site behaviour must not rely on this mock to prove
+      // it. The exemptions that ARE modelled faithfully are pakyaw and non-punching.
+      if (p.endsWith('/rest/v1/rpc/awol_skip_list')) {
+        if (mock.skipListFail)
+          return json(500, { code: '500', message: 'injected failure (mock.skipListFail)', details: '', hint: '' });
+        if (mock.skipListEmpty) return json(200, []);
+        const rows = ROSTER.map(r => {
+          const norm = String(r.code || '').replace(/[^A-Za-z0-9]/g, '').toUpperCase();
+          if (/^PEM/.test(norm))            return { code: r.code, skip: true,  reason: 'pakyaw' };
+          if (mock.nonPunching.has(r.code)) return { code: r.code, skip: true,  reason: 'non-punching' };
+          const site = r.home_site || null;
+          if (!site)                        return { code: r.code, skip: true,  reason: 'no site known' };
+          if (!(site in mock.siteHasKiosk)) return { code: r.code, skip: true,  reason: 'site not configured: ' + site };
+          if (!mock.siteHasKiosk[site])     return { code: r.code, skip: true,  reason: 'no kiosk at ' + site };
+          return { code: r.code, skip: false, reason: null };
+        });
+        return json(200, rows);
+      }
+      // AWOL: authoritative punch history (Defect 1, spec 2026-08-04 §3).
+      // The kiosk no longer asks its own `records` map "did he punch that day?" — it asks the
+      // database. Scenarios still seed punches into `records`, so this mock PROJECTS that seeded
+      // world back as the server's answer, which keeps every existing scenario meaning what it
+      // meant. mock.punchDaysExtra adds days the SERVER holds and the tablet does not — the only
+      // way to model the real defect, where `records` has been pruned to 10 days.
+      // It returns EVERY roster worker, punched or not: an empty ROW SET is the client's outage
+      // signal, while an empty DAY LIST is a legitimate "this man has not punched".
+      if (p.endsWith('/rest/v1/rpc/awol_punch_days')) {
+        if (mock.punchDaysFail)
+          return json(500, { code: '500', message: 'injected failure (mock.punchDaysFail)', details: '', hint: '' });
+        if (mock.punchDaysEmpty) return json(200, []);
+        let seeded = {};
+        try {
+          seeded = await currentPage.evaluate(() => {
+            const out = {};
+            const iso = (s) => { s = String(s || '').trim();
+              if (/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0, 10);
+              const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+              return m ? m[3] + '-' + m[1].padStart(2, '0') + '-' + m[2].padStart(2, '0') : null; };
+            // Same four marker literals the real awol_punch_days() excludes.
+            const bad = new Set(['(auto-skipped)', '(auto-deducted)', '(missing)', '(skipped)']);
+            for (const k of Object.keys(records || {})) {
+              const i = k.lastIndexOf('_'); if (i < 0) continue;
+              const c = k.slice(0, i), d = iso(k.slice(i + 1));
+              const t = records[k] && records[k].punches && records[k].punches.timein;
+              if (!d || !t || bad.has(t)) continue;
+              (out[c] = out[c] || []).push(d);
+            }
+            return out;
+          });
+        } catch { seeded = {}; }
+        // The window the server actually served. The real function derives from_date from p_days
+        // and the MANILA date; the mock mirrors that, and mock.punchDaysWindow lets a scenario
+        // serve a narrower one than was asked for.
+        let reqDays = 31;
+        try { const b = JSON.parse(req.postData() || '{}'); if (Number(b.p_days) > 0) reqDays = Number(b.p_days); } catch {}
+        const servedDays = mock.punchDaysWindow != null ? Number(mock.punchDaysWindow) : reqDays;
+        let today = null;
+        try { today = await currentPage.evaluate(() => { const d = new Date();
+          return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }); } catch {}
+        const from = today ? new Date(new Date(today + 'T00:00:00Z').getTime() - servedDays * 86400000)
+          .toISOString().slice(0, 10) : null;
+        const rows = ROSTER.map(r => {
+          const days = new Set([...(seeded[r.code] || []), ...(mock.punchDaysExtra[r.code] || [])]);
+          // Clip to the served window — a short window does not merely under-report, it makes the
+          // days beyond it indistinguishable from "he was absent".
+          const kept = [...days].filter(d => !from || d >= from).sort();
+          return { code: r.code, days: kept, window_from: from };
+        });
+        return json(200, rows);
       }
       // AWOL: dedup RPCs
       if (p.endsWith('/rest/v1/rpc/awol_set_suspended')) {
@@ -325,12 +441,47 @@ async function bisayaState() {
     text: (document.getElementById('bisaya-text') || {}).textContent || '',
   }));
 }
+// The BARRED refusal is deliberately asynchronous: kiosk/index.html:2117 re-reads suspensions from
+// the server BEFORE refusing, so that a man reinstated seconds ago is not turned away on his first
+// attempt ("a reinstate that fails the first time is not a reinstate"). The modal therefore appears
+// a tick or two after the PIN is keyed, and reading bisayaState() straight after enterPin() catches
+// the state before the refusal has rendered. Wait for it, with a bounded timeout so a genuine
+// no-modal case still fails rather than hanging.
+async function bisayaStateSettled(expectShown = true, ms = 2000) {
+  try {
+    await currentPage.waitForFunction(
+      (want) => document.getElementById('bisaya-modal').classList.contains('show') === want,
+      expectShown, { timeout: ms });
+  } catch { /* fall through — report the state as it actually is */ }
+  return await bisayaState();
+}
+// retryAwolUnsynced(skipList) TAKES THE SKIP LIST (owner 2026-07-30) so a queued case is not
+// re-pushed for a worker who has since become exempt. Called bare, skipList is undefined, every
+// queued case falls into the "not in skip list" branch and is DROPPED rather than retried — which
+// is why G6/G7 reported syncedActive=false even with connectivity restored. Fetch it the way
+// checkAllAbsences does. Only possible now that awol_skip_list is mocked.
+const retryWithSkipList = (page) => page.evaluate(async () => {
+  const { data } = await sbClient.rpc('awol_skip_list');
+  const s = {}; (data || []).forEach(r => { s[normCode(r.code)] = { skip: r.skip === true, reason: r.reason || null }; });
+  await retryAwolUnsynced(s);
+});
 const doPunch = (page, type) => page.evaluate(async (t) => { await punch(t); }, type);
 const recAt = (page, code, dateKey) => page.evaluate(([c, k]) => {
   const r = records[c + '_' + k];
   return r ? { punches: r.punches, nightShift: !!r.nightShift, isLate: !!r.isLate, lateTimeOut: !!r.lateTimeOut,
                afternoonStart: !!r.afternoonStart, autoTimeout: !!r.autoTimeout } : null;
 }, [code, dateKey]);
+// ── Defect 1 (2026-08-04) ─────────────────────────────────────────────────────
+// collectAbsentDates()/isAbsentOnDate()/hasRecentPunchHistory() no longer read the tablet's
+// `records` map — they read `awolPunched`, which checkAllAbsences() fetches once per sweep from
+// awol_punch_days(). A scenario that inspects the chain WITHOUT running a sweep must therefore
+// load that history first, or every worker reads as never-judged (the fail-open direction).
+// These helpers call the REAL production loader, so the assertion still exercises the shipped path
+// rather than a test-only shortcut.
+const chainOf = (page, code) => page.evaluate(async (c) => {
+  await awolLoadPunchHistory(); return collectAbsentDates(c); }, code);
+const historyOf = (page, code) => page.evaluate(async (c) => {
+  await awolLoadPunchHistory(); return await hasRecentPunchHistory(c); }, code);
 const dateKeyFor = (page) => page.evaluate(() => todayKey());
 const pendingKeys = (page) => page.evaluate(() => Object.keys(syncPending));
 // punch() fires saveData()→syncFlush() detached (not awaited), so tests must
@@ -390,6 +541,12 @@ async function scenario(name, initMs, fn) {
   mock.tgConfigured = false;
   mock.awolGroupId = '';
   mock.rpcSuspendFail = false;
+  mock.punchDaysFail = false; mock.punchDaysEmpty = false; mock.punchDaysExtra = {};
+  mock.punchDaysWindow = null;   // MUST be reset: a leaked short window silently starves every
+                                 // later scenario's history read and reads as a code failure
+  mock.skipListFail = false; mock.skipListEmpty = false;
+  mock.siteHasKiosk = { Carmen: true, Mandaue: true };
+  mock.nonPunching = new Set();
   const context = await newKioskContext(browser, base, initMs);
   const page = await context.newPage();
   currentPage = page; // active page for the single-arg enterPin(code)/bisayaState() helpers
@@ -966,9 +1123,27 @@ await scenario('G0 · AWOL group id loads from settings', manila(2026,7,24,8,0),
   report('G0 · tg_awol_group loaded', g === '-1001112223334', `tgAwolGroup=${g}`);
 });
 
-await scenario('G-load · poll surfaces a shared suspension', manila(2026,7,24,8,0), async (page) => {
+// ── FIXTURES UPDATED 2026-08-06 FOR DEFECT C ────────────────────────────────────────────────
+// Before 2026-08-04 an active suspension row WAS the punch gate, so these scenarios seeded
+// {active:true} and expected the worker blocked. That is no longer what an active row means.
+// The sweep now OPENS A CASE AND STOPS — it never writes suspendedEmployees, because that map is
+// the punch gate and a machine must not be able to reach it. Two maps come off one fetch
+// (kiosk/index.html:2855): rows with barred_at SET drive the gate; active rows with barred_at NULL
+// are open cases and gate NOTHING.
+//
+// So every fixture below that means "this man has been BARRED" now says barred_at, which is set
+// only by awol_set_barred() behind the admin passcode. The tests' intent is unchanged — a barred
+// worker is stopped at PIN entry — and they now assert it against the real contract instead of a
+// coincidence of the old design.
+//
+// DELIBERATELY NOT ADDED to the rows the mocked awol_set_suspended RPC writes (see its handler):
+// those are what the SWEEP creates, and the sweep must never produce a barred row. If barred_at
+// ever appears there, that is the defect these tests exist to catch.
+const BARRED_AT = '2026-07-24T00:10:00Z';   // "a human barred him", in the scenarios' frozen clock
+
+await scenario('G-load · poll surfaces a shared BARRED suspension', manila(2026,7,24,8,0), async (page) => {
   mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'x', suspended_on:'07/24/2026',
-    absent_dates:['2026-07-21','2026-07-22','2026-07-23'] };
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   const has = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
   report('G-load · shared suspension cached', has, `cached=${has}`);
@@ -980,10 +1155,10 @@ await scenario('G-load · poll surfaces a shared suspension', manila(2026,7,24,8
 await scenario('G1 · suspended PIN → blocking modal, no punch', manila(2026,7,24,8,0), async (page) => {
   const k = await dateKeyFor(page);
   mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL',
-    suspended_on:'07/24/2026', absent_dates:['2026-07-21','2026-07-22','2026-07-23'] };
+    suspended_on:'07/24/2026', absent_dates:['2026-07-21','2026-07-22','2026-07-23'], barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   await enterPin('RSR0100');
-  const b = await bisayaState();
+  const b = await bisayaStateSettled(true);
   const r = await recAt(page, 'RSR0100', k);
   const pass = b.show && /GI-SUSPEND/.test(b.text) && (!r || !r.punches.timein);
   report('G1 · suspended PIN blocking modal', pass,
@@ -1018,9 +1193,23 @@ await scenario('G3 · pending leave → HOLD, flag once', manila(2026,7,24,8,0),
     leaveRequests = [{ code:'RSR0100', status:'Pending', startDate:'2026-07-21', endDate:'2026-07-24' }]; });
   await page.evaluate(() => checkAllAbsences());
   await page.evaluate(() => checkAllAbsences()); // second run must NOT re-flag
+  // REWRITTEN 2026-08-06. This asserted the "⏸ Pending leave — please decide" HOLD note, which was
+  // the behaviour BEFORE Defect E. LEAVE_SUPPRESSES now includes 'Pending' (kiosk:1392 — "Filed and
+  // awaiting the owner. Suppresses while it waits"), so a pending leave explains the days outright:
+  // the chain breaks at the first covered day, no case is opened, and the HOLD note never arises.
+  //
+  // >>> CONSEQUENCE WORTH THE OWNER'S ATTENTION: that makes the HOLD-note branch UNREACHABLE. <<<
+  // It fires only when a chain of 3+ EXISTS and a pending leave overlaps one of those chain days —
+  // but any pending leave overlapping a chain day breaks the chain at that day, so the two
+  // conditions cannot both hold. sendAwolPendingFlag() is dead code under Defect E. Left in the
+  // kiosk untouched: removing an abandoned disciplinary workflow is the owner's call, not a test's.
   const flags = mock.telegram.filter(m => /Pending leave — please decide/.test(m.text));
   const notSuspended = !(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
-  report('G3 · hold + one-time flag', flags.length === 1 && notSuspended, `flags=${flags.length} suspended=${!notSuspended}`);
+  const d = await page.evaluate(() => ({ chain: collectAbsentDates('RSR0100').length,
+    onLeave: onLeaveToday('RSR0100') }));
+  report('G3 · a PENDING leave suppresses the absence entirely (Defect E) — no case, no HOLD note',
+    d.onLeave === true && d.chain === 0 && flags.length === 0 && notSuspended,
+    `onLeaveToday=${d.onLeave} chain=${d.chain} holdNotes=${flags.length} suspended=${!notSuspended}`);
 });
 
 // (2026-07-26) reinstateEmployee is now the leave-approval auto-cancel ONLY (dashboard owns every
@@ -1029,7 +1218,7 @@ await scenario('G4 · leave-approval cancel → closing msg + CANCELLED edit, on
   mock.tgConfigured = true; mock.awolGroupId = '-1005554443332';
   await page.evaluate(() => loadTgFromCloud());
   mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
-    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'1234', awol_group_chat:'-1005554443332' };
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'1234', awol_group_chat:'-1005554443332', barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator Bob'));
   await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator Bob')); // second → {newly:false}, no dup
@@ -1069,41 +1258,56 @@ await scenario('G5 · cross-device block + clear', manila(2026,7,24,8,0), async 
   await pageB.goto(kioskURL, { waitUntil: 'domcontentloaded' });
   await pageB.waitForFunction(() => typeof loadSuspensionsFromCloud === 'function' && typeof punch === 'function', null, { timeout: 8000 });
   await pageB.evaluate(() => loadSuspensionsFromCloud());
-  const blockedOnB = await pageB.evaluate(() => !!suspendedEmployees['RSR0100']);
+  // DEFECT C (2026-08-04): a SWEEP-created case has barred_at NULL, so what reaches kiosk B is an
+  // OPEN CASE — the informational notice — and NOT a block. This used to assert B_blocked, which is
+  // exactly the behaviour that let a machine bar a man across every tablet in the yard. Assert both
+  // halves now: the case DOES travel, and it does NOT bar.
+  const caseOnB = await pageB.evaluate(() => !!openCases['RSR0100']);
+  const notBarredOnB = await pageB.evaluate(() => !suspendedEmployees['RSR0100']);
 
   // Reinstate from A → B's next poll clears it.
   await page.evaluate(() => reinstateEmployee('RSR0100','Coordinator'));
   await pageB.evaluate(() => loadSuspensionsFromCloud());
-  const clearedOnB = await pageB.evaluate(() => !suspendedEmployees['RSR0100']);
+  const clearedOnB = await pageB.evaluate(() => !suspendedEmployees['RSR0100'] && !openCases['RSR0100']);
   await ctxB.close();
 
-  report('G5 · cross-device block then clear', inDb && blockedOnB && clearedOnB,
-    `A_suspended=${inDb} B_blocked=${blockedOnB} B_cleared=${clearedOnB}`);
+  report('G5 · sweep case travels cross-device as a NOTICE, never a block, and clears',
+    inDb && caseOnB && notBarredOnB && clearedOnB,
+    `A_caseInDb=${inDb} B_hasOpenCase=${caseOnB} B_notBarred=${notBarredOnB} B_cleared=${clearedOnB}`);
 });
 
-// G6 — FIX 1 lock: an offline suspend (RPC throws) must still block LOCALLY, survive a
-// loadSuspensionsFromCloud() poll (must NOT be wiped by the DB's empty active-rows set),
-// and sync + alert once connectivity returns via retryAwolUnsynced().
-await scenario('G6 · offline suspend survives poll + syncs on retry', manila(2026,7,24,8,0), async (page) => {
+// G6 — REWRITTEN 2026-08-06 FOR DEFECT C. Its original premise was "an offline suspend must still
+// block LOCALLY", which is the precise behaviour that was removed: a failed RPC used to bar a man
+// locally with barred_at NULL everywhere and no human at either end (kiosk/index.html:2858 — "the
+// awolUnsynced merge is GONE"). The sweep's own catch says it: "Queue the CASE for retry. NEVER
+// bar." So the assertion is inverted, and the valuable half is kept and strengthened: the case is
+// QUEUED, it does not reach the DB while offline, a poll does not invent a block, and on reconnect
+// it syncs and alerts.
+await scenario('G6 · offline case is queued, never bars, and syncs on retry', manila(2026,7,24,8,0), async (page) => {
   mock.tgConfigured = true; mock.awolGroupId = '-1002223334445'; mock.rpcSuspendFail = true;
   await page.evaluate(() => loadTgFromCloud());
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {};
     records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // recent-enough history (see G2)
   await page.evaluate(() => checkAllAbsences());
-  const blockedOffline = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  const notBarredOffline = await page.evaluate(() => !suspendedEmployees['RSR0100']);
+  const queued = await page.evaluate(() => !!awolUnsynced['RSR0100']);
   const notInDbYet = mock.suspensions['RSR0100'] === undefined;
 
   await page.evaluate(() => loadSuspensionsFromCloud());
-  const stillBlockedAfterPoll = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  const stillNotBarredAfterPoll = await page.evaluate(() => !suspendedEmployees['RSR0100']);
 
   mock.rpcSuspendFail = false;
-  await page.evaluate(() => retryAwolUnsynced());
+  await retryWithSkipList(page);
   const syncedActive = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
   const alerted = mock.telegram.some(m => m.method === 'sendMessage' && /AWOL — Account Suspended/.test(m.text) && /RSR0100/.test(m.text));
+  // And what synced must STILL be an open case, not a bar — the retry path must not do what the
+  // sweep is forbidden from doing.
+  const syncedUnbarred = !!(mock.suspensions['RSR0100'] && !mock.suspensions['RSR0100'].barred_at);
 
-  report('G6 · offline suspend survives poll, syncs+alerts on retry',
-    blockedOffline && notInDbYet && stillBlockedAfterPoll && syncedActive && alerted,
-    `blockedOffline=${blockedOffline} notInDbYet=${notInDbYet} stillBlockedAfterPoll=${stillBlockedAfterPoll} syncedActive=${!!syncedActive} alerted=${alerted}`);
+  report('G6 · offline case queued not barred, survives poll, syncs+alerts unbarred on retry',
+    notBarredOffline && queued && notInDbYet && stillNotBarredAfterPoll && syncedActive && alerted && syncedUnbarred,
+    `notBarredOffline=${notBarredOffline} queued=${queued} notInDbYet=${notInDbYet} `
+    + `stillNotBarredAfterPoll=${stillNotBarredAfterPoll} syncedActive=${!!syncedActive} alerted=${alerted} syncedUnbarred=${syncedUnbarred}`);
 });
 
 // G7 — resurrection-bug lock: an offline suspend (never reached the DB, only tracked in
@@ -1117,10 +1321,12 @@ await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurre
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {};
     records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // recent-enough history (see G2)
 
-  // Offline suspend: RPC fails → local block only, never reaches the DB.
+  // Offline: the RPC fails, so the CASE is queued and never reaches the DB. It does NOT bar —
+  // see G6's note; the original "local block only" is the Defect C behaviour that was removed.
   mock.rpcSuspendFail = true;
   await page.evaluate(() => checkAllAbsences());
-  const blockedOffline = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  const notBarredOffline = await page.evaluate(() => !suspendedEmployees['RSR0100']);
+  const queuedOffline = await page.evaluate(() => !!awolUnsynced['RSR0100']);
   const notInDbYet = mock.suspensions['RSR0100'] === undefined;
 
   // Admin reinstates while still offline (awol_cancel_leave_approved finds no active DB row → {newly:false}).
@@ -1130,7 +1336,8 @@ await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurre
 
   // Reconnect: retry must NOT resurrect the already-reinstated worker.
   mock.rpcSuspendFail = false; mock.telegram = [];
-  await page.evaluate(async () => { await retryAwolUnsynced(); await loadSuspensionsFromCloud(); });
+  await retryWithSkipList(page);
+  await page.evaluate(async () => { await loadSuspensionsFromCloud(); });
   const notResurrectedInDb = !(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true);
   // Scoped to RSR0100: other absent roster members legitimately sync+alert on this same retry
   // (they were never reinstated), so a blanket "no AWOL alert at all" check would false-fail.
@@ -1138,8 +1345,8 @@ await scenario('G7 · reinstate before reconnect clears awolUnsynced (no resurre
   const stillClearedLocally = await page.evaluate(() => !suspendedEmployees['RSR0100']);
 
   report('G7 · reinstate-before-reconnect: no resurrection',
-    blockedOffline && notInDbYet && unsyncedCleared && localCleared && notResurrectedInDb && noReAlert && stillClearedLocally,
-    `blockedOffline=${blockedOffline} notInDbYet=${notInDbYet} unsyncedCleared=${unsyncedCleared} localCleared=${localCleared} notResurrectedInDb=${notResurrectedInDb} noReAlert=${noReAlert} stillClearedLocally=${stillClearedLocally}`);
+    notBarredOffline && queuedOffline && notInDbYet && unsyncedCleared && localCleared && notResurrectedInDb && noReAlert && stillClearedLocally,
+    `notBarredOffline=${notBarredOffline} queuedOffline=${queuedOffline} notInDbYet=${notInDbYet} unsyncedCleared=${unsyncedCleared} localCleared=${localCleared} notResurrectedInDb=${notResurrectedInDb} noReAlert=${noReAlert} stillClearedLocally=${stillClearedLocally}`);
 });
 
 // G8 — REST-DAY POLICY (owner 2026-07-25): a no-punch Sunday must be TRANSPARENT — not counted as
@@ -1185,7 +1392,7 @@ await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', mani
     // Fri/Sat intentionally unseeded → isAbsentOnDate() defaults to absent (no timein, no leave)
     // Sunday intentionally unseeded → moot either way, transparent regardless of a record
   }, thuKey);
-  const chainC = await page.evaluate(code => collectAbsentDates(code), 'RSR0303');
+  const chainC = await chainOf(page, 'RSR0303');
   await page.evaluate(() => checkAllAbsences());
   const susC = mock.suspensions['RSR0303'] && mock.suspensions['RSR0303'].active === true;
   const exactlyTwoC = chainC.length === 2;
@@ -1218,8 +1425,8 @@ await scenario('G8 · rest-day (Sunday) transparent in AWOL absence chain', mani
     // Fri/Sat intentionally unseeded → absent; Sunday unseeded either way (transparent regardless)
   }, [thuKey2, monKey]);
 
-  const chainA = await page.evaluate(code => collectAbsentDates(code), 'RSR0100');
-  const chainB = await page.evaluate(code => collectAbsentDates(code), 'RSR0207');
+  const chainA = await chainOf(page, 'RSR0100');
+  const chainB = await chainOf(page, 'RSR0207');
   await page.evaluate(() => checkAllAbsences());
 
   const susA = mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active === true;
@@ -1246,8 +1453,11 @@ await scenario('G10 · PAKYAW/PEM workers are exempt from AWOL', manila(2026, 7,
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; awolUnsynced = {}; });
 
   // PEM9001 with a 5+ working-day absence run and NO punches at all — far past the 3-day threshold.
-  await page.evaluate(() => { employees = employees.filter(e => e.code === 'PEM9001'); });
-  const chain = await page.evaluate(() => collectAbsentDates('PEM9001'));
+  // Stash the full roster before narrowing: G10b checks the LOCAL employment_type layer for both a
+  // PEM and an RSR worker, and the RSR one is filtered out of `employees` by the line below.
+  await page.evaluate(() => { window.__g10Roster = employees.slice();
+    employees = employees.filter(e => e.code === 'PEM9001'); });
+  const chain = await chainOf(page, 'PEM9001');
   await page.evaluate(() => checkAllAbsences());
 
   const suspended = !!(mock.suspensions['PEM9001'] && mock.suspensions['PEM9001'].active);
@@ -1257,11 +1467,36 @@ await scenario('G10 · PAKYAW/PEM workers are exempt from AWOL', manila(2026, 7,
     !suspended && !localBlock && !anyTelegram && chain.length >= 5,
     `absentChain=${chain.length} suspendedInDb=${suspended} blockedLocally=${localBlock} telegramSends=${mock.telegram.length}`);
 
-  // The space-separated live spelling must be exempt too ('PEM 0001' on the real roster).
-  const bothSpellings = await page.evaluate(() => [isPemCode('PEM 0001'), isPemCode('PEM9001'), isPemCode('RSR0100')]);
-  report('G10b · both PEM spellings exempt, RSR not',
-    JSON.stringify(bothSpellings) === JSON.stringify([true, true, false]),
-    `isPemCode(['PEM 0001','PEM9001','RSR0100']) = ${JSON.stringify(bothSpellings)}`);
+  // REWRITTEN 2026-08-06. This asserted isPemCode(), a CODE-PREFIX predicate that no longer exists:
+  // the marker moved to employees.employment_type (owner 2026-07-29) precisely because a converted
+  // worker keeps his old code, so the prefix stopped being the truth. The ReferenceError it threw
+  // aborted the rest of this scenario, taking G10c with it.
+  //
+  // Exemption is now proven at BOTH layers, which is what spec §6.5 asks for and what the prefix
+  // check never covered:
+  //   SERVER — awol_skip_list reports skip=true, reason 'pakyaw' (mirrors awol_is_pem)
+  //   LOCAL  — awolExemptState(emp) reads 'exempt' from employment_type, the second gate the sweep
+  //            applies before judging anyone
+  // Code spelling is still exercised: PEM9001 is looked up as 'PEM 0001' too, so the normalisation
+  // the old test cared about is still covered — just at the layer that now decides.
+  const bothLayers = await page.evaluate(async () => {
+    const { data } = await sbClient.rpc('awol_skip_list');
+    const byCode = {}; (data || []).forEach(r => { byCode[normCode(r.code)] = r; });
+    const srv = (c) => { const r = byCode[normCode(c)]; return r ? { skip: r.skip === true, reason: r.reason } : null; };
+    const loc = (c) => awolExemptState(employees.find(e => normCode(e.code) === normCode(c))
+      || (window.__g10Roster || []).find(e => normCode(e.code) === normCode(c)));
+    return {
+      serverPemSpaced: srv('PEM 0001') ? null : srv('PEM9001'),   // 'PEM 0001' is not on this roster
+      serverPem: srv('PEM9001'), serverRsr: srv('RSR0100'),
+      localPem: loc('PEM9001'), localRsr: loc('RSR0100'),
+    };
+  });
+  report('G10b · PEM exempt at BOTH layers (server skip list + local employment_type), RSR at neither',
+    !!bothLayers.serverPem && bothLayers.serverPem.skip === true && bothLayers.serverPem.reason === 'pakyaw'
+    && !!bothLayers.serverRsr && bothLayers.serverRsr.skip === false
+    && bothLayers.localPem === 'exempt' && bothLayers.localRsr === 'regular',
+    `server PEM9001=${JSON.stringify(bothLayers.serverPem)} RSR0100=${JSON.stringify(bothLayers.serverRsr)} `
+    + `· local PEM9001=${bothLayers.localPem} RSR0100=${bothLayers.localRsr}`);
 
   // A PEM worker with a PENDING leave must not even generate the "please decide" HOLD note.
   await page.evaluate(() => {
@@ -1287,7 +1522,7 @@ await scenario('G11 · kiosk has no reinstate control; leave cancel is labelled 
   await page.evaluate(() => loadTgFromCloud());
   mock.suspensions['RSR0100'] = { employee_code: 'RSR0100', active: true, reason: 'AWOL',
     suspended_on: '07/20/2026', absent_dates: ['2026-07-17','2026-07-18','2026-07-20'],
-    awol_group_msg_id: '9001', awol_group_chat: '-1005554443332', letter_received: false };
+    awol_group_msg_id: '9001', awol_group_chat: '-1005554443332', letter_received: false, barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   await page.evaluate(() => renderRoster());
 
@@ -1339,7 +1574,7 @@ await scenario('G12 · real Telegram approve_leave callback cancels a matching s
 
   // Active suspension for a roster employee, seeded the same way G4/G11 seed it.
   mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
-    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'5001', awol_group_chat:'-1004443332221' };
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'5001', awol_group_chat:'-1004443332221', barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   const suspendedBefore = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
 
@@ -1382,7 +1617,7 @@ await scenario('G13 · kiosk Admin-tab approveLeave() cancels a matching suspens
   await page.evaluate(() => loadTgFromCloud());
 
   mock.suspensions['RSR0100'] = { employee_code:'RSR0100', active:true, reason:'AWOL', suspended_on:'07/24/2026',
-    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'6001', awol_group_chat:'-1003332221110' };
+    absent_dates:['2026-07-21','2026-07-22','2026-07-23'], awol_group_msg_id:'6001', awol_group_chat:'-1003332221110', barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   const suspendedBefore = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
 
@@ -1446,8 +1681,14 @@ await scenario('G9 · absence SMS/violation path is Sunday-aware (mirrors collec
   await page.evaluate(() => checkAndSendAbsenceSMS());
   const smsCountTue = await page.evaluate(() => smsLog.length);
   const dayLogged = await page.evaluate(() => smsLog[0] && smsLog[0].day);
-  report('G9b · no-punch NON-Sunday today (Day 1) → SMS still sent (unaffected by the fix)',
-    smsCountTue === 1 && dayLogged === 1, `smsLog.length=${smsCountTue} day=${dayLogged}`);
+  // INVERTED 2026-08-06. checkAndSendAbsenceSMS() was DISABLED by the owner on 2026-07-30
+  // (kiosk/index.html:5108 — an unconditional `return;` at the top of the function). This scenario
+  // asserted the SMS still goes out, so it has been asserting removed behaviour ever since. The
+  // check is kept rather than deleted, pointing the other way: it now LOCKS the disable, so if that
+  // `return;` is ever removed by a merge the suite says so instead of going quietly green.
+  report('G9b · absence SMS stays DISABLED (owner 2026-07-30) — nothing is sent',
+    smsCountTue === 0 && dayLogged === undefined,
+    `smsLog.length=${smsCountTue} day=${dayLogged} (both must show nothing was sent)`);
 });
 
 // G14 — THE GATE, CROSS-DEVICE: an approval on the dashboard must lift the block on the kiosks
@@ -1457,7 +1698,7 @@ await scenario('G14 · two-step gate lifts the block on every kiosk', manila(202
   await page.evaluate(() => loadTgFromCloud());
   mock.suspensions['RSR0100'] = { employee_code: 'RSR0100', active: true, reason: 'AWOL',
     suspended_on: '07/20/2026', absent_dates: ['2026-07-17','2026-07-18','2026-07-20'],
-    awol_group_msg_id: '9100', awol_group_chat: '-1004443332221', letter_received: false };
+    awol_group_msg_id: '9100', awol_group_chat: '-1004443332221', letter_received: false, barred_at: BARRED_AT };
   await page.evaluate(() => loadSuspensionsFromCloud());
   const blockedBefore = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
 
@@ -1484,7 +1725,7 @@ await scenario('G14 · two-step gate lifts the block on every kiosk', manila(202
   // Keep-suspended resets the tick and leaves the block in place.
   mock.suspensions['RSR0207'] = { employee_code: 'RSR0207', active: true, reason: 'AWOL',
     suspended_on: '07/20/2026', absent_dates: ['2026-07-17','2026-07-18','2026-07-20'],
-    awol_group_msg_id: '9101', awol_group_chat: '-1004443332221', letter_received: true };
+    awol_group_msg_id: '9101', awol_group_chat: '-1004443332221', letter_received: true, barred_at: BARRED_AT };
   await page.evaluate(async () => { await sbClient.rpc('awol_admin_decide', { p_code: 'RSR0207', p_by: 'Boss', p_decision: 'keep' }); });
   await page.evaluate(() => loadSuspensionsFromCloud());
   const stillBlocked207 = await page.evaluate(() => !!suspendedEmployees['RSR0207']);
@@ -1515,7 +1756,7 @@ await scenario('G15 · never-punched/30-day safety net + inactive skip (owner 20
   // Proves the OLD chain logic (collectAbsentDates, untouched by this fix) still sees a long
   // absence run here — the ONLY thing standing between this worker and a wrongful suspension is the
   // new hasRecentPunchHistory() skip inside checkAllAbsences.
-  const chain1 = await page.evaluate(() => collectAbsentDates('RSR0002'));
+  const chain1 = await chainOf(page, 'RSR0002');
   await page.evaluate(() => checkAllAbsences());
   const susNever = !!(mock.suspensions['RSR0002'] && mock.suspensions['RSR0002'].active);
   const alertedNever = mock.telegram.some(m => /RSR0002/.test(m.text));
@@ -1527,7 +1768,7 @@ await scenario('G15 · never-punched/30-day safety net + inactive skip (owner 20
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
     employees = window.__g15Roster.filter(e => e.code === 'RSR0404');
     records['RSR0404_06/14/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // 40 days before 07/24/2026
-  const historyStale = await page.evaluate(() => hasRecentPunchHistory('RSR0404'));
+  const historyStale = await historyOf(page, 'RSR0404');
   await page.evaluate(() => checkAllAbsences());
   const susStale = !!(mock.suspensions['RSR0404'] && mock.suspensions['RSR0404'].active);
   const alertedStale = mock.telegram.some(m => /RSR0404/.test(m.text));
@@ -1541,8 +1782,8 @@ await scenario('G15 · never-punched/30-day safety net + inactive skip (owner 20
   await page.evaluate(() => { suspendedEmployees = {}; awolPending = {};
     employees = window.__g15Roster.filter(e => e.code === 'RSR0100');
     records['RSR0100_07/14/2026'] = { punches: { timein: '08:00:00 AM' } }; }); // 10 days before 07/24/2026
-  const historyRecent = await page.evaluate(() => hasRecentPunchHistory('RSR0100'));
-  const chain3 = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  const historyRecent = await historyOf(page, 'RSR0100');
+  const chain3 = await chainOf(page, 'RSR0100');
   await page.evaluate(() => checkAllAbsences());
   const susRecent = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   const alertedRecent = mock.telegram.some(m => /RSR0100/.test(m.text));
@@ -1584,7 +1825,7 @@ await scenario('G16a · Approved leave (Supabase YYYY-MM-DD) covers the absent r
     // Approved leave stored exactly as PostgREST returns a DATE column: YYYY-MM-DD.
     leaveRequests = [{ code: 'RSR0100', status: 'Approved', startDate: '2026-07-21', endDate: '2026-07-23' }];
   });
-  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  const chain = await chainOf(page, 'RSR0100');
   await page.evaluate(() => checkAllAbsences());
   const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
@@ -1605,7 +1846,7 @@ await scenario('G16b · Approved leave (kiosk MM/DD/YYYY) also covers the absent
     // accidentally sort correctly as raw strings and would not prove anything.
     leaveRequests = [{ code: 'RSR0100', status: 'Approved', startDate: '7/21/2026', endDate: '7/23/2026' }];
   });
-  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  const chain = await chainOf(page, 'RSR0100');
   await page.evaluate(() => checkAllAbsences());
   const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
@@ -1625,7 +1866,7 @@ await scenario('G16c · Approved leave covers only PART of the absent run → ch
     // leave-covered day, so the chain is exactly the ONE real absence in front of it.
     leaveRequests = [{ code: 'RSR0100', status: 'Approved', startDate: '2026-07-22', endDate: '2026-07-22' }];
   });
-  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  const chain = await chainOf(page, 'RSR0100');
   await page.evaluate(() => checkAllAbsences());
   const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
@@ -1643,7 +1884,7 @@ await scenario('G16d · Approved leave code differs only by spacing (RSR 0100 vs
     // stores it with a space. Must still match via normCode().
     leaveRequests = [{ code: 'RSR 0100', status: 'Approved', startDate: '2026-07-21', endDate: '2026-07-23' }];
   });
-  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  const chain = await chainOf(page, 'RSR0100');
   await page.evaluate(() => checkAllAbsences());
   const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
@@ -1658,13 +1899,258 @@ await scenario('G16e · regression: worker with NO leave and 3+ absences → STI
     records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } };
     leaveRequests = []; // no leave at all — the fix must not have disabled detection wholesale
   });
-  const chain = await page.evaluate(() => collectAbsentDates('RSR0100'));
+  const chain = await chainOf(page, 'RSR0100');
   await page.evaluate(() => checkAllAbsences());
   const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
   const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
   report('G16e · no leave + 3+ absences still suspends (detection not disabled)',
     chain.length >= 3 && sus && alerted,
     `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`);
+});
+
+// G17 — DEFECT 1 (2026-08-04): PUNCH HISTORY COMES FROM THE DATABASE, NOT `records`.
+// Live evidence: RSR 0015's count went 6 -> 10 overnight on 08/04, adding 07/23, 07/24 and 07/25 —
+// two of which he demonstrably worked (07/24 08:55–12:00, 07/25 08:15–17:00). Nothing changed but
+// the calendar. `records` is localStorage pruned to 10 days (cleanupOldData :1871, loadData :4800),
+// both of which run BEFORE detection, while the chain looks back 21 days. Past the horizon
+// records[key] is undefined, hasTimein is false, and MISSING DATA READS AS ABSENCE — an error that
+// only ever runs against the worker, and only ever on long chains, i.e. the cases that end in a
+// letter. Spec: docs/superpowers/specs/2026-08-04-awol-detector-punch-history-and-void.md §2–3.
+//
+// mock.punchDaysExtra is what makes this testable: it gives the SERVER a day the tablet's `records`
+// map does not have. That gap IS the defect — no scenario that seeds `records` can express it.
+await scenario('G17a · a punch the tablet pruned but the SERVER still holds breaks the chain', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007778889990';
+  await page.evaluate(() => loadTgFromCloud());
+  // 07/14 is 10 days back: recent enough to clear the 30-day safety net, and the exact age at which
+  // the tablet's own retention starts deleting rows. It lives ONLY on the server here.
+  // 07/22 is 2 days back and likewise server-only — this is the day that must stop the chain.
+  mock.punchDaysExtra = { RSR0100: ['2026-07-14', '2026-07-22'] };
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; leaveRequests = [];
+    records = {}; });   // the tablet knows NOTHING — exactly the state after a 10-day prune
+  const chain = await chainOf(page, 'RSR0100');
+  await page.evaluate(() => checkAllAbsences());
+  const sus = !!(mock.suspensions['RSR0100'] && mock.suspensions['RSR0100'].active);
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  // Chain walks back from 07/23 and must stop dead at 07/22. One absent day, so no case at all.
+  // Before this fix the same setup produced a 10-day run and a suspension off an empty local map.
+  report('G17a · server-side punch stops the chain the tablet could not see',
+    chain.length === 1 && chain[0] === '07/23/2026' && !sus && !alerted,
+    `chain=[${chain.join(', ')}] suspended=${sus} alerted=${alerted}`
+    + (alerted ? ` matched=${JSON.stringify(mock.telegram.filter(m => /RSR0100/.test(m.text)).map(m => m.text.slice(0, 120)))}` : ''));
+});
+
+await scenario('G17b · a real absence run is still visible in server history', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007778889990';
+  await page.evaluate(() => loadTgFromCloud());
+  // The counterpart to G17a, and the one that matters most: reading the server must not become a
+  // blanket amnesty. Only punch on file is 07/14, so 07/15 onward is a genuine absence run.
+  //
+  // ASSERTS THE CHAIN, NOT THE SUSPENSION, deliberately. checkAllAbsences() bails at its FIRST
+  // gate in this harness — awol_skip_list() is not mocked, so it reads empty and the sweep fails
+  // open before punch history is ever consulted. That is the standing gap behind the G1/G15c/G16e
+  // family of failures, not something this change introduced; asserting a suspension here would
+  // only add a 20th failure with the same single cause. The chain and the safety net ARE reachable,
+  // and they are what this defect is about.
+  mock.punchDaysExtra = { RSR0100: ['2026-07-14'] };
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; leaveRequests = [];
+    records = {}; });
+  const chain = await chainOf(page, 'RSR0100');
+  const hist = await historyOf(page, 'RSR0100');
+  report('G17b · genuine absence run off server history still counts, history recognised',
+    hist === true && chain.length >= 3 && chain[chain.length - 1] === '07/15/2026',
+    `hasRecentPunchHistory=${hist} chain=${chain.length} oldest=${chain[chain.length - 1]}`);
+});
+
+// FAIL OPEN, BINDING (owner rule): a man always gets to punch and the owner gets TOLD; never a
+// silent block. Unreadable punch history must leave NO map behind — the three read sites then
+// resolve to "do not judge" in both directions (awolPunchedOn → present, hasRecentPunchHistory →
+// false), and checkAllAbsences abandons the sweep on the returned reason.
+// Tested against awolLoadPunchHistory() directly for the same reason as G17b: the sweep never
+// reaches this fetch while awol_skip_list() is unmocked, so a sweep-level assertion would pass
+// vacuously — it would go green whether or not the fail-open branch existed at all.
+await scenario('G17c · punch-history RPC error → no map, a reason returned, nothing judgeable', manila(2026,7,24,8,0), async (page) => {
+  await page.evaluate(() => { records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; });
+  mock.punchDaysFail = true;          // the RPC 500s
+  const r = await page.evaluate(async () => {
+    const why = await awolLoadPunchHistory();
+    return { why, map: awolPunched, chain: collectAbsentDates('RSR0100'), hist: await hasRecentPunchHistory('RSR0100') };
+  });
+  report('G17c · RPC failure yields a reason, a null map, and no absences',
+    typeof r.why === 'string' && r.why.length > 0 && r.map === null && r.chain.length === 0 && r.hist === false,
+    `reason=${JSON.stringify(r.why)} map=${r.map} chain=${r.chain.length} history=${r.hist}`);
+});
+
+await scenario('G17d · empty punch-history result is an OUTAGE, not "nobody punched"', manila(2026,7,24,8,0), async (page) => {
+  await page.evaluate(() => { records['RSR0100_06/29/2026'] = { punches: { timein: '08:00:00 AM' } }; });
+  // awol_punch_days() returns EVERY non-separated worker precisely so that zero rows can only mean
+  // the read went wrong. Read as a legitimate answer it would say "nobody in the yard has punched
+  // in a month" and flag the entire roster.
+  mock.punchDaysEmpty = true;
+  const r = await page.evaluate(async () => {
+    const why = await awolLoadPunchHistory();
+    return { why, map: awolPunched };
+  });
+  report('G17d · empty result is treated as a failure, not an answer',
+    /empty/.test(String(r.why)) && r.map === null,
+    `reason=${JSON.stringify(r.why)} map=${r.map}`);
+});
+
+// The load path must also SUCCEED cleanly — otherwise G17c/G17d would pass against a function that
+// is broken in every state. Proves the map is populated, keyed by normCode, and ISO-valued.
+await scenario('G17e · a successful load populates the map, normCode-keyed and ISO-valued', manila(2026,7,24,8,0), async (page) => {
+  mock.punchDaysExtra = { RSR0100: ['2026-07-14', '2026-07-22'] };
+  await page.evaluate(() => { records = {}; });
+  const r = await page.evaluate(async () => {
+    const why = await awolLoadPunchHistory();
+    const s = awolPunched && awolPunched['RSR0100'];
+    return { why, codes: awolPunched ? Object.keys(awolPunched).length : 0,
+             days: s ? [...s].sort() : null,
+             spacedLookupWorks: awolPunchedOn('RSR 0100', '07/22/2026') };
+  });
+  report('G17e · load succeeds, map keyed by normCode, spacing drift resolves',
+    r.why === null && r.codes === 9 && JSON.stringify(r.days) === '["2026-07-14","2026-07-22"]' && r.spacedLookupWorks === true,
+    `reason=${r.why} codes=${r.codes} days=${JSON.stringify(r.days)} spacedLookup=${r.spacedLookupWorks}`);
+});
+
+// ==============================================================================
+// G18 — THE 2026-08-05 INCIDENT: ten false cases in a twelve-second burst.
+// Spec: docs/superpowers/specs/2026-08-05-awol-detection-data-source.md
+//
+// awol_events 41–50, 2026-08-04 23:59:55 → 2026-08-05 00:00:07, each reading "Absent 10
+// consecutive days without approved leave". All ten false; four of them (RSR 0019, 0027, 0030,
+// 0033) were present all 10 of 10 days their case named. attendance_records held every punch the
+// whole time. The tablet's site data had been cleared via reset.html the evening before, so the
+// local map rebuilt near-empty and the next sweep hit the 10-day cap for ten men at once.
+// ==============================================================================
+
+// G18a is the incident itself, reduced. It is the REGRESSION GUARD for the 08-04 fix: run this
+// same scenario against main's kiosk (git checkout main -- kiosk/index.html) and it fails with a
+// full chain per worker, which is how the failure was reproduced before any of this was written.
+await scenario('G18a · empty local cache + full server history → nobody is judged absent', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007778889990';
+  await page.evaluate(() => loadTgFromCloud());
+  // Four workers, present every working day the chain would walk. Exactly the shape of the four
+  // men who were present 10 of 10.
+  const days = ['2026-07-13','2026-07-14','2026-07-15','2026-07-16','2026-07-17','2026-07-20',
+                '2026-07-21','2026-07-22','2026-07-23'];
+  mock.punchDaysExtra = { RSR0100: days, RSR0101: days, RSR0102: days, RSR0103: days };
+  // reset.html has just been through here. The tablet knows nothing at all.
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; leaveRequests = []; records = {}; });
+  const chains = await page.evaluate(() => ['RSR0100','RSR0101','RSR0102','RSR0103']
+    .map(c => ({ c, n: collectAbsentDates(c).length })));
+  const worst = Math.max(...chains.map(x => x.n));
+  report('G18a · an empty tablet cache invents no absences when the server has the punches',
+    worst === 0,
+    `chains=${chains.map(x => x.c + ':' + x.n).join(' ')} (each must be 0; main\'s build gives 10)`);
+});
+
+// G18b — §4.2. THE NEW HOLE. A server that answers successfully but covers less ground than the
+// detector walks is the original defect with a different store. The 08-04 fix guards failure and
+// emptiness; it does not guard a SHORT window, and nothing about a short window looks wrong.
+await scenario('G18b · server window shorter than the lookback must abandon the sweep', manila(2026,7,24,8,0), async (page) => {
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; leaveRequests = []; records = {}; });
+  // He punched 20 days back. The chain walks 21 days, so that punch is what ends it — but the
+  // server is only serving 5 days, so from the client's side he looks absent throughout.
+  mock.punchDaysExtra = { RSR0100: ['2026-07-04', '2026-07-23'] };
+  mock.punchDaysWindow = 5;
+  const r = await page.evaluate(async () => {
+    const why = await awolLoadPunchHistory();
+    return { why, map: awolPunched ? Object.keys(awolPunched).length : 0,
+             chain: collectAbsentDates('RSR0100').length };
+  });
+  // A short window must be refused the same way an outage is: a reason back, no map, nothing judged.
+  report('G18b · a short server window is refused, not silently judged on',
+    typeof r.why === 'string' && r.why.length > 0 && r.map === 0 && r.chain === 0,
+    `reason=${JSON.stringify(r.why)} mapCodes=${r.map} chain=${r.chain}`);
+});
+
+// G18c — §4.3. The never-punched guard must be a SECOND OPINION. Sharing the detector's map means
+// it cannot contradict it: whatever truncated or corrupted the detector's view is already inside
+// the guard. Here the detector's map is deliberately wiped after loading while the server can
+// still answer — a guard that queries on its own says "he has history", a shared one says nothing.
+await scenario('G18c · the never-punched guard queries independently of the detector map', manila(2026,7,24,8,0), async (page) => {
+  await page.evaluate(() => { records = {}; });
+  mock.punchDaysExtra = { RSR0100: ['2026-07-14', '2026-07-22'] };
+  const r = await page.evaluate(async () => {
+    await awolLoadPunchHistory();
+    awolPunched = null;                       // the detector's view is gone; the SERVER still knows
+    return { hist: await hasRecentPunchHistory('RSR0100') };
+  });
+  report('G18c · hasRecentPunchHistory answers from its own read, not the detector\'s map',
+    r.hist === true,
+    `hasRecentPunchHistory=${r.hist} (shared-map implementation returns false here)`);
+});
+
+// G18d — §4.2 / §6.3: THE VISIBLE NOTICE MUST NAME WHAT WAS SKIPPED, IN THE PAST TENSE.
+// "A silent skip is not acceptable; a silent skip is how this went unnoticed for two days."
+// The card was hardcoded to "the exemption list could not be read" — written when that was the
+// only authority that could fail. It now fires for punch history and the never-punched guard too,
+// so on two of three paths it named the wrong cause and sent the owner to check a list that was
+// fine. sendAwolDetectionSkipped() always named it correctly on Telegram; the tablet's own card,
+// which is the surface §4.2 requires, was the one lying.
+await scenario('G18d · the skip notice names the authority that actually failed', manila(2026,7,24,8,0), async (page) => {
+  // The skip list is mocked and healthy by default now, so the failure is INJECTED rather than
+  // relied upon. That is the better test anyway: it proves the exemption-list branch specifically,
+  // instead of passing because the gate happened to be broken for everyone.
+  mock.skipListFail = true;
+  const r = await page.evaluate(async () => {
+    const read = () => (document.getElementById('awol-skip-msg') || {}).textContent || '';
+    // (a) END TO END on the exemption-list path, with the RPC forced to 500.
+    await checkAllAbsences();
+    const viaSweep = { shown: (document.getElementById('awol-skip-card') || {}).style.display !== 'none',
+                       text: read() };
+    // (b) THE PATH THAT WAS WRONG. Rendering is asserted directly because the sweep cannot reach
+    //     the punch-history gate while the skip list is unmocked (the standing G1/G15c/G16e gap).
+    awolDetectionSkipped = true;
+    awolSkipWhat = 'punch history';
+    awolSkipWhy  = 'covers only 5 days but 21 are needed';
+    renderAwolCards();
+    return { viaSweep, punchText: read() };
+  });
+  const pastTense = /did not run/.test(r.punchText);
+  const namesPunch = /punch history/.test(r.punchText);
+  const blamesWrongThing = /exemption list/.test(r.punchText);
+  const carriesReason = /covers only 5 days/.test(r.punchText);
+  const sweepNamesSkipList = /exemption list/.test(r.viaSweep.text) && /did not run/.test(r.viaSweep.text);
+  report('G18d · notice is past-tense, names the right authority, and carries the reason',
+    pastTense && namesPunch && !blamesWrongThing && carriesReason && r.viaSweep.shown && sweepNamesSkipList,
+    `pastTense=${pastTense} namesPunchHistory=${namesPunch} stillBlamesSkipList=${blamesWrongThing} `
+    + `carriesReason=${carriesReason} sweepCardShown=${r.viaSweep.shown} sweepNamesSkipList=${sweepNamesSkipList}`);
+});
+
+// G18e — §6.4: A GENUINE ABSENCE RUN IS STILL DETECTED. THE ONLY POSITIVE TEST IN THE SUITE.
+//
+// Every other AWOL scenario asserts the SAFE direction — not suspended, not alerted, not barred.
+// That is right, and it is also why a fix that simply switched detection off would have passed the
+// entire suite. Nothing anywhere proved the detector still fires. This does.
+//
+// Runnable only now that awol_skip_list is mocked: the sweep used to abandon at its first gate, so
+// it never reached awol_set_suspended and a suspension could not be observed end to end.
+await scenario('G18e · a real 3-day absence run is still detected and a case opened', manila(2026,7,24,8,0), async (page) => {
+  mock.tgConfigured = true; mock.awolGroupId = '-1007778889990';
+  await page.evaluate(() => loadTgFromCloud());
+  // 07/20 is his last punch. 07/21, 07/22, 07/23 are absent working days — a genuine run of three,
+  // which is the threshold (dates.length < 3 continues). 07/19 is a Sunday and transparent either
+  // way. He has recent history, so the never-punched net does not shield him.
+  mock.punchDaysExtra = { RSR0100: ['2026-07-14', '2026-07-17', '2026-07-20'] };
+  await page.evaluate(() => { suspendedEmployees = {}; awolPending = {}; leaveRequests = []; records = {}; });
+  const chain = await chainOf(page, 'RSR0100');
+  await page.evaluate(() => checkAllAbsences());
+  const c = mock.suspensions['RSR0100'];
+  const opened = !!(c && c.active);
+  const reasonOk = !!(c && /Absent 3 consecutive days without approved leave/.test(c.reason || ''));
+  const datesOk = !!(c && Array.isArray(c.absent_dates) && c.absent_dates.length === 3
+    && c.absent_dates.includes('2026-07-23') && c.absent_dates.includes('2026-07-21'));
+  const alerted = mock.telegram.some(m => /RSR0100/.test(m.text));
+  // A case is OPENED. He is NOT barred — Defect C: the sweep never writes the punch gate, so he
+  // can still clock in tomorrow. Both halves matter; proving only the first would be proving the
+  // thing that hurt people.
+  const barred = await page.evaluate(() => !!suspendedEmployees['RSR0100']);
+  report('G18e · genuine 3-day run → case opened, alert sent, worker NOT barred from punching',
+    chain.length === 3 && opened && reasonOk && datesOk && alerted && !barred,
+    `chain=${chain.length} opened=${opened} reason="${(c && c.reason) || ''}" `
+    + `dates=${JSON.stringify((c && c.absent_dates) || [])} alerted=${alerted} barredLocally=${barred}`);
 });
 
 // ==============================================================================

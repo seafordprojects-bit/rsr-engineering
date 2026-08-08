@@ -1,0 +1,256 @@
+# A retired build is still writing disciplinary events
+
+Incident 2026-08-05 23:12 UTC · awol_events 51–77 · Status: ANALYSIS, nothing run, nothing pushed
+
+---
+
+## 0. The diagnosis needs one correction first
+
+The working assumption was that the note string *"Absent for 7 consecutive day(s) without filed
+leave"* **entered** at `c0cb52f` and so the writer runs something between `c0cb52f` and `c6696df` —
+a 25½-hour window.
+
+That is backwards. `git log -S` reports commits where the **count** of a string changed, in either
+direction, and this one changed by going to **zero**:
+
+| ref | the string |
+|---|---|
+| `c0cb52f~1` (`v2026-07-24b`) | **present** — `kiosk/index.html:2247` |
+| `c0cb52f` (2026-07-25) | **absent** — replaced with *"Absent N consecutive days without approved leave"* |
+
+`c0cb52f` **removed** it. So the writing device is running a build **at or older than
+`v2026-07-24b`**, and the string traces back through `01c1552` (2026-06-14) to before the file was
+even moved into `kiosk/`. The search window is roughly **six weeks of builds, not 25 hours** — which
+matters, because it means the device may have been offline or unattended far longer than assumed.
+
+`c6696df` (the disable) is a red herring here: it is *later* than the build in question and its own
+appearance in `git log -S` is the same counting artefact.
+
+## 1. What actually wrote the rows
+
+Three separate pieces of the old build, and none of them is the sweep you would expect.
+
+**The local map.** The old `checkAllAbsences()` (`c0cb52f~1:2238`) is not a server sweep at all — it
+writes `suspendedEmployees` into **localStorage** and calls `saveData()`. It calls no RPC. Its
+absence count comes from `getConsecutiveAbsences()`, a bare `for (let i = 1; i <= 7; i++)` walk over
+the tablet's own `records` map. Hence **7** in the note text: seven is that loop's ceiling, not a
+finding about anybody. It has no separation filter, no exemption list, no PEM check, no punch
+history, and no site gate — none of those existed yet. It flags whoever the local map cannot
+account for.
+
+That is why **RSR 0000 (the owner)** and **RSR 0017 (separated 2026-07-11)** are in the batch. They
+were never filtered because there was nothing to filter them.
+
+**The pusher.** `awolCutover()` (`c0cb52f~1:2301`):
+
+```js
+if (localStorage.getItem('rsr_awol_cutover') === 'done') return;
+const local = JSON.parse(localStorage.getItem('rsr_suspended') || '{}') || {};
+for (const code of Object.keys(local)) {
+  await sbClient.rpc('awol_set_suspended', { p_code: code, p_reason: e.reason || 'migrated', … });
+}
+localStorage.setItem('rsr_awol_cutover', 'done');
+```
+
+A one-time cutover that pushes **the entire accumulated local map** through the real RPC in a tight
+loop. That is the 3-second burst and the unbroken id run 51–77 — 27 sequential calls, no gaps.
+
+**Why nobody was barred.** `awol_set_suspended` opens a case with `barred_at` NULL. Detection has
+not been able to bar anyone since Defect C. The fail-open held, exactly as in the 08-04 batch.
+
+### The trigger, and why this can happen again
+
+`rsr_awol_cutover` is a **localStorage flag**. Clearing site data clears it — and clearing site data
+is precisely what `reset.html` does. On a stale device, a reset does not clean it: it **re-arms the
+cutover** and re-fires the entire backlog on the next load.
+
+Both incidents now share that shape. The 08-04 batch followed a `reset.html` clear; this one is a
+`reset.html` clear away from repeating. **Do not send this device through `reset.html`.** It is the
+one action guaranteed to fire it again.
+
+---
+
+## 2. Identifying the device
+
+### What is NOT in the write path
+
+- **`awol_events`** records nothing about its writer. `actor` is the string literal `'detection'`,
+  hard-coded in `awol_set_suspended`. No device, no site, no user agent, no IP.
+- **`employee_suspensions`** carries the same 27 codes with the old reason string, and no device
+  column either.
+- The RPC is `security definer` and takes four scalars. Nothing about the caller survives the call.
+
+So nothing inside the disciplinary tables identifies the tablet. That is itself a finding.
+
+### The one in-repo lead: `kiosk_health`
+
+The old build **does** write the heartbeat — `c0cb52f~1:5722` upserts `kiosk_health` with
+`device_id` and `site`, guarded by `IS_LOCALHOST` so it is a real tablet and not a walkthrough.
+
+```sql
+-- Which tablets were alive around the burst? 23:12 UTC = 07:12 Manila.
+select device_id, site, last_seen, stuck_count, queue_length
+  from public.kiosk_health
+ where last_seen between timestamptz '2026-08-05 22:40+00' and timestamptz '2026-08-05 23:40+00'
+ order by last_seen;
+
+-- And the standing question: which device has NOT been seen recently at all?
+select device_id, site, last_seen, now() - last_seen as age
+  from public.kiosk_health order by last_seen;
+```
+
+**Treat this as circumstantial.** It places a device at a site at a time; it does not prove that
+device made the calls. Two tablets at one yard, or a `device_id` regenerated by the site-data clear
+that re-armed the cutover, would both mislead. Corroborate before acting on it.
+
+### The distinctive Telegram signature
+
+The old build's alert is textually unlike the current one — `sendAbsenceSuspensionAlert` posts
+*"🚨 Employee Suspended … This employee is now blocked from punching in. Approve reinstatement?"*
+with inline buttons whose `callback_data` is `approve_reinstate_<CODE>_<epoch>`. The current build
+posts *"AWOL — Account Suspended"* with a letter link and **no buttons**.
+
+If 27 of the old-format messages landed in the group at 07:12 Manila, that **confirms the build and
+timestamps it to the second**. It identifies the *build*, not the device — but combined with the
+heartbeat window it narrows things sharply. The `_<epoch>` suffix on each callback is also a clock
+reading from the writing device.
+
+### The definitive answer, which is outside this repo
+
+**Supabase → Logs → API (PostgREST).** Filter `POST /rest/v1/rpc/awol_set_suspended` around
+`2026-08-05 23:12 UTC`. The log lines carry **client IP and user agent** — the only true device
+identity in the whole chain. 27 calls from one address in three seconds will be unmistakable.
+
+Do this first. Everything above is inference; this is evidence.
+
+---
+
+## 3. Stopping a retired build from writing disciplinary events
+
+### Why the obvious approach does not work
+
+The old build calls **the same RPC, with the same four-argument signature, as the current one**.
+There is no header, no version, no field that distinguishes them. Any check *inside* the function
+sees identical input from both. The server cannot tell them apart as things stand.
+
+### The mechanism that does work: remove the entry point
+
+A retired build cannot be taught to send a build stamp — it is frozen. So the only way to refuse it
+is to **take away the signature it calls**:
+
+1. Add `awol_set_suspended(p_code, p_reason, p_dates, p_on, p_build text)` — same body, plus a check
+   that `p_build` is at or above a minimum held in `settings` (so the floor is raised by data, not
+   by a migration).
+2. Ship a kiosk that passes its own `version-stamp` as `p_build`. Verify it live.
+3. **Only then** `drop function public.awol_set_suspended(text, text, jsonb, text);`
+
+After step 3 an old client gets *"function does not exist"* from PostgREST, its call fails, and its
+`catch` swallows it — the same fail-closed direction as an outage. **A `p_build` argument with a
+DEFAULT would not work**: the 4-argument call would still resolve to it. The old signature has to
+stop existing.
+
+**The ordering is load-bearing.** Drop the old signature before the new kiosk is live and every
+tablet stops being able to open a case — including the healthy ones. Steps 1 and 2 are safe in any
+payroll window; step 3 is the gate, and it wants the same care as a deploy.
+
+### A second hole, independent of build gating
+
+`awol-suspensions.sql` grants **`insert`** on `public.employee_suspensions` to `anon`. Later files
+revoked `update` down to two columns, but the insert grant stands. Any client — old build, browser
+console, anything holding the anon key — can write a suspension row directly, bypassing the RPC and
+its PEM guard entirely.
+
+`awol_set_suspended` is `security definer` and does not need the caller to hold table rights. The
+grant should be revoked. That is worth doing regardless of the version gate, and it is a smaller,
+safer change.
+
+### Third: the RPC accepts codes it should refuse
+
+This batch would have been much smaller had the server applied the filters the client applies. The
+function's only guard is `awol_is_pem(p_code)`. It does not check:
+
+- **`separated_at is not null`** → RSR 0017 was accepted five weeks after separation. `awol_skip_list`
+  filters these client-side; the RPC does not.
+- **membership in `employees` at all** → an unknown or retired code opens a case against nobody.
+- **`is_non_punching`** — the table trigger catches this, so it is covered, but by accident of
+  ordering rather than by the function.
+
+Adding those three refusals is defence in depth and is independent of everything above. It would not
+have prevented this incident — the other 25 codes are live workers — but it would have kept the
+owner and a separated man out of the disciplinary log.
+
+---
+
+## 4. Void and correction — now two batches, two causes
+
+Extends the plan in `2026-08-05-awol-detection-data-source.md` §7. Same principle throughout:
+**correct by addition, never by deletion.** The original `detected` rows stay unaltered.
+
+The two batches must NOT be corrected with one shared note, because their causes and their
+remedies differ:
+
+| | ids 41–50 (10 workers) | ids 51–77 (27 workers) |
+|---|---|---|
+| When | 2026-08-04 23:59 → 08-05 00:00 | 2026-08-05 23:12 |
+| Cause | Defect 1 — 21-day lookback over a 10-day pruned local cache | A build ≤ `v2026-07-24b` replaying its local map through `awolCutover()` |
+| Writer | the current build | a device that has not loaded a new build in ≥ 6 weeks |
+| Note text | "Absent 10 consecutive days without approved leave" | "Absent for 7 consecutive day(s) without filed leave" |
+| Fixed by | the merged detection-data-source work | **nothing yet** — a fix cannot reach a device that never loads it |
+| Recurs? | No | **Yes** — on the next site-data clear, including `reset.html` |
+
+### Ordering, which matters more than usual
+
+1. **Find the device first** (§2). Correcting before it is neutralised risks a third batch landing
+   mid-correction and reusing the ids you just wrote about.
+2. **Do not `reset.html` that tablet.** It re-arms the cutover. Take it out of service, or clear
+   `rsr_suspended` and set `rsr_awol_cutover` to `done` by hand before anything else.
+3. Then correct + void, batch by batch, each with its own note.
+
+### What each correction row must say
+
+Per worker, or one row naming all of them — but one row **per batch**, never one across both:
+
+- the finding: the case was false, and on what evidence;
+- the cause, in the batch's own terms;
+- that **no NTE was issued or served, and `barred_at` was never set** — nobody was blocked;
+- for 51–77 specifically: that it was written by a retired build, so the case never reflected any
+  assessment the current system would make.
+
+### Two named cases needing individual handling
+
+- **RSR 0000** — the owner's own code. It should not be capable of carrying a disciplinary case at
+  all; worth a separate note recording that the roster/exemption gap let it happen.
+- **RSR 0017** — separated 2026-07-11, flagged 25 days after leaving. The correction should state
+  that separation predates the case, because a disciplinary row against a former worker is the kind
+  of thing that surfaces in a dispute long after everyone has forgotten why it exists.
+
+### Verification after voiding
+
+```sql
+-- No open case may survive either batch.
+select id, employee_code, event, actor, note, created_at
+  from public.awol_events where id between 41 and 77 order by id;
+
+select employee_code, active, barred_at, reason
+  from public.employee_suspensions
+ where reason like '%without filed leave%' or reason like '%consecutive days without approved leave%';
+-- EXPECT: active false throughout, barred_at null throughout.
+```
+
+And the standing rule from the void work: a voided case must stay voided. `awol-void-mute.sql`
+(written, **not applied**) is what enforces that. Until it is live, re-detection can re-open what
+was just corrected — which for batch 41–50 is a live risk, since the current build still sweeps.
+
+---
+
+## 5. Residual, stated not fixed
+
+- Nothing in the disciplinary tables identifies the client that wrote a row. `actor` is a constant.
+  If build gating goes in, recording the caller's build alongside it would make the next incident an
+  hour's work instead of a day's.
+- There is no inventory of which tablet is on which build. `kiosk_health` knows a device was alive;
+  it does not know what it is running. A build stamp on the heartbeat would close both this gap and
+  the fingerprinting one.
+- A service worker (`kiosk/sw.js`) serves the kiosk network-first with cache fallback. Network-first
+  is the right shape and is not the cause here, but it does mean a tablet that never regains network
+  can serve a cached build indefinitely without anyone seeing a stale stamp.

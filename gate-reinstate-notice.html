@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Carmen Gate — Reinstate Instructions</title>
+<!-- ════════════════════════════════════════════════════════════════════════════
+     TEMPORARY GATE HANDOUT — print one copy for the Carmen gate.
+     Created 2026-07-27 for the window where the live kiosk build (v2026-07-24a)
+     still counts a no-punch Sunday as an absence and can refuse Time In.
+     DELETE THIS FILE once detection reads from the database and the tablets are
+     updated — it describes a bug, not a permanent procedure.
+     Print setup: A4 margins are done with PADDING and @page margin:0, the same
+     pattern that fixed the AWOL letter's print clipping (commit e996f74).
+     ════════════════════════════════════════════════════════════════════════════ -->
+<style>
+  @page { size: A4; margin: 0; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #fff; color: #000; }
+  body {
+    font-family: Arial, Helvetica, sans-serif;
+    padding: 18mm 16mm;
+    max-width: 210mm;
+    margin: 0 auto;
+    line-height: 1.35;
+  }
+  h1 { font-size: 30px; margin: 0 0 4px; letter-spacing: .5px; }
+  .sub { font-size: 17px; font-weight: 700; margin: 0 0 16px; }
+
+  .watch {
+    border: 3px solid #000; padding: 12px 14px; margin: 0 0 18px;
+    font-size: 19px; font-weight: 700; line-height: 1.4;
+  }
+  .watch .lead { font-size: 21px; display: block; margin-bottom: 6px; }
+
+  .what { font-size: 19px; margin: 0 0 16px; line-height: 1.45; }
+  .what b { font-size: 20px; }
+
+  ol { font-size: 21px; margin: 0 0 16px; padding-left: 30px; }
+  ol li { margin-bottom: 11px; line-height: 1.35; }
+
+  .names { border: 2px solid #000; padding: 10px 14px; margin: 0 0 16px; font-size: 19px; }
+  .names b { font-size: 21px; }
+
+  .note { font-size: 18px; margin: 0 0 16px; line-height: 1.4; }
+
+  .call {
+    border: 3px solid #000; background: #000; color: #fff;
+    padding: 12px 14px; font-size: 21px; font-weight: 700; text-align: center;
+  }
+  @media print { .noprint { display: none !important; } }
+  .noprint {
+    position: fixed; top: 10px; right: 10px;
+    background: #111; color: #fff; border: 0; border-radius: 8px;
+    padding: 10px 16px; font-size: 14px; font-weight: 700; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<button class="noprint" onclick="window.print()">Print</button>
+
+<h1>IF A MAN IS REFUSED AT THE TABLET</h1>
+<p class="sub">Carmen gate — keep this by the tablet</p>
+
+<div class="watch">
+  <span class="lead">STAND AT THE TABLET FROM 7:45 AM AND WATCH.</span>
+  Do not wait to be told. If a man walks away after a red message, GO AFTER HIM.
+  He will not necessarily complain.
+</div>
+
+<p class="what">
+  He taps <b>Time In</b> and a <b>red message</b> appears saying <b>“Account Suspended”</b>.
+  He has done nothing wrong. The tablet is counting Sunday as an absence by mistake.
+  <b>Let him work.</b> Then fix it on the tablet:
+</p>
+
+<ol>
+  <li>Press and hold the <b>big title at the very top of the screen</b> for about <b>2 seconds</b>, then let go.</li>
+  <li>A number pad appears. Type the <b>6-digit admin PIN</b>.</li>
+  <li>A box titled <b>“Stuck punches”</b> appears. Press and hold <b>its title</b> for about <b>2 seconds</b>, then let go.</li>
+  <li>A list of buttons appears. Tap <b>Staff</b>.</li>
+  <li>Scroll to the man’s name. He has a red <b>Suspended</b> tag.</li>
+  <li>Tap the green <b>Reinstate</b> button next to his name.</li>
+  <li>Tell him to tap <b>Time In</b> again. It will work now.</li>
+</ol>
+
+<div class="names">
+  <b>Watch for these three especially:</b><br />
+  Allan Manos &nbsp;·&nbsp; Art Tañola &nbsp;·&nbsp; Jembo<br />
+  There may be a fourth. Anyone who gets the red message is treated the same way.
+</div>
+
+<p class="note">
+  Do this on <b>the tablet he is standing at</b>. It does not carry over to the other tablet.
+  Do not press anything else in that screen.
+</p>
+
+<div class="call">
+  IF YOU ARE UNSURE, CALL RAFFY. ANY HOUR.<br />
+  DO NOT GUESS AND DO NOT SKIP IT.
+</div>
+
+</body>
+</html>

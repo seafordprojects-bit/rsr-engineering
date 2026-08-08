@@ -11,7 +11,7 @@ import { supabase } from './supabase.js';
 // one without opening devtools. Shown on the lock screen, the launcher and the admin header.
 // MUST be bumped in lockstep with the `home.js?v=` query string in admin/index.html, index.html
 // and preflight.html. A stamp that lags the query string is worse than none: it reads as proof.
-const BUILD = 'v2026-08-05a';
+const BUILD = 'v2026-08-07c';
 
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
 // The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
@@ -552,6 +552,11 @@ function AwolSuspensions({ emps, flash }) {
   const [manual, setManual] = useState(null);
   const [err, setErr] = useState('');
   const [busy, setBusy] = useState(false);
+  // Voided cases are history, not a to-do list — they need no decision and the section grows
+  // without bound, pushing the outstanding cases that DO need attention off the screen. Collapsed
+  // by default; display only. The rows themselves, the Release buttons and the nightly re-check
+  // are untouched — expanding renders exactly what rendered before.
+  const [showMuted, setShowMuted] = useState(false);
   // Synchronous guard for run() — `busy` (state) only takes effect on re-render, which cannot
   // happen until the currently-scheduled run() has already started executing (see the comment
   // on `run` below). A second tap in that window would read a still-false `busy` from its own
@@ -767,8 +772,12 @@ Makatrabaho na siya pag-usab. Desisyon ni ${actor} ${today}.`);
         </div>`)
         : html`<div class="empty">Nobody outstanding.</div>`}
 
-      <div class="sectlabel">Voided — detection muted (${muted.length})</div>
-      ${muted.length ? muted.map(r => html`
+      <div class="sectlabel" style="cursor:pointer;user-select:none"
+        onClick=${() => setShowMuted(!showMuted)}>
+        Voided — detection muted (${muted.length})
+        <span style="text-transform:none;font-weight:700">${showMuted ? '▾ hide' : '▸ show'}</span>
+      </div>
+      ${!showMuted ? '' : muted.length ? muted.map(r => html`
         <div class="row" key=${r.employee_code} style="align-items:flex-start">
           <div>
             <div class="name">${nameOf(r.employee_code)}</div>
@@ -1921,6 +1930,15 @@ function App() {
           busy=${leaveBusy} err=${leaveErr} onSubmit=${runLeaveDecision}
           onCancel=${() => { setLeaveAsk(null); setLeaveErr(''); }} />` : '',
         ...hrRows.map(r => {
+        // 'Provisional' is decidable here too (2026-08-08). It is what ReportedAbsence writes — a
+        // man told someone he would be out and it was recorded THAT DAY (Defect G). It suppresses
+        // detection immediately and NEVER expires, and until now nothing anywhere read it back for
+        // a decision, so every reported absence sat undecidable forever. The status pill stays on
+        // (rendered unconditionally below), and statusPill already colours the two differently —
+        // Pending amber, Provisional grey — so a reported-absence hold is still distinguishable
+        // from an ordinary pending leave at a glance.
+        // The RPC has its own guard and must accept 'Provisional' as well, or these buttons return
+        // "Already Provisional": docs/leave-decide-accept-provisional.sql.
         const ask = (st) => { setLeaveErr(''); setLeaveAsk({ row: r, status: st }); };
         const note = leaveNotes[r.id];
         return html`
@@ -1936,7 +1954,7 @@ function App() {
               <button class="btn ghost" style="padding:4px 10px;font-size:12px;margin-top:6px"
                 onClick=${() => setLeaveNotes(n => { const c = { ...n }; delete c[r.id]; return c; })}>Dismiss</button>
             </div>` : ''}
-            ${r.status === 'Pending' ? html`<div style="display:flex;gap:8px;margin-top:8px">
+            ${(r.status === 'Pending' || r.status === 'Provisional') ? html`<div style="display:flex;gap:8px;margin-top:8px">
               <button class="btn" style="padding:6px 14px;font-size:13px" onClick=${() => ask('Approved')}>✅ Approve</button>
               <button class="btn ghost" style="padding:6px 14px;font-size:13px" onClick=${() => ask('Rejected')}>❌ Reject</button>
             </div>` : ''}

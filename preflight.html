@@ -40,16 +40,26 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // conflicts on this line — main's value must name what is DEPLOYED, this branch's must name what
 // is being tested. Neither is wrong; they answer different questions. Resolve in favour of the
 // branch while the branch is unshipped.
-// payroll from THIS branch (v2026-08-04a — the Time-approvals tab, NOT live, walkthrough pending);
-// kiosk from the AWOL branch (v2026-08-03a — also NOT live).
-// Live on main today: payroll v2026-07-25a. Bumped here in lockstep with the stamp at
-// payroll/index.html:141 — these two move together or the stale-build guard misfires.
-const EXPECT = { 'payroll/index.html':'v2026-08-04a', 'kiosk/index.html':'v2026-08-03a',
+// RESOLVED at the 2026-08-08 merge of main into this branch. "Main's stamps win" is NOT the rule
+// that applies here, and taking it literally would have broken two pages: EXPECT must name what
+// THIS TREE ACTUALLY SERVES, and after the merge each page comes from a different side.
+//   payroll/index.html   — from THIS BRANCH (main never touched it) → v2026-08-04a
+//   kiosk/index.html     — from MAIN (the branch never touched it)  → v2026-08-06c
+//   admin/ + index.html  — BOTH sides touched; re-bumped once at the merge → home.js?v=2026-08-07c
+//   coordinator/         — from THIS BRANCH → coordinator.js?v=2026-08-04c
+// Taking main's payroll value (v2026-07-25a) against the branch's payroll/index.html would have
+// made check 1 fail on a page that is perfectly fine, which is exactly the misfire the stale-build
+// guard exists to prevent.
+//
+// NOTHING BELOW IS LIVE except kiosk v2026-08-06c and the dashboard's ancestor build. The payroll
+// Time-approvals tab and the coordinator Time-correction surface are still walkthrough-pending —
+// nine Gate C items remain unticked. This branch is not cleared to ship.
+const EXPECT = { 'payroll/index.html':'v2026-08-04a', 'kiosk/index.html':'v2026-08-06c',
                  'monitoring/roll-call.html':'v2026-07-18a', 'monitoring/borrow.html':'v2026-07-16c',
                  'tools/index.html':'v2026-07-19b', 'monitoring/index.html':'v2026-07-16c',
                  'monitoring/job-order.html':'v2026-07-19a', 'monitoring/efficiency.html':'v2026-07-18a',
                  'material-issuance/index.html':'v2026-07-19b',
-                 'admin/index.html':'home.js?v=2026-08-05a', 'index.html':'home.js?v=2026-08-05a',
+                 'admin/index.html':'home.js?v=2026-08-07c', 'index.html':'home.js?v=2026-08-07c',
                  'coordinator/index.html':'coordinator.js?v=2026-08-04c',
                  'awol-letter.html':'v2026-08-01a' };
 
