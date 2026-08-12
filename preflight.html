@@ -35,25 +35,23 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Expected version stamp per deployed page (this file sits at the repo root, so the
 // pages are same-origin siblings under payroll/ and kiosk/). Bump these each deploy.
-// RULE (owner, 2026-07-31): ON THIS BRANCH preflight tracks the BRANCH build. It flips to the live
-// stamp only when this branch merges to main and ships. That is why merging main here always
-// conflicts on this line — main's value must name what is DEPLOYED, this branch's must name what
-// is being tested. Neither is wrong; they answer different questions. Resolve in favour of the
-// branch while the branch is unshipped.
-// RESOLVED at the 2026-08-08 merge of main into this branch. "Main's stamps win" is NOT the rule
-// that applies here, and taking it literally would have broken two pages: EXPECT must name what
-// THIS TREE ACTUALLY SERVES, and after the merge each page comes from a different side.
-//   payroll/index.html   — from THIS BRANCH (main never touched it) → v2026-08-04a
-//   kiosk/index.html     — from MAIN (the branch never touched it)  → v2026-08-06c
-//   admin/ + index.html  — BOTH sides touched; re-bumped once at the merge → home.js?v=2026-08-07c
-//   coordinator/         — from THIS BRANCH → coordinator.js?v=2026-08-04c
-// Taking main's payroll value (v2026-07-25a) against the branch's payroll/index.html would have
-// made check 1 fail on a page that is perfectly fine, which is exactly the misfire the stale-build
-// guard exists to prevent.
+// RULE (owner, 2026-07-31): EXPECT must always name what THIS TREE SERVES. On an unshipped branch
+// that is the branch build, which is why merging main into a branch reliably conflicts on these
+// lines — main's value names what is DEPLOYED, the branch's names what is being TESTED. Neither is
+// wrong; they answer different questions. Resolve in favour of the branch while it is unshipped,
+// and note that "main's stamps win" is NOT a safe shortcut: at the 2026-08-08 merge each page came
+// from a different side, and taking main's payroll value (v2026-07-25a) against the branch's
+// payroll/index.html would have failed check 1 on a page that was perfectly fine — the exact
+// misfire the payroll stale-build guard exists to prevent.
 //
-// NOTHING BELOW IS LIVE except kiosk v2026-08-06c and the dashboard's ancestor build. The payroll
-// Time-approvals tab and the coordinator Time-correction surface are still walkthrough-pending —
-// nine Gate C items remain unticked. This branch is not cleared to ship.
+// SHIPPED 2026-08-12: coordinator-time-correction merged to main and pushed. Every value below now
+// names a LIVE build. The payroll Time-approvals tab and the coordinator Time-correction surface
+// went out together after all eleven Gate C walkthrough items passed on localhost.
+//
+// NOTE — payroll/index.html is load-bearing here, not just documentation: payroll's own
+// checkBuildFresh() fetches THIS FILE and compares its stamp against the EXPECT entry below. If the
+// two drift, payroll disables every edit and decision path behind a red banner. Bump the page and
+// this line in lockstep, always.
 const EXPECT = { 'payroll/index.html':'v2026-08-04a', 'kiosk/index.html':'v2026-08-06c',
                  'monitoring/roll-call.html':'v2026-07-18a', 'monitoring/borrow.html':'v2026-07-16c',
                  'tools/index.html':'v2026-07-19b', 'monitoring/index.html':'v2026-07-16c',
