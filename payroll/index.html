@@ -2087,6 +2087,7 @@ async function apprWriteLock(iso){
 }
 
 function apprCloseDay(){
+  if(_buildStale){ alert('OUTDATED BUILD — hard reload (open reset.html) before closing a day. This close was blocked to prevent a silent no-op that looks successful but leaves the day open to the coordinator.'); return; }
   if(_apprBusy) return;
   const iso=document.getElementById('appr-date').value;
   const stillPending=_apprItems.filter(it=>!it.handled).length;
