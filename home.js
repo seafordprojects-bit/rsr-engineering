@@ -11,7 +11,7 @@ import { supabase } from './supabase.js';
 // one without opening devtools. Shown on the lock screen, the launcher and the admin header.
 // MUST be bumped in lockstep with the `home.js?v=` query string in admin/index.html, index.html
 // and preflight.html. A stamp that lags the query string is worse than none: it reads as proof.
-const BUILD = 'v2026-08-07c';
+const BUILD = 'v2026-08-15a';
 
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
 // The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
@@ -45,6 +45,29 @@ async function notifyAwol(text) {
       body: JSON.stringify({ chat_id: id, text, parse_mode: 'HTML' }),
     }).catch(() => {})));
   } catch (_) {}
+}
+// Holiday notice — READ-ONLY NOTIFIER. It reads the holiday it was handed and sends. It sets no
+// flag, claims no row and updates nothing, so it can fail, be retried, or fire twice without
+// corrupting anything. No send-log is needed here (unlike the cron-fired cutoff reminder) because
+// this fires on a human pressing Save, so "once per press" is already the natural behaviour.
+//
+// Sent from the BROWSER, after the RPC has returned ok — deliberately not from inside the database
+// transaction, so a Telegram outage can never roll back a correctly recorded holiday. The cost is
+// that a send can fail silently, so unlike notifyAwol this one REPORTS its result and the caller
+// tells the owner to post the notice by hand.
+async function notifyHoliday(text) {
+  try {
+    const token = await getSetting('tg_token');
+    if (!token) return false;
+    const grp = (await getSetting('tg_group')) || (await getSetting('tg_awol_group')) || '';
+    const targets = grp ? [grp] : String((await getSetting('mgr_ids')) || '').split(',').map(s => s.trim()).filter(Boolean);
+    if (!targets.length) return false;
+    const res = await Promise.all(targets.map(id => fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: id, text, parse_mode: 'HTML' }),
+    }).then(r => r.ok).catch(() => false)));
+    return res.some(Boolean);
+  } catch (_) { return false; }
 }
 // Edit the ORIGINAL 🚨 alert so the group reads as a running open/resolved log.
 async function editAwolMsg(chat, msgId, text) {
@@ -1295,6 +1318,21 @@ function App() {
   const [dismissalV, setDismissalV] = useState('21:00');
   const [nightStart, setNightStart] = useState('22:00');
   const [nightEnd, setNightEnd] = useState('08:00');
+  // ── Holidays (spec: docs/superpowers/specs/2026-08-12-holiday-pay.md) ──
+  const [hols, setHols] = useState(null);        // null = not loaded yet, [] = loaded and empty
+  const [holErr, setHolErr] = useState('');
+  const [holEditId, setHolEditId] = useState(null);   // null = the Add form, an id = editing that row
+  const [holDate, setHolDate] = useState('');
+  const [holName, setHolName] = useState('');
+  const [holType, setHolType] = useState('regular');
+  const [holScope, setHolScope] = useState('national');
+  const [holPin, setHolPin] = useState('');
+  const [holBusy, setHolBusy] = useState(false);
+  // Delete confirms INLINE rather than through window.prompt: a prompt renders its input in clear
+  // text, and the admin passcode is the same secret that opens the kiosk admin panel and authorises
+  // every holiday RPC. It is never typed anywhere it can be read over a shoulder.
+  const [holDelId, setHolDelId] = useState(null);
+  const [holDelPin, setHolDelPin] = useState('');
   const [rate, setRate] = useState('');          // current/starting daily rate
   const [incRate, setIncRate] = useState('');     // new rate for an increase
   const [incDate, setIncDate] = useState('');
@@ -1491,6 +1529,82 @@ function App() {
     } catch (e) { flash('Error: ' + e.message); }
   };
 
+  // ── HOLIDAYS ───────────────────────────────────────────────────────────────────────────────
+  // Every write goes through a passcode-gated RPC that verifies admin_verify_passcode() INSIDE
+  // itself. Nothing here decides authorisation, and the tables carry no insert/update/delete grant
+  // for anon, so this component genuinely cannot write around the gate.
+  const HOL_TYPE_LABEL = {
+    regular: 'Regular holiday',
+    special_nonworking: 'Special non-working day',
+    special_working: 'Special working day (ordinary pay)',
+  };
+  // holidays.date is a REAL date column, so it arrives as 'YYYY-MM-DD' with no timezone. Formatting
+  // it at NOON local avoids the classic off-by-one where midnight UTC renders as the previous day.
+  const holDMY = (d) => {
+    const p = String(d || '').slice(0, 10).split('-');
+    if (p.length !== 3) return String(d || '—');
+    return new Date(+p[0], +p[1] - 1, +p[2], 12).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: '2-digit' });
+  };
+  const loadHols = async () => {
+    setHolErr('');
+    try {
+      const { data, error } = await supabase.from('holidays')
+        .select('id,date,name,type,scope,added_by,created_at').order('date', { ascending: false }).limit(500);
+      if (error) throw error;
+      setHols(data || []);
+    } catch (e) {
+      setHols([]);
+      setHolErr('Could not load holidays: ' + (e.message || e) + ' — has holiday-pay.sql been run?');
+    }
+  };
+  const holReset = () => { setHolEditId(null); setHolDate(''); setHolName(''); setHolType('regular'); setHolScope('national'); setHolPin(''); };
+  const holStartEdit = (h) => {
+    setHolEditId(h.id); setHolDate(String(h.date).slice(0, 10)); setHolName(h.name || '');
+    setHolType(h.type || 'regular'); setHolScope(h.scope || 'national'); setHolPin('');
+  };
+  // The notice goes out on BOTH add and edit: after an edit the copy on the wall is wrong and
+  // somebody has to reprint it, which is the entire reason the message exists.
+  const holNotify = async (verb, h) => {
+    const sent = await notifyHoliday(
+      `Holiday ${verb}: ${h.name}, ${holDMY(h.date)}, ${HOL_TYPE_LABEL[h.type] || h.type} — please post on the wall.`);
+    if (!sent) flash('Saved — but the Telegram notice did NOT send. Post it on the wall yourself.');
+  };
+  const holSave = async () => {
+    if (!holDate || !holName.trim()) { flash('Give the holiday a date and a name'); return; }
+    if (!holPin) { flash('Enter the admin passcode'); return; }
+    setHolBusy(true);
+    try {
+      const args = holEditId
+        ? { p_id: holEditId, p_date: holDate, p_name: holName.trim(), p_type: holType, p_scope: holScope, p_passcode: holPin, p_actor: 'Owner' }
+        : { p_date: holDate, p_name: holName.trim(), p_type: holType, p_scope: holScope, p_passcode: holPin, p_actor: 'Owner' };
+      const { data, error } = await supabase.rpc(holEditId ? 'holiday_edit' : 'holiday_add', args);
+      if (error) throw error;
+      if (!data || data.ok !== true) { flash((data && data.reason) || 'The database refused it.'); setHolBusy(false); return; }
+      const verb = holEditId ? 'updated' : 'added';
+      holReset();
+      await loadHols();
+      flash(`Holiday ${verb}`);
+      await holNotify(verb, { name: data.name, date: data.date, type: data.type });
+    } catch (e) { flash('Error: ' + (e.message || e)); }
+    setHolBusy(false);
+  };
+  const holDelAsk = (h) => { setHolDelId(h.id); setHolDelPin(''); };
+  const holDelCancel = () => { setHolDelId(null); setHolDelPin(''); };
+  const holDelete = async (h) => {
+    if (!holDelPin) { flash('Enter the admin passcode'); return; }
+    setHolBusy(true);
+    try {
+      const { data, error } = await supabase.rpc('holiday_delete', { p_id: h.id, p_passcode: holDelPin, p_actor: 'Owner' });
+      if (error) throw error;
+      if (!data || data.ok !== true) { flash((data && data.reason) || 'The database refused it.'); setHolBusy(false); return; }
+      if (holEditId === h.id) holReset();
+      holDelCancel();
+      await loadHols();
+      flash('Holiday deleted');
+    } catch (e) { flash('Error: ' + (e.message || e)); }
+    setHolBusy(false);
+  };
+
   const loadEmps = async () => { try { setEmps(await getEmployees()); } catch (_) {} };
   const pickEmp = async (id) => {
     setEmpSel(id);
@@ -1581,6 +1695,7 @@ function App() {
 
   useEffect(() => { if (authed && onAdminPage) loadEmps(); }, [authed]);
   useEffect(() => { if (authed && showSet) loadEmps(); }, [authed, showSet]);
+  useEffect(() => { if (authed && showSet && hols === null) loadHols(); }, [authed, showSet]);
 
   useEffect(() => {
     if (!(authed && showSet) || tgLoaded) return;
@@ -2291,6 +2406,88 @@ function App() {
             <input type="password" inputmode="numeric" value=${ownerPin} onInput=${e => setOwnerPin(e.target.value)} placeholder="choose a passcode" />
           <//>
           <button class="btn" onClick=${saveOwnerPin}>Save owner passcode</button>
+        </div>
+
+        <div class="card">
+          <div class="sectlabel" style="margin-top:0">Holidays</div>
+          <p class="note" style="margin:0 0 12px">
+            Declared holidays the payroll pays from. <b>Regular holiday</b> pays 200% when worked, and 100%
+            when not worked if the man punched on the last day the yard ran. <b>Special non-working day</b>
+            pays 130% when worked (same day-before condition), nothing when not worked.
+            <b>Special working day</b> is an ordinary day with no premium. Pakyaw men are excluded.
+            Adding or editing sends a Telegram notice so the wall copy gets reprinted.
+          </p>
+          ${holErr ? html`<p class="note" style="color:#a32d2d;margin:0 0 10px">${holErr}</p>` : ''}
+
+          <${Field} label="Date">
+            <input type="date" value=${holDate} onInput=${e => setHolDate(e.target.value)} />
+          <//>
+          <${Field} label="Name">
+            <input value=${holName} onInput=${e => setHolName(e.target.value)} placeholder="e.g. Araw ng Kagitingan" />
+          <//>
+          <${Field} label="Type">
+            <select value=${holType} onChange=${e => setHolType(e.target.value)}>
+              <option value="regular">Regular holiday (200% / 100%)</option>
+              <option value="special_nonworking">Special non-working day (130% / nothing)</option>
+              <option value="special_working">Special working day (ordinary pay)</option>
+            </select>
+          <//>
+          <${Field} label="Scope">
+            <select value=${holScope} onChange=${e => setHolScope(e.target.value)}>
+              <option value="national">National</option>
+              <option value="local">Local</option>
+            </select>
+          <//>
+          <${Field} label="Admin passcode">
+            <input type="password" inputmode="numeric" value=${holPin} onInput=${e => setHolPin(e.target.value)} placeholder="required to save" />
+          <//>
+          <div style="display:flex;gap:8px;align-items:center">
+            <button class="btn" disabled=${holBusy} onClick=${holSave}>
+              ${holBusy ? 'Saving…' : (holEditId ? 'Save changes' : 'Add holiday')}
+            </button>
+            ${holEditId ? html`<button class="btn" style="background:transparent;color:var(--ink-dim)" onClick=${holReset}>Cancel</button>` : ''}
+          </div>
+
+          <div class="sectlabel">Recorded (${hols === null ? '…' : hols.length})</div>
+          ${hols === null
+            ? html`<div class="note">Loading…</div>`
+            : (hols.length === 0
+              ? html`<div class="note">No holidays recorded yet.</div>`
+              : hols.map(h => html`
+                <div key=${h.id} style="padding:7px 0;border-bottom:1px solid var(--line)">
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+                    <div style="min-width:0">
+                      <div style="font-weight:600;font-size:13px">${h.name}</div>
+                      <div class="note" style="margin:0">
+                        ${holDMY(h.date)} · ${HOL_TYPE_LABEL[h.type] || h.type}${h.scope === 'local' ? ' · local' : ''}
+                      </div>
+                    </div>
+                    <div style="display:flex;gap:6px;flex:none">
+                      <button class="btn" style="padding:5px 10px;font-size:12px" disabled=${holBusy} onClick=${() => holStartEdit(h)}>Edit</button>
+                      <button class="btn" style="padding:5px 10px;font-size:12px;background:#a32d2d" disabled=${holBusy} onClick=${() => holDelAsk(h)}>Delete</button>
+                    </div>
+                  </div>
+                  ${holDelId === h.id ? html`
+                    <div style="margin-top:8px;padding:10px;border:1px solid #a32d2d;border-radius:8px;background:rgba(163,45,45,.06)">
+                      <div style="font-size:12px;font-weight:600;margin-bottom:4px">Delete "${h.name}" on ${holDMY(h.date)}?</div>
+                      <p class="note" style="margin:0 0 8px">
+                        Refused if that day's payroll has already been closed, or if any owner override
+                        is recorded against it.
+                      </p>
+                      <input type="password" inputmode="numeric" value=${holDelPin}
+                             onInput=${e => setHolDelPin(e.target.value)} placeholder="admin passcode"
+                             style="width:100%;margin-bottom:8px" />
+                      <div style="display:flex;gap:8px">
+                        <button class="btn" style="background:#a32d2d;padding:6px 12px;font-size:12px"
+                                disabled=${holBusy} onClick=${() => holDelete(h)}>
+                          ${holBusy ? 'Deleting…' : 'Confirm delete'}
+                        </button>
+                        <button class="btn" style="background:transparent;color:var(--ink-dim);padding:6px 12px;font-size:12px"
+                                disabled=${holBusy} onClick=${holDelCancel}>Cancel</button>
+                      </div>
+                    </div>` : ''}
+                </div>`)
+            )}
         </div>
 
         <div class="card">
