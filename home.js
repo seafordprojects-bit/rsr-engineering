@@ -93,7 +93,7 @@ async function getEmployees() {
     // employment_type / type_effective_from added 2026-07-29, AFTER employment-type.sql was run
     // and verified live (STEP 4 + STEP 5 probes). Naming them any earlier would have repeated the
     // is_active failure described above.
-    .select('id, name, code, position, phone, started_on, pin, sl_balance, vl_balance, daily_rate, home_site, is_issuer, employment_type, type_effective_from').order('name').limit(2000);
+    .select('id, name, code, position, phone, started_on, has_pin, sl_balance, vl_balance, daily_rate, home_site, is_issuer, employment_type, type_effective_from').order('name').limit(2000);
   if (error) throw error;
   return data;
 }
@@ -1301,6 +1301,10 @@ function App() {
   const [emps, setEmps] = useState([]);
   const [empSel, setEmpSel] = useState('');
   const [empPin, setEmpPin] = useState('');
+  // A PIN change is a privileged write: set_employee_pin hashes it server-side
+  // and demands the admin passcode. The gate deliberately keeps no copy of that
+  // passcode, so it is asked for per change, the same as the AWOL decisions do.
+  const [pinAsk, setPinAsk] = useState(null);   // { id, pin } while the pad is up
   const [empSick, setEmpSick] = useState('');
   const [empVac, setEmpVac] = useState('');
   const [empSite, setEmpSite] = useState('');
@@ -1609,7 +1613,7 @@ function App() {
   const pickEmp = async (id) => {
     setEmpSel(id);
     const e = emps.find(x => x.id === id) || {};
-    setEmpPin(e.pin || ''); setEmpSick(e.sl_balance ?? ''); setEmpVac(e.vl_balance ?? ''); setEmpSite(siteNorm(e.home_site) || '');
+    setEmpPin(''); setEmpSick(e.sl_balance ?? ''); setEmpVac(e.vl_balance ?? ''); setEmpSite(siteNorm(e.home_site) || '');
     setRate(e.daily_rate ?? ''); setIncRate(''); setIncDate(''); setIncNote('');
     try { setSalHist(await getSalaryHistory(id)); } catch (_) { setSalHist([]); }
   };
@@ -1632,12 +1636,29 @@ function App() {
     if (!empSel) { flash('Pick an employee'); return; }
     try {
       await updateEmployee(empSel, {
-        pin: empPin.trim() || null,
         sl_balance: empSick === '' ? 0 : Number(empSick),
         vl_balance: empVac === '' ? 0 : Number(empVac),
         home_site: siteNorm(empSite) || siteList[0] || '',
       });
-      flash('Saved'); loadEmps();
+      const wanted = empPin.trim();
+      if (!wanted) { flash('Saved'); loadEmps(); return; }   // blank = leave the PIN alone
+      if (!/^[0-9]{6}$/.test(wanted)) { flash('PIN must be exactly 6 digits — the rest was saved'); loadEmps(); return; }
+      setPinAsk({ id: empSel, pin: wanted });                // the pad asks for the admin passcode
+      flash('Saved — now confirm the PIN change');
+      loadEmps();
+    } catch (e) { flash('Error: ' + e.message); }
+  };
+  // The PIN never travels as a column any more: set_employee_pin bcrypts it,
+  // refuses a duplicate, and reports why rather than throwing.
+  const savePin = async (typed) => {
+    if (!pinAsk) return;
+    try {
+      const { data, error } = await supabase.rpc('set_employee_pin', {
+        p_emp_id: pinAsk.id, p_new_pin: pinAsk.pin, p_passcode: typed,
+      });
+      if (error) throw error;
+      if (!data || data.ok !== true) { flash(data?.reason || 'PIN not changed'); return; }
+      setPinAsk(null); setEmpPin(''); flash('Passcode set for ' + data.name); loadEmps();
     } catch (e) { flash('Error: ' + e.message); }
   };
   const setIssuer = async (id, on) => {
@@ -2313,7 +2334,7 @@ function App() {
                 <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.code || '—'}</span></div>
                 <div class="unit">${e.position || 'No position'}${e.phone ? ' · ' + e.phone : ''}</div>
                 <div class="unit">Rate: ${peso(e.daily_rate)}/day · Sick: ${e.sl_balance ?? 0} · Vacation: ${e.vl_balance ?? 0}</div>
-                <div class="unit">Passcode: <span class="mono" style="font-weight:700;letter-spacing:1px">${e.pin || '— not set —'}</span></div>
+                <div class="unit">Passcode — ${e.has_pin ? 'set ✓' : 'not set ⚠'}</div>
                 <div class="unit" style="margin-top:6px;display:flex;align-items:center;gap:8px">
                   <span>Home site:</span>
                   <select value=${siteNorm(e.home_site)} onChange=${async ev => {
@@ -2325,7 +2346,7 @@ function App() {
                   </select>
                 </div>
               </div>
-              <span class="badge" style=${e.pin ? '' : 'background:var(--hivis);color:#000'}>${e.pin ? 'PIN ✓' : 'no PIN'}</span>
+              <span class="badge" style=${e.has_pin ? '' : 'background:var(--hivis);color:#000'}>${e.has_pin ? 'PIN ✓' : 'no PIN'}</span>
             </div>`) : html`<div class="empty">No personnel yet. Your assistant adds them in the Coordinator.</div>`}
         </div>
         <p class="note" style="text-align:center">Home site is editable here. To set passcode, leave or salary, use the dashboard's <b>settings</b>.</p>
@@ -2351,7 +2372,7 @@ function App() {
       <${ReportedAbsence} emps=${emps} flash=${flash} />
       <${AwolSuspensions} emps=${emps} flash=${flash} />
       ${(() => {
-        const needs = emps.filter(e => !e.pin).length;
+        const needs = emps.filter(e => !e.has_pin).length;
         return needs > 0 ? html`
           <div class="card" style="border-color:var(--hivis);cursor:pointer" onClick=${() => setShowSet(true)}>
             <div style="font-weight:800;color:var(--hivis)">⚠ ${needs} employee${needs>1?'s':''} need a passcode</div>
@@ -2536,7 +2557,7 @@ function App() {
           <p class="note" style="margin:0 0 12px">Authorized issuers unlock the Tools and Material Issuance pages with their OWN employee PIN, and every slip is stamped with their name. Add or remove issuers anytime — no code change.</p>
           ${(() => {
             const issuers = [...emps].filter(e => e.is_issuer).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
-            const nonIssuers = [...emps].filter(e => !e.is_issuer && e.pin).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
+            const nonIssuers = [...emps].filter(e => !e.is_issuer && e.has_pin).sort((a,b)=>(a.name||'').localeCompare(b.name||''));
             return html`
               <div style="margin-bottom:12px">
                 ${issuers.length===0
@@ -2562,8 +2583,8 @@ function App() {
           <${Field} label="Employee">
             <select value=${empSel} onChange=${e => pickEmp(e.target.value)}>
               <option value="">Select employee…</option>
-              ${[...emps].sort((a, b) => (!!a.pin - !!b.pin) || (a.name || '').localeCompare(b.name || ''))
-                .map(e => html`<option value=${e.id}>${e.pin ? '✓' : '⚠'} ${e.name} (${e.code || '—'})</option>`)}
+              ${[...emps].sort((a, b) => (!!a.has_pin - !!b.has_pin) || (a.name || '').localeCompare(b.name || ''))
+                .map(e => html`<option value=${e.id}>${e.has_pin ? '✓' : '⚠'} ${e.name} (${e.code || '—'})</option>`)}
             </select>
           <//>
           ${empSel && (() => {
@@ -2573,14 +2594,15 @@ function App() {
               <div class="unit">${e.position || '—'}${e.phone ? ' · ' + e.phone : ''}${e.started_on ? ' · since ' + e.started_on : ''}</div>
               <div class="unit">Leave — Sick ${e.sl_balance ?? 0} · Vacation ${e.vl_balance ?? 0}</div>
               <div class="unit">Daily rate — ${e.daily_rate ? '₱' + Number(e.daily_rate).toLocaleString('en-PH') : 'not set'}</div>
-              <div class="unit">Passcode — ${e.pin ? 'set ✓' : 'not set ⚠'}</div>
+              <div class="unit">Passcode — ${e.has_pin ? 'set ✓' : 'not set ⚠'}</div>
               <div class="unit">Home site (location) — ${siteNorm(e.home_site) || '—'}</div>
             </div>`;
           })()}
           ${empSel && html`
             <${Field} label="Passcode (PIN)">
-              <input inputmode="numeric" value=${empPin} onInput=${e => setEmpPin(e.target.value)} placeholder="e.g. 1234" />
+              <input inputmode="numeric" maxlength="6" value=${empPin} onInput=${e => setEmpPin(e.target.value)} placeholder="6 digits — leave blank to keep the current one" />
             <//>
+            <p class="note" style="margin:-6px 0 12px">Passcodes are stored hashed and cannot be read back, so this box never shows the current one. Setting a new one asks for the admin passcode.</p>
             <div class="grid" style="margin-bottom:14px">
               <${Field} label="Sick leave (days)"><input type="number" min="0" step="0.5" value=${empSick} onInput=${e => setEmpSick(e.target.value)} placeholder="0" /><//>
               <${Field} label="Vacation leave (days)"><input type="number" min="0" step="0.5" value=${empVac} onInput=${e => setEmpVac(e.target.value)} placeholder="0" /><//>
@@ -2591,7 +2613,12 @@ function App() {
               </select>
             <//>
             <p class="note" style="margin:6px 0 12px">This is the worker’s base. The kiosk pays the away / stay-in allowance only when they clock in at a site other than this one.</p>
-            <button class="btn" onClick=${saveEmp}>Save</button>`}
+            <button class="btn" onClick=${saveEmp}>Save</button>
+            ${pinAsk && html`<${PinPad} key="setpin"
+              title="Confirm the passcode change"
+              note=${'Enter the 6-digit admin PIN to set a new passcode for ' + ((emps.find(x => x.id === pinAsk.id) || {}).name || 'this employee') + '.'}
+              onSubmit=${savePin}
+              onCancel=${() => { setPinAsk(null); flash('PIN change cancelled'); }} />`}`}
         </div>
 
         ${empSel && html`

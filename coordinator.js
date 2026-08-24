@@ -14,7 +14,7 @@ async function getEmployees() {
   // backed by the unique index employees_code_norm_uniq. It is the system's authority on whether
   // two spellings are the same worker, so it is READ here and never recomputed for existing rows.
   const { data, error } = await supabase.from('employees')
-    .select('id, code, code_norm, name, dept, position, phone, network, home_site, pin, started_on, sl_balance, vl_balance, is_suspended')
+    .select('id, code, code_norm, name, dept, position, phone, network, home_site, started_on, sl_balance, vl_balance, is_suspended')
     .order('name').limit(2000);
   if (error) throw error;
   return data;
