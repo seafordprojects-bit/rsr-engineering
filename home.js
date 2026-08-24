@@ -1659,7 +1659,18 @@ function App() {
       if (error) throw error;
       if (!data || data.ok !== true) { flash(data?.reason || 'PIN not changed'); return; }
       setPinAsk(null); setEmpPin(''); flash('Passcode set for ' + data.name); loadEmps();
-    } catch (e) { flash('Error: ' + e.message); }
+    } catch (e) {
+      // A raw "canceling statement due to statement timeout" told the admin
+      // nothing about whether the passcode changed. It does not: a cancelled
+      // statement rolls its transaction back, so the old PIN still stands.
+      const msg = String((e && e.message) || '');
+      if ((e && e.code === '57014') || /statement timeout|canceling statement/i.test(msg)) {
+        flash('That took too long and was cancelled — the passcode was NOT changed. The previous one still works. Try again.');
+      } else {
+        flash('Could not set the passcode: ' + (msg || 'unknown error') + ' — nothing was changed.');
+      }
+      loadEmps();
+    }
   };
   const setIssuer = async (id, on) => {
     try { await updateEmployee(id, { is_issuer: on }); loadEmps(); }
