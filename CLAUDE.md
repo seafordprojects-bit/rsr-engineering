@@ -68,6 +68,23 @@ means confirm the *business* direction, not implementation details.)
 - Kiosk punches save locally first and sync to Supabase via a persistent retry queue
   (30s interval). Sync upsert relies on unique index `uniq_attendance_emp_date`
   on (employee_code, date).
+- **OUT parameters shadow column names in EVERY embedded SQL statement in a function.**
+  A `returns table(status text, id uuid, code text, name text)` puts `status`, `id`,
+  `code` and `name` in scope for the whole body, so an unqualified `where id` inside
+  resolves to the PARAMETER, not the column: `ERROR 42702 column reference "id" is
+  ambiguous`. Same class as the 2026-08-24 on-conflict lesson — `on conflict (id)` is
+  exposed too; name the constraint instead (`on conflict on constraint <pkey>`).
+  **Alias-qualify every table reference inside a function** (`update x t … where t.id`),
+  including in `update`/`set` right-hand sides. Legal bare uses are narrow: INSERT column
+  lists and the left side of a SET target.
+- **Only running a code path proves it. Smoke-test every branch, not just the first.**
+  `identify_employee_by_pin` shipped broken twice: a filter on a nonexistent column
+  (42703, every path) and the shadowing above (42702, the throttle UPDATEs only). Neither
+  is a syntax error — `create function` accepts both, and a single happy-path call misses
+  the branch. When a function has N returns, exercise N paths. Where a path needs a real
+  secret to reach (the success branch needs a real passcode), prove it at the kiosk during
+  the walkthrough, NOT by typing the secret into the SQL editor — the editor keeps a query
+  history and that writes a live passcode into it in clear text.
 
 ## Verification pages in this repo
 - `payroll/diagnostic.html` — inspects attendance data quality and simulates a payroll run.

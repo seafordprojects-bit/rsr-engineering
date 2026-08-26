@@ -11,7 +11,7 @@ import { supabase } from './supabase.js';
 // one without opening devtools. Shown on the lock screen, the launcher and the admin header.
 // MUST be bumped in lockstep with the `home.js?v=` query string in admin/index.html, index.html
 // and preflight.html. A stamp that lags the query string is worse than none: it reads as proof.
-const BUILD = 'v2026-08-15a';
+const BUILD = 'v2026-08-26b';
 
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
 // The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
@@ -81,7 +81,25 @@ async function editAwolMsg(chat, msgId, text) {
     }).catch(() => {});
   } catch (_) {}
 }
+// pin_set_at (employee-pin-set-at.sql) is behind a PROBE rather than named outright, for exactly the
+// reason spelled out in getEmployees() below: naming a column whose migration has not run yet makes
+// PostgREST answer 400 and takes the WHOLE dashboard down, not just the passcode line. The probe is
+// the same shape payroll uses for early_start_paid (payroll/index.html: recordsHaveEarlyStart).
+// Probed once per page load and cached; a false answer simply means no "(since …)" date is shown.
+let _pinSetAtCol = null;
+async function employeesHavePinSetAt() {
+  if (_pinSetAtCol !== null) return _pinSetAtCol;
+  try {
+    const { error } = await supabase.from('employees').select('pin_set_at').limit(1);
+    _pinSetAtCol = !error;
+  } catch (_) { _pinSetAtCol = false; }
+  return _pinSetAtCol;
+}
 async function getEmployees() {
+  // NEVER add `pin` to this list. The column is a bcrypt hash, the screen has no use for it, and a
+  // hash that is never fetched is a hash that cannot be rendered, logged or leaked by accident.
+  // has_pin answers "is one set"; pin_set_at answers "since when". Neither is a secret.
+  const withDate = await employeesHavePinSetAt();
   const { data, error } = await supabase.from('employees')
     // Do NOT name a column here before its migration has been applied. `is_active` was listed
     // before awol-inactive-workers.sql had been run, and because the column did not exist
@@ -93,7 +111,8 @@ async function getEmployees() {
     // employment_type / type_effective_from added 2026-07-29, AFTER employment-type.sql was run
     // and verified live (STEP 4 + STEP 5 probes). Naming them any earlier would have repeated the
     // is_active failure described above.
-    .select('id, name, code, position, phone, started_on, has_pin, sl_balance, vl_balance, daily_rate, home_site, is_issuer, employment_type, type_effective_from').order('name').limit(2000);
+    .select('id, name, code, position, phone, started_on, has_pin, sl_balance, vl_balance, daily_rate, home_site, is_issuer, employment_type, type_effective_from'
+            + (withDate ? ', pin_set_at' : '')).order('name').limit(2000);
   if (error) throw error;
   return data;
 }
@@ -1305,6 +1324,11 @@ function App() {
   // and demands the admin passcode. The gate deliberately keeps no copy of that
   // passcode, so it is asked for per change, the same as the AWOL decisions do.
   const [pinAsk, setPinAsk] = useState(null);   // { id, pin } while the pad is up
+  // Per-row passcode entry on the PERSONNEL screen: { id, name, value } while the admin is typing a
+  // new PIN for one worker. It holds the NEW PIN only, never a stored one - nothing on this screen
+  // ever reads employees.pin. Handing off to pinAsk is what puts the admin-passcode pad up, so the
+  // row button lands on exactly the same set_employee_pin path the settings form already uses.
+  const [rowPin, setRowPin] = useState(null);
   const [empSick, setEmpSick] = useState('');
   const [empVac, setEmpVac] = useState('');
   const [empSite, setEmpSite] = useState('');
@@ -2325,9 +2349,32 @@ function App() {
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }
 
-  // ---- admin: personnel roster (read-only list with details) ----
+  // ---- admin: personnel roster (details + passcode management) ----
   if (adminTab === 'people') {
     const peso = (n) => n ? '₱' + Number(n).toLocaleString('en-PH') : '—';
+    const pinDate = (s) => s
+      ? new Date(s).toLocaleDateString('en-PH', { year: 'numeric', month: 'short', day: '2-digit' })
+      : null;
+    // Three states, and the middle one matters: has_pin is the authority on whether a passcode
+    // exists, pin_set_at only on when it last changed. A row with a passcode set before
+    // 2026-08-26 (or on a tree where employee-pin-set-at.sql has not been run) has no date, and
+    // must still read as SET - showing "No PIN" there would send the office to re-issue a passcode
+    // that works perfectly well.
+    const pinStatus = (e) => {
+      if (!e.has_pin) return { text: 'No PIN', set: false };
+      const d = pinDate(e.pin_set_at);
+      return { text: d ? `PIN set ✓ (since ${d})` : 'PIN set ✓', set: true };
+    };
+    const startRowPin = (e) => { setPinAsk(null); setRowPin({ id: e.id, name: e.name, value: '' }); };
+    const submitRowPin = () => {
+      const v = (rowPin && rowPin.value || '').trim();
+      if (!/^[0-9]{6}$/.test(v)) { flash('PIN must be exactly 6 digits'); return; }
+      // Hand off to the existing gate: pinAsk raises the admin-passcode pad, and savePin calls
+      // set_employee_pin. The new PIN is never written to the column from here - or anywhere else
+      // in this file.
+      setPinAsk({ id: rowPin.id, pin: v });
+      setRowPin(null);
+    };
     return html`
       <header class="app">
         <div class="wrap"><div class="brand" style="justify-content:space-between;display:flex;align-items:center">
@@ -2345,7 +2392,26 @@ function App() {
                 <div class="name">${e.name} <span class="mono" style="color:var(--ink-dim);font-weight:400">· ${e.code || '—'}</span></div>
                 <div class="unit">${e.position || 'No position'}${e.phone ? ' · ' + e.phone : ''}</div>
                 <div class="unit">Rate: ${peso(e.daily_rate)}/day · Sick: ${e.sl_balance ?? 0} · Vacation: ${e.vl_balance ?? 0}</div>
-                <div class="unit">Passcode — ${e.has_pin ? 'set ✓' : 'not set ⚠'}</div>
+                <div class="unit" style="margin-top:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <span style=${pinStatus(e).set ? '' : 'color:var(--hivis);font-weight:700'}>${pinStatus(e).text}</span>
+                  <button onClick=${() => startRowPin(e)}
+                    style="background:none;border:1px solid var(--line);border-radius:8px;color:var(--ink);font-size:12px;font-weight:700;padding:5px 10px;cursor:pointer">
+                    ${e.has_pin ? 'Set new PIN' : 'Set PIN'}
+                  </button>
+                </div>
+                ${rowPin && rowPin.id === e.id && html`
+                  <div style="margin-top:8px;padding:10px;border:1px solid var(--line);border-radius:10px">
+                    <div class="note" style="margin:0 0 8px">New 6-digit passcode for <b>${e.name}</b>. You will be asked for your admin PIN next.</div>
+                    <div style="display:flex;gap:8px;align-items:center">
+                      <input type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"
+                        value=${rowPin.value}
+                        onInput=${ev => setRowPin(r => ({ ...r, value: ev.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                        style="flex:1;letter-spacing:4px;text-align:center;font-weight:700" />
+                      <button class="btn" style="width:auto;padding:8px 14px" onClick=${submitRowPin}>Continue</button>
+                      <button onClick=${() => setRowPin(null)}
+                        style="background:none;border:none;color:var(--ink-dim);font-size:12px;font-weight:700;cursor:pointer">Cancel</button>
+                    </div>
+                  </div>`}
                 <div class="unit" style="margin-top:6px;display:flex;align-items:center;gap:8px">
                   <span>Home site:</span>
                   <select value=${siteNorm(e.home_site)} onChange=${async ev => {
@@ -2360,7 +2426,17 @@ function App() {
               <span class="badge" style=${e.has_pin ? '' : 'background:var(--hivis);color:#000'}>${e.has_pin ? 'PIN ✓' : 'no PIN'}</span>
             </div>`) : html`<div class="empty">No personnel yet. Your assistant adds them in the Coordinator.</div>`}
         </div>
-        <p class="note" style="text-align:center">Home site is editable here. To set passcode, leave or salary, use the dashboard's <b>settings</b>.</p>
+        ${/* The admin-passcode pad. It lives here as well as in the settings form because this
+              screen returns early — setting pinAsk from a row would otherwise change state that
+              nothing on screen renders, and the passcode change would silently never happen. */''}
+        ${pinAsk && html`<${PinPad} key="rowsetpin"
+          title="Confirm the passcode change"
+          note=${'Enter the 6-digit admin PIN to set a new passcode for '
+                 + ((emps.find(x => x.id === pinAsk.id) || {}).name || 'this employee') + '.'}
+          onSubmit=${savePin}
+          onCancel=${() => { setPinAsk(null); flash('PIN change cancelled — the old passcode still works'); }} />`}
+        <p class="note" style="text-align:center">Home site and passcodes are managed here. For leave or salary, use the dashboard's <b>settings</b>.</p>
+        <p class="note" style="text-align:center">A passcode is never shown, here or anywhere — it is stored scrambled and cannot be read back. If someone forgets theirs, set a new one.</p>
       </div>
       ${toast && html`<div class="toast">${toast}</div>`}`;
   }

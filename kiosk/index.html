@@ -38,6 +38,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-siz
 .pin-dots{display:flex;justify-content:center;gap:20px;margin-bottom:7px;min-height:22px}
 .pin-dot{width:18px;height:18px;border-radius:50%;border:2px solid #ccc;background:transparent;transition:all .15s}
 .pin-dot.filled{background:#378ADD;border-color:#378ADD}
+.pin-dot.checking{border-color:#E8A830;background:#E8A830;animation:pinPulse .7s ease-in-out infinite}
+@keyframes pinPulse{0%,100%{opacity:1}50%{opacity:.25}}
 .pin-hint{font-size:12px;color:#888}
 .emp-preview{background:#fff;border:1px solid #e8e8e3;border-radius:14px;padding:10px 14px;margin-bottom:10px;display:none}
 .prev-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:4px}
@@ -235,7 +237,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-08-06c</span>
+        <span id="version-stamp">v2026-08-26b</span>
       </div>
     </div>
   </div>
@@ -379,9 +381,10 @@ textarea.field-input{resize:none;height:65px}
   <div id="tab-leave" class="section">
     <div style="font-size:13px;color:#888;margin-bottom:10px">Enter your PIN to view your leave balance and requests.</div>
     <div style="display:flex;gap:8px;margin-bottom:12px">
-      <input type="text" id="lv-pin" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" class="field-input" style="font-size:16px;letter-spacing:4px;text-align:center;font-weight:600;flex:1" />
+      <input type="password" id="lv-pin" placeholder="6-digit PIN" maxlength="6" inputmode="numeric" class="field-input" style="font-size:16px;letter-spacing:4px;text-align:center;font-weight:600;flex:1" />
       <button onclick="lookupLeave()" class="btn-sm">View</button>
     </div>
+    <div id="lv-err" style="font-size:12px;color:#A32D2D;min-height:14px;margin-bottom:8px;text-align:center"></div>
     <div id="lv-panel" style="display:none">
       <div class="card" style="margin-bottom:10px">
         <div style="font-weight:600;font-size:15px" id="lp-name"></div>
@@ -1140,6 +1143,9 @@ let nightArmConfirmed=false; // (nd Task 4) set true only for the in-flight conf
 let activeSite='',sites=[],awayAllow=50; // (site rename) activeSite = active yard NAME; `sites` = data-driven yard list (settings key attendance_sites, cached in rsr_sites); away allowance flat ₱50/day
 let otAllowanceAmt=50,otAllowanceMinHrs=3;
 let pin='',curEmp=null,msgTimer=null;
+// kpChecking: an identify round trip is in flight. The keypad ignores taps while it is true, so a
+// worker drumming the pad cannot stack requests (each one costs a full bcrypt scan on the server).
+let kpChecking=false;
 let adminSecs=ADMIN_TO,adminTick=null;
 let tgToken='',tgGroup='',tgPosGroup='',tgPhotoGroup='',tgBackupGroup='',tgAwolGroup='',mgrIds=[];
 let semaphoreKey='',semaphoreSender='RSR ENGRG';
@@ -1198,7 +1204,37 @@ function populateSiteSelects(){
   });
 }
 function getRec(code){const k=code+'_'+todayKey();if(!records[k])records[k]={code,punches:{},msMap:{},isLate:false,lateMs:0,photos:{},clockedSite:null,hasAllowance:false,allowanceAmt:0,nightShift:false};return records[k];}
-function findEmp(code){return employees.find(e=>e.pin&&e.pin===code);}
+// Look a worker up by EMPLOYEE CODE - the only local lookup left. The PIN is not a column the
+// browser can see any more (bcrypt since 2026-08-24), so nothing here can find a person from a
+// typed PIN. This replaces findEmp(), which matched on e.pin and was ALSO being called with a code
+// at four sites (approveLeave, clearOverride, openEditModal, and the Telegram approve-leave
+// branch) where it silently found nobody - the Telegram one never deducted a leave balance.
+function findByCode(code){const n=normCode(code);return employees.find(e=>normCode(e.code)===n);}
+
+// ── IDENTIFY BY PIN (server side) ──────────────────────────────────────────────────────────────
+// The tablet cannot match a bcrypt hash, so the DATABASE does the identifying. The RPC bcrypts the
+// typed PIN against every active worker and returns id/code/name - never the PIN, never the hash.
+//
+// It answers with a status rather than a row-or-nothing, because "no match" and "more than one
+// match" are different events and the second one must never be resolved by picking somebody:
+//   ok         - exactly one active worker matched
+//   not_found  - none did
+//   collision  - two or more did; the RPC logged which, and refuses to choose
+//   throttled  - too many failed attempts on this project just now
+// Locally we add 'offline' for anything that stops us getting an answer at all.
+async function identifyByPin(typed){
+  if(!navigator.onLine)return {status:'offline'};
+  try{
+    const {data,error}=await sbClient.rpc('identify_employee_by_pin',{pin_input:typed});
+    // Fail CLOSED. A PostgREST error is reported as 'offline', never as a wrong PIN (which would
+    // burn one of the five attempts) and never as a pass. A 15s server timeout lands here too.
+    if(error){console.warn('identify_employee_by_pin:',error);return {status:'offline'};}
+    const row=Array.isArray(data)?data[0]:data;
+    if(!row||!row.status)return {status:'offline'};
+    if(row.status==='ok')return {status:'ok',id:row.id,code:row.code,name:row.name};
+    return {status:row.status};
+  }catch(e){console.warn('identify_employee_by_pin:',e);return {status:'offline'};}
+}
 // Canonical employee-code key: uppercase + strip all whitespace ('rsr 0002'/'RSR0002' → 'RSR0002').
 // Used ONLY to match codes arriving from OTHER Supabase tables (leave, straight-duty, late-break,
 // admin approvals, roster sync) against the local roster — it never rewrites a stored code.
@@ -2086,13 +2122,31 @@ setInterval(updateClock,1000);updateClock();
 function updShiftPill(){const tm=shiftM+graceMins,gh=shiftH+Math.floor(tm/60),gm=tm%60;document.getElementById('shift-pill').textContent='Shift: '+fmt12(shiftH,shiftM)+' · Grace: until '+fmt12(gh,gm);}
 updShiftPill();
 
-function updDots(){for(let i=0;i<PIN_LEN;i++){const d=document.getElementById('d'+i);if(d)d.className='pin-dot'+(i<pin.length?' filled':'');}}
-function kp(n){
+function updDots(){for(let i=0;i<PIN_LEN;i++){const d=document.getElementById('d'+i);if(d)d.className='pin-dot'+(kpChecking?' checking':(i<pin.length?' filled':''));}}
+async function kp(n){
   if(isKioskLocked()){showKioskLockScreen();return;}
+  if(kpChecking)return;                    // an identification is already in flight - ignore extra taps
   if(pin.length>=PIN_LEN)return;pin+=n;updDots();
   const hint=document.getElementById('pin-hint');
   if(pin.length===PIN_LEN){
-    const emp=findEmp(pin);
+    const typed=pin;
+    // Every punch button stays down for the whole round trip (kpBusy), exactly as it already did
+    // for the bar re-check below. A correct PIN answers in about 1.5s, a wrong one in about 3.1s.
+    kpChecking=true;kpBusy=true;updBtns();updDots();
+    hint.textContent='Checking…';hint.style.color='#E8A830';
+    let ident={status:'offline'};
+    try{ ident=await identifyByPin(typed); }catch(_){ ident={status:'offline'}; }
+    kpChecking=false;kpBusy=false;updDots();
+    // The RPC returns identity only. Everything the punch rules read - dept, shift, home site,
+    // employment type, balances - still comes from the local roster.
+    const emp=ident.status==='ok'?findByCode(ident.code):null;
+    if(ident.status==='ok'&&!emp){
+      // Identified by the server, but this tablet has never synced that worker.
+      pin='';updDots();
+      hint.textContent='Your record is not on this tablet yet — connect to the internet and reload.';hint.style.color='#A32D2D';
+      document.getElementById('emp-preview').style.display='none';updBtns(null);curEmp=null;
+      return;
+    }
     if(emp){pinFailCount=0;curEmp=emp;hint.textContent='';hint.style.color='';showEmpPreview(emp);clearMsg();
       // A BARRED worker is stopped at PIN entry on every tablet (DB-shared via barred_at).
       //
@@ -2163,6 +2217,30 @@ function kp(n){
         }
       }
     }
+    else if(ident.status==='collision'){
+      // Two or more active workers share this PIN. Refusing is the only safe answer - resolving it
+      // by picking one would let a man punch as somebody else, and a payroll built on that is worse
+      // than a man who cannot punch. The RPC has already written the matching codes to
+      // pin_collision_log, so the office can fix it by name.
+      //
+      // Deliberately does NOT burn one of his five attempts: retyping cannot help him, and locking
+      // the tablet for five minutes over an admin data problem punishes the wrong person.
+      pin='';updDots();
+      hint.textContent='PIN not recognized — see the office.';hint.style.color='#A32D2D';
+      document.getElementById('emp-preview').style.display='none';updBtns(null);curEmp=null;
+    }
+    else if(ident.status==='throttled'){
+      pin='';updDots();
+      hint.textContent='Too many tries just now — wait a moment and try again.';hint.style.color='#A32D2D';
+      document.getElementById('emp-preview').style.display='none';updBtns(null);curEmp=null;
+    }
+    else if(ident.status==='offline'){
+      // Server-verified punches need a connection (owner decision, 2026-08-26). Nothing is written
+      // and nothing is queued - a queued punch would claim an identification that never happened.
+      pin='';updDots();
+      hint.textContent='No connection — try again. Nothing was recorded.';hint.style.color='#A32D2D';
+      document.getElementById('emp-preview').style.display='none';updBtns(null);curEmp=null;
+    }
     else{
       pinFailCount++;pin='';updDots();
       const rem=PIN_MAX_ATTEMPTS-pinFailCount;
@@ -2171,13 +2249,13 @@ function kp(n){
     }
   }else{hint.textContent='Enter your 6-digit PIN';hint.style.color='';document.getElementById('emp-preview').style.display='none';updBtns(null);curEmp=null;}
 }
-function kpDel(){pin=pin.slice(0,-1);updDots();clearMsg();document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';document.getElementById('emp-preview').style.display='none';document.getElementById('btn-undertime').disabled=true;updBtns(null);curEmp=null;}
-function kpClr(){pin='';updDots();clearMsg();document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';document.getElementById('emp-preview').style.display='none';document.getElementById('btn-undertime').disabled=true;document.getElementById('ot-allow-banner').style.display='none';updBtns(null);curEmp=null;}
+function kpDel(){if(kpChecking)return;pin=pin.slice(0,-1);updDots();clearMsg();document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';document.getElementById('emp-preview').style.display='none';document.getElementById('btn-undertime').disabled=true;updBtns(null);curEmp=null;}
+function kpClr(){kpChecking=false;pin='';updDots();clearMsg();document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';document.getElementById('emp-preview').style.display='none';document.getElementById('btn-undertime').disabled=true;document.getElementById('ot-allow-banner').style.display='none';updBtns(null);curEmp=null;}
 
 
 
 // ── MY TIME TAB ──
-let mtPin='',mtEmp=null;
+let mtPin='',mtEmp=null,mtChecking=false;
 const PIN_LEN_MT=6;
 
 function getWeekDates(){
@@ -2210,31 +2288,36 @@ function dateToKey(d){
 function mtUpdDots(){
   for(let i=0;i<PIN_LEN_MT;i++){
     const d=document.getElementById('mt-d'+i);
-    if(d)d.className='pin-dot'+(i<mtPin.length?' filled':'');
+    if(d)d.className='pin-dot'+(mtChecking?' checking':(i<mtPin.length?' filled':''));
   }
 }
 
-function mtKp(n){
+async function mtKp(n){
+  if(mtChecking)return;
   if(mtPin.length>=PIN_LEN_MT)return;
   mtPin+=n;mtUpdDots();
-  document.getElementById('mt-err').textContent='';
+  const err=document.getElementById('mt-err');err.textContent='';
   if(mtPin.length===PIN_LEN_MT){
-    const emp=findEmp(mtPin);
-    if(emp){
-      mtEmp=emp;
-      renderMyTimeSheet(emp);
-    } else {
-      document.getElementById('mt-err').textContent='PIN not found. Please try again.';
-      setTimeout(()=>{mtPin='';mtUpdDots();document.getElementById('mt-err').textContent='';},1500);
-    }
+    const typed=mtPin;
+    mtChecking=true;mtUpdDots();err.textContent='Checking…';err.style.color='#E8A830';
+    let ident={status:'offline'};
+    try{ ident=await identifyByPin(typed); }catch(_){ ident={status:'offline'}; }
+    mtChecking=false;mtPin='';mtUpdDots();err.style.color='#A32D2D';
+    const emp=ident.status==='ok'?findByCode(ident.code):null;
+    if(emp){ err.textContent=''; mtEmp=emp; renderMyTimeSheet(emp); return; }
+    err.textContent = ident.status==='collision' ? 'PIN not recognized — see the office.'
+                    : ident.status==='throttled' ? 'Too many tries just now — wait a moment.'
+                    : ident.status==='offline'   ? 'No connection — try again.'
+                    : ident.status==='ok'        ? 'Your record is not on this tablet yet — reload.'
+                    : 'PIN not found. Please try again.';
   }
 }
 
-function mtKpDel(){mtPin=mtPin.slice(0,-1);mtUpdDots();document.getElementById('mt-err').textContent='';}
-function mtKpClr(){mtPin='';mtUpdDots();document.getElementById('mt-err').textContent='';}
+function mtKpDel(){if(mtChecking)return;mtPin=mtPin.slice(0,-1);mtUpdDots();document.getElementById('mt-err').textContent='';}
+function mtKpClr(){if(mtChecking)return;mtPin='';mtUpdDots();document.getElementById('mt-err').textContent='';}
 
 function mtLogout(){
-  mtPin='';mtEmp=null;mtUpdDots();
+  mtPin='';mtEmp=null;mtChecking=false;mtUpdDots();
   document.getElementById('mytime-login').style.display='block';
   document.getElementById('mytime-sheet').style.display='none';
 }
@@ -3642,9 +3725,27 @@ function submitLeave(){
   sendTgApprovalRequest('leave',leaveId);
 }
 
-function lookupLeave(){
-  const p=document.getElementById('lv-pin').value.trim(),emp=findEmp(p),panel=document.getElementById('lv-panel');
-  if(!emp){panel.style.display='none';alert('PIN not found.');return;}
+async function lookupLeave(){
+  const p=document.getElementById('lv-pin').value.trim(),
+        panel=document.getElementById('lv-panel'),err=document.getElementById('lv-err');
+  if(err){err.textContent='';err.style.color='#A32D2D';}
+  if(!/^[0-9]{6}$/.test(p)){if(err)err.textContent='Enter your 6-digit PIN.';return;}
+  if(err){err.textContent='Checking…';err.style.color='#E8A830';}
+  let ident={status:'offline'};
+  try{ ident=await identifyByPin(p); }catch(_){ }
+  if(err)err.style.color='#A32D2D';
+  const emp=ident.status==='ok'?findByCode(ident.code):null;
+  if(!emp){
+    panel.style.display='none';
+    if(err)err.textContent = ident.status==='collision' ? 'PIN not recognized — see the office.'
+                           : ident.status==='throttled' ? 'Too many tries just now — wait a moment.'
+                           : ident.status==='offline'   ? 'No connection — try again.'
+                           : ident.status==='ok'        ? 'Your record is not on this tablet yet — reload.'
+                           : 'PIN not found.';
+    return;
+  }
+  if(err)err.textContent='';
+  document.getElementById('lv-pin').value='';
   document.getElementById('lp-name').textContent=emp.name;document.getElementById('lp-dept').textContent=emp.dept+' · Home: '+siteName(emp.homeSite);
   const bal=emp.balance||{VL:0,SL:0};
   document.getElementById('lp-balance').innerHTML=`<span class="bal-chip">VL <span>${bal.VL}d</span></span><span class="bal-chip">SL <span>${bal.SL}d</span></span>`;
@@ -3974,9 +4075,9 @@ function renderAdminPanel(){
   if(!leaveRequests.length){ael.innerHTML='<div class="empty-state">No leave requests yet.</div>';}
   else{ael.innerHTML='';leaveRequests.forEach(r=>{const sc={Pending:'pill-pending',Approved:'pill-approved',Rejected:'pill-rejected'}[r.status]||'';const d=document.createElement('div');d.className='leave-card';d.innerHTML=`<div class="leave-card-header"><span style="font-weight:600">${r.name}</span><span class="pill ${sc}">${r.status}</span></div><div class="leave-card-meta">${r.type} · ${r.startDate} to ${r.endDate} · ${r.dept}</div><div class="leave-card-reason">"${r.reason}"</div>`;ael.appendChild(d);});}
   const bel=document.getElementById('admin-balances');bel.innerHTML='';
-  employees.forEach(emp=>{const bal=emp.balance||{VL:2,SL:2};const d=document.createElement('div');d.className='bal-editor';d.innerHTML=`<div style="font-size:13px;font-weight:600;margin-bottom:8px">${emp.name} <span style="font-size:11px;color:#888;font-weight:400">(${siteName(emp.homeSite)} · PIN: ${emp.code})</span></div><div class="bal-editor-row"><label>VL</label><input type="number" min="0" max="30" value="${bal.VL}" id="b-${emp.code}-VL" /></div><div class="bal-editor-row"><label>SL</label><input type="number" min="0" max="30" value="${bal.SL}" id="b-${emp.code}-SL" /></div><`;bel.appendChild(d);});
+  employees.forEach(emp=>{const bal=emp.balance||{VL:2,SL:2};const d=document.createElement('div');d.className='bal-editor';d.innerHTML=`<div style="font-size:13px;font-weight:600;margin-bottom:8px">${emp.name} <span style="font-size:11px;color:#888;font-weight:400">(${siteName(emp.homeSite)} · Code: ${emp.code})</span></div><div class="bal-editor-row"><label>VL</label><input type="number" min="0" max="30" value="${bal.VL}" id="b-${emp.code}-VL" /></div><div class="bal-editor-row"><label>SL</label><input type="number" min="0" max="30" value="${bal.SL}" id="b-${emp.code}-SL" /></div><`;bel.appendChild(d);});
 }
-function approveLeave(id){const r=leaveRequests.find(x=>x.id===id);if(!r)return;r.status='Approved';const e=findEmp(r.code);if(e){const k=lkey(r.type);e.balance[k]=Math.max(0,(e.balance[k]||0)-r.days);}
+function approveLeave(id){const r=leaveRequests.find(x=>x.id===id);if(!r)return;r.status='Approved';const e=findByCode(r.code);if(e){const k=lkey(r.type);e.balance[k]=Math.max(0,(e.balance[k]||0)-r.days);}
   // (2026-07-26) Mirror the Telegram approve_leave branch (~line 4115): both surfaces that can approve
   // a leave request must cancel a matching active suspension the same way — keep them in step.
   if(suspendedEmployees[r.code])reinstateEmployee(r.code,'leave approved');
@@ -4055,7 +4156,7 @@ function saveOverride(code){
 }
 function clearOverride(code){
   delete allowanceOverrides[code+'_'+todayKey()];
-  const emp=findEmp(code);const rec=getRec(code);
+  const emp=findByCode(code);const rec=getRec(code);
   if(emp&&rec.punches.timein){rec.hasAllowance=isAwayDeployment(emp);rec.allowanceAmt=getAllowanceAmt(emp);}
   renderAllowance();updateStats();
 }
@@ -4614,7 +4715,7 @@ async function processTgCallbacks(){
         if(req.status!=='Pending'){await tgAnswerCallback(cb.id,'Already '+req.status+'.');continue;}
         if(action==='approve'){
           req.status='Approved';
-          const e=findEmp(req.code);if(e){const k=lkey(req.type);e.balance[k]=Math.max(0,(e.balance[k]||0)-req.days);}
+          const e=findByCode(req.code);if(e){const k=lkey(req.type);e.balance[k]=Math.max(0,(e.balance[k]||0)-req.days);}
           // If employee was suspended, reinstate them
           if(suspendedEmployees[req.code])reinstateEmployee(req.code,'leave approved');
           await tgAnswerCallback(cb.id,'✅ Leave approved!');
@@ -4966,6 +5067,10 @@ function loadData(){
     if(tadj){try{timeoutAdjustments=JSON.parse(tadj)||{};}catch(e){timeoutAdjustments={};}}    
     const emp=localStorage.getItem('rsr_employees');
     if(emp){const parsed=JSON.parse(emp);if(parsed&&parsed.length>0)employees=parsed;}
+    // A roster cached by a build older than v2026-08-26b carries a `pin` field - plaintext once, a
+    // bcrypt hash after the migration. Neither belongs on a tablet, and a kiosk is never re-imaged,
+    // so strip it on load and re-save rather than waiting for the value to age out.
+    if(employees.some(e=>e&&'pin' in e)){employees.forEach(e=>{if(e)delete e.pin;});try{localStorage.setItem('rsr_employees',JSON.stringify(employees));}catch(_){}}
     const ut=localStorage.getItem('rsr_undertime');
     if(ut){const parsed=JSON.parse(ut);if(parsed&&parsed.length>0)undertimeRequests=parsed;}
     // Load all saved records
@@ -5266,7 +5371,11 @@ function importStaffCSV(input){
         const vl=parseInt(vlStr)||2,sl=parseInt(slStr)||2,el=parseInt(elStr)||3;
         // Check duplicate PINs within import
         if(imported.find(e=>e.code===cleanCode)){errors.push('Row '+(idx+2)+': duplicate PIN '+cleanCode);return;}
-        imported.push({code:cleanCode,name:name.trim(),dept:(dept||'—').trim(),homeSite:validSite,shift,balance:{VL:vl,SL:sl}});
+        // Carry the Supabase row id across. It is not needed to identify a worker (the RPC returns
+        // it) but every other PIN RPC in the system takes an emp_id, and a roster that quietly loses
+        // them is a trap for the next feature. Restored anyway on the next loadEmployeesFromSupabase.
+        const _ex=findByCode(cleanCode);
+        imported.push({code:cleanCode,name:name.trim(),dept:(dept||'—').trim(),homeSite:validSite,shift,balance:{VL:vl,SL:sl},id:_ex?_ex.id:undefined});
       });
       if(!imported.length){msg.textContent='No valid employees found. Check your CSV format.';msg.style.color='#A32D2D';return;}
       if(errors.length){
@@ -5333,9 +5442,9 @@ function renderRoster(){
 
 let editingCode=null;
 function openEditModal(code){
-  const emp=findEmp(code);if(!emp)return;
+  const emp=findByCode(code);if(!emp)return;
   editingCode=code;
-  document.getElementById('edit-pin-display').textContent='PIN: '+emp.code+' — editing record';
+  document.getElementById('edit-pin-display').textContent='Code: '+emp.code+' — editing record';
   document.getElementById('edit-name').value=emp.name;
   document.getElementById('edit-dept').value=emp.dept==='—'?'':emp.dept;
   document.getElementById('edit-position').value=emp.position==='—'?'':(emp.position||'');
@@ -5913,7 +6022,9 @@ async function syncEmployeeToSupabase(emp) {
       home_site: siteNorm(emp.homeSite) || '',
       shift: emp.shift || 8,
       daily_rate: emp.dailyRate || 500,
-      pin: emp.pin || null,
+      // pin is NOT written from here. The column holds a bcrypt hash; this payload used to push a
+      // plaintext value (or null) straight over it, which would have destroyed a worker's passcode.
+      // Passcodes are set only by set_employee_pin, from the admin dashboard.
       vl_balance: emp.balance?.VL || 2,
       sl_balance: emp.balance?.SL || 2,
       is_suspended: emp.suspended || false
@@ -5975,7 +6086,10 @@ async function loadEmployeesFromSupabase() {
           position: se.position || '—', phone: se.phone || '',
           network: se.network || 'smart', homeSite: siteNorm(se.home_site) || '',
           shift: se.shift || 8, dailyRate: se.daily_rate || 500,
-          pin: se.pin || '',
+          // employees.pin is a bcrypt hash since 2026-08-24 and is deliberately NOT copied here:
+          // nothing on a tablet may hold a PIN or its hash. `id` is carried because it is what the
+          // identify RPC hands back, and what every other PIN RPC in the system takes.
+          id: se.id,
           isActive: se.is_active !== false, // AWOL never-suspend-inactive skip (owner 2026-07-26); missing column/undefined defaults to active
           // Employment type replaces the PEM code prefix as the AWOL exemption marker (owner
           // 2026-07-29). MUST be carried here: this object is an ALLOW-LIST, so a column that is

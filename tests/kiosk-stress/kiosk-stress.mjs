@@ -39,7 +39,11 @@ const manila = (y, mo, d, h = 0, mi = 0, s = 0) => Date.UTC(y, mo - 1, d, h - 8,
 const DAY = 86400000;
 
 // ── Roster returned by the mocked /rest/v1/employees (snake_case, as the real
-//    loadEmployeesFromSupabase reads: se.pin, se.home_site, se.daily_rate…) ────
+//    loadEmployeesFromSupabase reads: se.id, se.home_site, se.daily_rate…) ────
+// `pin` here is the fixture passcode the mocked identify_employee_by_pin RPC matches against.
+// Since v2026-08-26b the kiosk NEVER receives it: loadEmployeesFromSupabase drops the column and
+// identification happens server-side. It is still SERVED below, deliberately — that is what proves
+// the client drops it rather than the fixture hiding the problem.
 const ROSTER = [
   // employment_type models a FULLY SYNCED tablet, which is the correct default for a fixture.
   // The kiosk gates AWOL on it twice — awolExemptState(emp) must read 'regular' before a worker is
@@ -47,16 +51,16 @@ const ROSTER = [
   // bucket and no detection scenario can reach the code it means to test. That is a second, LOCAL
   // exemption layer sitting behind the server's skip list, and §6.5 asks for both to be proven.
   // A scenario wanting the unsynced case sets it explicitly (see mock.nonPunching / G16 fixtures).
-  { code: 'RSR0001', pin: '000123', name: 'Leading-Zero Larry',  dept: 'Welding',    home_site: 'Carmen',  shift: 8, daily_rate: 600, employment_type: 'regular' },
-  { code: 'RSR0002', pin: '007007', name: 'Double-Zero Zeny',    dept: 'Fitting',    home_site: 'Mandaue', shift: 8, daily_rate: 520, employment_type: 'regular' },
-  { code: 'RSR0100', pin: '100200', name: 'Regular Rey',         dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 500, employment_type: 'regular' },
-  { code: 'RSR0207', pin: '246810', name: 'Midday Manny',        dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 540, employment_type: 'regular' },
-  { code: 'PEM9001', pin: '900001', name: 'PEM Niner Pedro',     dept: 'Electrical', home_site: 'Mandaue', shift: 8, daily_rate: 700, employment_type: 'pakyaw' },
-  { code: 'PEM9042', pin: '987654', name: 'PEM Band Bella',      dept: 'Instrument', home_site: 'Carmen',  shift: 8, daily_rate: 680, employment_type: 'pakyaw' },
-  { code: 'RSR0303', pin: '333333', name: 'Night-Owl Nardo',     dept: 'Blasting',   home_site: 'Mandaue', shift: 8, daily_rate: 560, employment_type: 'regular' },
+  { id: '11111111-1111-4111-8111-111111111111', code: 'RSR0001', pin: '000123', name: 'Leading-Zero Larry',  dept: 'Welding',    home_site: 'Carmen',  shift: 8, daily_rate: 600, employment_type: 'regular' },
+  { id: '22222222-2222-4222-8222-222222222222', code: 'RSR0002', pin: '007007', name: 'Double-Zero Zeny',    dept: 'Fitting',    home_site: 'Mandaue', shift: 8, daily_rate: 520, employment_type: 'regular' },
+  { id: '33333333-3333-4333-8333-333333333333', code: 'RSR0100', pin: '100200', name: 'Regular Rey',         dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 500, employment_type: 'regular' },
+  { id: '44444444-4444-4444-8444-444444444444', code: 'RSR0207', pin: '246810', name: 'Midday Manny',        dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 540, employment_type: 'regular' },
+  { id: '55555555-5555-4555-8555-555555555555', code: 'PEM9001', pin: '900001', name: 'PEM Niner Pedro',     dept: 'Electrical', home_site: 'Mandaue', shift: 8, daily_rate: 700, employment_type: 'pakyaw' },
+  { id: '66666666-6666-4666-8666-666666666666', code: 'PEM9042', pin: '987654', name: 'PEM Band Bella',      dept: 'Instrument', home_site: 'Carmen',  shift: 8, daily_rate: 680, employment_type: 'pakyaw' },
+  { id: '77777777-7777-4777-8777-777777777777', code: 'RSR0303', pin: '333333', name: 'Night-Owl Nardo',     dept: 'Blasting',   home_site: 'Mandaue', shift: 8, daily_rate: 560, employment_type: 'regular' },
   // G15 fixtures (never-punched/30-day safety net + inactive skip):
-  { code: 'RSR0404', pin: '404040', name: 'Old-Punch Ofelia',    dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 510, employment_type: 'regular' },
-  { code: 'RSR0500', pin: '500500', name: 'Inactive Ising',      dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 510, is_active: false, employment_type: 'regular' },
+  { id: '88888888-8888-4888-8888-888888888888', code: 'RSR0404', pin: '404040', name: 'Old-Punch Ofelia',    dept: 'Rigging',    home_site: 'Carmen',  shift: 8, daily_rate: 510, employment_type: 'regular' },
+  { id: '99999999-9999-4999-8999-999999999999', code: 'RSR0500', pin: '500500', name: 'Inactive Ising',      dept: 'Painting',   home_site: 'Carmen',  shift: 8, daily_rate: 510, is_active: false, employment_type: 'regular' },
 ];
 const pinOf = (code) => ROSTER.find(r => r.code === code).pin;
 
@@ -78,6 +82,15 @@ const mock = {
   awolGroupId: '',     // the mocked AWOL group chat id
   tgMsgSeq: 1000,      // incrementing message_id source
   rpcSuspendFail: false, // when true, /rpc/awol_set_suspended 500s (simulates offline for FIX 1 coverage)
+  // ── identify_employee_by_pin (v2026-08-26b) ──────────────────────────────────────────────────
+  identifyFail: false,     // when true the RPC 500s — the yard has lost its connection. A punch
+                           // cannot be identified without the server, so this must refuse cleanly
+                           // and write NOTHING (owner decision, offline answer 1).
+  identifyThrottled: false,// when true the RPC answers status=throttled
+  identifyCollide: null,   // a PIN string that should answer status=collision, as two active
+                           // workers sharing it would. Never resolved by picking one.
+  identifyCalls: [],       // every pin_input the kiosk sent — proves the PIN leaves the tablet only
+                           // as an RPC argument, and that a wrong one is not retried in a loop.
   // ── Defect 1 (2026-08-04): the sweep reads punch history from the DATABASE, not `records` ──
   punchDaysFail: false,  // when true, /rpc/awol_punch_days 500s → the sweep must abandon detection
   punchDaysEmpty: false, // when true, it returns [] → ALSO an outage (empty is never an answer)
@@ -185,6 +198,30 @@ async function newKioskContext(browser, base, initMs) {
       const p = new URL(url).pathname;
       const method = req.method();
       if (p.endsWith('/rest/v1/employees')) return json(200, ROSTER);
+      if (p.endsWith('/rest/v1/rpc/identify_employee_by_pin')) {
+        let body = null; try { body = JSON.parse(req.postData() || 'null'); } catch {}
+        const typed = body && body.pin_input;
+        mock.identifyCalls.push(typed);
+        if (mock.identifyFail) return json(500, { code: '500', message: 'injected failure (mock.identifyFail)', details: '', hint: '' });
+        // The real function returns ONE row with a status. Mirror that shape exactly, including
+        // the array PostgREST wraps a set-returning function in.
+        const row = (status, e) => json(200, [{ status, id: e ? e.id : null, code: e ? e.code : null, name: e ? e.name : null }]);
+        if (mock.identifyThrottled) return row('throttled', null);
+        if (!/^[0-9]{6}$/.test(String(typed || ''))) return row('not_found', null);
+        if (mock.identifyCollide && typed === mock.identifyCollide) return row('collision', null);
+        // NO employment-status filter, matching the real WHERE.
+        //
+        // An is_active filter was added on 2026-08-26 and REMOVED the same day: employees has no
+        // is_active column, so the deployed function raised 42703 and refused every worker. The
+        // fixture below still carries is_active because the AWOL scenarios (G15d) read it out of the
+        // roster JSON — but that is a client-side field the kiosk defaults to true when the column is
+        // absent (kiosk/index.html: "missing column/undefined defaults to active"), NOT a column the
+        // database can filter on. Identification is identity-only; policy is unchanged.
+        const hits = ROSTER.filter(r => r.pin === typed);
+        if (hits.length === 1) return row('ok', hits[0]);
+        if (hits.length > 1)  return row('collision', null);
+        return row('not_found', null);
+      }
       if (p.endsWith('/rest/v1/attendance_records') && method === 'POST') {
         let payload = null;
         try { payload = JSON.parse(req.postData() || 'null'); } catch {}
@@ -423,17 +460,26 @@ const setNow = (page, ms) => page.evaluate(ms => window.__setNow(ms), ms);
 //   enterPin(page, pin)  — legacy: drives the keypad on an explicit page, by PIN.
 //   enterPin(code)       — new: drives the keypad on the ACTIVE scenario page, by employee code.
 let currentPage = null; // set by scenario() to the in-flight page, for the single-arg enterPin(code) form
+// v2026-08-26b — kp() is async: it awaits identify_employee_by_pin on the sixth digit. Both forms
+// therefore await every digit. Returning curEmp.code afterwards still tells a caller whether the
+// worker was identified, which is what all ~40 existing call sites rely on.
+const DRIVE_KEYPAD = async (p) => {
+  kpClr();
+  for (const d of p) await kp(d);
+  return curEmp ? curEmp.code : null;
+};
 async function enterPin(a, b) {
   if (a && typeof a.evaluate === 'function') {
     // legacy: enterPin(page, pin)
-    return a.evaluate((p) => { kpClr(); for (const d of p) kp(d); return curEmp ? curEmp.code : null; }, b);
+    return a.evaluate(DRIVE_KEYPAD, b);
   }
   // new: enterPin(code) — drive the REAL keypad so the kp() PIN-entry hooks (modal, preview) run.
   // Drives currentPage (the scenario's PRIMARY page). For a multi-page scenario, drive the
   // secondary page directly via page.evaluate(...) instead of this 1-arg helper.
-  const pin = pinOf(a);
-  return currentPage.evaluate((pn) => { kpClr(); for (const d of pn) kp(d); }, pin);
+  return currentPage.evaluate(DRIVE_KEYPAD, pinOf(a));
 }
+// Type digits that are nobody's PIN — for the refusal scenarios.
+async function enterRawPin(typed) { return currentPage.evaluate(DRIVE_KEYPAD, typed); }
 // Read whether the Bisaya modal is showing + its text.
 async function bisayaState() {
   return await currentPage.evaluate(() => ({
@@ -541,6 +587,7 @@ async function scenario(name, initMs, fn) {
   mock.tgConfigured = false;
   mock.awolGroupId = '';
   mock.rpcSuspendFail = false;
+  mock.identifyFail = false; mock.identifyThrottled = false; mock.identifyCollide = null; mock.identifyCalls = [];
   mock.punchDaysFail = false; mock.punchDaysEmpty = false; mock.punchDaysExtra = {};
   mock.punchDaysWindow = null;   // MUST be reset: a leaked short window silently starves every
                                  // later scenario's history read and reads as a code failure
@@ -767,6 +814,9 @@ await scenario('B2 · cross-midnight NIGHT: 00:05 tap → routes to yesterday me
 
 console.log('\n── C. FULL ROSTER IN/OUT CYCLES ──────────────────────────────');
 
+// RSR0303 is the night-shift fixture and has its own scenarios. RSR0500 is back in this loop: he was
+// briefly excluded on the theory that identification refuses inactive workers, which it does not —
+// there is no is_active column to refuse them by. Every fixture worker punches.
 for (const emp of ROSTER.filter(e => e.code !== 'RSR0303')) {
   await scenario(`C · roster cycle ${emp.code} (pin ${emp.pin})`, manila(2026,7,17,8,0), async (page) => {
     const k = await dateKeyFor(page);
@@ -2151,6 +2201,128 @@ await scenario('G18e · a real 3-day absence run is still detected and a case op
     chain.length === 3 && opened && reasonOk && datesOk && alerted && !barred,
     `chain=${chain.length} opened=${opened} reason="${(c && c.reason) || ''}" `
     + `dates=${JSON.stringify((c && c.absent_dates) || [])} alerted=${alerted} barredLocally=${barred}`);
+});
+
+// ==============================================================================
+//  H — SERVER-SIDE IDENTIFICATION (v2026-08-26b, Option A)
+// ==============================================================================
+// employees.pin has been a bcrypt hash since 2026-08-24, so the browser can no longer match it.
+// The keypad is unchanged for the worker — six digits, name appears, punch — but identification
+// now happens in the database via identify_employee_by_pin. These cover every answer that RPC can
+// give, plus the two things that must never happen: a PIN reaching the tablet, and a punch being
+// written without a successful identification.
+
+await scenario('H1 · roster load never carries the pin column', manila(2026,7,15,8,0), async (page) => {
+  const leaked = await page.evaluate(() => employees.filter(e => e && Object.prototype.hasOwnProperty.call(e, 'pin')).map(e => e.code));
+  const haveIds = await page.evaluate(() => employees.every(e => !e || typeof e.id === 'string'));
+  const cached = await page.evaluate(() => {
+    try { return (JSON.parse(localStorage.getItem('rsr_employees') || '[]') || []).filter(e => e && 'pin' in e).length; }
+    catch (e) { return -1; }
+  });
+  const noFindEmp = await page.evaluate(() => typeof findEmp === 'undefined' && typeof findByCode === 'function');
+  report('H1 · pin never reaches employees[] or localStorage; ids present; findEmp gone',
+    leaked.length === 0 && haveIds && cached === 0 && noFindEmp,
+    `rowsWithPin=${JSON.stringify(leaked)} everyRowHasId=${haveIds} cachedRowsWithPin=${cached} findEmpRemoved=${noFindEmp}`);
+});
+
+await scenario('H2 · correct PIN identifies server-side and punches', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  const who = await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  const r = await recAt(page, 'RSR0100', k);
+  report('H2 · six digits → identified by the RPC, name shown, punch written',
+    who === 'RSR0100' && r && /08:00/.test(r.punches.timein)
+      && mock.identifyCalls.length === 1 && mock.identifyCalls[0] === pinOf('RSR0100'),
+    `curEmp=${who} timein=${r?.punches.timein} identifyCalls=${JSON.stringify(mock.identifyCalls)}`, sends());
+});
+
+await scenario('H3 · unknown PIN refuses, writes nothing', manila(2026,7,15,8,0), async (page) => {
+  const who = await enterRawPin('111111');   // nobody's
+  const hint = await page.evaluate(() => document.getElementById('pin-hint').textContent);
+  const armed = await page.evaluate(() => !!curEmp);
+  await doPunch(page, 'timein');             // inert: curEmp is null
+  report('H3 · unknown PIN → not identified, no record, no upsert, one attempt burned',
+    who === null && !armed && mock.writes.length === 0 && /PIN not found/i.test(hint)
+      && (await page.evaluate(() => pinFailCount)) === 1,
+    `curEmp=${who} hint="${hint}" writes=${mock.writes.length}`, sends());
+});
+
+await scenario('H4 · RPC unreachable → refuses cleanly, records nothing', manila(2026,7,15,8,0), async (page) => {
+  mock.identifyFail = true;
+  const who = await enterPin(page, pinOf('RSR0100'));
+  const hint = await page.evaluate(() => document.getElementById('pin-hint').textContent);
+  const fails = await page.evaluate(() => pinFailCount);
+  await doPunch(page, 'timein');
+  // The offline answer the owner chose (2026-08-26): a punch needs a connection. It must NOT be
+  // queued — a queued punch would claim an identification that never happened. And a server fault
+  // must not burn one of the worker's five attempts.
+  report('H4 · server unreachable → \u201cNo connection\u201d, nothing recorded, nothing queued, no attempt burned',
+    who === null && mock.writes.length === 0 && /No connection/i.test(hint) && fails === 0,
+    `curEmp=${who} hint="${hint}" writes=${mock.writes.length} pinFailCount=${fails}`, sends());
+});
+
+await scenario('H5 · collision refuses and never picks a worker', manila(2026,7,15,8,0), async (page) => {
+  mock.identifyCollide = pinOf('RSR0100');
+  const who = await enterPin(page, pinOf('RSR0100'));
+  const hint = await page.evaluate(() => document.getElementById('pin-hint').textContent);
+  const fails = await page.evaluate(() => pinFailCount);
+  await doPunch(page, 'timein');
+  // Refusing is the whole point: resolving a collision by picking one worker would let a man punch
+  // as somebody else. It also must not burn an attempt — retyping cannot help him, and locking the
+  // tablet over an admin data fault punishes the wrong person.
+  report('H5 · two matches → \u201csee the office\u201d, nobody identified, no punch, no attempt burned',
+    who === null && mock.writes.length === 0 && /see the office/i.test(hint) && fails === 0,
+    `curEmp=${who} hint="${hint}" writes=${mock.writes.length} pinFailCount=${fails}`, sends());
+});
+
+await scenario('H6 · throttled answer is surfaced, not mistaken for a wrong PIN', manila(2026,7,15,8,0), async (page) => {
+  mock.identifyThrottled = true;
+  const who = await enterPin(page, pinOf('RSR0100'));
+  const hint = await page.evaluate(() => document.getElementById('pin-hint').textContent);
+  const fails = await page.evaluate(() => pinFailCount);
+  report('H6 · throttled → its own message, no punch, no attempt burned',
+    who === null && mock.writes.length === 0 && /too many tries/i.test(hint) && fails === 0,
+    `curEmp=${who} hint="${hint}" pinFailCount=${fails}`, sends());
+});
+
+await scenario('H7 · five wrong PINs still lock the kiosk', manila(2026,7,15,8,0), async (page) => {
+  for (let i = 0; i < 5; i++) await enterRawPin('111111');
+  const locked = await page.evaluate(() => isKioskLocked());
+  const shown = await page.evaluate(() => { const l = document.getElementById('kiosk-lock-screen'); return !!l && l.style.display !== 'none'; });
+  report('H7 · lockout after 5 failed identifications survives the async keypad', locked && shown,
+    `locked=${locked} lockScreenShown=${shown}`);
+});
+
+await scenario('H8 · identification applies no employment-status policy', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  const who = await enterPin(page, pinOf('RSR0500'));   // carries is_active:false in the fixture
+  await doPunch(page, 'timein');
+  const r = await recAt(page, 'RSR0500', k);
+  // SETTLED 2026-08-26, the hard way. An is_active filter was added to the RPC and removed the same
+  // day: employees HAS NO is_active COLUMN, so the deployed function raised 42703 and refused every
+  // worker at every tablet. identify_employee_by_pin is identity-only and changes nothing about who
+  // may punch — the same policy the client-side lookup it replaced had.
+  //
+  // This scenario is the guard against re-adding such a filter on a column that does not exist. If a
+  // real employment-status column is ever confirmed and the owner asks for it, this flips — but it
+  // must not flip because a filter looked sensible.
+  report('H8 · a worker flagged inactive client-side is still identified and can punch',
+    who === 'RSR0500' && r && r.punches.timein,
+    `curEmp=${who} timein=${r?.punches.timein}`, sends());
+});
+
+await scenario('H9 · taps during a check do not stack RPC calls', manila(2026,7,15,8,0), async (page) => {
+  // Each miss costs a full bcrypt scan on the server, so a worker drumming the pad must not be
+  // able to queue several. kpChecking gates the keypad for the whole round trip.
+  const out = await page.evaluate(async (p) => {
+    kpClr();
+    const proms = []; for (const d of (p + '99')) proms.push(kp(d));   // 8 taps, 6 of them a PIN
+    await Promise.all(proms);
+    return { cur: curEmp ? curEmp.code : null };
+  }, pinOf('RSR0100'));
+  report('H9 · extra taps mid-check are ignored; exactly one RPC call',
+    mock.identifyCalls.length === 1 && out.cur === 'RSR0100',
+    `identifyCalls=${JSON.stringify(mock.identifyCalls)} curEmp=${out.cur}`);
 });
 
 // ==============================================================================
