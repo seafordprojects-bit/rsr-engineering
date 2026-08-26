@@ -108,6 +108,8 @@
 <div id="toast-root"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.39.3/dist/umd/supabase.min.js"></script>
+<!-- Login gate — locks the page at parse time, before any content paints. See auth-gate.js. -->
+<script src="../auth-gate.js?v=2026-08-26a"></script>
 <script>
 /* =====================================================================
    DATA LAYER — Supabase (shared DB with the warehouse app).
@@ -1141,7 +1143,12 @@ async function boot(){
   await DB.load();
   render();
 }
-boot();
+/* Login gate — boot() is what loads all nine tables, so it must not run before a session exists.
+   ADMIN ONLY: this is the one page with an account allowlist. The site accounts (carmen@, mandaue@)
+   are signed in correctly but are not authorised here, so they get the "for the administrator
+   account" notice and a Sign out link — not the login form, which would read as a wrong password.
+   Every other gated page accepts all three accounts. */
+window.RSRAuth.gate(sb, { allow: window.RSRAuth.ADMIN_ONLY }).then(boot);
 </script>
 </body>
 </html>

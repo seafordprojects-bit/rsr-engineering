@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RSR Pre-Deploy Preflight</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- Login gate — locks the page at parse time, before any content paints. See auth-gate.js. -->
+<script src="./auth-gate.js?v=2026-08-26a"></script>
 <style>
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f4f4ef;color:#1a1a1a;margin:0 auto;padding:16px;max-width:820px}
 h2{font-size:18px;margin:0 0 2px}
@@ -25,13 +27,18 @@ button{background:#378ADD;color:#fff;border:none;border-radius:10px;padding:10px
 <body>
 <h2>🛫 Pre-Deploy Preflight</h2>
 <div class="sub">Run this on the DEPLOYED site after a deploy — it verifies build stamps, Supabase, the upsert path, and data quality. Screenshot the results.</div>
-<button onclick="run()">Run preflight</button>
+<button id="run-btn" onclick="run()" disabled>Run preflight</button>
 <div id="out"></div>
 <script>
 // Same Supabase project as the kiosk and payroll (wpmcbjrisuyjvobvzaus).
 const SUPABASE_URL = 'https://wpmcbjrisuyjvobvzaus.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// Login gate. This page queries nothing until Run is pressed, so there is no pre-login burst —
+// the button ships disabled and is only enabled once a session exists.
+window.RSRAuth.gate(sb, { allow: window.RSRAuth.ADMIN_ONLY })
+  .then(() => { document.getElementById('run-btn').disabled = false; });
 
 // Expected version stamp per deployed page (this file sits at the repo root, so the
 // pages are same-origin siblings under payroll/ and kiosk/). Bump these each deploy.
@@ -52,13 +59,13 @@ const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 // checkBuildFresh() fetches THIS FILE and compares its stamp against the EXPECT entry below. If the
 // two drift, payroll disables every edit and decision path behind a red banner. Bump the page and
 // this line in lockstep, always.
-const EXPECT = { 'payroll/index.html':'v2026-08-15b', 'kiosk/index.html':'v2026-08-06c',
-                 'monitoring/roll-call.html':'v2026-07-18a', 'monitoring/borrow.html':'v2026-07-16c',
-                 'tools/index.html':'v2026-07-19b', 'monitoring/index.html':'v2026-07-16c',
-                 'monitoring/job-order.html':'v2026-07-19a', 'monitoring/efficiency.html':'v2026-07-18a',
-                 'material-issuance/index.html':'v2026-07-19b',
-                 'admin/index.html':'home.js?v=2026-08-15a', 'index.html':'home.js?v=2026-08-15a',
-                 'coordinator/index.html':'coordinator.js?v=2026-08-04c',
+const EXPECT = { 'payroll/index.html':'v2026-08-26a', 'kiosk/index.html':'v2026-08-06c',
+                 'monitoring/roll-call.html':'v2026-08-26a', 'monitoring/borrow.html':'v2026-08-26a',
+                 'tools/index.html':'v2026-08-26a', 'monitoring/index.html':'v2026-07-16c',
+                 'monitoring/job-order.html':'v2026-08-26a', 'monitoring/efficiency.html':'v2026-08-26a',
+                 'material-issuance/index.html':'v2026-08-26a',
+                 'admin/index.html':'home.js?v=2026-08-26a', 'index.html':'home.js?v=2026-08-26a',
+                 'coordinator/index.html':'coordinator.js?v=2026-08-26a',
                  'awol-letter.html':'v2026-08-01a' };
 
 // Stored punch-slot values that are NOT real clock times (known, not data errors).

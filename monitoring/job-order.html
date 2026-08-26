@@ -50,6 +50,9 @@
   .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:18px 0}
   .loading{color:var(--muted);font-size:13px;text-align:center;padding:10px}
 </style>
+<!-- Login gate — locks the page at parse time, before any content paints. See auth-gate.js. -->
+<script src="../auth-gate.js?v=2026-08-26a"></script>
+
 <script type="importmap">
 {
   "imports": {
@@ -64,7 +67,7 @@
 <body>
   <div class="wrap">
     <header class="top">
-      <div><h1>Job Order</h1><div class="sub">Estimate from the tariff &middot; v2026-07-19a</div></div>
+      <div><h1>Job Order</h1><div class="sub">Estimate from the tariff &middot; v2026-08-26a</div></div>
       <a class="back" href="index.html">&larr; Menu</a>
     </header>
     <div id="app"><div class="loading">Loading&hellip;</div></div>
@@ -299,6 +302,9 @@
         </div>
       `;
     }
+    // Login gate — nothing mounts until a session exists, so no useEffect fires and config.js
+    // issues no query before sign-in.
+    await window.RSRAuth.gate(sb);
     render(html`<${App} />`, document.getElementById("app"));
   </script>
 </body>

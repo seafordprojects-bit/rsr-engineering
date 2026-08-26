@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8" />
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- Login gate — locks the page at parse time, before any content paints. See auth-gate.js. -->
+<script src="../auth-gate.js?v=2026-08-26a"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <title>RSR Payroll Adjustments</title>
@@ -49,7 +51,7 @@ select.field-input{appearance:none}
   <a class="back" href="../index.html">← Back</a>
   <div class="header">
     <div class="app-title">Payroll Adjustments</div>
-    <div class="app-sub">Pending pay additions · v2026-07-07a</div>
+    <div class="app-sub">Pending pay additions · v2026-08-26a</div>
   </div>
 
   <div class="actor">
@@ -183,8 +185,8 @@ async function addAdj(){
 }
 
 document.getElementById('actor').value = localStorage.getItem('rsr_prepared_by') || '';
-loadEmployees();
-load();
+// Login gate — both loaders query Supabase, so neither runs before a session exists.
+window.RSRAuth.gate(sb, { allow: window.RSRAuth.ADMIN_ONLY }).then(() => { loadEmployees(); load(); });
 </script>
 </body>
 </html>

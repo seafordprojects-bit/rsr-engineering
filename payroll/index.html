@@ -3,6 +3,10 @@
 <head>
 <meta charset="UTF-8" />
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- Login gate. Plain (non-deferred) script on purpose: it locks the page at parse time, so payroll
+     never flashes salary figures before the session check resolves. The numeric PIN lock below is
+     UNCHANGED — the two stack. See auth-gate.js. -->
+<script src="../auth-gate.js?v=2026-08-26a"></script>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <meta name="apple-mobile-web-app-capable" content="yes" />
 <title>RSR Engineering Payroll</title>
@@ -138,7 +142,7 @@ select.field-input{appearance:none}
   <div class="header" style="position:relative">
     <a href="../admin/" onclick="if(history.length>1){history.back();return false}" style="position:absolute;right:0;top:50%;transform:translateY(-50%);color:#888;text-decoration:none;font-size:13px;font-weight:600">← Back</a>
     <div class="app-title" id="co-title">RSR ENGINEERING</div>
-    <div class="app-sub" id="build-stamp">Weekly Payroll · v2026-08-15b</div>
+    <div class="app-sub" id="build-stamp">Weekly Payroll · v2026-08-26a</div>
   </div>
 
   <div class="tabs">
@@ -2758,7 +2762,15 @@ function saveSettings(){
   msg('set-msg','ok','Settings saved.');
 }
 
-window.addEventListener('load',async ()=>{ document.getElementById('lock-pin').focus(); await loadCfg(); });
+window.addEventListener('load',async ()=>{
+  // Login gate FIRST. loadCfg() used to run before the PIN lock, which meant `settings` was read
+  // for anyone who merely opened this URL. Nothing is queried now until a session exists.
+  // The numeric PIN lock is unchanged and still runs after this.
+  // ADMIN ONLY — the site accounts get the "for the administrator account" notice, not payroll.
+  await window.RSRAuth.gate(sb, { allow: window.RSRAuth.ADMIN_ONLY });
+  document.getElementById('lock-pin').focus();
+  await loadCfg();
+});
 </script>
 </body>
 </html>

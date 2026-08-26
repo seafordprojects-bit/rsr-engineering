@@ -67,6 +67,10 @@
   .empty{color:var(--muted);font-size:13.5px;text-align:center;padding:18px 0}
   .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
 </style>
+<!-- Login gate — locks the page at parse time, before any content paints. See auth-gate.js.
+     This page edits work_tariff and correction_factor, the rates that drive job pay. -->
+<script src="../auth-gate.js?v=2026-08-26a"></script>
+
 <script type="importmap">
 {
   "imports": {
@@ -267,6 +271,10 @@
       `;
     }
 
+    // Login gate — nothing mounts until a session exists, so no useEffect fires and config.js
+    // issues no query before sign-in.
+    // ADMIN ONLY — this page edits the rates that drive job pay.
+    await window.RSRAuth.gate(sb, { allow: window.RSRAuth.ADMIN_ONLY });
     render(html`<${App} />`, document.getElementById("app"));
   </script>
 </body>

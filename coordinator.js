@@ -113,7 +113,9 @@ async function nextNo(prefix, site) {
   const n = new Date(), z = x => String(x).padStart(2, '0');
   return prefix + '-' + site + '-' + z(n.getHours()) + z(n.getMinutes()) + z(n.getSeconds());
 }
-const LIQ_SITE_CODES = { 'Carmen': 'CAR', 'Mandaue': 'MAN', 'Lapu-Lapu': 'LAP' };
+// Lapu-Lapu removed 2026-08-26 (owner: not an active site). No-op: liqSiteCode()'s fallback strips
+// non-letters and yields the same 'LAP' for that name, and the map is never iterated.
+const LIQ_SITE_CODES = { 'Carmen': 'CAR', 'Mandaue': 'MAN' };
 const liqSiteCode = (s) => LIQ_SITE_CODES[s] || (s || 'GEN').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase();
 // push leftover material into the site's stock (mirrors the material app's delivery)
 async function liqStockIn(line, custodian) {
@@ -2587,5 +2589,9 @@ function App() {
     ${toast && html`<div class=${'toast' + (toast.err?' err':'')}>${toast.msg}</div>`}
   `;
 }
+
+// Login gate — see home.js for the reasoning. Mounts nothing until a session exists, so the
+// coordinator PIN screen (Lock, above) appears only after sign-in. The two stack.
+await window.RSRAuth.gate(supabase);
 
 render(html`<${App} />`, document.getElementById('app'));

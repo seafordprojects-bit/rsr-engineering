@@ -55,6 +55,9 @@
   .msg{margin:0 0 12px;font-size:13px;padding:9px 11px;border-radius:9px;background:var(--overbg);color:var(--over);border:1px solid #f0bdba}
   .note{font-size:12px;color:var(--muted);margin:4px 2px 0;line-height:1.4}
 </style>
+<!-- Login gate — locks the page at parse time, before any content paints. See auth-gate.js. -->
+<script src="../auth-gate.js?v=2026-08-26a"></script>
+
 <script type="importmap">
 {
   "imports": {
@@ -203,6 +206,9 @@
       `;
     }
 
+    // Login gate — nothing mounts until a session exists, so no useEffect fires and config.js
+    // issues no query before sign-in.
+    await window.RSRAuth.gate(sb);
     render(html`<${App} />`, document.getElementById("app"));
   </script>
 </body>

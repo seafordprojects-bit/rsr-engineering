@@ -78,6 +78,11 @@
         background:var(--steel);border:none;border-radius:12px}
   .gate .gbtn:disabled{opacity:.6}
 </style>
+<!-- Login gate — locks the page at parse time, before any content paints. See auth-gate.js.
+     Field phones sign in once per device (carmen@ / mandaue@) and stay signed in; the yard
+     passcode + one-device binding in rollcall-core.js is unchanged and still runs after. -->
+<script src="../auth-gate.js?v=2026-08-26a"></script>
+
 <script type="importmap">
 {
   "imports": {
@@ -94,7 +99,7 @@
     <header class="top">
       <div>
         <h1>Hulam og gamit <span id="site-badge" class="sbadge"></span></h1>
-        <div class="sub">Tool borrowing &middot; v2026-07-16c</div>
+        <div class="sub">Tool borrowing &middot; v2026-08-26a</div>
       </div>
       <a class="back" href="index.html">&larr; Menu</a>
     </header>
@@ -285,6 +290,9 @@
 
     // English unlock card — the in-charge operates it (matches the warehouse Borrow Slip). The
     // borrower-facing confirm modal inside BorrowPage stays Bisaya.
+    // Login gate — Shell (the yard passcode + one-device binding) does not mount until a session
+    // exists, so rollcall-core.js reads no settings and no sites before sign-in. Both gates run.
+    await window.RSRAuth.gate(sb);
     render(html`<${Shell} App=${BorrowPage} gate=${{ heading:(s)=>"Borrow Slip — "+s, prompt:"Enter the passcode" }} />`, document.getElementById("app"));
   </script>
 </body>

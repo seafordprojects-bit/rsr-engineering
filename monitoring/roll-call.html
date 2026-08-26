@@ -90,6 +90,11 @@
         background:var(--steel);border:none;border-radius:12px}
   .gate .gbtn:disabled{opacity:.6}
 </style>
+<!-- Login gate — locks the page at parse time, before any content paints. See auth-gate.js.
+     Field phones sign in once per device (carmen@ / mandaue@) and stay signed in; the yard
+     passcode + one-device binding in rollcall-core.js is unchanged and still runs after. -->
+<script src="../auth-gate.js?v=2026-08-26a"></script>
+
 <script type="importmap">
 {
   "imports": {
@@ -106,7 +111,7 @@
     <header class="top">
       <div>
         <h1>Roll-call <span id="site-badge" class="sbadge"></span></h1>
-        <div class="sub">Tap who is present each checkpoint &middot; v2026-07-18a</div>
+        <div class="sub">Tap who is present each checkpoint &middot; v2026-08-26a</div>
       </div>
       <a class="back" href="index.html">&larr; Menu</a>
     </header>
@@ -347,6 +352,10 @@
       `;
     }
 
+    // Login gate — Shell (the yard passcode + one-device binding) does not mount until a session
+    // exists, so rollcall-core.js reads no settings and no sites before sign-in. Both gates run:
+    // sign in once on this phone, then the yard passcode as before.
+    await window.RSRAuth.gate(sb);
     render(html`<${Shell} App=${App} />`, document.getElementById("app"));
   </script>
 </body>

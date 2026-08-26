@@ -51,6 +51,9 @@
   .loading{color:var(--muted);font-size:13px;text-align:center;padding:14px}
   .empty-jobs{color:var(--muted);font-size:13.5px;text-align:center;padding:20px 0;background:var(--paper);border:1px solid var(--line);border-radius:var(--radius)}
 </style>
+<!-- Login gate — locks the page at parse time, before any content paints. See auth-gate.js. -->
+<script src="../auth-gate.js?v=2026-08-26a"></script>
+
 <script type="importmap">
 {
   "imports": {
@@ -177,6 +180,10 @@
       `;
     }
 
+    // Login gate — nothing mounts until a session exists, so no useEffect fires and config.js
+    // issues no query before sign-in. config.js itself is untouched: it only createClient()s at
+    // import time, which makes no request.
+    await window.RSRAuth.gate(sb);
     render(html`<${App} />`, document.getElementById("app"));
   </script>
 </body>

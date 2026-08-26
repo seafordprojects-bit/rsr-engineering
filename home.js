@@ -2732,4 +2732,13 @@ function App() {
   `;
 }
 
+// Login gate (auth-gate.js, loaded as a plain <script> in the page head, so window.RSRAuth
+// is already there when this deferred module runs). Nothing mounts until a session exists,
+// so App's useEffects never run and not one query leaves the page before sign-in.
+// The admin passcode gate below this is UNCHANGED — the two stack.
+// ADMIN ONLY. This file serves BOTH index.html (the dashboard) and admin/index.html, and both are
+// admin-only, so one allowlist here covers the pair. The site accounts (carmen@, mandaue@) get the
+// "for the administrator account" notice instead of the page.
+await window.RSRAuth.gate(supabase, { allow: window.RSRAuth.ADMIN_ONLY });
+
 render(html`<${App} />`, document.getElementById('app'));

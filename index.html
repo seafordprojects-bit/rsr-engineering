@@ -8,6 +8,10 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
 
+<!-- Login gate. Plain (non-deferred) script on purpose: it locks the page at parse time, so the
+     dashboard never flashes real data before the session check resolves. See auth-gate.js. -->
+<script src="./auth-gate.js?v=2026-08-26a"></script>
+
 <script type="importmap">
 {
   "imports": {
@@ -70,6 +74,6 @@
 </head>
 <body>
   <div id="app"></div>
-  <script type="module" src="./home.js?v=2026-08-15a"></script>
+  <script type="module" src="./home.js?v=2026-08-26a"></script>
 </body>
 </html>

@@ -10,6 +10,9 @@
   .ok{color:#1f7a4d;font-weight:700}.bad{color:#b4231f;font-weight:700}.mono{font-family:ui-monospace,Consolas,monospace}
   a{color:#2f5d8a}
 </style>
+<!-- Login gate — locks the page at parse time, before any content paints. See auth-gate.js. -->
+<script src="../auth-gate.js?v=2026-08-26a"></script>
+
 <script type="importmap">
 { "imports": {
     "@supabase/supabase-js": "https://esm.sh/@supabase/supabase-js@2"
@@ -23,6 +26,11 @@
   <script type="module">
     import { weekContaining, defaultPayWeek, isoOf, saturdayOnOrBefore } from "../shared/payweek.mjs";
     import { sb } from "./config.js";
+
+    // Login gate. This page starts its checks on load — several of them query Supabase — so the
+    // gate goes ABOVE the first check, not next to a button. Nothing below runs before sign-in.
+    await window.RSRAuth.gate(sb);
+
     const out=document.getElementById("out");
     const rows=[];
     const check=(name,pass,detail="")=>rows.push(`<div class="card"><b>${name}</b> — <span class="${pass?"ok":"bad"}">${pass?"PASS":"FAIL"}</span> <div class="mono">${detail}</div></div>`);

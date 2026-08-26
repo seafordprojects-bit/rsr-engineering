@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>RSR Payroll Diagnostic</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<!-- Login gate — locks the page at parse time, before any content paints. See auth-gate.js. -->
+<script src="../auth-gate.js?v=2026-08-26a"></script>
 <style>
 body{font-family:-apple-system,sans-serif;background:#f4f4ef;margin:0;padding:16px;color:#1a1a1a}
 h2{margin:0 0 4px}
@@ -25,13 +27,18 @@ button{background:#378ADD;color:#fff;border:0;border-radius:10px;padding:12px 18
 <body>
 <h2>🔬 Payroll Diagnostic</h2>
 <div class="sub">Reads the same Supabase project as the payroll (wpmcbjrisuyjvobvzaus) and tests every stage. Take a screenshot of the whole result.</div>
-<button onclick="run()">Run diagnostic</button>
+<button id="run-btn" onclick="run()" disabled>Run diagnostic</button>
 <div id="out"></div>
 
 <script>
 const SUPABASE_URL = 'https://wpmcbjrisuyjvobvzaus.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndwbWNianJpc3V5anZvYnZ6YXVzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzc4NjU3ODQsImV4cCI6MjA5MzQ0MTc4NH0.EGyUnXmVkUrsEteKICMRSOXURxYXPOaKUs8EYCpw6_0';
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// Login gate. This page queries nothing until Run is pressed, so there is no pre-login burst —
+// the button ships disabled and is only enabled once a session exists.
+window.RSRAuth.gate(sb, { allow: window.RSRAuth.ADMIN_ONLY })
+  .then(() => { document.getElementById('run-btn').disabled = false; });
 
 function toISO(s){
   if(!s) return '';
