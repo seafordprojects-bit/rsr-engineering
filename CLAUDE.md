@@ -162,3 +162,31 @@ uncleaned for 5 days until today.
 - Offline UX shows no worker name by design; on-device PIN verification was discussed and
   declined for now because a 6-digit PIN cannot be safely verified without server-side
   throttling.
+- **`navigator.onLine` is proven unreliable under flaky-connectivity conditions** (2026-09-03
+  investigation) — it can read `true` while the tablet genuinely has no route to Supabase.
+  Affects eleven call sites in `kiosk/index.html` (`identifyByPin`, admin verify, passcode
+  change, three `setInterval` connectivity gates, `updateSyncBadge`, `syncFlush`,
+  `flushOfflinePunches`, an error classifier, and one more guard) — every one of them trusts
+  this same single, browser-documented-as-unreliable property, with no cross-check against an
+  actual request's real success or failure. **Needs a probe-based real-connectivity check**
+  (an actual request/response, not the browser property) **before Phase 2 is built** — Phase
+  2's provisional offline PIN lookup would otherwise inherit the same unreliable signal.
+
+## offline-punch-v2 — Phase 1 status, 2026-09-03 (evening session)
+Two bug fixes landed on branch `offline-punch-v2` tonight. **Not merged to main.**
+- `146e104` — the post-queue auto-clear timer (`offlineClearTimer`) disabled every punch
+  button and nulled `offlinePin` mid-session if more than 4s passed after tapping Confirm,
+  regardless of what the worker did next (retyping a PIN, or sitting on a second confirm
+  screen). Fixed with a cancellable timer handle, cancelled by every action that means the
+  worker is still active.
+- (this session) — `employee_suspensions` poll had no `navigator.onLine` gate and no
+  backoff; a genuinely offline tablet logged one identical failed request every 45s,
+  forever (211 in one 2.6-hour session). Fixed with an online-gated, doubling-then-capped
+  retry.
+
+**The Phase 1 localhost walkthrough for offline-punch-v2 is NOT complete.** The
+duplicate-block test result was inconclusive tonight, because the `navigator.onLine`
+unreliability above made it impossible to tell whether a "No connection" result meant the
+dedupe logic actually ran, or the tablet had been falsely detected as offline. The four
+Supabase/admin/Telegram verification steps were not yet run. Do not merge to main until
+the walkthrough actually completes.
