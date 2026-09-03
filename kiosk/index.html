@@ -237,7 +237,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-08-28a</span>
+        <span id="version-stamp">v2026-09-03a</span>
       </div>
     </div>
   </div>
@@ -748,6 +748,17 @@ textarea.field-input{resize:none;height:65px}
   </div>
 </div>
 
+<!-- (v2026-09-03a) OFFLINE PUNCH CONFIRM — masked PIN + punch type, before anything is queued -->
+<div class="modal-bg center" id="offline-confirm-modal">
+  <div class="modal bisaya-modal">
+    <div class="bisaya-text" id="offline-confirm-text"></div>
+    <div style="display:flex;gap:10px;justify-content:center;margin-top:6px">
+      <button class="btn-primary bisaya-ok" style="background:#8a8a86" onclick="offlineConfirmRetype()">I-type Pag-usab</button>
+      <button class="btn-primary bisaya-ok" onclick="offlineConfirmProceed()">Confirm</button>
+    </div>
+  </div>
+</div>
+
 <!-- LATE TIMEOUT WARNING MODAL -->
 <div class="modal-bg" id="late-timeout-modal">
   <div class="modal">
@@ -1150,6 +1161,10 @@ let kpChecking=false;
 // tablet knows about that worker - no name, no code, no record. It is cleared by kpClr like any
 // other keypad state, and it exists only between the sixth digit and the punch that follows it.
 let offlinePin=null;
+// (v2026-09-03a) Holds {pin,type,photo} between a punch button press while offline and the
+// Confirm/Retype screen's answer. Nothing is queued until offlineConfirmProceed() runs; Retype (or
+// any other kpClr) discards it untouched - the tablet is not allowed to guess a "yes".
+let pendingOfflinePunch=null;
 let adminSecs=ADMIN_TO,adminTick=null;
 let tgToken='',tgGroup='',tgPosGroup='',tgPhotoGroup='',tgBackupGroup='',tgAwolGroup='',mgrIds=[];
 let semaphoreKey='',semaphoreSender='RSR ENGRG';
@@ -1561,6 +1576,36 @@ function capturePhoto(){
         res(c.toDataURL('image/jpeg',0.75));
       }).catch(()=>{res(null);});
     }catch(e){console.warn('capturePhoto failed (non-fatal):',e&&e.message);res(null);}
+  });
+}
+// (v2026-09-03a) Offline twin of capturePhoto(). Smaller from the start (160x160, not 400x400) and
+// steps the JPEG quality down until it clears a size budget, because this frame travels inside the
+// offline queue - up to 200 of them may sit on the tablet at once - rather than straight to Telegram.
+// Same freshness guard (verifyLiveFrame) as the online capture: a frozen frame is never queued as if
+// it were a live one.
+const OFFLINE_PHOTO_TARGET_CHARS=30*1024*1.37; // ~30KB of actual bytes, once the base64 1-in-3 blow-up is undone
+function capturePhotoOffline(){
+  return new Promise(res=>{
+    try{
+      if(!camReady){res(null);return;}
+      const v=document.getElementById('cam-video'),c=document.getElementById('cam-canvas');
+      if(!v||!c||!v.videoWidth){res(null);return;}
+      verifyLiveFrame(v).then(live=>{
+        if(!live){camReady=false;tryRecoverCamera();res(null);return;}
+        const SIZE=160;
+        c.width=SIZE;c.height=SIZE;
+        const ctx=c.getContext('2d');
+        ctx.save();ctx.translate(SIZE,0);ctx.scale(-1,1);ctx.drawImage(v,0,0,SIZE,SIZE);ctx.restore();
+        // 0.2 is the practical floor for a still-recognizable face at 160x160 - "somebody was there"
+        // matters more here than crispness, so the last step is kept rather than giving up on a photo.
+        let out=null;
+        for(const q of [0.6,0.5,0.4,0.3,0.2]){
+          out=c.toDataURL('image/jpeg',q);
+          if(out.length<=OFFLINE_PHOTO_TARGET_CHARS)break;
+        }
+        res(out);
+      }).catch(()=>{res(null);});
+    }catch(e){console.warn('capturePhotoOffline failed (non-fatal):',e&&e.message);res(null);}
   });
 }
 
@@ -3084,6 +3129,46 @@ function showOfflinePreview(pin){
   const ot=document.getElementById('ot-allow-banner'); if(ot)ot.style.display='none';
   el.style.display='block';
 }
+// (v2026-09-03a) OFFLINE CONFIRM SCREEN. Shows only the last two digits - the tablet cannot show a
+// name, so this is the one chance to catch a mistyped PIN or a wrong button before it is queued and
+// silently mis-punches somebody until the office reviews it, hours or days later.
+function showOfflineConfirm(pin,type){
+  const masked='••••'+pin.slice(-2);
+  const el=document.getElementById('offline-confirm-text');
+  if(el)el.textContent=masked+' — '+(PLABELS[type]||type)+'\n\nWalay internet. Husto ba ni? Confirm kung husto, o i-type pag-usab kung sayop.';
+  document.getElementById('offline-confirm-modal').classList.add('show');
+}
+async function offlineConfirmProceed(){
+  document.getElementById('offline-confirm-modal').classList.remove('show');
+  const pending=pendingOfflinePunch; pendingOfflinePunch=null;   // cleared FIRST - a double-tap on
+  if(!pending)return;                                            // Confirm must never queue twice
+  await queueOfflinePunch(pending.pin,pending.type,pending.photo);
+}
+function offlineConfirmRetype(){
+  document.getElementById('offline-confirm-modal').classList.remove('show');
+  pendingOfflinePunch=null;   // the captured frame (if any) is simply discarded, never queued
+  kpClr();
+}
+// The actual queue write, split out of punch() so both offlineConfirmProceed() and (later) any other
+// caller share one path. Stores the photo in IndexedDB FIRST and only the returned id on the
+// localStorage queue entry - see OFFLINE PHOTO STORE below for why.
+async function queueOfflinePunch(pin,type,photoDataUrl){
+  let photoId=null;
+  if(photoDataUrl){
+    photoId=offlinePhotoNewId();
+    try{ await offlinePhotoPut(photoId,photoDataUrl); }
+    catch(e){ console.warn('offlinePhotoPut failed (non-fatal, punch still queues):',e&&e.message); photoId=null; }
+  }
+  const ok=offqAdd(pin,type,photoId);
+  if(ok){
+    showOfflinePreview(pin);
+    showMsg('ok','Saved offline - pending',
+      'Na-save ang imong '+(PLABELS[type]||type)+'. Ma-record ni sa opisina inig balik sa internet.',4500);
+  }else if(photoId){
+    offlinePhotoDelete(photoId);   // queue was full (200 cap) - do not leave an orphaned photo behind
+  }
+  setTimeout(()=>kpClr(),4000);
+}
 // Offline every punch button is pressable: the tablet cannot know which one is next for a worker
 // it cannot identify. The SERVER refuses anything that does not fit and files it in
 // kiosk_offline_rejects - it never guesses which punch was meant.
@@ -3299,13 +3384,22 @@ async function punch(type){
   // logic below can run without an identity: the record, the sequence gating, the bar check and
   // the allowance all key off curEmp. The server applies those rules at sync instead.
   if(offlinePin){
-    const ok=offqAdd(offlinePin,type);
-    if(ok){
-      showOfflinePreview(offlinePin);
-      showMsg('ok','Saved offline - pending',
-        'Na-save ang imong '+(PLABELS[type]||type)+'. Ma-record ni sa opisina inig balik sa internet.',4500);
+    // (v2026-09-03a) SAME-TYPE DEDUPE, before anything else. offqToday is this device's own queue,
+    // typed-PIN-scoped (the only identity the tablet has offline) - a second tap of the same button
+    // by the same PIN today is refused here rather than queued twice for the server to untangle.
+    const dup=offqToday(offlinePin).find(j=>j.punch_type===type);
+    if(dup){
+      const dt=new Date(dup.client_ts).toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true});
+      showMsg('warn',(PLABELS[type]||type)+' already saved '+dt+' - pending. No need to punch again.',
+        'Na-rehistro na ang imong '+(PLABELS[type]||type)+' alas '+dt+'. Dili na kinahanglan i-punch pag-usab.',4500);
+      return;
     }
-    setTimeout(()=>kpClr(),4000);
+    // (v2026-09-03a) Capture BEFORE the confirm screen, same causal moment as the button press (the
+    // online path also captures at press time, not at whatever moment the worker later confirms).
+    // A Retype simply discards this frame; the retried attempt captures its own.
+    const photo=await capturePhotoOffline();
+    pendingOfflinePunch={pin:offlinePin,type,photo};
+    showOfflineConfirm(offlinePin,type);
     return;
   }
   if(!curEmp){showMsg('err','No employee selected','Please enter your 6-digit PIN first.');return;}
@@ -6391,6 +6485,59 @@ async function syncFlush(){
 // punch, or it filed a row in kiosk_offline_rejects. A network failure keeps the entry and it is
 // still counted in the badge. There is deliberately no catch-and-requeue that swallows a result:
 // every outcome is either synced, visibly pending, or a reject the office can see.
+// (v2026-09-03a) OFFLINE PHOTO STORE (IndexedDB), NOT localStorage. 200 queued entries at ~30KB of
+// photo each is ~6MB - on top of everything else already living in localStorage (records, employees,
+// settings...), that risks the tablet's quota. IndexedDB has no such practical ceiling, so only a
+// small photo_id lives on the localStorage queue entry below; the bytes live here, one row per
+// queued punch, deleted the moment the server has accounted for that punch - written or rejected -
+// exactly the same "leaves only when accounted for" rule the queue entry itself follows.
+const OFFPHOTO_DB='rsr_offline_photos', OFFPHOTO_STORE='photos';
+function offlinePhotoDB(){
+  return new Promise((res,rej)=>{
+    try{
+      if(!window.indexedDB){rej(new Error('no indexedDB'));return;}
+      const req=indexedDB.open(OFFPHOTO_DB,1);
+      req.onupgradeneeded=()=>{ if(!req.result.objectStoreNames.contains(OFFPHOTO_STORE))req.result.createObjectStore(OFFPHOTO_STORE); };
+      req.onsuccess=()=>res(req.result);
+      req.onerror=()=>rej(req.error);
+    }catch(e){rej(e);}
+  });
+}
+function offlinePhotoNewId(){ return 'p'+Date.now()+'_'+Math.random().toString(36).slice(2,8); }
+async function offlinePhotoPut(id,dataUrl){
+  const db=await offlinePhotoDB();
+  return new Promise((res,rej)=>{
+    try{
+      const tx=db.transaction(OFFPHOTO_STORE,'readwrite');
+      tx.objectStore(OFFPHOTO_STORE).put(dataUrl,id);
+      tx.oncomplete=()=>res(true);
+      tx.onerror=()=>rej(tx.error);
+    }catch(e){rej(e);}
+  });
+}
+// Never throws: a photo that cannot be read back is treated the same as no photo (null), and the
+// punch itself - the thing that actually matters to payroll - is never blocked on it.
+async function offlinePhotoGet(id){
+  if(!id)return null;
+  try{
+    const db=await offlinePhotoDB();
+    return await new Promise((res,rej)=>{
+      const tx=db.transaction(OFFPHOTO_STORE,'readonly');
+      const rq=tx.objectStore(OFFPHOTO_STORE).get(id);
+      rq.onsuccess=()=>res(rq.result||null);
+      rq.onerror=()=>rej(rq.error);
+    });
+  }catch(e){ console.warn('offlinePhotoGet failed (non-fatal, punch still syncs):',e&&e.message); return null; }
+}
+async function offlinePhotoDelete(id){
+  if(!id)return;
+  try{
+    const db=await offlinePhotoDB();
+    const tx=db.transaction(OFFPHOTO_STORE,'readwrite');
+    tx.objectStore(OFFPHOTO_STORE).delete(id);
+  }catch(e){ /* non-fatal: a leftover row just sits unused - no correctness impact */ }
+}
+
 const OFFQ_KEY='rsr_offline_punches';
 const OFFQ_MAX=200;                 // hard cap on entries
 const OFFQ_MAX_AGE_MS=12*60*60*1000; // and on age (owner 2026-08-28: shortened from 24h)
@@ -6419,10 +6566,16 @@ function offqPrune(){
   if(expired.length){
     // Dropped, but never silently: each one is a punch a worker really made, and the day it
     // belongs to now needs correcting by hand.
-    expired.forEach(j=>logNotif('Offline punch expired unsynced ('+j.punch_type+', queued '+new Date(j.queued_at).toLocaleString('en-PH')+') - correct this day by hand','late-n',false));
+    expired.forEach(j=>{
+      logNotif('Offline punch expired unsynced ('+j.punch_type+', queued '+new Date(j.queued_at).toLocaleString('en-PH')+') - correct this day by hand','late-n',false);
+      if(j.photo_id)offlinePhotoDelete(j.photo_id);   // the punch is gone; its photo would otherwise orphan
+    });
     offlineQueue=offlineQueue.filter(j=>j.queued_at>=cutoff);
   }
-  if(offlineQueue.length>OFFQ_MAX) offlineQueue=offlineQueue.slice(-OFFQ_MAX); // keep the newest
+  if(offlineQueue.length>OFFQ_MAX){
+    offlineQueue.slice(0,offlineQueue.length-OFFQ_MAX).forEach(j=>{ if(j.photo_id)offlinePhotoDelete(j.photo_id); });
+    offlineQueue=offlineQueue.slice(-OFFQ_MAX); // keep the newest
+  }
   if(offlineQueue.length!==before) offqSave();
 }
 function offqCount(){ offqPrune(); return offlineQueue.length; }
@@ -6432,7 +6585,7 @@ function offqToday(pin){
   const day=todayKey();
   return offlineQueue.filter(j=>j.pin===pin&&new Date(j.client_ts).toLocaleDateString("en-PH",{year:"numeric",month:"2-digit",day:"2-digit"})===day);
 }
-function offqAdd(pin,punchType){
+function offqAdd(pin,punchType,photoId){
   offqPrune();
   if(offlineQueue.length>=OFFQ_MAX){
     showMsg('err','Queue full','Naa nay 200 ka punch nga wala pa ma-sync. Palihug tawag sa opisina.',6000);
@@ -6445,6 +6598,7 @@ function offqAdd(pin,punchType){
     device_id: getDeviceId(),
     site: activeSite||null,      // the tablet knows its OWN yard; this is not a decision about the worker
     queued_at: Date.now(),
+    photo_id: photoId||null,     // (v2026-09-03a) points into the IndexedDB photo store; never the photo itself
   });
   offqSave(); updateSyncBadge();
   return true;
@@ -6463,10 +6617,14 @@ async function flushOfflinePunches(){
     const ordered=offlineQueue.slice().sort((a,b)=>new Date(a.client_ts)-new Date(b.client_ts));
     for(const job of ordered){
       let res=null;
+      // (v2026-09-03a) Read BEFORE the RPC call, not after: the server needs the bytes to store
+      // against a reject, and the tablet needs them right after to notify Telegram on an accept.
+      const photoDataUrl=job.photo_id?await offlinePhotoGet(job.photo_id):null;
       try{
         const {data,error}=await sbClient.rpc('sync_offline_punch',{
           p_pin:job.pin, p_punch_type:job.punch_type,
           p_client_ts:job.client_ts, p_device_id:job.device_id, p_site:job.site||null,
+          p_photo:photoDataUrl||null,
         });
         if(error) throw error;
         res=Array.isArray(data)?data[0]:data;
@@ -6480,12 +6638,17 @@ async function flushOfflinePunches(){
       // The server has ACCOUNTED for this entry either way - written, or filed as a reject.
       offlineQueue=offlineQueue.filter(j=>j!==job);
       offqSave();
+      if(job.photo_id)offlinePhotoDelete(job.photo_id);   // accounted for either way; nothing left to keep
       if(res.out_status==='ok'){
         // Fold the punch the server wrote into the LOCAL record. Without this the tablet would
         // push its own full record for that worker later and overwrite the punch it never knew
         // about - the punch would vanish and the day would be short.
         try{ offqMergeServerPunches(res); }catch(e){}
         logNotif('Offline punch synced: '+(res.out_employee_name||res.out_employee_code||'?')+' '+job.punch_type,'ok',false);
+        // Best-effort, not awaited: a slow/failed Telegram send must never stall or retry the sync
+        // loop. The job is already dequeued and its photo already deleted above - there is exactly
+        // one chance to send this, matching "once per queued entry, never again on retry".
+        if(photoDataUrl)sendOfflineSyncedPhotoNotif(job,res,photoDataUrl).catch(()=>{});
       }else{
         // Rejected. It is already in kiosk_offline_rejects for the office; surface it here too so
         // the tablet is not silently quieter than the database.
@@ -6494,6 +6657,20 @@ async function flushOfflinePunches(){
       updateSyncBadge();
     }
   } finally { offqSyncing=false; updateSyncBadge(); }
+}
+// (v2026-09-03a) The offline-sync twin of sendPunchNotif's photo-backup step. The caption must carry
+// the ORIGINAL tap time (job.client_ts), not "now" - "now" is whenever the tablet happened to
+// reconnect, which can be hours later, and a Time In photo captioned with an afternoon timestamp
+// would read as wrong to whoever is watching the backup group.
+async function sendOfflineSyncedPhotoNotif(job,res,photoDataUrl){
+  if(!tgToken||tgToken.length<20||!tgBackupGroup)return;
+  const tapTime=new Date(job.client_ts).toLocaleTimeString('en-PH',{hour:'2-digit',minute:'2-digit',hour12:true});
+  const syncTime=nowShort();
+  const name=res.out_employee_name||res.out_employee_code||'Unknown worker';
+  const caption='⏳ <b>'+(PLABELS[job.punch_type]||job.punch_type)+' (offline, synced '+syncTime+')</b>\n'
+    +'👤 '+name+'\n🕐 Tapped '+tapTime+' · '+todayKey()+'\n🏢 '+company;
+  const stamped=await stampPhoto(photoDataUrl,name,job.punch_type,tapTime);
+  await tgSendPhoto(tgBackupGroup,caption,stamped||photoDataUrl);
 }
 // Merge the server-confirmed punch set into the local record for that worker + day.
 function offqMergeServerPunches(res){

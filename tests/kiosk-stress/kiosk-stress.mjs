@@ -80,6 +80,7 @@ const mock = {
   telegram: [],        // captured Telegram sends: {method, chat_id, text, hasButtons}
   tgConfigured: false, // when true, /settings returns a live tg_token + tg_awol_group
   awolGroupId: '',     // the mocked AWOL group chat id
+  tgBackupGroupId: '', // the mocked tg_backup_group chat id (v2026-09-03a offline-photo notify)
   tgMsgSeq: 1000,      // incrementing message_id source
   rpcSuspendFail: false, // when true, /rpc/awol_set_suspended 500s (simulates offline for FIX 1 coverage)
   // ── identify_employee_by_pin (v2026-08-26b) ──────────────────────────────────────────────────
@@ -422,6 +423,7 @@ async function newKioskContext(browser, base, initMs) {
         return json(200, [
           { key: 'tg_token', value: 'TESTTOKEN0000000000000000000000000000' },
           { key: 'tg_awol_group', value: mock.awolGroupId || '' },
+          { key: 'tg_backup_group', value: mock.tgBackupGroupId || '' },
           { key: 'mgr_ids', value: '111,222' },
         ]);
       }
@@ -446,6 +448,14 @@ async function newKioskContext(browser, base, initMs) {
         const cbs = mock.tgCallbacks || [];
         mock.tgCallbacks = [];
         return json(200, { ok: true, result: cbs.map((c, i) => ({ update_id: i + 1, callback_query: c })) });
+      }
+      if (p.endsWith('/sendPhoto')) {
+        // multipart/form-data, not JSON — pull the fields the offline-photo tests need out of the
+        // raw body rather than a full multipart parse.
+        const raw = req.postData() || '';
+        const field = (name) => { const m2 = raw.match(new RegExp('name="' + name + '"\\r?\\n\\r?\\n([\\s\\S]*?)\\r?\\n--')); return m2 ? m2[1] : ''; };
+        mock.telegram.push({ method: 'sendPhoto', chat_id: field('chat_id'), text: field('caption'), hasButtons: false, hasPhoto: raw.includes('name="photo"') });
+        return json(200, { ok: true, result: { message_id: ++mock.tgMsgSeq } });
       }
       if (p.endsWith('/answerCallbackQuery')) {
         // Captured the same way as sendMessage/editMessageText — this is the only evidence that
@@ -538,7 +548,22 @@ const retryWithSkipList = (page) => page.evaluate(async () => {
   const s = {}; (data || []).forEach(r => { s[normCode(r.code)] = { skip: r.skip === true, reason: r.reason || null }; });
   await retryAwolUnsynced(s);
 });
-const doPunch = (page, type) => page.evaluate(async (t) => { await punch(t); }, type);
+const doPunch = (page, type) => page.evaluate(async (t) => {
+  await punch(t);
+  // (v2026-09-03a) OFFLINE CONFIRM STEP: an online punch finishes here. An offline punch instead
+  // stops at a Confirm/Retype screen; doPunch auto-confirms so every existing online-flow scenario
+  // is unaffected, and only the confirm-step scenarios in section J need to drive it explicitly.
+  const m = document.getElementById('offline-confirm-modal');
+  if (m && m.classList.contains('show')) await offlineConfirmProceed();
+}, type);
+// Raw offline punch attempt WITHOUT auto-confirm, for scenarios testing the confirm screen itself.
+const doPunchNoConfirm = (page, type) => page.evaluate(async (t) => { await punch(t); }, type);
+const offlineConfirmState = (page) => page.evaluate(() => ({
+  show: document.getElementById('offline-confirm-modal').classList.contains('show'),
+  text: (document.getElementById('offline-confirm-text') || {}).textContent || '',
+}));
+const confirmOffline = (page) => page.evaluate(() => offlineConfirmProceed());
+const retypeOffline = (page) => page.evaluate(() => offlineConfirmRetype());
 const recAt = (page, code, dateKey) => page.evaluate(([c, k]) => {
   const r = records[c + '_' + k];
   return r ? { punches: r.punches, nightShift: !!r.nightShift, isLate: !!r.isLate, lateTimeOut: !!r.lateTimeOut,
@@ -613,6 +638,7 @@ async function scenario(name, initMs, fn) {
   mock.tgCallbacks = [];
   mock.tgConfigured = false;
   mock.awolGroupId = '';
+  mock.tgBackupGroupId = '';
   mock.rpcSuspendFail = false;
   mock.identifyFail = false; mock.identifyThrottled = false; mock.identifyCollide = null; mock.identifyCalls = [];
   mock.syncOfflineCalls = []; mock.syncOfflineMode = 'ok'; mock.syncOfflineReason = 'no_match';
@@ -2549,6 +2575,226 @@ await scenario('I12 - a night punch just before midnight survives into the small
   const after = await page.evaluate(() => offqCount());
   report('I12 - punch survives midnight; the shift day has not turned over yet',
     before === 1 && after === 1, `beforeMidnight=${before} afterMidnight=${after}`);
+});
+
+// ==============================================================================
+//  J - OFFLINE PUNCH V2: dedupe, confirm step, photo (v2026-09-03a)
+// ==============================================================================
+// Three additions on top of section I's queue: (1) a same-type re-tap today is refused instead of
+// queued twice, (2) nothing queues until the worker sees a masked-PIN Confirm/Retype screen, and
+// (3) a photo captured at tap time travels with the entry - by reference (IndexedDB), never inline
+// in localStorage - and is either handed to the server on sync (for a reject to review) or sent
+// straight to Telegram by the tablet itself (for an accept, mirroring the ONLINE punch path exactly).
+
+const OFFLINE_PHOTO_FIXTURE = 'data:image/jpeg;base64,ZmFrZS1qcGVnLWJ5dGVz';
+// The real camera is unreachable in this headless suite (getUserMedia is stubbed to reject for every
+// scenario - see the init script above). Rather than fake a live video stream, this stubs the ONE
+// function that turns a frame into a data URL, the same boundary-level substitution the harness
+// already uses for getUserMedia itself - everything downstream (IndexedDB storage, the RPC payload,
+// the Telegram send, cleanup) runs as the real shipped code.
+const stubOfflineCamera = (page, dataUrl) => page.evaluate((d) => {
+  window.capturePhotoOffline = () => Promise.resolve(d);
+}, dataUrl);
+// Poll instead of a fixed sleep: J11 pushes 200 sequential RPC round-trips through the mock, and a
+// single fixed wait would either stall every other scenario or flake under load.
+async function waitForQueueEmpty(page, maxMs = 15000) {
+  const step = 400;
+  for (let waited = 0; waited < maxMs; waited += step) {
+    if ((await offq(page) || []).length === 0) return true;
+    await page.waitForTimeout(step);
+  }
+  return (await offq(page) || []).length === 0;
+}
+
+await scenario('J1 - same PIN + same punch type today is refused, not re-queued', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  const afterFirst = (await offq(page) || []).length;
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunchNoConfirm(page, 'timein');   // dedupe fires INSIDE punch(), before any confirm screen
+  const modal = await offlineConfirmState(page);
+  const afterSecond = (await offq(page) || []).length;
+  report('J1 - second same-type tap never reaches the confirm screen and the queue is unchanged',
+    afterFirst === 1 && afterSecond === 1 && !modal.show,
+    `afterFirst=${afterFirst} afterSecond=${afterSecond} confirmShown=${modal.show}`);
+});
+
+await scenario('J2 - a DIFFERENT punch type for the same PIN is not blocked', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'lunch_out');
+  const types = (await offq(page) || []).map(j => j.punch_type);
+  report('J2 - the dedupe is scoped to the same punch_type only',
+    types.length === 2 && types.includes('timein') && types.includes('lunch_out'),
+    `types=${JSON.stringify(types)}`);
+});
+
+await scenario('J3 - the confirm screen shows a masked PIN + the punch type, and queues nothing until Confirm', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));   // pin '100200' → masked '••••00'
+  await doPunchNoConfirm(page, 'timein');
+  const state = await offlineConfirmState(page);
+  const beforeConfirm = (await offq(page) || []).length;
+  await confirmOffline(page);
+  const afterConfirm = (await offq(page) || []).length;
+  report('J3 - masked PIN + punch type shown; the queue grows only after Confirm',
+    state.show && state.text.includes('••••00') && state.text.includes('Time In')
+      && beforeConfirm === 0 && afterConfirm === 1,
+    `text="${state.text}" beforeConfirm=${beforeConfirm} afterConfirm=${afterConfirm}`);
+});
+
+await scenario('J4 - Retype discards the pending punch and resets the keypad', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunchNoConfirm(page, 'timein');
+  await retypeOffline(page);
+  const state = await offlineConfirmState(page);
+  const q = (await offq(page) || []).length;
+  const pinCleared = await page.evaluate(() => offlinePin === null && pin === '');
+  report('J4 - Retype queues nothing, hides the screen, and clears the typed PIN',
+    !state.show && q === 0 && pinCleared,
+    `modalShown=${state.show} queued=${q} pinCleared=${pinCleared}`);
+});
+
+await scenario('J5 - a double-tap on Confirm queues exactly once', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunchNoConfirm(page, 'timein');
+  await Promise.all([confirmOffline(page), confirmOffline(page)]);
+  const q = (await offq(page) || []).length;
+  report('J5 - pendingOfflinePunch is cleared before the queue write, so a repeat Confirm is a no-op',
+    q === 1, `queued=${q}`);
+});
+
+await scenario('J6 - a captured offline photo is stored by reference, never inline in localStorage', manila(2026,7,15,8,0), async (page) => {
+  await stubOfflineCamera(page, OFFLINE_PHOTO_FIXTURE);
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  const e = (await offq(page) || [])[0] || {};
+  const rawStore = await page.evaluate(() => localStorage.getItem('rsr_offline_punches') || '');
+  report('J6 - the queue entry carries only a photo_id; the photo bytes never touch localStorage',
+    typeof e.photo_id === 'string' && e.photo_id.length > 0 && !rawStore.includes('data:image'),
+    `photo_id=${e.photo_id} rawContainsImage=${rawStore.includes('data:image')}`);
+});
+
+await scenario('J7 - a stored offline photo is read back and sent as p_photo on sync', manila(2026,7,15,8,0), async (page) => {
+  await stubOfflineCamera(page, OFFLINE_PHOTO_FIXTURE);
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await waitForQueueEmpty(page);
+  const call = mock.syncOfflineCalls[0] || {};
+  report('J7 - p_photo carries the exact captured data URL',
+    call.p_photo === OFFLINE_PHOTO_FIXTURE, `p_photo=${String(call.p_photo).slice(0,40)}`);
+});
+
+await scenario('J7b - no camera available → p_photo is explicitly null, never omitted', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);   // capturePhotoOffline not stubbed: camReady stays false, same as every other scenario
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await waitForQueueEmpty(page);
+  const call = mock.syncOfflineCalls[0] || {};
+  report('J7b - no photo captured → p_photo is sent as null',
+    call.p_photo === null, `p_photo=${JSON.stringify(call.p_photo)}`);
+});
+
+await scenario('J8 - a synced offline punch with a photo notifies Telegram with the ORIGINAL tap time', manila(2026,7,15,7,48), async (page) => {
+  mock.tgConfigured = true; mock.tgBackupGroupId = '-1005550001112';
+  await page.evaluate(() => loadTgFromCloud());
+  await stubOfflineCamera(page, OFFLINE_PHOTO_FIXTURE);
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');   // tapped 07:48 AM, offline
+  await setNow(page, manila(2026,7,15,15,0));   // reconnects at 3:00 PM - a very different time
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await waitForQueueEmpty(page);
+  // sendOfflineSyncedPhotoNotif is deliberately fire-and-forget (never awaited by the sync loop, so
+  // a slow/failed Telegram send cannot stall the next punch) - the queue can empty before it lands.
+  for (let i = 0; i < 15 && !mock.telegram.some(t => t.method === 'sendPhoto'); i++) await page.waitForTimeout(200);
+  const sent = mock.telegram.find(t => t.method === 'sendPhoto');
+  // The whole point: the office must never mistake a stale morning photo for an afternoon one just
+  // because it landed in Telegram at 3 PM.
+  report('J8 - caption carries the original 07:48 tap time and an explicit offline/synced marker',
+    !!sent && sent.hasPhoto && sent.chat_id === '-1005550001112'
+      && /07:48/.test(sent.text) && /offline/i.test(sent.text) && /synced/i.test(sent.text),
+    `sent=${JSON.stringify(sent)}`);
+});
+
+await scenario('J9 - a REJECTED offline punch hands its photo to the server, not to Telegram', manila(2026,7,15,8,0), async (page) => {
+  mock.tgConfigured = true; mock.tgBackupGroupId = '-1005550001112';
+  await page.evaluate(() => loadTgFromCloud());
+  await stubOfflineCamera(page, OFFLINE_PHOTO_FIXTURE);
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  mock.syncOfflineMode = 'reject'; mock.syncOfflineReason = 'out_of_sequence';
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await waitForQueueEmpty(page);
+  const call = mock.syncOfflineCalls[0] || {};
+  const sentPhoto = mock.telegram.some(t => t.method === 'sendPhoto');
+  report('J9 - a rejected sync still carries p_photo (for the admin card); the tablet does not also notify Telegram',
+    call.p_photo === OFFLINE_PHOTO_FIXTURE && !sentPhoto,
+    `p_photo=${String(call.p_photo).slice(0,20)} telegramSentPhoto=${sentPhoto}`);
+});
+
+await scenario('J10 - the stored photo is deleted once the server has accounted for the punch', manila(2026,7,15,8,0), async (page) => {
+  await stubOfflineCamera(page, OFFLINE_PHOTO_FIXTURE);
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  const photoId = (await offq(page))[0].photo_id;
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await waitForQueueEmpty(page);
+  const stillThere = await page.evaluate(async (id) => !!(await offlinePhotoGet(id)), photoId);
+  report('J10 - the IndexedDB photo row is removed once the queue entry is gone',
+    !stillThere, `photoStillInIndexedDB=${stillThere}`);
+});
+
+await scenario('J11 - STRESS: 200 photo-bearing offline entries fit and all sync', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  const setup = await page.evaluate(async (fixture) => {
+    const q = [];
+    for (let i = 0; i < 200; i++) {
+      const id = offlinePhotoNewId();
+      await offlinePhotoPut(id, fixture);
+      const ts = Date.now() - ((200 - i) * 1000);
+      q.push({ pin:'100200', punch_type:'timein', client_ts:new Date(ts).toISOString(),
+                device_id:'stress-dev', site:'Carmen', queued_at: ts, photo_id: id });
+    }
+    localStorage.setItem('rsr_offline_punches', JSON.stringify(q));
+    offlineQueue = q;
+    return { queued: offlineQueue.length };
+  }, OFFLINE_PHOTO_FIXTURE);
+  mock.syncOfflineMode = 'ok';
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await waitForQueueEmpty(page, 30000);
+  const left = (await offq(page) || []).length;
+  const allHadPhoto = mock.syncOfflineCalls.length === 200
+    && mock.syncOfflineCalls.every(c => c.p_photo === OFFLINE_PHOTO_FIXTURE);
+  const orphanCount = await page.evaluate(() => new Promise(async (res) => {
+    try{
+      const db = await offlinePhotoDB();
+      const tx = db.transaction('photos','readonly');
+      const req = tx.objectStore('photos').count();
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => res(-1);
+    }catch(e){ res(-1); }
+  }));
+  report('J11 - all 200 photo-bearing entries synced, each carried its photo, and none orphaned in IndexedDB',
+    setup.queued === 200 && left === 0 && allHadPhoto && orphanCount === 0,
+    `queued=${setup.queued} remaining=${left} calls=${mock.syncOfflineCalls.length} allHadPhoto=${allHadPhoto} orphans=${orphanCount}`);
 });
 
 // ==============================================================================
