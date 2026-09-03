@@ -2605,6 +2605,18 @@ async function waitForQueueEmpty(page, maxMs = 15000) {
   }
   return (await offq(page) || []).length === 0;
 }
+// A REAL DOM .click(), not a direct punch() call like doPunch() — a disabled <button> never
+// dispatches a click event at all (browser spec, not app logic), which is exactly the symptom the
+// offlineClearTimer race produces. doPunch()/punch(t) would call the handler regardless of the
+// disabled attribute and could never reproduce or verify this bug.
+const clickPunchBtn = (page, type) => page.evaluate((t) => {
+  const b = document.getElementById(BIDS[t]);
+  if (b) b.click();
+}, type);
+const btnEnabled = (page, type) => page.evaluate((t) => {
+  const b = document.getElementById(BIDS[t]);
+  return !!b && !b.disabled;
+}, type);
 
 await scenario('J1 - same PIN + same punch type today is refused, not re-queued', manila(2026,7,15,8,0), async (page) => {
   await goOffline(page);
@@ -2795,6 +2807,72 @@ await scenario('J11 - STRESS: 200 photo-bearing offline entries fit and all sync
   report('J11 - all 200 photo-bearing entries synced, each carried its photo, and none orphaned in IndexedDB',
     setup.queued === 200 && left === 0 && allHadPhoto && orphanCount === 0,
     `queued=${setup.queued} remaining=${left} calls=${mock.syncOfflineCalls.length} allHadPhoto=${allHadPhoto} orphans=${orphanCount}`);
+});
+
+// ── offlineClearTimer race (found 2026-09-03, fixed same day) ──────────────────────────────────
+// queueOfflinePunch used to end with a bare setTimeout(()=>kpClr(),4000) with no handle - it fired on
+// its own fixed clock no matter what happened afterward. If the worker was still mid-session past 4s
+// (retyping a PIN, or sitting on a confirm screen for a SECOND punch), it nulled offlinePin and
+// disabled every button out from under them via updBtns(null). The next tap then hit a DISABLED
+// button, which never dispatches a click at all - no modal, no error, nothing. These two scenarios
+// use a REAL DOM click (clickPunchBtn), not doPunch(), because doPunch() calls punch(t) directly and
+// would run the handler regardless of whether the button was actually disabled - it cannot see this
+// bug at all.
+
+await scenario('J12 - re-entering the PIN cancels the old timer, so a later distinct punch still reaches the confirm screen and queues', manila(2026,7,15,8,0), async (page) => {
+  // The DANGEROUS ordering from the original report: the stale timer (scheduled at T=0 by the first
+  // Confirm) must fire AFTER a retype has already reset offlinePin/buttons, not before. Retyping
+  // immediately (well inside the old timer's 4000ms window) and THEN waiting past that deadline is
+  // what actually exercises the fix — a retype that only happens after the wait would never hit the
+  // bug either way, since kp()'s offline branch always rebuilds state from scratch on its own.
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await clickPunchBtn(page, 'timein');
+  await confirmOffline(page);                  // queues 'timein' at T≈0; schedules the auto-clear for T+4000ms
+  const afterFirst = (await offq(page) || []).length;
+  await enterPin(page, pinOf('RSR0100'));       // retype EARLY — exactly as the original repro did
+  // Now wait until well past where the ORIGINAL (T=0-scheduled) timer's deadline falls. Fixed code
+  // already cancelled that timer at the retype above and it never fires. The old code had no such
+  // cancellation, and this is exactly when it used to fire — AFTER the retype had already reset
+  // offlinePin and re-enabled the buttons.
+  await page.waitForTimeout(4300);
+  const enabledAfterWait = await btnEnabled(page, 'lunch_out');
+  await clickPunchBtn(page, 'lunch_out');       // a DIFFERENT punch type — real DOM click
+  const confirmShown = (await offlineConfirmState(page)).show;
+  if (confirmShown) await confirmOffline(page);
+  const q = await offq(page);
+  const types = (q || []).map(j => j.punch_type);
+  report('J12 - re-entering the PIN before the old deadline keeps the buttons usable well after it passes',
+    afterFirst === 1 && enabledAfterWait && confirmShown && types.length === 2
+      && types.includes('timein') && types.includes('lunch_out'),
+    `afterFirst=${afterFirst} enabledAfterWait=${enabledAfterWait} confirmShown=${confirmShown} types=${JSON.stringify(types)}`);
+});
+
+await scenario('J13 - after a confirm screen outlives the old timer, the keypad stays usable for a THIRD punch with no retype', manila(2026,7,15,8,0), async (page) => {
+  // NOTE: confirming the SECOND punch's own screen succeeds even under the old bug — Confirm reads
+  // pendingOfflinePunch (captured when the screen opened), not the live offlinePin the stale timer
+  // nulls, so that alone does not distinguish old from new. The real damage under the old bug is
+  // what's left BEHIND: kpClr()'s updBtns(null) disabled every button while the screen was open, and
+  // nothing re-enables them afterward — so the tablet is stuck needing a PIN retype for a third punch
+  // that should need none. THAT is what this asserts.
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await clickPunchBtn(page, 'timein');
+  await confirmOffline(page);                  // queues 'timein'; schedules the auto-clear
+  await clickPunchBtn(page, 'lunch_out');       // opens the confirm screen for a SECOND, distinct punch
+  const shownBefore = (await offlineConfirmState(page)).show;
+  await page.waitForTimeout(4300);              // outlive the old timer's window WHILE this screen is up
+  await confirmOffline(page);                   // queues 'lunch_out'
+  const enabledForThird = await btnEnabled(page, 'pm_out');
+  await clickPunchBtn(page, 'pm_out');           // a THIRD distinct punch, no PIN retype
+  const confirmShownThird = (await offlineConfirmState(page)).show;
+  if (confirmShownThird) await confirmOffline(page);
+  const q = await offq(page);
+  const types = (q || []).map(j => j.punch_type);
+  report('J13 - keypad stays usable for a third punch after a confirm screen outlives the old timer',
+    shownBefore && enabledForThird && confirmShownThird && types.length === 3
+      && types.includes('timein') && types.includes('lunch_out') && types.includes('pm_out'),
+    `shownBefore=${shownBefore} enabledForThird=${enabledForThird} confirmShownThird=${confirmShownThird} types=${JSON.stringify(types)}`);
 });
 
 // ==============================================================================

@@ -1165,6 +1165,16 @@ let offlinePin=null;
 // Confirm/Retype screen's answer. Nothing is queued until offlineConfirmProceed() runs; Retype (or
 // any other kpClr) discards it untouched - the tablet is not allowed to guess a "yes".
 let pendingOfflinePunch=null;
+// (v2026-09-03b) Handle for queueOfflinePunch's post-queue "reset the keypad for whoever's next"
+// timer. BUG FIXED HERE: that timer used to be a bare setTimeout(()=>kpClr(),4000) with no handle at
+// all, so it fired on its own fixed clock no matter what happened afterward - if the worker was
+// still mid-session past 4s (retyping a PIN, or looking at a confirm screen for a SECOND punch), it
+// nulled offlinePin and disabled every button out from under them, and the next tap silently did
+// nothing (a disabled button never dispatches a click - no error, no modal, nothing). Cancelled by
+// every action that means "still in progress": a new PIN digit, a fresh offline punch attempt, the
+// confirm screen opening, or kpClr running for any other reason.
+let offlineClearTimer=null;
+function cancelOfflineClearTimer(){ if(offlineClearTimer){clearTimeout(offlineClearTimer);offlineClearTimer=null;} }
 let adminSecs=ADMIN_TO,adminTick=null;
 let tgToken='',tgGroup='',tgPosGroup='',tgPhotoGroup='',tgBackupGroup='',tgAwolGroup='',mgrIds=[];
 let semaphoreKey='',semaphoreSender='RSR ENGRG';
@@ -2182,6 +2192,8 @@ function updDots(){for(let i=0;i<PIN_LEN;i++){const d=document.getElementById('d
 async function kp(n){
   if(isKioskLocked()){showKioskLockScreen();return;}
   if(kpChecking)return;                    // an identification is already in flight - ignore extra taps
+  cancelOfflineClearTimer();               // (v2026-09-03b) a new PIN entry starting means the worker
+                                            // is not idle - the post-queue auto-clear must not fire mid-entry
   if(pin.length>=PIN_LEN)return;pin+=n;updDots();
   const hint=document.getElementById('pin-hint');
   if(pin.length===PIN_LEN){
@@ -2317,7 +2329,7 @@ async function kp(n){
   }else{hint.textContent='Enter your 6-digit PIN';hint.style.color='';document.getElementById('emp-preview').style.display='none';updBtns(null);curEmp=null;}
 }
 function kpDel(){if(kpChecking)return;pin=pin.slice(0,-1);updDots();clearMsg();document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';document.getElementById('emp-preview').style.display='none';document.getElementById('btn-undertime').disabled=true;updBtns(null);curEmp=null;}
-function kpClr(){kpChecking=false;offlinePin=null;pin='';updDots();clearMsg();document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';document.getElementById('emp-preview').style.display='none';document.getElementById('btn-undertime').disabled=true;document.getElementById('ot-allow-banner').style.display='none';updBtns(null);curEmp=null;}
+function kpClr(){cancelOfflineClearTimer();kpChecking=false;offlinePin=null;pin='';updDots();clearMsg();document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';document.getElementById('emp-preview').style.display='none';document.getElementById('btn-undertime').disabled=true;document.getElementById('ot-allow-banner').style.display='none';updBtns(null);curEmp=null;}
 
 
 
@@ -3133,6 +3145,8 @@ function showOfflinePreview(pin){
 // name, so this is the one chance to catch a mistyped PIN or a wrong button before it is queued and
 // silently mis-punches somebody until the office reviews it, hours or days later.
 function showOfflineConfirm(pin,type){
+  cancelOfflineClearTimer();   // (v2026-09-03b) an EARLIER punch's auto-clear must never fire while
+                                // THIS confirm screen is open - see offlineClearTimer's declaration.
   const masked='••••'+pin.slice(-2);
   const el=document.getElementById('offline-confirm-text');
   if(el)el.textContent=masked+' — '+(PLABELS[type]||type)+'\n\nWalay internet. Husto ba ni? Confirm kung husto, o i-type pag-usab kung sayop.';
@@ -3167,7 +3181,14 @@ async function queueOfflinePunch(pin,type,photoDataUrl){
   }else if(photoId){
     offlinePhotoDelete(photoId);   // queue was full (200 cap) - do not leave an orphaned photo behind
   }
-  setTimeout(()=>kpClr(),4000);
+  // (v2026-09-03b) Reset the keypad for whoever's next, but ONLY if nothing else happens first.
+  // offlineClearTimer's declaration explains the bug this replaced: a bare setTimeout here used to
+  // fire on its own fixed clock regardless of what the worker did afterward. cancelOfflineClearTimer()
+  // runs on every action that means "still in progress" (kp(), a fresh punch attempt, the confirm
+  // screen opening, kpClr itself) - if none of those happen within 4s, the tablet really is idle and
+  // this timer is exactly the reset it always was meant to be.
+  cancelOfflineClearTimer();
+  offlineClearTimer=setTimeout(()=>{offlineClearTimer=null;kpClr();},4000);
 }
 // Offline every punch button is pressable: the tablet cannot know which one is next for a worker
 // it cannot identify. The SERVER refuses anything that does not fit and files it in
@@ -3384,6 +3405,10 @@ async function punch(type){
   // logic below can run without an identity: the record, the sequence gating, the bar check and
   // the allowance all key off curEmp. The server applies those rules at sync instead.
   if(offlinePin){
+    // (v2026-09-03b) A fresh offline punch attempt - dedupe-blocked or not - means the worker is
+    // actively using the tablet, not idle. The post-queue auto-clear from an EARLIER punch must not
+    // be allowed to fire underneath this one and disable the buttons mid-attempt.
+    cancelOfflineClearTimer();
     // (v2026-09-03a) SAME-TYPE DEDUPE, before anything else. offqToday is this device's own queue,
     // typed-PIN-scoped (the only identity the tablet has offline) - a second tap of the same button
     // by the same PIN today is refused here rather than queued twice for the server to untangle.
