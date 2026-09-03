@@ -1,4 +1,7 @@
 -- ============================================================================
+-- ALREADY APPLIED to wpmcbjrisuyjvobvzaus on 2026-08-28. Do not re-run.
+-- Kept in the repo as the record of what the live RPC and tables are.
+-- ============================================================================
 -- apply-offline-punch-sync.sql                                          2026-08-27
 --
 -- Offline clock-in, restored under server-side identification.
