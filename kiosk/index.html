@@ -6031,7 +6031,35 @@ function awolTarget(){ return tgAwolGroup || (mgrIds && mgrIds[0]) || tgGroup ||
 loadTgFromCloud();
 loadAwolNoticeShown();
 awolCutover().then(loadSuspensionsFromCloud);
-setInterval(loadSuspensionsFromCloud, 45000);
+// (v2026-09-03c) BUG FIXED HERE: this used to be a bare setInterval(loadSuspensionsFromCloud, 45000)
+// - no navigator.onLine gate (unlike the 60s/30s intervals at 6406/6408) and no backoff. A tablet
+// offline for a few hours logged hundreds of identical failed requests at the exact same 45s cadence
+// as a healthy one (211 in one 2.6-hour session). Same shape as the offlineClearTimer bug: a timer
+// that never reacts to what actually happened.
+//
+// Fix: skip the attempt entirely while offline (matching 6406/6408's pattern), and after a failed
+// ATTEMPT (not a skip), double the wait before the next one, capped at SUSP_POLL_MAX_MS. A success
+// resets the streak to the base cadence. This is robust even if navigator.onLine itself is wrong
+// (see the 2026-09-03 investigation) - the backoff triggers off loadSuspensionsFromCloud's own real
+// success/failure, not off the online guard, so a genuinely-failing connection still backs off.
+const SUSP_POLL_BASE_MS=45000, SUSP_POLL_MAX_MS=45000*8;   // 45s, doubling, capped at 6 min
+let suspPollFails=0, suspPollTimer=null;
+// One poll cycle: attempt if online, update the fail streak, return the delay before the NEXT cycle.
+// Kept as its own function (not inlined in the setTimeout callback) so it can be driven and inspected
+// directly, without waiting through real timers, to prove the delay sequence actually grows and caps.
+async function suspPollCycle(){
+  if(navigator.onLine){
+    const ok=await loadSuspensionsFromCloud();
+    suspPollFails = ok ? 0 : suspPollFails+1;
+  }
+  // offline: skip the attempt, but leave the fail streak untouched - an unattempted poll is neither
+  // a success nor a new failure, and must not reset backoff a healthy connection has yet to earn.
+  return Math.min(SUSP_POLL_BASE_MS*Math.pow(2,suspPollFails), SUSP_POLL_MAX_MS);
+}
+function scheduleSuspPoll(delayMs){
+  suspPollTimer=setTimeout(async ()=>{ scheduleSuspPoll(await suspPollCycle()); },delayMs);
+}
+scheduleSuspPoll(SUSP_POLL_BASE_MS);
 
 // ── SHIFT TIMES FROM ADMIN (Supabase `settings`) — morning clock-in + evening clock-out ──
 // The dashboard sets `shift_start` and `dismissal` (HH:MM). The kiosk pulls them on startup

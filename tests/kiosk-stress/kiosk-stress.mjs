@@ -81,6 +81,7 @@ const mock = {
   tgConfigured: false, // when true, /settings returns a live tg_token + tg_awol_group
   awolGroupId: '',     // the mocked AWOL group chat id
   tgBackupGroupId: '', // the mocked tg_backup_group chat id (v2026-09-03a offline-photo notify)
+  suspensionsFail: false, // when true, GET employee_suspensions 500s (v2026-09-03c backoff coverage)
   tgMsgSeq: 1000,      // incrementing message_id source
   rpcSuspendFail: false, // when true, /rpc/awol_set_suspended 500s (simulates offline for FIX 1 coverage)
   // ── identify_employee_by_pin (v2026-08-26b) ──────────────────────────────────────────────────
@@ -267,6 +268,9 @@ async function newKioskContext(browser, base, initMs) {
       // AWOL: shared suspension table (read + msg-id patch)
       if (p.endsWith('/rest/v1/employee_suspensions')) {
         if (method === 'GET') {
+          // v2026-09-03c backoff coverage: force every GET to fail, so loadSuspensionsFromCloud's
+          // own return value drives suspPollCycle's fail streak deterministically.
+          if (mock.suspensionsFail) return json(500, { code: '500', message: 'injected failure (mock.suspensionsFail)' });
           const active = Object.values(mock.suspensions).filter(r => r.active);
           return json(200, active);
         }
@@ -639,6 +643,7 @@ async function scenario(name, initMs, fn) {
   mock.tgConfigured = false;
   mock.awolGroupId = '';
   mock.tgBackupGroupId = '';
+  mock.suspensionsFail = false;
   mock.rpcSuspendFail = false;
   mock.identifyFail = false; mock.identifyThrottled = false; mock.identifyCollide = null; mock.identifyCalls = [];
   mock.syncOfflineCalls = []; mock.syncOfflineMode = 'ok'; mock.syncOfflineReason = 'no_match';
@@ -2873,6 +2878,54 @@ await scenario('J13 - after a confirm screen outlives the old timer, the keypad 
     shownBefore && enabledForThird && confirmShownThird && types.length === 3
       && types.includes('timein') && types.includes('lunch_out') && types.includes('pm_out'),
     `shownBefore=${shownBefore} enabledForThird=${enabledForThird} confirmShownThird=${confirmShownThird} types=${JSON.stringify(types)}`);
+});
+
+// ==============================================================================
+//  K - employee_suspensions poll: navigator.onLine gate + failure backoff (v2026-09-03c)
+// ==============================================================================
+// The bug: setInterval(loadSuspensionsFromCloud, 45000) had no online gate and no backoff - a
+// genuinely offline tablet logged one identical failed request every 45s, forever (211 in one
+// 2.6-hour session). suspPollCycle() replaces it: skip entirely while offline, double the wait after
+// each real failed ATTEMPT (capped), reset to the base cadence on a real success. Driven directly via
+// page.evaluate(() => suspPollCycle()) rather than real timers - the growing delays would otherwise
+// take minutes of actual wall-clock time to observe.
+
+await scenario('K1 - while offline, the poll skips the attempt entirely and does not touch the fail streak', manila(2026,7,15,8,0), async (page) => {
+  mock.suspensionsFail = true;   // if this fires at all, the test would see it - it must not fire
+  await goOffline(page);
+  const before = await page.evaluate(() => suspPollFails);
+  const delay = await page.evaluate(() => suspPollCycle());
+  const after = await page.evaluate(() => suspPollFails);
+  report('K1 - offline poll makes no request and leaves the fail streak untouched',
+    before === 0 && after === 0 && delay === 45000,
+    `before=${before} after=${after} delay=${delay} (base=45000)`);
+});
+
+await scenario('K2 - repeated failures make the retry spacing grow and cap, never hammering at a fixed 45s', manila(2026,7,15,8,0), async (page) => {
+  mock.suspensionsFail = true;
+  const delays = [];
+  for (let i = 0; i < 6; i++) delays.push(await page.evaluate(() => suspPollCycle()));
+  // 45000 doubling from the FIRST real failure, capped at 8x base (SUSP_POLL_MAX_MS = 45000*8):
+  // 90000, 180000, 360000(cap), 360000, 360000, 360000...
+  const expected = [90000, 180000, 360000, 360000, 360000, 360000];
+  const grows = delays.every((d, i) => d === expected[i]);
+  const neverHammers = delays.slice(1).every(d => d > 45000);   // never falls back to the bare 45s cadence
+  report('K2 - delay sequence doubles from the base and caps at 8x (6 min), never returning to bare 45s while failing',
+    grows && neverHammers,
+    `delays=${JSON.stringify(delays)} expected=${JSON.stringify(expected)}`);
+});
+
+await scenario('K3 - a real success resets the streak back to the base 45s cadence', manila(2026,7,15,8,0), async (page) => {
+  mock.suspensionsFail = true;
+  await page.evaluate(() => suspPollCycle());              // fail #1 -> 90000
+  await page.evaluate(() => suspPollCycle());              // fail #2 -> 180000
+  const failsBeforeSuccess = await page.evaluate(() => suspPollFails);
+  mock.suspensionsFail = false;                             // connection recovers
+  const delayAfterSuccess = await page.evaluate(() => suspPollCycle());
+  const failsAfterSuccess = await page.evaluate(() => suspPollFails);
+  report('K3 - a successful poll clears the fail streak and the next delay drops back to base',
+    failsBeforeSuccess === 2 && failsAfterSuccess === 0 && delayAfterSuccess === 45000,
+    `failsBeforeSuccess=${failsBeforeSuccess} failsAfterSuccess=${failsAfterSuccess} delayAfterSuccess=${delayAfterSuccess}`);
 });
 
 // ==============================================================================
