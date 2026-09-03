@@ -1251,8 +1251,41 @@ function findByCode(code){const n=normCode(code);return employees.find(e=>normCo
 //   collision  - two or more did; the RPC logged which, and refuses to choose
 //   throttled  - too many failed attempts on this project just now
 // Locally we add 'offline' for anything that stops us getting an answer at all.
+//
+// (v2026-09-04) isReallyOnline(): navigator.onLine is a fast FIRST FILTER only - proven unreliable
+// on real hardware (2026-09-04: reads true with Airplane Mode fully on, real
+// net::ERR_INTERNET_DISCONNECTED on every actual request). A false reading is trusted outright (no
+// documented false negative); a true reading is confirmed by an actual request before this - the
+// one decision that determines whether a punch gets queued or wrongly refused - relies on it.
+//
+// Deliberately probes a bare HEAD to the REST root, NOT an RPC. identify_employee_by_pin and
+// admin_verify_passcode both sit behind a shared GLOBAL rate limit (pin_identify_throttle,
+// admin_verify_throttle - 10 failures/15 min, see this file's landmines). A probe firing every
+// 5-10s against either would burn that budget itself and could lock out a real worker mid-shift.
+// A HEAD touches neither table and costs nothing server-side; fetch() only REJECTS on a genuine
+// network-layer failure, so any resolved response - status code irrelevant - proves real connectivity.
+let _onlineProbeCache=null;              // {result, at} - avoids spamming a request on every check
+const ONLINE_PROBE_TTL_MS=8000;          // 5-10s window
+const ONLINE_PROBE_TIMEOUT_MS=3000;
+async function isReallyOnline(){
+  if(!navigator.onLine)return false;
+  const now=Date.now();
+  if(_onlineProbeCache&&(now-_onlineProbeCache.at)<ONLINE_PROBE_TTL_MS)return _onlineProbeCache.result;
+  let result;
+  try{
+    const ctrl=new AbortController();
+    const t=setTimeout(()=>ctrl.abort(),ONLINE_PROBE_TIMEOUT_MS);
+    await fetch(SUPABASE_URL+'/rest/v1/',{method:'HEAD',headers:{apikey:SUPABASE_KEY},signal:ctrl.signal});
+    clearTimeout(t);
+    result=true;
+  }catch(e){
+    result=false;
+  }
+  _onlineProbeCache={result,at:now};
+  return result;
+}
 async function identifyByPin(typed){
-  if(!navigator.onLine)return {status:'offline'};
+  if(!(await isReallyOnline()))return {status:'offline'};
   try{
     const {data,error}=await sbClient.rpc('identify_employee_by_pin',{pin_input:typed});
     // Fail CLOSED, but distinguish WHY, because only one of these may be queued offline:
@@ -6432,8 +6465,9 @@ setTimeout(initSupabaseSync, 2000);
 // Re-check approved straight duties + late breaks periodically (so an approval
 // made during the day is applied without restarting the kiosk).
 setInterval(function(){ if (navigator.onLine) { loadApprovedStraightDuties(); loadApprovedLateBreaks(); loadShiftFromCloud(); } }, 60000);
-// Offline punches replay on the same cadence as the record queue, and immediately on reconnect.
-setInterval(function(){ if (navigator.onLine) flushOfflinePunches(); }, 30000);
+// Offline punches replay on reconnect immediately, and otherwise on offqPollCycle's own backoff
+// schedule (kicked off near flushOfflinePunches's definition, below - see the v2026-09-04 note there
+// for why this is no longer a bare fixed-cadence setInterval).
 window.addEventListener('online', function(){ flushOfflinePunches(); });
 // Also refresh the shift/dismissal settings when the tablet regains focus, so an admin change to the
 // evening OT cut-off (dismissal) or shift start reflects WITHOUT a kiosk reload (same class as the
@@ -6476,7 +6510,13 @@ function updateSyncBadge(){
   if (!el) { renderStuckPunches(); return; }
   const n = pendingCount(), dead = deadCount();
   const offq = (typeof offqCount === "function") ? offqCount() : 0;   // offline punches awaiting the server
-  const offline = !navigator.onLine;
+  // (v2026-09-04) Reads isReallyOnline()'s CACHED result only - this function runs very frequently
+  // (after every sync tick) and must stay synchronous, so it never triggers a fresh probe itself. A
+  // false navigator.onLine is trusted outright, same as isReallyOnline() does. A true navigator.onLine
+  // is cross-checked against the cache ONLY when that cache is still fresh; a stale or empty cache
+  // falls back to the raw navigator.onLine value rather than blocking on a probe or guessing.
+  const probeFresh = navigator.onLine && _onlineProbeCache && (Date.now()-_onlineProbeCache.at) < ONLINE_PROBE_TTL_MS;
+  const offline = !navigator.onLine || (probeFresh && !_onlineProbeCache.result);
   if (n === 0 && dead === 0 && offq === 0 && !offline) { el.style.display='none'; renderStuckPunches(); return; }
   el.style.display='flex';
   if (dead > 0) { el.style.background='#FCEBEB'; el.style.color='#A32D2D'; el.textContent = '⚠ ' + dead + ' punch' + (dead===1?'':'es') + ' rejected — see Admin ▸ Settings'; }
@@ -6661,11 +6701,15 @@ function offqAdd(pin,punchType,photoId){
 // punched before the queue drained, must be judged in the order the punches actually happened,
 // because the server validates each one against the state the previous ones left behind.
 let offqSyncing=false;
+// Returns true when the pass completed with no network failure (an empty queue counts as success -
+// there was nothing to fail at), false when it stopped on an unreachable server. The caller
+// (offqPollCycle, below) uses this to back off instead of retrying at a fixed cadence forever.
 async function flushOfflinePunches(){
-  if(offqSyncing||!navigator.onLine)return;
+  if(offqSyncing||!navigator.onLine)return true;
   offqPrune();
-  if(!offlineQueue.length)return;
+  if(!offlineQueue.length)return true;
   offqSyncing=true;
+  let ok=true;
   try{
     const ordered=offlineQueue.slice().sort((a,b)=>new Date(a.client_ts)-new Date(b.client_ts));
     for(const job of ordered){
@@ -6685,9 +6729,10 @@ async function flushOfflinePunches(){
         // Could not reach the server. KEEP the entry - it stays in the badge and retries. This is
         // the only path that leaves a job in the queue, and it never hides anything.
         console.warn('sync_offline_punch:',e);
+        ok=false;
         break;   // stop the pass; order matters, so do not skip ahead past a failure
       }
-      if(!res||!res.out_status){ break; }   // unreadable answer: treat as unreachable, keep + retry
+      if(!res||!res.out_status){ ok=false; break; }   // unreadable answer: treat as unreachable, keep + retry
       // The server has ACCOUNTED for this entry either way - written, or filed as a reject.
       offlineQueue=offlineQueue.filter(j=>j!==job);
       offqSave();
@@ -6710,7 +6755,28 @@ async function flushOfflinePunches(){
       updateSyncBadge();
     }
   } finally { offqSyncing=false; updateSyncBadge(); }
+  return ok;
 }
+// (v2026-09-04) BUG FIXED HERE: the 30s interval below used to call flushOfflinePunches() directly
+// on a fixed cadence forever - same shape as the employee_suspensions poll fixed earlier tonight. A
+// tablet stuck offline (or falsely reading navigator.onLine=true, see isReallyOnline() above) logged
+// one failed sync attempt every 30s indefinitely. No punch is ever LOST either way - a failed pass
+// just leaves the queue untouched, which is exactly why this only needed a simple backoff, not the
+// isReallyOnline() probe: the damage from a wrong guess here is a wasted request, not a lost punch.
+const OFFQ_POLL_BASE_MS=30000, OFFQ_POLL_MAX_MS=30000*8;   // 30s, doubling, capped at 4 min
+let offqPollFails=0, offqPollTimer=null;
+async function offqPollCycle(){
+  if(navigator.onLine){
+    const ok=await flushOfflinePunches();
+    offqPollFails = ok ? 0 : offqPollFails+1;
+  }
+  // offline: skip the attempt, leave the fail streak untouched - same reasoning as suspPollCycle.
+  return Math.min(OFFQ_POLL_BASE_MS*Math.pow(2,offqPollFails), OFFQ_POLL_MAX_MS);
+}
+function scheduleOffqPoll(delayMs){
+  offqPollTimer=setTimeout(async ()=>{ scheduleOffqPoll(await offqPollCycle()); },delayMs);
+}
+scheduleOffqPoll(OFFQ_POLL_BASE_MS);
 // (v2026-09-03a) The offline-sync twin of sendPunchNotif's photo-backup step. The caption must carry
 // the ORIGINAL tap time (job.client_ts), not "now" - "now" is whenever the tablet happened to
 // reconnect, which can be hours later, and a Time In photo captioned with an afternoon timestamp

@@ -82,6 +82,8 @@ const mock = {
   awolGroupId: '',     // the mocked AWOL group chat id
   tgBackupGroupId: '', // the mocked tg_backup_group chat id (v2026-09-03a offline-photo notify)
   suspensionsFail: false, // when true, GET employee_suspensions 500s (v2026-09-03c backoff coverage)
+  onlineProbeFail: false, // when true, isReallyOnline()'s HEAD probe aborts (v2026-09-04)
+  onlineProbeCalls: 0,    // count of probe requests actually made (proves the cache is working)
   tgMsgSeq: 1000,      // incrementing message_id source
   rpcSuspendFail: false, // when true, /rpc/awol_set_suspended 500s (simulates offline for FIX 1 coverage)
   // ── identify_employee_by_pin (v2026-08-26b) ──────────────────────────────────────────────────
@@ -203,6 +205,15 @@ async function newKioskContext(browser, base, initMs) {
     if (host === FORBIDDEN_HOST) {
       const p = new URL(url).pathname;
       const method = req.method();
+      // isReallyOnline()'s probe (v2026-09-04): a bare HEAD to the REST root. MUST be mocked before
+      // anything else here - every scenario that identifies a PIN while online now fires this first,
+      // and an unmocked/escaped request would abort and make isReallyOnline() report false for every
+      // existing online scenario in the suite, not just the ones deliberately testing this.
+      if (method === 'HEAD' && p.endsWith('/rest/v1/')) {
+        mock.onlineProbeCalls = (mock.onlineProbeCalls || 0) + 1;
+        if (mock.onlineProbeFail) return route.abort('failed');
+        return route.fulfill({ status: 200, contentType: 'application/json', body: '' });
+      }
       if (p.endsWith('/rest/v1/employees')) return json(200, ROSTER);
       if (p.endsWith('/rest/v1/rpc/sync_offline_punch')) {
         let body = null; try { body = JSON.parse(req.postData() || 'null'); } catch {}
@@ -644,6 +655,8 @@ async function scenario(name, initMs, fn) {
   mock.awolGroupId = '';
   mock.tgBackupGroupId = '';
   mock.suspensionsFail = false;
+  mock.onlineProbeFail = false;
+  mock.onlineProbeCalls = 0;
   mock.rpcSuspendFail = false;
   mock.identifyFail = false; mock.identifyThrottled = false; mock.identifyCollide = null; mock.identifyCalls = [];
   mock.syncOfflineCalls = []; mock.syncOfflineMode = 'ok'; mock.syncOfflineReason = 'no_match';
@@ -2926,6 +2939,123 @@ await scenario('K3 - a real success resets the streak back to the base 45s caden
   report('K3 - a successful poll clears the fail streak and the next delay drops back to base',
     failsBeforeSuccess === 2 && failsAfterSuccess === 0 && delayAfterSuccess === 45000,
     `failsBeforeSuccess=${failsBeforeSuccess} failsAfterSuccess=${failsAfterSuccess} delayAfterSuccess=${delayAfterSuccess}`);
+});
+
+// ==============================================================================
+//  L - isReallyOnline() probe, offqPollCycle backoff, updateSyncBadge cache-read (v2026-09-04)
+// ==============================================================================
+// The finding this fixes, confirmed on REAL hardware (not a DevTools artifact): navigator.onLine
+// reads true with Airplane Mode fully ON, while every actual request fails with a genuine
+// net::ERR_INTERNET_DISCONNECTED. L5 reproduces that exact shape - navigator.onLine is never
+// toggled false in that scenario; only the network itself (via the mocked probe) is made to fail.
+const seedOneOfflinePunch = (page) => page.evaluate(() => {
+  const q = [{ pin:'100200', punch_type:'timein', client_ts:new Date().toISOString(), device_id:'d', site:'Carmen', queued_at: Date.now() }];
+  localStorage.setItem('rsr_offline_punches', JSON.stringify(q));
+  offlineQueue = q;
+});
+
+await scenario('L1 - isReallyOnline(): navigator.onLine=false is trusted outright, no probe request', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  const result = await page.evaluate(() => isReallyOnline());
+  report('L1 - a definite offline reading needs no confirmation',
+    result === false && mock.onlineProbeCalls === 0,
+    `result=${result} probeCalls=${mock.onlineProbeCalls}`);
+});
+
+await scenario('L2 - isReallyOnline(): online and the probe succeeds returns true', manila(2026,7,15,8,0), async (page) => {
+  const result = await page.evaluate(() => isReallyOnline());
+  report('L2 - a genuinely reachable server confirms online',
+    result === true && mock.onlineProbeCalls === 1,
+    `result=${result} probeCalls=${mock.onlineProbeCalls}`);
+});
+
+await scenario('L3 - isReallyOnline(): online but the probe genuinely fails returns false', manila(2026,7,15,8,0), async (page) => {
+  mock.onlineProbeFail = true;
+  const result = await page.evaluate(() => isReallyOnline());
+  report('L3 - navigator.onLine=true does not override a real network failure',
+    result === false && mock.onlineProbeCalls === 1,
+    `result=${result} probeCalls=${mock.onlineProbeCalls}`);
+});
+
+await scenario('L4 - isReallyOnline(): the result is cached briefly, not re-probed on every call', manila(2026,7,15,8,0), async (page) => {
+  await page.evaluate(() => isReallyOnline());
+  await page.evaluate(() => isReallyOnline());
+  await page.evaluate(() => isReallyOnline());
+  report('L4 - three calls inside the TTL make exactly one real request',
+    mock.onlineProbeCalls === 1, `probeCalls=${mock.onlineProbeCalls}`);
+});
+
+await scenario('L5 - navigator.onLine=true but the network is genuinely down: identifyByPin now queues instead of refusing', manila(2026,7,15,8,0), async (page) => {
+  // THE reproduction. goOffline() is deliberately NOT called - navigator.onLine stays true for the
+  // whole scenario, exactly as it wrongly did on the real tablet. Only the probe (standing in for
+  // the actual network) is made to fail.
+  mock.onlineProbeFail = true;
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  const q = await offq(page);
+  const onLineStillTrue = await page.evaluate(() => navigator.onLine);
+  report('L5 - a real network failure under a falsely-true navigator.onLine queues the punch and never attempts identify_employee_by_pin',
+    onLineStillTrue === true && (q || []).length === 1 && mock.identifyCalls.length === 0,
+    `onLineStillTrue=${onLineStillTrue} queued=${(q || []).length} identifyRpcAttempted=${mock.identifyCalls.length > 0}`);
+});
+
+await scenario('L6 - offqPollCycle(): offline skips the attempt and leaves the fail streak untouched', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  const before = await page.evaluate(() => offqPollFails);
+  const delay = await page.evaluate(() => offqPollCycle());
+  const after = await page.evaluate(() => offqPollFails);
+  report('L6 - offline poll makes no sync attempt and leaves the fail streak untouched',
+    before === 0 && after === 0 && delay === 30000,
+    `before=${before} after=${after} delay=${delay} (base=30000)`);
+});
+
+await scenario('L7 - offqPollCycle(): repeated sync failures make the retry spacing grow and cap, and never drop the queued punch', manila(2026,7,15,8,0), async (page) => {
+  await seedOneOfflinePunch(page);
+  mock.syncOfflineMode = 'net';
+  const delays = [];
+  for (let i = 0; i < 6; i++) delays.push(await page.evaluate(() => offqPollCycle()));
+  // 30000 doubling from the FIRST real failure, capped at 8x base (OFFQ_POLL_MAX_MS = 30000*8):
+  const expected = [60000, 120000, 240000, 240000, 240000, 240000];
+  const grows = delays.every((d, i) => d === expected[i]);
+  const queueLen = (await offq(page) || []).length;
+  report('L7 - delay sequence doubles from the base and caps at 8x; the queued punch is never dropped by the backoff',
+    grows && queueLen === 1,
+    `delays=${JSON.stringify(delays)} expected=${JSON.stringify(expected)} queueLen=${queueLen}`);
+});
+
+await scenario('L8 - offqPollCycle(): a real successful sync resets the streak back to the base 30s cadence', manila(2026,7,15,8,0), async (page) => {
+  await seedOneOfflinePunch(page);
+  mock.syncOfflineMode = 'net';
+  await page.evaluate(() => offqPollCycle());               // fail #1 -> 60000
+  const failsBeforeSuccess = await page.evaluate(() => offqPollFails);
+  mock.syncOfflineMode = 'ok';                                // connection recovers
+  const delayAfterSuccess = await page.evaluate(() => offqPollCycle());
+  const failsAfterSuccess = await page.evaluate(() => offqPollFails);
+  report('L8 - a successful sync pass clears the fail streak and the next delay drops back to base',
+    failsBeforeSuccess === 1 && failsAfterSuccess === 0 && delayAfterSuccess === 30000,
+    `failsBeforeSuccess=${failsBeforeSuccess} failsAfterSuccess=${failsAfterSuccess} delayAfterSuccess=${delayAfterSuccess}`);
+});
+
+await scenario('L9 - updateSyncBadge(): a fresh cached "not really online" result overrides the Syncing wording', manila(2026,7,15,8,0), async (page) => {
+  await seedOneOfflinePunch(page);
+  mock.onlineProbeFail = true;
+  await page.evaluate(() => isReallyOnline());   // populate the cache with a real (failing) probe result
+  const probeCallsBefore = mock.onlineProbeCalls;
+  const badgeText = await page.evaluate(() => { updateSyncBadge(); return document.getElementById('sync-badge').textContent; });
+  const probeCallsAfter = mock.onlineProbeCalls;
+  report('L9 - the badge reads the fresh cache (Offline wording) without making a new probe request of its own',
+    /Offline/.test(badgeText) && !/Syncing/.test(badgeText) && probeCallsAfter === probeCallsBefore,
+    `badgeText="${badgeText}" probeCallsBefore=${probeCallsBefore} probeCallsAfter=${probeCallsAfter}`);
+});
+
+await scenario('L10 - updateSyncBadge(): a stale/empty cache falls back to raw navigator.onLine, never blocking on a probe', manila(2026,7,15,8,0), async (page) => {
+  await seedOneOfflinePunch(page);
+  // No isReallyOnline() call at all - the cache is empty on a fresh page. navigator.onLine defaults
+  // true; this must fall back to it rather than triggering a fresh probe or guessing.
+  const badgeText = await page.evaluate(() => { updateSyncBadge(); return document.getElementById('sync-badge').textContent; });
+  report('L10 - an empty cache falls back to raw navigator.onLine (Syncing wording) with zero probe calls',
+    /Syncing/.test(badgeText) && mock.onlineProbeCalls === 0,
+    `badgeText="${badgeText}" probeCalls=${mock.onlineProbeCalls}`);
 });
 
 // ==============================================================================
