@@ -11,7 +11,7 @@ import { supabase } from './supabase.js';
 // one without opening devtools. Shown on the lock screen, the launcher and the admin header.
 // MUST be bumped in lockstep with the `home.js?v=` query string in admin/index.html, index.html
 // and preflight.html. A stamp that lags the query string is worse than none: it reads as proof.
-const BUILD = 'v2026-08-26b';
+const BUILD = 'v2026-08-28a';
 
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
 // The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
@@ -1334,6 +1334,10 @@ function App() {
   const [empSite, setEmpSite] = useState('');
   const [siteList, setSiteList] = useState([]); // (site rename) data-driven yard list from settings.attendance_sites
   const [health, setHealth] = useState(null);   // kiosk_health rows for the stuck-punch banner (null = loading)
+  // Offline punches the server REFUSED to write (kiosk_offline_rejects). null = not loaded, or the
+  // table does not exist yet because apply-offline-punch-sync.sql has not been run. Never fatal:
+  // naming a table before its migration is live is the same 42703-class mistake as is_active.
+  const [offRejects, setOffRejects] = useState(null);
   const [coordPin, setCoordPin] = useState('');
   const [ownerPin, setOwnerPin] = useState('');
   const [rollPin, setRollPin] = useState('');
@@ -1700,6 +1704,21 @@ function App() {
     try { await updateEmployee(id, { is_issuer: on }); loadEmps(); }
     catch (e) { flash('Error: ' + e.message); }
   };
+
+  // Unreviewed offline-punch rejects. Guarded end to end: if the table is not there, or the read
+  // fails for any reason, the dashboard renders exactly as before rather than breaking.
+  useEffect(() => {
+    if (!authed || !onAdminPage) return;
+    (async () => {
+      try {
+        const { data, error } = await supabase.from('kiosk_offline_rejects')
+          .select('att_date, employee_code, employee_name, punch_type, reason, client_ts')
+          .eq('reviewed', false).order('client_ts', { ascending: false }).limit(200);
+        if (error) { setOffRejects(null); return; }
+        setOffRejects(data || []);
+      } catch (e) { setOffRejects(null); }
+    })();
+  }, [authed, onAdminPage]);
 
   useEffect(() => {
     if (!authed || !onAdminPage) return;
@@ -2458,6 +2477,40 @@ function App() {
       ${healthBanner()}
       <${ReportedAbsence} emps=${emps} flash=${flash} />
       <${AwolSuspensions} emps=${emps} flash=${flash} />
+      ${(() => {
+        // A day with a rejected offline punch is priced by payroll from an INCOMPLETE record. This
+        // has to be visible before a payroll run, not discovered after one.
+        const rj = offRejects || [];
+        if (!rj.length) return '';
+        const days = [...new Set(rj.map(r => r.att_date || '(unknown day)'))];
+        const REASON = {
+          no_match: 'PIN matched nobody', collision: 'PIN shared by two workers',
+          duplicate: 'tapped twice', already_recorded: 'already on the record',
+          out_of_sequence: 'out of order', bad_pin_shape: 'not a 6-digit PIN',
+          bad_punch_type: 'unknown punch', implausible_timestamp: 'tablet clock wrong',
+        };
+        return html`
+          <div class="card" style="border-color:var(--hivis)">
+            <div style="font-weight:800;color:var(--hivis)">
+              !! ${rj.length} offline punch${rj.length>1?'es':''} could not be recorded
+              · ${days.length} day${days.length>1?'s':''} affected
+            </div>
+            <p class="note" style="margin:4px 0 10px">
+              These workers punched while a tablet had no internet, and the office could not write the
+              punch when it came back. <b>Fix these before running payroll</b> - those days are short a
+              punch and will be priced as incomplete.
+            </p>
+            ${rj.slice(0, 12).map(r => html`
+              <div class="row" key=${r.client_ts + r.employee_code}>
+                <div>
+                  <div class="name">${r.employee_name || r.employee_code || 'Unknown worker'}</div>
+                  <div class="unit">${r.att_date || '(unknown day)'} · ${r.punch_type} · ${REASON[r.reason] || r.reason}</div>
+                </div>
+                <span class="badge" style="background:var(--hivis);color:#000">fix</span>
+              </div>`)}
+            ${rj.length > 12 ? html`<p class="note" style="margin-top:8px">...and ${rj.length - 12} more.</p>` : ''}
+          </div>`;
+      })()}
       ${(() => {
         const needs = emps.filter(e => !e.has_pin).length;
         return needs > 0 ? html`

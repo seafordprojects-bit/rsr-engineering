@@ -237,7 +237,7 @@ textarea.field-input{resize:none;height:65px}
       <div style="font-size:11px;color:#888;margin-top:1px;display:flex;align-items:center;justify-content:center;gap:8px">
         <span>Attendance Kiosk</span>
         <span id="site-badge-wrap"></span>
-        <span id="version-stamp">v2026-08-26b</span>
+        <span id="version-stamp">v2026-08-28a</span>
       </div>
     </div>
   </div>
@@ -1146,6 +1146,10 @@ let pin='',curEmp=null,msgTimer=null;
 // kpChecking: an identify round trip is in flight. The keypad ignores taps while it is true, so a
 // worker drumming the pad cannot stack requests (each one costs a full bcrypt scan on the server).
 let kpChecking=false;
+// offlinePin holds the six digits typed while there is no connection. It is the ONLY thing the
+// tablet knows about that worker - no name, no code, no record. It is cleared by kpClr like any
+// other keypad state, and it exists only between the sixth digit and the punch that follows it.
+let offlinePin=null;
 let adminSecs=ADMIN_TO,adminTick=null;
 let tgToken='',tgGroup='',tgPosGroup='',tgPhotoGroup='',tgBackupGroup='',tgAwolGroup='',mgrIds=[];
 let semaphoreKey='',semaphoreSender='RSR ENGRG';
@@ -1226,9 +1230,16 @@ async function identifyByPin(typed){
   if(!navigator.onLine)return {status:'offline'};
   try{
     const {data,error}=await sbClient.rpc('identify_employee_by_pin',{pin_input:typed});
-    // Fail CLOSED. A PostgREST error is reported as 'offline', never as a wrong PIN (which would
-    // burn one of the five attempts) and never as a pass. A 15s server timeout lands here too.
-    if(error){console.warn('identify_employee_by_pin:',error);return {status:'offline'};}
+    // Fail CLOSED, but distinguish WHY, because only one of these may be queued offline:
+    //   'offline'      - we could not reach the server at all. Safe to queue: nobody has judged
+    //                    this PIN yet, and the server will judge it at sync.
+    //   'server_error' - the server answered, with something we do not understand. NOT queued:
+    //                    it may have been a refusal, and queuing it would turn a refusal into a
+    //                    punch. Reported at the keypad exactly like a lost connection.
+    if(error){
+      console.warn('identify_employee_by_pin:',error);
+      return {status:'server_error'};
+    }
     const row=Array.isArray(data)?data[0]:data;
     if(!row||!row.status)return {status:'offline'};
     if(row.status==='ok')return {status:'ok',id:row.id,code:row.code,name:row.name};
@@ -2235,8 +2246,19 @@ async function kp(n){
       document.getElementById('emp-preview').style.display='none';updBtns(null);curEmp=null;
     }
     else if(ident.status==='offline'){
-      // Server-verified punches need a connection (owner decision, 2026-08-26). Nothing is written
-      // and nothing is queued - a queued punch would claim an identification that never happened.
+      // (v2026-08-28a) NO CONNECTION -> offline punch mode. The tablet cannot identify anybody, so
+      // it shows no name, enables every punch button, and queues the RAW PIN plus whichever button
+      // is pressed. sync_offline_punch decides who that was and whether the punch fits, on
+      // reconnect. The tablet decides nothing.
+      offlinePin=typed;
+      hint.textContent='Saved offline - pending';hint.style.color='#633806';
+      showOfflinePreview(typed);
+      offlineEnableAllButtons();
+    }
+    else if(ident.status==='server_error'){
+      // The server ANSWERED, with something we cannot read. Deliberately NOT queued: it may have
+      // been a refusal, and queuing it would turn a refusal into a punch. Same wording as a lost
+      // connection, because to the worker it is the same thing - try again.
       pin='';updDots();
       hint.textContent='No connection — try again. Nothing was recorded.';hint.style.color='#A32D2D';
       document.getElementById('emp-preview').style.display='none';updBtns(null);curEmp=null;
@@ -2250,7 +2272,7 @@ async function kp(n){
   }else{hint.textContent='Enter your 6-digit PIN';hint.style.color='';document.getElementById('emp-preview').style.display='none';updBtns(null);curEmp=null;}
 }
 function kpDel(){if(kpChecking)return;pin=pin.slice(0,-1);updDots();clearMsg();document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';document.getElementById('emp-preview').style.display='none';document.getElementById('btn-undertime').disabled=true;updBtns(null);curEmp=null;}
-function kpClr(){kpChecking=false;pin='';updDots();clearMsg();document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';document.getElementById('emp-preview').style.display='none';document.getElementById('btn-undertime').disabled=true;document.getElementById('ot-allow-banner').style.display='none';updBtns(null);curEmp=null;}
+function kpClr(){kpChecking=false;offlinePin=null;pin='';updDots();clearMsg();document.getElementById('pin-hint').textContent='Enter your 6-digit PIN';document.getElementById('pin-hint').style.color='';document.getElementById('emp-preview').style.display='none';document.getElementById('btn-undertime').disabled=true;document.getElementById('ot-allow-banner').style.display='none';updBtns(null);curEmp=null;}
 
 
 
@@ -3027,6 +3049,50 @@ function confirmUndertime(){ closeUndertimeModal(); undertimeConfirmed=true; pun
 
 // (early-break PIN modal removed — dead code; early breaks confirm via bisayaConfirm, no PIN)
 
+// Offline stand-in for showEmpPreview. Shows NO name - the tablet does not know it - but does show
+// everything this PIN has already tapped today, so a worker can see their own punch registered and
+// does not tap a second time waiting for feedback that is not coming.
+function showOfflinePreview(pin){
+  const el=document.getElementById('emp-preview'); if(!el)return;
+  document.getElementById('prev-name').textContent='Saved offline - pending';
+  document.getElementById('prev-dept').textContent='Walay internet. Ma-record ni inig balik sa signal.';
+  const pp=document.getElementById('prev-photo'); if(pp)pp.style.display='none';
+  const mine=offqToday(pin);
+  const LBL={timein:"Time In",lunch_out:"Lunch Out",lunch_in:"Lunch In",pm_out:"PM Break Out",pm_in:"PM Break In",timeout:"Time Out"};
+  const box=document.getElementById('prev-punches');
+  if(box){
+    box.innerHTML='';
+    if(!mine.length){
+      const d=document.createElement('div');
+      d.style.cssText='font-size:12px;color:#888';
+      d.textContent='Wala pa kay na-punch karon nga adlaw dinhi.';
+      box.appendChild(d);
+    }else{
+      // Built as DOM nodes, never innerHTML: punch_type comes back out of localStorage, which is
+      // editable by anyone holding the tablet, and an unknown label must not become markup.
+      mine.slice().sort((a,b)=>new Date(a.client_ts)-new Date(b.client_ts)).forEach(j=>{
+        const t=new Date(j.client_ts).toLocaleTimeString("en-PH",{hour:"2-digit",minute:"2-digit",hour12:true});
+        const row=document.createElement('div');
+        row.style.cssText='display:flex;justify-content:space-between;font-size:13px;padding:3px 0';
+        const l=document.createElement('span'); l.textContent=LBL[j.punch_type]||String(j.punch_type||'?');
+        const v=document.createElement('b');    v.textContent=t;
+        row.appendChild(l); row.appendChild(v); box.appendChild(row);
+      });
+    }
+  }
+  const bal=document.getElementById('prev-balance'); if(bal)bal.innerHTML='';
+  const ot=document.getElementById('ot-allow-banner'); if(ot)ot.style.display='none';
+  el.style.display='block';
+}
+// Offline every punch button is pressable: the tablet cannot know which one is next for a worker
+// it cannot identify. The SERVER refuses anything that does not fit and files it in
+// kiosk_offline_rejects - it never guesses which punch was meant.
+function offlineEnableAllButtons(){
+  PUNCHES.forEach(p=>{const b=document.getElementById(BIDS[p]);if(b){b.disabled=false;b.classList.remove('highlight-next');}});
+  const _l=document.getElementById('btn-leave'), _u=document.getElementById('btn-undertime');
+  if(_l)_l.disabled=true; if(_u)_u.disabled=true;   // leave/undertime need a real identity
+}
+
 function showEmpPreview(emp){
   const rec=getRec(emp.code);
   document.getElementById('prev-name').textContent=emp.name;
@@ -3229,6 +3295,19 @@ function updBtns(rec){
 }
 
 async function punch(type){
+  // (v2026-08-28a) OFFLINE PUNCH. Queue the raw PIN + the button pressed and stop here. None of the
+  // logic below can run without an identity: the record, the sequence gating, the bar check and
+  // the allowance all key off curEmp. The server applies those rules at sync instead.
+  if(offlinePin){
+    const ok=offqAdd(offlinePin,type);
+    if(ok){
+      showOfflinePreview(offlinePin);
+      showMsg('ok','Saved offline - pending',
+        'Na-save ang imong '+(PLABELS[type]||type)+'. Ma-record ni sa opisina inig balik sa internet.',4500);
+    }
+    setTimeout(()=>kpClr(),4000);
+    return;
+  }
   if(!curEmp){showMsg('err','No employee selected','Please enter your 6-digit PIN first.');return;}
   const emp=curEmp; let rec=getRec(emp.code), next=getNext(rec);
   // ── Cross-midnight punch routing ──────────────────────────────────────────────────────────────
@@ -6198,6 +6277,7 @@ async function initSupabaseSync() {
   await loadApprovedLateBreaks();
   console.log('✅ Supabase sync initialized');
   syncFlush(); // push anything queued from a previous offline session
+  flushOfflinePunches(); // and replay any punches taken while the tablet had no connection
 }
 
 // Start Supabase sync after page loads
@@ -6205,6 +6285,9 @@ setTimeout(initSupabaseSync, 2000);
 // Re-check approved straight duties + late breaks periodically (so an approval
 // made during the day is applied without restarting the kiosk).
 setInterval(function(){ if (navigator.onLine) { loadApprovedStraightDuties(); loadApprovedLateBreaks(); loadShiftFromCloud(); } }, 60000);
+// Offline punches replay on the same cadence as the record queue, and immediately on reconnect.
+setInterval(function(){ if (navigator.onLine) flushOfflinePunches(); }, 30000);
+window.addEventListener('online', function(){ flushOfflinePunches(); });
 // Also refresh the shift/dismissal settings when the tablet regains focus, so an admin change to the
 // evening OT cut-off (dismissal) or shift start reflects WITHOUT a kiosk reload (same class as the
 // tariff cache bug). loadShiftFromCloud is idempotent — it re-reads settings and re-applies.
@@ -6245,10 +6328,13 @@ function updateSyncBadge(){
   const el = document.getElementById('sync-badge');
   if (!el) { renderStuckPunches(); return; }
   const n = pendingCount(), dead = deadCount();
+  const offq = (typeof offqCount === "function") ? offqCount() : 0;   // offline punches awaiting the server
   const offline = !navigator.onLine;
-  if (n === 0 && dead === 0 && !offline) { el.style.display='none'; renderStuckPunches(); return; }
+  if (n === 0 && dead === 0 && offq === 0 && !offline) { el.style.display='none'; renderStuckPunches(); return; }
   el.style.display='flex';
   if (dead > 0) { el.style.background='#FCEBEB'; el.style.color='#A32D2D'; el.textContent = '⚠ ' + dead + ' punch' + (dead===1?'':'es') + ' rejected — see Admin ▸ Settings'; }
+  else if (offq > 0) { el.style.background='#FCEBEB'; el.style.color='#A32D2D';
+    el.textContent = (offline ? 'Offline' : 'Syncing') + ' \u00b7 ' + offq + ' punch' + (offq===1?'':'es') + ' pending'; }
   else if (offline) { el.style.background='#FCEBEB'; el.style.color='#A32D2D'; el.textContent = '⚠ Offline · ' + n + ' punch' + (n===1?'':'es') + ' waiting'; }
   else if (n > 0) { el.style.background='#FFF3CD'; el.style.color='#633806'; el.textContent = '↻ Syncing ' + n + ' punch' + (n===1?'':'es') + '…'; }
   renderStuckPunches();
@@ -6295,6 +6381,133 @@ async function syncFlush(){
 // a data-k attribute + a bound listener (NOT an inline onclick with an interpolated string), because
 // an interpolated value inside inline-handler JS can't be made safe by entity-escaping alone (the
 // browser decodes entities before the JS parses).
+// ---- OFFLINE PUNCH QUEUE (v2026-08-28a) ------------------------------------------------------
+// A tablet with no connection cannot identify anybody, so it stores the RAW TYPED PIN and the
+// punch that was pressed, and decides NOTHING else. sync_offline_punch verifies the PIN and
+// validates the punch server-side on reconnect. The tablet never learns who anyone is, never
+// holds a hash, and never writes an attendance record it cannot account for.
+//
+// AN ENTRY LEAVES THIS QUEUE ONLY WHEN THE SERVER HAS ACCOUNTED FOR IT - either it wrote the
+// punch, or it filed a row in kiosk_offline_rejects. A network failure keeps the entry and it is
+// still counted in the badge. There is deliberately no catch-and-requeue that swallows a result:
+// every outcome is either synced, visibly pending, or a reject the office can see.
+const OFFQ_KEY='rsr_offline_punches';
+const OFFQ_MAX=200;                 // hard cap on entries
+const OFFQ_MAX_AGE_MS=12*60*60*1000; // and on age (owner 2026-08-28: shortened from 24h)
+// A queued entry holds a workerraw PIN, so it must not outlive the shift it was typed in. The
+// shift day opens at 7:00 AM - Time In opens then, and 1:00-6:59 AM is the dead zone - so that,
+// NOT midnight, is the boundary used here. Purging at midnight would delete a night-shift punch
+// taken at 23:50 ten minutes after it was made, while its tablet was still offline.
+const OFFQ_DAY_START_H=7;
+function offqDayBoundary(nowMs){
+  const d=new Date(nowMs); d.setHours(OFFQ_DAY_START_H,0,0,0);
+  if(nowMs<d.getTime()) d.setDate(d.getDate()-1);   // before 7 AM we are still inside yesterday shift day
+  return d.getTime();
+}
+let offlineQueue=[];
+try{ offlineQueue=JSON.parse(localStorage.getItem(OFFQ_KEY)||"[]")||[]; }catch(e){ offlineQueue=[]; }
+function offqSave(){ try{ localStorage.setItem(OFFQ_KEY,JSON.stringify(offlineQueue)); }catch(e){} }
+// Drop entries older than 24h. They are NOT silently discarded: the count they were part of is
+// surfaced first, and an expired punch is logged so the day can be corrected by hand.
+function offqPrune(){
+  // Whichever bound bites first: the 12-hour cap, or the start of the current shift day. A PIN
+  // therefore never survives into a shift after the one it was typed in.
+  const now=Date.now();
+  const cutoff=Math.max(now-OFFQ_MAX_AGE_MS, offqDayBoundary(now));
+  const before=offlineQueue.length;
+  const expired=offlineQueue.filter(j=>j.queued_at<cutoff);
+  if(expired.length){
+    // Dropped, but never silently: each one is a punch a worker really made, and the day it
+    // belongs to now needs correcting by hand.
+    expired.forEach(j=>logNotif('Offline punch expired unsynced ('+j.punch_type+', queued '+new Date(j.queued_at).toLocaleString('en-PH')+') - correct this day by hand','late-n',false));
+    offlineQueue=offlineQueue.filter(j=>j.queued_at>=cutoff);
+  }
+  if(offlineQueue.length>OFFQ_MAX) offlineQueue=offlineQueue.slice(-OFFQ_MAX); // keep the newest
+  if(offlineQueue.length!==before) offqSave();
+}
+function offqCount(){ offqPrune(); return offlineQueue.length; }
+// Everything this PIN has tapped today, so the worker can see their own punch already registered
+// and does not tap twice. Matched on the typed PIN, which is all the tablet has.
+function offqToday(pin){
+  const day=todayKey();
+  return offlineQueue.filter(j=>j.pin===pin&&new Date(j.client_ts).toLocaleDateString("en-PH",{year:"numeric",month:"2-digit",day:"2-digit"})===day);
+}
+function offqAdd(pin,punchType){
+  offqPrune();
+  if(offlineQueue.length>=OFFQ_MAX){
+    showMsg('err','Queue full','Naa nay 200 ka punch nga wala pa ma-sync. Palihug tawag sa opisina.',6000);
+    return false;
+  }
+  offlineQueue.push({
+    pin: pin,
+    punch_type: punchType,
+    client_ts: new Date().toISOString(),
+    device_id: getDeviceId(),
+    site: activeSite||null,      // the tablet knows its OWN yard; this is not a decision about the worker
+    queued_at: Date.now(),
+  });
+  offqSave(); updateSyncBadge();
+  return true;
+}
+
+// Replay strictly in client_ts order, never insertion order: two tablets, or one worker who
+// punched before the queue drained, must be judged in the order the punches actually happened,
+// because the server validates each one against the state the previous ones left behind.
+let offqSyncing=false;
+async function flushOfflinePunches(){
+  if(offqSyncing||!navigator.onLine)return;
+  offqPrune();
+  if(!offlineQueue.length)return;
+  offqSyncing=true;
+  try{
+    const ordered=offlineQueue.slice().sort((a,b)=>new Date(a.client_ts)-new Date(b.client_ts));
+    for(const job of ordered){
+      let res=null;
+      try{
+        const {data,error}=await sbClient.rpc('sync_offline_punch',{
+          p_pin:job.pin, p_punch_type:job.punch_type,
+          p_client_ts:job.client_ts, p_device_id:job.device_id, p_site:job.site||null,
+        });
+        if(error) throw error;
+        res=Array.isArray(data)?data[0]:data;
+      }catch(e){
+        // Could not reach the server. KEEP the entry - it stays in the badge and retries. This is
+        // the only path that leaves a job in the queue, and it never hides anything.
+        console.warn('sync_offline_punch:',e);
+        break;   // stop the pass; order matters, so do not skip ahead past a failure
+      }
+      if(!res||!res.out_status){ break; }   // unreadable answer: treat as unreachable, keep + retry
+      // The server has ACCOUNTED for this entry either way - written, or filed as a reject.
+      offlineQueue=offlineQueue.filter(j=>j!==job);
+      offqSave();
+      if(res.out_status==='ok'){
+        // Fold the punch the server wrote into the LOCAL record. Without this the tablet would
+        // push its own full record for that worker later and overwrite the punch it never knew
+        // about - the punch would vanish and the day would be short.
+        try{ offqMergeServerPunches(res); }catch(e){}
+        logNotif('Offline punch synced: '+(res.out_employee_name||res.out_employee_code||'?')+' '+job.punch_type,'ok',false);
+      }else{
+        // Rejected. It is already in kiosk_offline_rejects for the office; surface it here too so
+        // the tablet is not silently quieter than the database.
+        logNotif('Offline punch REJECTED ('+res.out_reason+'): '+(res.out_employee_name||'unknown worker')+' '+job.punch_type,'late-n',false);
+      }
+      updateSyncBadge();
+    }
+  } finally { offqSyncing=false; updateSyncBadge(); }
+}
+// Merge the server-confirmed punch set into the local record for that worker + day.
+function offqMergeServerPunches(res){
+  const code=resolveCode(res.out_employee_code);
+  const key=code+"_"+res.out_att_date;
+  const p=res.out_punches||{};
+  if(!records[key]) records[key]={code,punches:{},msMap:{},isLate:false,lateMs:0,photos:{},clockedSite:null,hasAllowance:false,allowanceAmt:0,nightShift:false};
+  const rec=records[key];
+  ['timein','lunch_out','lunch_in','pm_out','pm_in','timeout'].forEach(k=>{
+    if(p[k]&&!rec.punches[k]) rec.punches[k]=p[k];
+  });
+  saveData(); updateStats();
+}
+
 function renderStuckPunches(){
   const host = document.getElementById('stuck-punches'); if (!host) return;
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

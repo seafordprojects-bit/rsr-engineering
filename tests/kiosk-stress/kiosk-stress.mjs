@@ -89,6 +89,10 @@ const mock = {
   identifyThrottled: false,// when true the RPC answers status=throttled
   identifyCollide: null,   // a PIN string that should answer status=collision, as two active
                            // workers sharing it would. Never resolved by picking one.
+  // ---- offline punch queue (v2026-08-27a) -----------------------------------------------------
+  syncOfflineCalls: [],    // every sync_offline_punch payload the kiosk sent, in the order sent
+  syncOfflineMode: "ok",   // "ok" | "reject" | "net" - what the RPC does
+  syncOfflineReason: "no_match",
   identifyCalls: [],       // every pin_input the kiosk sent — proves the PIN leaves the tablet only
                            // as an RPC argument, and that a wrong one is not retried in a loop.
   // ── Defect 1 (2026-08-04): the sweep reads punch history from the DATABASE, not `records` ──
@@ -198,6 +202,29 @@ async function newKioskContext(browser, base, initMs) {
       const p = new URL(url).pathname;
       const method = req.method();
       if (p.endsWith('/rest/v1/employees')) return json(200, ROSTER);
+      if (p.endsWith('/rest/v1/rpc/sync_offline_punch')) {
+        let body = null; try { body = JSON.parse(req.postData() || 'null'); } catch {}
+        mock.syncOfflineCalls.push(body);
+        if (mock.syncOfflineMode === 'net') return route.abort('failed');
+        const row = ROSTER.find(r => r.pin === (body && body.p_pin));
+        if (mock.syncOfflineMode === 'reject' || !row) {
+          return json(200, [{
+            out_status: 'rejected', out_reason: row ? mock.syncOfflineReason : 'no_match',
+            out_employee_code: row ? row.code : null, out_employee_name: row ? row.name : null,
+            out_att_date: null, out_punches: null,
+          }]);
+        }
+        const t = new Date(body.p_client_ts)
+          .toLocaleTimeString('en-PH', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true });
+        const punches = {};
+        punches[body.p_punch_type] = t;
+        return json(200, [{
+          out_status: 'ok', out_reason: null,
+          out_employee_code: row.code, out_employee_name: row.name,
+          out_att_date: new Date(body.p_client_ts).toLocaleDateString('en-PH', { year:'numeric', month:'2-digit', day:'2-digit' }),
+          out_punches: punches,
+        }]);
+      }
       if (p.endsWith('/rest/v1/rpc/identify_employee_by_pin')) {
         let body = null; try { body = JSON.parse(req.postData() || 'null'); } catch {}
         const typed = body && body.pin_input;
@@ -588,6 +615,7 @@ async function scenario(name, initMs, fn) {
   mock.awolGroupId = '';
   mock.rpcSuspendFail = false;
   mock.identifyFail = false; mock.identifyThrottled = false; mock.identifyCollide = null; mock.identifyCalls = [];
+  mock.syncOfflineCalls = []; mock.syncOfflineMode = 'ok'; mock.syncOfflineReason = 'no_match';
   mock.punchDaysFail = false; mock.punchDaysEmpty = false; mock.punchDaysExtra = {};
   mock.punchDaysWindow = null;   // MUST be reset: a leaked short window silently starves every
                                  // later scenario's history read and reads as a code failure
@@ -2323,6 +2351,204 @@ await scenario('H9 · taps during a check do not stack RPC calls', manila(2026,7
   report('H9 · extra taps mid-check are ignored; exactly one RPC call',
     mock.identifyCalls.length === 1 && out.cur === 'RSR0100',
     `identifyCalls=${JSON.stringify(mock.identifyCalls)} curEmp=${out.cur}`);
+});
+
+// ==============================================================================
+//  I - OFFLINE PUNCH QUEUE (v2026-08-27a)
+// ==============================================================================
+// A tablet with no connection cannot identify anybody. It queues the RAW TYPED PIN plus the button
+// pressed, and decides nothing else; sync_offline_punch judges both on reconnect. These scenarios
+// exist mostly to pin down what must NEVER happen: a queued punch that silently disappears, a
+// refusal turned into a punch, or an employee id invented on the tablet.
+
+// Take the page offline the way the kiosk sees it: navigator.onLine false + an offline event.
+const goOffline = (page) => page.evaluate(() => {
+  Object.defineProperty(navigator, 'onLine', { get: () => false, configurable: true });
+});
+const goOnline = (page) => page.evaluate(() => {
+  Object.defineProperty(navigator, 'onLine', { get: () => true, configurable: true });
+});
+const offq = (page) => page.evaluate(() => {
+  try { return JSON.parse(localStorage.getItem('rsr_offline_punches') || '[]'); } catch (e) { return null; }
+});
+
+await scenario('I1 - offline punch queues the PIN, never an employee id', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  const q = await offq(page);
+  const e = (q && q[0]) || {};
+  const shapeOk = q && q.length === 1
+    && e.pin === pinOf('RSR0100')
+    && e.punch_type === 'timein'
+    && typeof e.client_ts === "string" && typeof e.device_id === "string" && typeof e.queued_at === "number"
+    && !('employee_id' in e) && !('employee_code' in e) && !('code' in e);
+  report('I1 - queued entry carries the raw PIN and no identity; nothing sent while offline',
+    shapeOk && mock.writes.length === 0 && mock.syncOfflineCalls.length === 0,
+    `entry=${JSON.stringify(e)} writes=${mock.writes.length}`, sends());
+});
+
+await scenario('I2 - a wrong PIN while ONLINE is never queued', manila(2026,7,15,8,0), async (page) => {
+  await enterRawPin('111111');
+  const q = await offq(page);
+  report('I2 - online refusal stays a refusal', (q || []).length === 0 && mock.writes.length === 0,
+    `queue=${JSON.stringify(q)}`, sends());
+});
+
+await scenario('I3 - a collision or throttle while ONLINE is never queued', manila(2026,7,15,8,0), async (page) => {
+  mock.identifyCollide = pinOf('RSR0100');
+  await enterPin(page, pinOf('RSR0100'));
+  const afterCollision = (await offq(page) || []).length;
+  mock.identifyCollide = null; mock.identifyThrottled = true;
+  await enterPin(page, pinOf('RSR0207'));
+  const afterThrottle = (await offq(page) || []).length;
+  report('I3 - collision and throttle are reported at the keypad, not queued',
+    afterCollision === 0 && afterThrottle === 0,
+    `afterCollision=${afterCollision} afterThrottle=${afterThrottle}`, sends());
+});
+
+await scenario('I4 - a server ERROR while online is not queued either', manila(2026,7,15,8,0), async (page) => {
+  // identifyFail makes the RPC 500. The server ANSWERED; it may have been a refusal, so queuing it
+  // would turn a refusal into a punch.
+  mock.identifyFail = true;
+  await enterPin(page, pinOf('RSR0100'));
+  const q = await offq(page);
+  report('I4 - server_error is not a connection failure and is not queued', (q || []).length === 0,
+    `queue=${JSON.stringify(q)}`, sends());
+});
+
+await scenario('I5 - reconnect replays in client_ts order, oldest first', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  // Queue three punches OUT of chronological order on purpose.
+  await page.evaluate(() => {
+    const mk = (pin, type, iso) => ({ pin, punch_type: type, client_ts: iso, device_id: 'dev', site: 'Carmen', queued_at: Date.now() });
+    const q = [
+      mk('100200','lunch_out','2026-07-15T04:00:00.000Z'),
+      mk('100200','timein',   '2026-07-15T00:00:00.000Z'),
+      mk('100200','timeout',  '2026-07-15T09:00:00.000Z'),
+    ];
+    localStorage.setItem('rsr_offline_punches', JSON.stringify(q));
+    offlineQueue = q;
+  });
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await page.waitForTimeout(600);
+  const order = mock.syncOfflineCalls.map(c => c.p_punch_type);
+  const left = (await offq(page) || []).length;
+  report('I5 - replayed oldest-first and the queue drained',
+    JSON.stringify(order) === JSON.stringify(['timein','lunch_out','timeout']) && left === 0,
+    `order=${JSON.stringify(order)} remaining=${left}`);
+});
+
+await scenario('I6 - a REJECTED punch leaves the queue and is surfaced, never silently dropped', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  mock.syncOfflineMode = 'reject'; mock.syncOfflineReason = 'out_of_sequence';
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await page.waitForTimeout(600);
+  const left = (await offq(page) || []).length;
+  const notified = await page.evaluate(() => (notifLog||[]).some(n => /REJECTED/i.test(n.msg||n.text||'')));
+  // It is gone from the tablet because the SERVER accounted for it - it is a row in
+  // kiosk_offline_rejects now. The tablet must still say so rather than going quiet.
+  report('I6 - rejected entry dequeued and reported locally', left === 0 && notified,
+    `remaining=${left} surfacedOnTablet=${notified}`);
+});
+
+await scenario('I7 - a NETWORK failure keeps the punch and keeps counting it', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  mock.syncOfflineMode = 'net';
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await page.waitForTimeout(600);
+  const left = (await offq(page) || []).length;
+  const badge = await page.evaluate(() => { const b = document.getElementById('sync-badge'); return b ? b.textContent : ''; });
+  // THE point of this scenario: an unreachable server must never quietly consume a punch. This is
+  // the catch-and-requeue failure mode - the entry stays, and it stays VISIBLE.
+  report('I7 - unreachable server keeps the punch and shows it in the badge',
+    left === 1 && /pending/i.test(badge),
+    `remaining=${left} badge="${badge}"`);
+});
+
+await scenario('I8 - a synced punch is folded into the local record', manila(2026,7,15,8,0), async (page) => {
+  const k = await dateKeyFor(page);
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await page.waitForTimeout(600);
+  const r = await recAt(page, 'RSR0100', k);
+  // Without this merge the tablet would later push its own full record for that worker and
+  // overwrite the punch it never knew about - the punch would vanish and the day would be short.
+  report('I8 - the server-written punch lands in the local record', !!(r && r.punches && r.punches.timein),
+    `localTimein=${r && r.punches ? r.punches.timein : null}`);
+});
+
+await scenario('I9 - the queue is capped at 200 entries', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  const res = await page.evaluate(() => {
+    const q = [];
+    for (let i = 0; i < 205; i++) q.push({ pin:'100200', punch_type:'timein', client_ts:new Date().toISOString(), device_id:'d', site:'Carmen', queued_at: Date.now() });
+    localStorage.setItem('rsr_offline_punches', JSON.stringify(q));
+    offlineQueue = q;
+    return offqCount();
+  });
+  report('I9 - capped at 200, newest kept', res === 200, `count=${res}`);
+});
+
+await scenario('I10 - entries older than 12h are dropped, loudly', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  const res = await page.evaluate(() => {
+    const old = Date.now() - (13 * 60 * 60 * 1000);
+    const q = [{ pin:'100200', punch_type:'timein', client_ts:new Date(old).toISOString(), device_id:'d', site:'Carmen', queued_at: old }];
+    localStorage.setItem('rsr_offline_punches', JSON.stringify(q));
+    offlineQueue = q;
+    const n = offqCount();
+    return { n, notified: (notifLog||[]).some(x => /expired/i.test(x.msg||x.text||'')) };
+  });
+  // Dropped, but never silently: an expired punch is a day that needs correcting by hand.
+  report('I10 - expired entry removed and logged', res.n === 0 && res.notified,
+    `count=${res.n} logged=${res.notified}`);
+});
+
+await scenario('I11 - the queue is purged at the start of the shift day', manila(2026,7,15,8,0), async (page) => {
+  // Scenario clock is 08:00, so the current shift day opened at 07:00 today. An entry queued
+  // before that belongs to yesterday shift and must not survive into this one - a PIN must never
+  // outlive the shift it was typed in.
+  await goOffline(page);
+  const res = await page.evaluate(() => {
+    const beforeOpen = new Date(); beforeOpen.setHours(6, 30, 0, 0);   // 06:30 today, before the 07:00 open
+    const afterOpen  = new Date(); afterOpen.setHours(7, 30, 0, 0);    // 07:30 today, inside this shift day
+    const q = [
+      { pin:'100200', punch_type:'timein',  client_ts:beforeOpen.toISOString(), device_id:'d', site:'Carmen', queued_at: beforeOpen.getTime() },
+      { pin:'100200', punch_type:'lunch_out', client_ts:afterOpen.toISOString(), device_id:'d', site:'Carmen', queued_at: afterOpen.getTime() },
+    ];
+    localStorage.setItem('rsr_offline_punches', JSON.stringify(q));
+    offlineQueue = q;
+    const n = offqCount();
+    return { n, kept: offlineQueue.map(j => j.punch_type) };
+  });
+  report('I11 - yesterday shift entry purged, today entry kept',
+    res.n === 1 && JSON.stringify(res.kept) === JSON.stringify(['lunch_out']),
+    `count=${res.n} kept=${JSON.stringify(res.kept)}`);
+});
+
+await scenario('I12 - a night punch just before midnight survives into the small hours', manila(2026,7,15,23,50), async (page) => {
+  // The reason the boundary is 07:00 and not midnight. A night worker punches at 23:50 with no
+  // signal; the tablet reconnects at 00:10. A midnight purge would have deleted that punch ten
+  // minutes after it was made, silently costing him the day.
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0303'));
+  await doPunch(page, 'timein');
+  const before = (await offq(page) || []).length;
+  await setNow(page, manila(2026, 7, 16, 0, 10));   // past midnight, still the same shift day
+  const after = await page.evaluate(() => offqCount());
+  report('I12 - punch survives midnight; the shift day has not turned over yet',
+    before === 1 && after === 1, `beforeMidnight=${before} afterMidnight=${after}`);
 });
 
 // ==============================================================================
