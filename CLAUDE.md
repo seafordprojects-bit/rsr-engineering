@@ -129,3 +129,36 @@ pay-affecting changes without explicit approval.
   (SQL) definitions the owner re-runs themselves anyway — **may push directly without a
   walkthrough, but ALWAYS tell the owner immediately what went live** (exact commit + files).
 - When unsure which bucket a change falls in, treat it as interactive and pause.
+
+## Verified done, 2026-09-03
+Localhost walkthrough for the offline punch queue passed on branch `offline-punch-queue`
+at commit `5f6c06f`:
+- Offline Time In queued and synced on reconnect with `client_ts` = tap time (11:48:10);
+  `server_received_at` landed 41s later.
+- Offline Time Out queued and landed in `attendance_records.timeout` with its tap time
+  (12:02:25).
+- A `000000` PIN queued offline was refused at sync and written to `kiosk_offline_rejects`
+  with `employee` null.
+- The admin dashboard rejects card showed both rejects as unreviewed.
+- Test rows cleaned up afterward: `kiosk_offline_punch_log`, `kiosk_offline_rejects` ids 4
+  and 5, and the `RSR 0000` attendance row for 09/03/2026.
+
+`kiosk_offline_rejects` id 4 is dated 2026-08-29 — proof the Aug 29 walkthrough got as far
+as producing a rejection, but its cleanup never ran; that stale row sat in the table
+uncleaned for 5 days until today.
+
+## Known open items
+- `drift_seconds` (in `kiosk_offline_punch_log`) measures queue latency
+  (`server_received_at` minus `client_ts`), not clock drift; the two are indistinguishable
+  from this column alone.
+- The offline banner's wording is inconsistent: it says "pending" in one state and
+  "waiting" in another.
+- The admin rejects card shows "(unknown day)" even though `client_ts` has the date, and
+  showed "1 day affected" when two rejects were actually five days apart.
+- The live kiosk polls Telegram `getUpdates` and receives 409s, consistent with two tablets
+  long-polling one bot token.
+- `employees.pin_set_at` does not exist on the live database; `employee-pin-set-at.sql` was
+  never applied.
+- Offline UX shows no worker name by design; on-device PIN verification was discussed and
+  declined for now because a 6-digit PIN cannot be safely verified without server-side
+  throttling.
