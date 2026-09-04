@@ -6341,7 +6341,13 @@ async function syncSmsLogToSupabase(entry) {
 // allowance flags were stamped from stale data.
 async function loadEmployeesFromSupabase() {
   try {
-    const { data } = await sbClient.from('employees').select('*');
+    // supabase-js RESOLVES (never rejects) on a PostgREST/network-level failure here — `error` must
+    // be checked explicitly, same landmine as home.js:671. Without this, a failed fetch (network
+    // blip, timeout, rate limit) left `data` null/undefined, `if (data && ...)` was silently false,
+    // and the whole merge no-op'd with NOTHING visible anywhere — indistinguishable from "hasn't
+    // fetched yet", which is how a locally-removed-but-still-real employee could survive a reload.
+    const { data, error } = await sbClient.from('employees').select('*');
+    if (error) console.warn('Load employees from Supabase: fetch failed, roster NOT refreshed —', error);
     if (data && data.length > 0) {
       data.forEach(se => {
         const fresh = {
@@ -6531,10 +6537,13 @@ function updateSyncBadge(){
   renderStuckPunches();
 }
 
-// push every queued record to Supabase. Classify each result ok/net/rejected:
-//  • ok       → dequeue (UNLESS a newer punch arrived mid-sync — then keep for the next pass)
-//  • net      → transient (offline / fetch failure); stop the pass and retry later, no penalty
-//  • rejected → permanent server refusal; count toward dead-letter, but CONTINUE (never block others)
+// push every queued record to Supabase. Classify each result ok/net/rejected/employee_not_found:
+//  • ok                → dequeue (UNLESS a newer punch arrived mid-sync — then keep for the next pass)
+//  • net               → transient (offline / fetch failure); stop the pass and retry later, no penalty
+//  • rejected          → permanent server refusal; count toward dead-letter, but CONTINUE (never block others)
+//  • employee_not_found → the local roster lookup missed (pushRecord never reached the server). Retrying
+//                        is pointless until the roster itself changes, so this skips the attempts counter
+//                        and dead-letters on the FIRST occurrence, rather than waiting for DEAD_MAX.
 async function syncFlush(){
   if (syncing || !navigator.onLine) { updateSyncBadge(); return; }
   syncing = true;
@@ -6545,11 +6554,18 @@ async function syncFlush(){
       const seqAtFlush = meta.seq;
       const idx = k.lastIndexOf('_');
       const empCode = k.slice(0, idx), date = k.slice(idx + 1);
-      const result = await pushRecord(empCode, date); // 'ok' | 'net' | 'rejected'
+      const result = await pushRecord(empCode, date); // 'ok' | 'net' | 'rejected' | 'employee_not_found'
       const now = syncPending[k];
       if (result === 'net') break;                    // network down → nothing else will succeed this pass
       if (result === 'ok') {
         if (now && now.seq === seqAtFlush) delete syncPending[k]; // else a newer punch landed mid-sync → keep, re-sync next pass
+      } else if (result === 'employee_not_found') {
+        // Not a server rejection — pushRecord never made a network call. A retry can't succeed until
+        // the local roster changes, so skip attempts/DEAD_MAX entirely and dead-letter right away.
+        if (now) {
+          now.reason = "employee not on this tablet's roster — code not found locally";
+          if (!now.dead) { now.dead = true; pendingHeartbeat = true; }
+        }
       } else {                                        // 'rejected'
         if (now) {
           now.attempts = (now.attempts || 0) + 1;
@@ -6839,7 +6855,7 @@ async function pushRecord(empCode, date){
     const rec = records[empCode + '_' + date];
     if (!rec) return 'ok'; // nothing to send; treat as done
     const emp = employees.find(e => e.code === empCode);
-    if (!emp) return 'ok';
+    if (!emp) return 'employee_not_found';
     const p = rec.punches || {};
     const workedMs = calcWorked(rec) || 0;
     const otMs = workedMs ? Math.max(0, workedMs - (emp.shift * 3600000)) : 0;
