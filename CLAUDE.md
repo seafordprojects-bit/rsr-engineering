@@ -190,3 +190,25 @@ unreliability above made it impossible to tell whether a "No connection" result 
 dedupe logic actually ran, or the tablet had been falsely detected as offline. The four
 Supabase/admin/Telegram verification steps were not yet run. Do not merge to main until
 the walkthrough actually completes.
+
+## offline-punch-v2 — Phase 1 status, 2026-09-04 (walkthrough continued)
+**Still not merged to main.**
+- Confirmed real Airplane Mode reproduces true offline state and `navigator.onLine`
+  correctly reads `false` on real hardware — closes the open question from the 2026-09-03
+  session (whether the earlier "false online" report was a DevTools artifact; it wasn't, but
+  genuine Airplane Mode behaves correctly).
+- Found and fixed: the duplicate-block message (`#punch-msg`) rendered below all six punch
+  buttons, off-screen without scrolling on a typical device viewport — a worker could be
+  correctly refused by the dedupe check and never see why. Fixed in `1237099` (pure DOM
+  reorder, right after `#emp-preview`; no JS changed).
+- Confirmed via Supabase: an offline punch preserves its real tap time (`client_ts`) through
+  an online/offline interruption mid-session — no data corruption observed.
+
+**Still open, not yet checked this session:**
+- Reject+photo verification in `kiosk_offline_rejects` — whether the `photo` column actually
+  gets written on a real reject.
+- Admin dashboard rejects-card thumbnail display — whether the photo actually renders there.
+- Telegram caption timing — whether the "offline, synced HH:MM" caption carries the correct
+  tap time and sync time on a real device, not just in the mocked test suite.
+
+Do not merge to main until these are checked and the walkthrough is actually complete.
