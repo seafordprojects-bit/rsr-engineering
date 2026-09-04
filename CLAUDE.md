@@ -85,6 +85,21 @@ means confirm the *business* direction, not implementation details.)
   secret to reach (the success branch needs a real passcode), prove it at the kiosk during
   the walkthrough, NOT by typing the secret into the SQL editor — the editor keeps a query
   history and that writes a live passcode into it in clear text.
+- **Two separate login gates exist for the admin-side pages, and it is easy to test the wrong one.**
+  `index.html` / `admin/index.html` (via `home.js:2876`,
+  `RSRAuth.gate(supabase, {allow: RSRAuth.ADMIN_ONLY})`) is DELIBERATELY admin-only — the site
+  accounts (`carmen@`, `mandaue@rsrengineering.services`) get "This page is for the administrator
+  account" there, by design (the comment there names carmen@ explicitly). `coordinator/index.html`
+  (via `coordinator.js:2595`, `RSRAuth.gate(supabase)`, no `allow` argument) has NO email
+  restriction at all — any signed-in Supabase Auth account passes. The two pages sit adjacent in
+  navigation (the admin dashboard's own "Coordinator" tile links to `./coordinator/`, but only
+  after clearing the dashboard's own admin-only gate first), so it is easy to land on the wrong
+  one and read correct, by-design behavior as a bug. Confirmed 2026-09-04: a report of
+  carmen@rsrengineering.services always being refused / shown a sign-up-looking screen on
+  "Coordinator sign-in" traced to her being on `index.html`/`admin/index.html`, not
+  `coordinator/index.html` — live-vs-repo code was verified byte-identical on both files; there
+  was no discrepancy and no bug. **`coordinator/index.html` is the correct URL for site accounts.**
+  Do not re-investigate this without first confirming which of the two URLs was actually used.
 
 ## Verification pages in this repo
 - `payroll/diagnostic.html` — inspects attendance data quality and simulates a payroll run.
