@@ -299,6 +299,11 @@ textarea.field-input{resize:none;height:65px}
       <div class="bal-row" id="prev-balance"></div>
       <div id="ot-allow-banner" style="display:none;margin-top:8px;background:#EEEDFE;border:1px solid #9B95E8;border-radius:10px;padding:8px 12px;font-size:12px;color:#3C3489;font-weight:600;text-align:center"></div>
     </div>
+    <!-- (v2026-09-04) Moved up from below the punch buttons: on a typical device viewport it rendered
+         off-screen without scrolling, so a duplicate-block warning (or any punch-msg toast) could go
+         completely unseen. Now sits in the same visible area as the "Saved offline - pending" card
+         above, before the worker has to scroll past the keypad and six punch buttons to see it. -->
+    <div class="msg-box" id="punch-msg"><div class="msg-title" id="pm-title"></div><div class="msg-sub" id="pm-sub"></div></div>
     <div class="keypad">
       <button class="key" onclick="kp('1')">1</button><button class="key" onclick="kp('2')">2</button><button class="key" onclick="kp('3')">3</button>
       <button class="key" onclick="kp('4')">4</button><button class="key" onclick="kp('5')">5</button><button class="key" onclick="kp('6')">6</button>
@@ -317,7 +322,6 @@ textarea.field-input{resize:none;height:65px}
       <button class="pbtn pbtn-leave" id="btn-leave" onclick="openLeaveModal()" disabled>File a Leave</button>
       <button class="pbtn pbtn-undertime" id="btn-undertime" onclick="openUndertimeModal()" disabled>File Undertime / Half Day</button>
     </div>
-    <div class="msg-box" id="punch-msg"><div class="msg-title" id="pm-title"></div><div class="msg-sub" id="pm-sub"></div></div>
     <div class="stats-grid">
       <div class="stat"><div class="stat-label">Working</div><div class="stat-val" id="s-present">0</div></div>
       <div class="stat"><div class="stat-label">On break</div><div class="stat-val" id="s-break">0</div></div>
