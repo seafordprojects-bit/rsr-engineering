@@ -80,6 +80,10 @@ const mock = {
   telegram: [],        // captured Telegram sends: {method, chat_id, text, hasButtons}
   tgConfigured: false, // when true, /settings returns a live tg_token + tg_awol_group
   awolGroupId: '',     // the mocked AWOL group chat id
+  tgBackupGroupId: '', // the mocked tg_backup_group chat id (v2026-09-03a offline-photo notify)
+  suspensionsFail: false, // when true, GET employee_suspensions 500s (v2026-09-03c backoff coverage)
+  onlineProbeFail: false, // when true, isReallyOnline()'s HEAD probe aborts (v2026-09-04)
+  onlineProbeCalls: 0,    // count of probe requests actually made (proves the cache is working)
   tgMsgSeq: 1000,      // incrementing message_id source
   rpcSuspendFail: false, // when true, /rpc/awol_set_suspended 500s (simulates offline for FIX 1 coverage)
   // ── identify_employee_by_pin (v2026-08-26b) ──────────────────────────────────────────────────
@@ -201,6 +205,15 @@ async function newKioskContext(browser, base, initMs) {
     if (host === FORBIDDEN_HOST) {
       const p = new URL(url).pathname;
       const method = req.method();
+      // isReallyOnline()'s probe (v2026-09-04): a bare HEAD to the REST root. MUST be mocked before
+      // anything else here - every scenario that identifies a PIN while online now fires this first,
+      // and an unmocked/escaped request would abort and make isReallyOnline() report false for every
+      // existing online scenario in the suite, not just the ones deliberately testing this.
+      if (method === 'HEAD' && p.endsWith('/rest/v1/')) {
+        mock.onlineProbeCalls = (mock.onlineProbeCalls || 0) + 1;
+        if (mock.onlineProbeFail) return route.abort('failed');
+        return route.fulfill({ status: 200, contentType: 'application/json', body: '' });
+      }
       if (p.endsWith('/rest/v1/employees')) return json(200, ROSTER);
       if (p.endsWith('/rest/v1/rpc/sync_offline_punch')) {
         let body = null; try { body = JSON.parse(req.postData() || 'null'); } catch {}
@@ -266,6 +279,9 @@ async function newKioskContext(browser, base, initMs) {
       // AWOL: shared suspension table (read + msg-id patch)
       if (p.endsWith('/rest/v1/employee_suspensions')) {
         if (method === 'GET') {
+          // v2026-09-03c backoff coverage: force every GET to fail, so loadSuspensionsFromCloud's
+          // own return value drives suspPollCycle's fail streak deterministically.
+          if (mock.suspensionsFail) return json(500, { code: '500', message: 'injected failure (mock.suspensionsFail)' });
           const active = Object.values(mock.suspensions).filter(r => r.active);
           return json(200, active);
         }
@@ -422,6 +438,7 @@ async function newKioskContext(browser, base, initMs) {
         return json(200, [
           { key: 'tg_token', value: 'TESTTOKEN0000000000000000000000000000' },
           { key: 'tg_awol_group', value: mock.awolGroupId || '' },
+          { key: 'tg_backup_group', value: mock.tgBackupGroupId || '' },
           { key: 'mgr_ids', value: '111,222' },
         ]);
       }
@@ -446,6 +463,14 @@ async function newKioskContext(browser, base, initMs) {
         const cbs = mock.tgCallbacks || [];
         mock.tgCallbacks = [];
         return json(200, { ok: true, result: cbs.map((c, i) => ({ update_id: i + 1, callback_query: c })) });
+      }
+      if (p.endsWith('/sendPhoto')) {
+        // multipart/form-data, not JSON — pull the fields the offline-photo tests need out of the
+        // raw body rather than a full multipart parse.
+        const raw = req.postData() || '';
+        const field = (name) => { const m2 = raw.match(new RegExp('name="' + name + '"\\r?\\n\\r?\\n([\\s\\S]*?)\\r?\\n--')); return m2 ? m2[1] : ''; };
+        mock.telegram.push({ method: 'sendPhoto', chat_id: field('chat_id'), text: field('caption'), hasButtons: false, hasPhoto: raw.includes('name="photo"') });
+        return json(200, { ok: true, result: { message_id: ++mock.tgMsgSeq } });
       }
       if (p.endsWith('/answerCallbackQuery')) {
         // Captured the same way as sendMessage/editMessageText — this is the only evidence that
@@ -538,7 +563,22 @@ const retryWithSkipList = (page) => page.evaluate(async () => {
   const s = {}; (data || []).forEach(r => { s[normCode(r.code)] = { skip: r.skip === true, reason: r.reason || null }; });
   await retryAwolUnsynced(s);
 });
-const doPunch = (page, type) => page.evaluate(async (t) => { await punch(t); }, type);
+const doPunch = (page, type) => page.evaluate(async (t) => {
+  await punch(t);
+  // (v2026-09-03a) OFFLINE CONFIRM STEP: an online punch finishes here. An offline punch instead
+  // stops at a Confirm/Retype screen; doPunch auto-confirms so every existing online-flow scenario
+  // is unaffected, and only the confirm-step scenarios in section J need to drive it explicitly.
+  const m = document.getElementById('offline-confirm-modal');
+  if (m && m.classList.contains('show')) await offlineConfirmProceed();
+}, type);
+// Raw offline punch attempt WITHOUT auto-confirm, for scenarios testing the confirm screen itself.
+const doPunchNoConfirm = (page, type) => page.evaluate(async (t) => { await punch(t); }, type);
+const offlineConfirmState = (page) => page.evaluate(() => ({
+  show: document.getElementById('offline-confirm-modal').classList.contains('show'),
+  text: (document.getElementById('offline-confirm-text') || {}).textContent || '',
+}));
+const confirmOffline = (page) => page.evaluate(() => offlineConfirmProceed());
+const retypeOffline = (page) => page.evaluate(() => offlineConfirmRetype());
 const recAt = (page, code, dateKey) => page.evaluate(([c, k]) => {
   const r = records[c + '_' + k];
   return r ? { punches: r.punches, nightShift: !!r.nightShift, isLate: !!r.isLate, lateTimeOut: !!r.lateTimeOut,
@@ -613,6 +653,10 @@ async function scenario(name, initMs, fn) {
   mock.tgCallbacks = [];
   mock.tgConfigured = false;
   mock.awolGroupId = '';
+  mock.tgBackupGroupId = '';
+  mock.suspensionsFail = false;
+  mock.onlineProbeFail = false;
+  mock.onlineProbeCalls = 0;
   mock.rpcSuspendFail = false;
   mock.identifyFail = false; mock.identifyThrottled = false; mock.identifyCollide = null; mock.identifyCalls = [];
   mock.syncOfflineCalls = []; mock.syncOfflineMode = 'ok'; mock.syncOfflineReason = 'no_match';
@@ -2549,6 +2593,536 @@ await scenario('I12 - a night punch just before midnight survives into the small
   const after = await page.evaluate(() => offqCount());
   report('I12 - punch survives midnight; the shift day has not turned over yet',
     before === 1 && after === 1, `beforeMidnight=${before} afterMidnight=${after}`);
+});
+
+// ==============================================================================
+//  J - OFFLINE PUNCH V2: dedupe, confirm step, photo (v2026-09-03a)
+// ==============================================================================
+// Three additions on top of section I's queue: (1) a same-type re-tap today is refused instead of
+// queued twice, (2) nothing queues until the worker sees a masked-PIN Confirm/Retype screen, and
+// (3) a photo captured at tap time travels with the entry - by reference (IndexedDB), never inline
+// in localStorage - and is either handed to the server on sync (for a reject to review) or sent
+// straight to Telegram by the tablet itself (for an accept, mirroring the ONLINE punch path exactly).
+
+const OFFLINE_PHOTO_FIXTURE = 'data:image/jpeg;base64,ZmFrZS1qcGVnLWJ5dGVz';
+// The real camera is unreachable in this headless suite (getUserMedia is stubbed to reject for every
+// scenario - see the init script above). Rather than fake a live video stream, this stubs the ONE
+// function that turns a frame into a data URL, the same boundary-level substitution the harness
+// already uses for getUserMedia itself - everything downstream (IndexedDB storage, the RPC payload,
+// the Telegram send, cleanup) runs as the real shipped code.
+const stubOfflineCamera = (page, dataUrl) => page.evaluate((d) => {
+  window.capturePhotoOffline = () => Promise.resolve(d);
+}, dataUrl);
+// Poll instead of a fixed sleep: J11 pushes 200 sequential RPC round-trips through the mock, and a
+// single fixed wait would either stall every other scenario or flake under load.
+async function waitForQueueEmpty(page, maxMs = 15000) {
+  const step = 400;
+  for (let waited = 0; waited < maxMs; waited += step) {
+    if ((await offq(page) || []).length === 0) return true;
+    await page.waitForTimeout(step);
+  }
+  return (await offq(page) || []).length === 0;
+}
+// A REAL DOM .click(), not a direct punch() call like doPunch() — a disabled <button> never
+// dispatches a click event at all (browser spec, not app logic), which is exactly the symptom the
+// offlineClearTimer race produces. doPunch()/punch(t) would call the handler regardless of the
+// disabled attribute and could never reproduce or verify this bug.
+const clickPunchBtn = (page, type) => page.evaluate((t) => {
+  const b = document.getElementById(BIDS[t]);
+  if (b) b.click();
+}, type);
+const btnEnabled = (page, type) => page.evaluate((t) => {
+  const b = document.getElementById(BIDS[t]);
+  return !!b && !b.disabled;
+}, type);
+
+await scenario('J1 - same PIN + same punch type today is refused, not re-queued', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  const afterFirst = (await offq(page) || []).length;
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunchNoConfirm(page, 'timein');   // dedupe fires INSIDE punch(), before any confirm screen
+  const modal = await offlineConfirmState(page);
+  const afterSecond = (await offq(page) || []).length;
+  report('J1 - second same-type tap never reaches the confirm screen and the queue is unchanged',
+    afterFirst === 1 && afterSecond === 1 && !modal.show,
+    `afterFirst=${afterFirst} afterSecond=${afterSecond} confirmShown=${modal.show}`);
+});
+
+await scenario('J2 - a DIFFERENT punch type for the same PIN is not blocked', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'lunch_out');
+  const types = (await offq(page) || []).map(j => j.punch_type);
+  report('J2 - the dedupe is scoped to the same punch_type only',
+    types.length === 2 && types.includes('timein') && types.includes('lunch_out'),
+    `types=${JSON.stringify(types)}`);
+});
+
+await scenario('J3 - the confirm screen shows a masked PIN + the punch type, and queues nothing until Confirm', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));   // pin '100200' → masked '••••00'
+  await doPunchNoConfirm(page, 'timein');
+  const state = await offlineConfirmState(page);
+  const beforeConfirm = (await offq(page) || []).length;
+  await confirmOffline(page);
+  const afterConfirm = (await offq(page) || []).length;
+  report('J3 - masked PIN + punch type shown; the queue grows only after Confirm',
+    state.show && state.text.includes('••••00') && state.text.includes('Time In')
+      && beforeConfirm === 0 && afterConfirm === 1,
+    `text="${state.text}" beforeConfirm=${beforeConfirm} afterConfirm=${afterConfirm}`);
+});
+
+await scenario('J4 - Retype discards the pending punch and resets the keypad', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunchNoConfirm(page, 'timein');
+  await retypeOffline(page);
+  const state = await offlineConfirmState(page);
+  const q = (await offq(page) || []).length;
+  const pinCleared = await page.evaluate(() => offlinePin === null && pin === '');
+  report('J4 - Retype queues nothing, hides the screen, and clears the typed PIN',
+    !state.show && q === 0 && pinCleared,
+    `modalShown=${state.show} queued=${q} pinCleared=${pinCleared}`);
+});
+
+await scenario('J5 - a double-tap on Confirm queues exactly once', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunchNoConfirm(page, 'timein');
+  await Promise.all([confirmOffline(page), confirmOffline(page)]);
+  const q = (await offq(page) || []).length;
+  report('J5 - pendingOfflinePunch is cleared before the queue write, so a repeat Confirm is a no-op',
+    q === 1, `queued=${q}`);
+});
+
+await scenario('J6 - a captured offline photo is stored by reference, never inline in localStorage', manila(2026,7,15,8,0), async (page) => {
+  await stubOfflineCamera(page, OFFLINE_PHOTO_FIXTURE);
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  const e = (await offq(page) || [])[0] || {};
+  const rawStore = await page.evaluate(() => localStorage.getItem('rsr_offline_punches') || '');
+  report('J6 - the queue entry carries only a photo_id; the photo bytes never touch localStorage',
+    typeof e.photo_id === 'string' && e.photo_id.length > 0 && !rawStore.includes('data:image'),
+    `photo_id=${e.photo_id} rawContainsImage=${rawStore.includes('data:image')}`);
+});
+
+await scenario('J7 - a stored offline photo is read back and sent as p_photo on sync', manila(2026,7,15,8,0), async (page) => {
+  await stubOfflineCamera(page, OFFLINE_PHOTO_FIXTURE);
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await waitForQueueEmpty(page);
+  const call = mock.syncOfflineCalls[0] || {};
+  report('J7 - p_photo carries the exact captured data URL',
+    call.p_photo === OFFLINE_PHOTO_FIXTURE, `p_photo=${String(call.p_photo).slice(0,40)}`);
+});
+
+await scenario('J7b - no camera available → p_photo is explicitly null, never omitted', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);   // capturePhotoOffline not stubbed: camReady stays false, same as every other scenario
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await waitForQueueEmpty(page);
+  const call = mock.syncOfflineCalls[0] || {};
+  report('J7b - no photo captured → p_photo is sent as null',
+    call.p_photo === null, `p_photo=${JSON.stringify(call.p_photo)}`);
+});
+
+await scenario('J8 - a synced offline punch with a photo notifies Telegram with the ORIGINAL tap time', manila(2026,7,15,7,48), async (page) => {
+  mock.tgConfigured = true; mock.tgBackupGroupId = '-1005550001112';
+  await page.evaluate(() => loadTgFromCloud());
+  await stubOfflineCamera(page, OFFLINE_PHOTO_FIXTURE);
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');   // tapped 07:48 AM, offline
+  await setNow(page, manila(2026,7,15,15,0));   // reconnects at 3:00 PM - a very different time
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await waitForQueueEmpty(page);
+  // sendOfflineSyncedPhotoNotif is deliberately fire-and-forget (never awaited by the sync loop, so
+  // a slow/failed Telegram send cannot stall the next punch) - the queue can empty before it lands.
+  for (let i = 0; i < 15 && !mock.telegram.some(t => t.method === 'sendPhoto'); i++) await page.waitForTimeout(200);
+  const sent = mock.telegram.find(t => t.method === 'sendPhoto');
+  // The whole point: the office must never mistake a stale morning photo for an afternoon one just
+  // because it landed in Telegram at 3 PM.
+  report('J8 - caption carries the original 07:48 tap time and an explicit offline/synced marker',
+    !!sent && sent.hasPhoto && sent.chat_id === '-1005550001112'
+      && /07:48/.test(sent.text) && /offline/i.test(sent.text) && /synced/i.test(sent.text),
+    `sent=${JSON.stringify(sent)}`);
+});
+
+await scenario('J9 - a REJECTED offline punch hands its photo to the server, not to Telegram', manila(2026,7,15,8,0), async (page) => {
+  mock.tgConfigured = true; mock.tgBackupGroupId = '-1005550001112';
+  await page.evaluate(() => loadTgFromCloud());
+  await stubOfflineCamera(page, OFFLINE_PHOTO_FIXTURE);
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  mock.syncOfflineMode = 'reject'; mock.syncOfflineReason = 'out_of_sequence';
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await waitForQueueEmpty(page);
+  const call = mock.syncOfflineCalls[0] || {};
+  const sentPhoto = mock.telegram.some(t => t.method === 'sendPhoto');
+  report('J9 - a rejected sync still carries p_photo (for the admin card); the tablet does not also notify Telegram',
+    call.p_photo === OFFLINE_PHOTO_FIXTURE && !sentPhoto,
+    `p_photo=${String(call.p_photo).slice(0,20)} telegramSentPhoto=${sentPhoto}`);
+});
+
+await scenario('J10 - the stored photo is deleted once the server has accounted for the punch', manila(2026,7,15,8,0), async (page) => {
+  await stubOfflineCamera(page, OFFLINE_PHOTO_FIXTURE);
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  const photoId = (await offq(page))[0].photo_id;
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await waitForQueueEmpty(page);
+  const stillThere = await page.evaluate(async (id) => !!(await offlinePhotoGet(id)), photoId);
+  report('J10 - the IndexedDB photo row is removed once the queue entry is gone',
+    !stillThere, `photoStillInIndexedDB=${stillThere}`);
+});
+
+await scenario('J11 - STRESS: 200 photo-bearing offline entries fit and all sync', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  const setup = await page.evaluate(async (fixture) => {
+    const q = [];
+    for (let i = 0; i < 200; i++) {
+      const id = offlinePhotoNewId();
+      await offlinePhotoPut(id, fixture);
+      const ts = Date.now() - ((200 - i) * 1000);
+      q.push({ pin:'100200', punch_type:'timein', client_ts:new Date(ts).toISOString(),
+                device_id:'stress-dev', site:'Carmen', queued_at: ts, photo_id: id });
+    }
+    localStorage.setItem('rsr_offline_punches', JSON.stringify(q));
+    offlineQueue = q;
+    return { queued: offlineQueue.length };
+  }, OFFLINE_PHOTO_FIXTURE);
+  mock.syncOfflineMode = 'ok';
+  await goOnline(page);
+  await page.evaluate(() => flushOfflinePunches());
+  await waitForQueueEmpty(page, 30000);
+  const left = (await offq(page) || []).length;
+  const allHadPhoto = mock.syncOfflineCalls.length === 200
+    && mock.syncOfflineCalls.every(c => c.p_photo === OFFLINE_PHOTO_FIXTURE);
+  const orphanCount = await page.evaluate(() => new Promise(async (res) => {
+    try{
+      const db = await offlinePhotoDB();
+      const tx = db.transaction('photos','readonly');
+      const req = tx.objectStore('photos').count();
+      req.onsuccess = () => res(req.result);
+      req.onerror = () => res(-1);
+    }catch(e){ res(-1); }
+  }));
+  report('J11 - all 200 photo-bearing entries synced, each carried its photo, and none orphaned in IndexedDB',
+    setup.queued === 200 && left === 0 && allHadPhoto && orphanCount === 0,
+    `queued=${setup.queued} remaining=${left} calls=${mock.syncOfflineCalls.length} allHadPhoto=${allHadPhoto} orphans=${orphanCount}`);
+});
+
+// ── offlineClearTimer race (found 2026-09-03, fixed same day) ──────────────────────────────────
+// queueOfflinePunch used to end with a bare setTimeout(()=>kpClr(),4000) with no handle - it fired on
+// its own fixed clock no matter what happened afterward. If the worker was still mid-session past 4s
+// (retyping a PIN, or sitting on a confirm screen for a SECOND punch), it nulled offlinePin and
+// disabled every button out from under them via updBtns(null). The next tap then hit a DISABLED
+// button, which never dispatches a click at all - no modal, no error, nothing. These two scenarios
+// use a REAL DOM click (clickPunchBtn), not doPunch(), because doPunch() calls punch(t) directly and
+// would run the handler regardless of whether the button was actually disabled - it cannot see this
+// bug at all.
+
+await scenario('J12 - re-entering the PIN cancels the old timer, so a later distinct punch still reaches the confirm screen and queues', manila(2026,7,15,8,0), async (page) => {
+  // The DANGEROUS ordering from the original report: the stale timer (scheduled at T=0 by the first
+  // Confirm) must fire AFTER a retype has already reset offlinePin/buttons, not before. Retyping
+  // immediately (well inside the old timer's 4000ms window) and THEN waiting past that deadline is
+  // what actually exercises the fix — a retype that only happens after the wait would never hit the
+  // bug either way, since kp()'s offline branch always rebuilds state from scratch on its own.
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await clickPunchBtn(page, 'timein');
+  await confirmOffline(page);                  // queues 'timein' at T≈0; schedules the auto-clear for T+4000ms
+  const afterFirst = (await offq(page) || []).length;
+  await enterPin(page, pinOf('RSR0100'));       // retype EARLY — exactly as the original repro did
+  // Now wait until well past where the ORIGINAL (T=0-scheduled) timer's deadline falls. Fixed code
+  // already cancelled that timer at the retype above and it never fires. The old code had no such
+  // cancellation, and this is exactly when it used to fire — AFTER the retype had already reset
+  // offlinePin and re-enabled the buttons.
+  await page.waitForTimeout(4300);
+  const enabledAfterWait = await btnEnabled(page, 'lunch_out');
+  await clickPunchBtn(page, 'lunch_out');       // a DIFFERENT punch type — real DOM click
+  const confirmShown = (await offlineConfirmState(page)).show;
+  if (confirmShown) await confirmOffline(page);
+  const q = await offq(page);
+  const types = (q || []).map(j => j.punch_type);
+  report('J12 - re-entering the PIN before the old deadline keeps the buttons usable well after it passes',
+    afterFirst === 1 && enabledAfterWait && confirmShown && types.length === 2
+      && types.includes('timein') && types.includes('lunch_out'),
+    `afterFirst=${afterFirst} enabledAfterWait=${enabledAfterWait} confirmShown=${confirmShown} types=${JSON.stringify(types)}`);
+});
+
+await scenario('J13 - after a confirm screen outlives the old timer, the keypad stays usable for a THIRD punch with no retype', manila(2026,7,15,8,0), async (page) => {
+  // NOTE: confirming the SECOND punch's own screen succeeds even under the old bug — Confirm reads
+  // pendingOfflinePunch (captured when the screen opened), not the live offlinePin the stale timer
+  // nulls, so that alone does not distinguish old from new. The real damage under the old bug is
+  // what's left BEHIND: kpClr()'s updBtns(null) disabled every button while the screen was open, and
+  // nothing re-enables them afterward — so the tablet is stuck needing a PIN retype for a third punch
+  // that should need none. THAT is what this asserts.
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await clickPunchBtn(page, 'timein');
+  await confirmOffline(page);                  // queues 'timein'; schedules the auto-clear
+  await clickPunchBtn(page, 'lunch_out');       // opens the confirm screen for a SECOND, distinct punch
+  const shownBefore = (await offlineConfirmState(page)).show;
+  await page.waitForTimeout(4300);              // outlive the old timer's window WHILE this screen is up
+  await confirmOffline(page);                   // queues 'lunch_out'
+  const enabledForThird = await btnEnabled(page, 'pm_out');
+  await clickPunchBtn(page, 'pm_out');           // a THIRD distinct punch, no PIN retype
+  const confirmShownThird = (await offlineConfirmState(page)).show;
+  if (confirmShownThird) await confirmOffline(page);
+  const q = await offq(page);
+  const types = (q || []).map(j => j.punch_type);
+  report('J13 - keypad stays usable for a third punch after a confirm screen outlives the old timer',
+    shownBefore && enabledForThird && confirmShownThird && types.length === 3
+      && types.includes('timein') && types.includes('lunch_out') && types.includes('pm_out'),
+    `shownBefore=${shownBefore} enabledForThird=${enabledForThird} confirmShownThird=${confirmShownThird} types=${JSON.stringify(types)}`);
+});
+
+// ==============================================================================
+//  K - employee_suspensions poll: navigator.onLine gate + failure backoff (v2026-09-03c)
+// ==============================================================================
+// The bug: setInterval(loadSuspensionsFromCloud, 45000) had no online gate and no backoff - a
+// genuinely offline tablet logged one identical failed request every 45s, forever (211 in one
+// 2.6-hour session). suspPollCycle() replaces it: skip entirely while offline, double the wait after
+// each real failed ATTEMPT (capped), reset to the base cadence on a real success. Driven directly via
+// page.evaluate(() => suspPollCycle()) rather than real timers - the growing delays would otherwise
+// take minutes of actual wall-clock time to observe.
+
+await scenario('K1 - while offline, the poll skips the attempt entirely and does not touch the fail streak', manila(2026,7,15,8,0), async (page) => {
+  mock.suspensionsFail = true;   // if this fires at all, the test would see it - it must not fire
+  await goOffline(page);
+  const before = await page.evaluate(() => suspPollFails);
+  const delay = await page.evaluate(() => suspPollCycle());
+  const after = await page.evaluate(() => suspPollFails);
+  report('K1 - offline poll makes no request and leaves the fail streak untouched',
+    before === 0 && after === 0 && delay === 45000,
+    `before=${before} after=${after} delay=${delay} (base=45000)`);
+});
+
+await scenario('K2 - repeated failures make the retry spacing grow and cap, never hammering at a fixed 45s', manila(2026,7,15,8,0), async (page) => {
+  mock.suspensionsFail = true;
+  const delays = [];
+  for (let i = 0; i < 6; i++) delays.push(await page.evaluate(() => suspPollCycle()));
+  // 45000 doubling from the FIRST real failure, capped at 8x base (SUSP_POLL_MAX_MS = 45000*8):
+  // 90000, 180000, 360000(cap), 360000, 360000, 360000...
+  const expected = [90000, 180000, 360000, 360000, 360000, 360000];
+  const grows = delays.every((d, i) => d === expected[i]);
+  const neverHammers = delays.slice(1).every(d => d > 45000);   // never falls back to the bare 45s cadence
+  report('K2 - delay sequence doubles from the base and caps at 8x (6 min), never returning to bare 45s while failing',
+    grows && neverHammers,
+    `delays=${JSON.stringify(delays)} expected=${JSON.stringify(expected)}`);
+});
+
+await scenario('K3 - a real success resets the streak back to the base 45s cadence', manila(2026,7,15,8,0), async (page) => {
+  mock.suspensionsFail = true;
+  await page.evaluate(() => suspPollCycle());              // fail #1 -> 90000
+  await page.evaluate(() => suspPollCycle());              // fail #2 -> 180000
+  const failsBeforeSuccess = await page.evaluate(() => suspPollFails);
+  mock.suspensionsFail = false;                             // connection recovers
+  const delayAfterSuccess = await page.evaluate(() => suspPollCycle());
+  const failsAfterSuccess = await page.evaluate(() => suspPollFails);
+  report('K3 - a successful poll clears the fail streak and the next delay drops back to base',
+    failsBeforeSuccess === 2 && failsAfterSuccess === 0 && delayAfterSuccess === 45000,
+    `failsBeforeSuccess=${failsBeforeSuccess} failsAfterSuccess=${failsAfterSuccess} delayAfterSuccess=${delayAfterSuccess}`);
+});
+
+// ==============================================================================
+//  L - isReallyOnline() probe, offqPollCycle backoff, updateSyncBadge cache-read (v2026-09-04)
+// ==============================================================================
+// The finding this fixes, confirmed on REAL hardware (not a DevTools artifact): navigator.onLine
+// reads true with Airplane Mode fully ON, while every actual request fails with a genuine
+// net::ERR_INTERNET_DISCONNECTED. L5 reproduces that exact shape - navigator.onLine is never
+// toggled false in that scenario; only the network itself (via the mocked probe) is made to fail.
+const seedOneOfflinePunch = (page) => page.evaluate(() => {
+  const q = [{ pin:'100200', punch_type:'timein', client_ts:new Date().toISOString(), device_id:'d', site:'Carmen', queued_at: Date.now() }];
+  localStorage.setItem('rsr_offline_punches', JSON.stringify(q));
+  offlineQueue = q;
+});
+
+await scenario('L1 - isReallyOnline(): navigator.onLine=false is trusted outright, no probe request', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  const result = await page.evaluate(() => isReallyOnline());
+  report('L1 - a definite offline reading needs no confirmation',
+    result === false && mock.onlineProbeCalls === 0,
+    `result=${result} probeCalls=${mock.onlineProbeCalls}`);
+});
+
+await scenario('L2 - isReallyOnline(): online and the probe succeeds returns true', manila(2026,7,15,8,0), async (page) => {
+  const result = await page.evaluate(() => isReallyOnline());
+  report('L2 - a genuinely reachable server confirms online',
+    result === true && mock.onlineProbeCalls === 1,
+    `result=${result} probeCalls=${mock.onlineProbeCalls}`);
+});
+
+await scenario('L3 - isReallyOnline(): online but the probe genuinely fails returns false', manila(2026,7,15,8,0), async (page) => {
+  mock.onlineProbeFail = true;
+  const result = await page.evaluate(() => isReallyOnline());
+  report('L3 - navigator.onLine=true does not override a real network failure',
+    result === false && mock.onlineProbeCalls === 1,
+    `result=${result} probeCalls=${mock.onlineProbeCalls}`);
+});
+
+await scenario('L4 - isReallyOnline(): the result is cached briefly, not re-probed on every call', manila(2026,7,15,8,0), async (page) => {
+  await page.evaluate(() => isReallyOnline());
+  await page.evaluate(() => isReallyOnline());
+  await page.evaluate(() => isReallyOnline());
+  report('L4 - three calls inside the TTL make exactly one real request',
+    mock.onlineProbeCalls === 1, `probeCalls=${mock.onlineProbeCalls}`);
+});
+
+await scenario('L5 - navigator.onLine=true but the network is genuinely down: identifyByPin now queues instead of refusing', manila(2026,7,15,8,0), async (page) => {
+  // THE reproduction. goOffline() is deliberately NOT called - navigator.onLine stays true for the
+  // whole scenario, exactly as it wrongly did on the real tablet. Only the probe (standing in for
+  // the actual network) is made to fail.
+  mock.onlineProbeFail = true;
+  await enterPin(page, pinOf('RSR0100'));
+  await doPunch(page, 'timein');
+  const q = await offq(page);
+  const onLineStillTrue = await page.evaluate(() => navigator.onLine);
+  report('L5 - a real network failure under a falsely-true navigator.onLine queues the punch and never attempts identify_employee_by_pin',
+    onLineStillTrue === true && (q || []).length === 1 && mock.identifyCalls.length === 0,
+    `onLineStillTrue=${onLineStillTrue} queued=${(q || []).length} identifyRpcAttempted=${mock.identifyCalls.length > 0}`);
+});
+
+await scenario('L6 - offqPollCycle(): offline skips the attempt and leaves the fail streak untouched', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  const before = await page.evaluate(() => offqPollFails);
+  const delay = await page.evaluate(() => offqPollCycle());
+  const after = await page.evaluate(() => offqPollFails);
+  report('L6 - offline poll makes no sync attempt and leaves the fail streak untouched',
+    before === 0 && after === 0 && delay === 30000,
+    `before=${before} after=${after} delay=${delay} (base=30000)`);
+});
+
+await scenario('L7 - offqPollCycle(): repeated sync failures make the retry spacing grow and cap, and never drop the queued punch', manila(2026,7,15,8,0), async (page) => {
+  await seedOneOfflinePunch(page);
+  mock.syncOfflineMode = 'net';
+  const delays = [];
+  for (let i = 0; i < 6; i++) delays.push(await page.evaluate(() => offqPollCycle()));
+  // 30000 doubling from the FIRST real failure, capped at 8x base (OFFQ_POLL_MAX_MS = 30000*8):
+  const expected = [60000, 120000, 240000, 240000, 240000, 240000];
+  const grows = delays.every((d, i) => d === expected[i]);
+  const queueLen = (await offq(page) || []).length;
+  report('L7 - delay sequence doubles from the base and caps at 8x; the queued punch is never dropped by the backoff',
+    grows && queueLen === 1,
+    `delays=${JSON.stringify(delays)} expected=${JSON.stringify(expected)} queueLen=${queueLen}`);
+});
+
+await scenario('L8 - offqPollCycle(): a real successful sync resets the streak back to the base 30s cadence', manila(2026,7,15,8,0), async (page) => {
+  await seedOneOfflinePunch(page);
+  mock.syncOfflineMode = 'net';
+  await page.evaluate(() => offqPollCycle());               // fail #1 -> 60000
+  const failsBeforeSuccess = await page.evaluate(() => offqPollFails);
+  mock.syncOfflineMode = 'ok';                                // connection recovers
+  const delayAfterSuccess = await page.evaluate(() => offqPollCycle());
+  const failsAfterSuccess = await page.evaluate(() => offqPollFails);
+  report('L8 - a successful sync pass clears the fail streak and the next delay drops back to base',
+    failsBeforeSuccess === 1 && failsAfterSuccess === 0 && delayAfterSuccess === 30000,
+    `failsBeforeSuccess=${failsBeforeSuccess} failsAfterSuccess=${failsAfterSuccess} delayAfterSuccess=${delayAfterSuccess}`);
+});
+
+await scenario('L9 - updateSyncBadge(): a fresh cached "not really online" result overrides the Syncing wording', manila(2026,7,15,8,0), async (page) => {
+  await seedOneOfflinePunch(page);
+  mock.onlineProbeFail = true;
+  await page.evaluate(() => isReallyOnline());   // populate the cache with a real (failing) probe result
+  const probeCallsBefore = mock.onlineProbeCalls;
+  const badgeText = await page.evaluate(() => { updateSyncBadge(); return document.getElementById('sync-badge').textContent; });
+  const probeCallsAfter = mock.onlineProbeCalls;
+  report('L9 - the badge reads the fresh cache (Offline wording) without making a new probe request of its own',
+    /Offline/.test(badgeText) && !/Syncing/.test(badgeText) && probeCallsAfter === probeCallsBefore,
+    `badgeText="${badgeText}" probeCallsBefore=${probeCallsBefore} probeCallsAfter=${probeCallsAfter}`);
+});
+
+await scenario('L10 - updateSyncBadge(): a stale/empty cache falls back to raw navigator.onLine, never blocking on a probe', manila(2026,7,15,8,0), async (page) => {
+  await seedOneOfflinePunch(page);
+  // No isReallyOnline() call at all - the cache is empty on a fresh page. navigator.onLine defaults
+  // true; this must fall back to it rather than triggering a fresh probe or guessing.
+  const badgeText = await page.evaluate(() => { updateSyncBadge(); return document.getElementById('sync-badge').textContent; });
+  report('L10 - an empty cache falls back to raw navigator.onLine (Syncing wording) with zero probe calls',
+    /Syncing/.test(badgeText) && mock.onlineProbeCalls === 0,
+    `badgeText="${badgeText}" probeCalls=${mock.onlineProbeCalls}`);
+});
+
+// ==============================================================================
+//  M - REAL-CLICK verification of the dedupe path (owner report, 2026-09-04)
+// ==============================================================================
+// J1 covers the same scenario but drives BOTH attempts through doPunch()/doPunchNoConfirm(), which
+// call punch(t) directly - never a real DOM .click(). That is the exact blind spot that hid the
+// original offlineClearTimer bug: a disabled <button> never dispatches a click event at all, so a
+// direct function call can't tell "the tap silently did nothing" from "the tap worked". J12/J13 were
+// rewritten to use real clicks for that reason; J1 never was. This section closes that gap for the
+// dedupe path specifically, using the owner's exact repro: re-enter the SAME PIN with NO gap, then
+// tap the SAME button again as a genuine click.
+const clickOfflineConfirmBtn = (page) => page.evaluate(() => {
+  const btns = document.querySelectorAll('#offline-confirm-modal button');
+  if (btns[1]) btns[1].click();   // second button = "Confirm" (first is "I-type Pag-usab" / Retype)
+});
+const msgState = (page) => page.evaluate(() => ({
+  shown: document.getElementById('punch-msg').className.includes('show'),
+  title: document.getElementById('pm-title').textContent,
+  sub: document.getElementById('pm-sub').textContent,
+}));
+
+await scenario('M1 - REAL CLICK: a second tap of the same button after an immediate PIN re-entry reaches the dedupe check', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await clickPunchBtn(page, 'lunch_in');
+  await clickOfflineConfirmBtn(page);          // real click on "Confirm"
+  const afterFirst = (await offq(page) || []).length;
+
+  // Re-enter the SAME PIN with NO gap, then tap the SAME button again - the owner's exact repro.
+  await enterPin(page, pinOf('RSR0100'));
+  const enabledBeforeSecondTap = await btnEnabled(page, 'lunch_in');
+  await clickPunchBtn(page, 'lunch_in');       // REAL DOM click - punch() is never called directly
+  const confirmShown = (await offlineConfirmState(page)).show;
+  const msg = await msgState(page);
+  const q = await offq(page);
+
+  report('M1 - the second real tap shows the duplicate-block message, not a silent no-op',
+    afterFirst === 1
+      && enabledBeforeSecondTap
+      && !confirmShown
+      && msg.shown && /Lunch In already saved/.test(msg.title)
+      && (q || []).length === 1,
+    `afterFirst=${afterFirst} enabledBeforeSecondTap=${enabledBeforeSecondTap} confirmShown=${confirmShown} ` +
+    `msgShown=${msg.shown} msgTitle="${msg.title}" queueLen=${(q || []).length}`);
+});
+
+await scenario('M2 - REAL CLICK: every OTHER punch button stays usable after the blocked duplicate tap', manila(2026,7,15,8,0), async (page) => {
+  // Directly answers the owner's report that ALL SIX buttons appeared stuck, not just the duplicate
+  // one - if the bug were real, a DIFFERENT button should also fail to respond right after it.
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await clickPunchBtn(page, 'lunch_in');
+  await clickOfflineConfirmBtn(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await clickPunchBtn(page, 'lunch_in');       // the blocked duplicate tap
+  // Immediately after the block, tap a DIFFERENT button - no PIN retype.
+  const enabledForOther = await btnEnabled(page, 'pm_out');
+  await clickPunchBtn(page, 'pm_out');
+  const confirmShownForOther = (await offlineConfirmState(page)).show;
+  if (confirmShownForOther) await confirmOffline(page);
+  const q = await offq(page);
+  const types = (q || []).map(j => j.punch_type);
+  report('M2 - a distinct button tapped right after the blocked duplicate still reaches the confirm screen and queues',
+    enabledForOther && confirmShownForOther && types.length === 2
+      && types.includes('lunch_in') && types.includes('pm_out'),
+    `enabledForOther=${enabledForOther} confirmShownForOther=${confirmShownForOther} types=${JSON.stringify(types)}`);
 });
 
 // ==============================================================================

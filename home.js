@@ -11,7 +11,7 @@ import { supabase } from './supabase.js';
 // one without opening devtools. Shown on the lock screen, the launcher and the admin header.
 // MUST be bumped in lockstep with the `home.js?v=` query string in admin/index.html, index.html
 // and preflight.html. A stamp that lags the query string is worse than none: it reads as proof.
-const BUILD = 'v2026-08-28a';
+const BUILD = 'v2026-09-03a';
 
 // (site rename) legacy 'A'/'Site A' -> Carmen, 'B'/'Site B' -> Mandaue; real yard names pass through.
 // The LIVE yard list is data (settings key attendance_sites) — this map is a one-time legacy shim.
@@ -1712,7 +1712,7 @@ function App() {
     (async () => {
       try {
         const { data, error } = await supabase.from('kiosk_offline_rejects')
-          .select('att_date, employee_code, employee_name, punch_type, reason, client_ts')
+          .select('att_date, employee_code, employee_name, punch_type, reason, client_ts, photo')
           .eq('reviewed', false).order('client_ts', { ascending: false }).limit(200);
         if (error) { setOffRejects(null); return; }
         setOffRejects(data || []);
@@ -2502,9 +2502,14 @@ function App() {
             </p>
             ${rj.slice(0, 12).map(r => html`
               <div class="row" key=${r.client_ts + r.employee_code}>
-                <div>
-                  <div class="name">${r.employee_name || r.employee_code || 'Unknown worker'}</div>
-                  <div class="unit">${r.att_date || '(unknown day)'} · ${r.punch_type} · ${REASON[r.reason] || r.reason}</div>
+                <div style="display:flex;align-items:center;gap:8px">
+                  ${r.photo
+                    ? html`<img src=${r.photo} alt="" style="width:32px;height:32px;border-radius:50%;object-fit:cover;flex:none" />`
+                    : ''}
+                  <div>
+                    <div class="name">${r.employee_name || r.employee_code || 'Unknown worker'}</div>
+                    <div class="unit">${r.att_date || '(unknown day)'} · ${r.punch_type} · ${REASON[r.reason] || r.reason}</div>
+                  </div>
                 </div>
                 <span class="badge" style="background:var(--hivis);color:#000">fix</span>
               </div>`)}

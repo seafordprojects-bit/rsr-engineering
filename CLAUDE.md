@@ -177,3 +177,53 @@ uncleaned for 5 days until today.
 - Offline UX shows no worker name by design; on-device PIN verification was discussed and
   declined for now because a 6-digit PIN cannot be safely verified without server-side
   throttling.
+- **`navigator.onLine` is proven unreliable under flaky-connectivity conditions** (2026-09-03
+  investigation) — it can read `true` while the tablet genuinely has no route to Supabase.
+  Affects eleven call sites in `kiosk/index.html` (`identifyByPin`, admin verify, passcode
+  change, three `setInterval` connectivity gates, `updateSyncBadge`, `syncFlush`,
+  `flushOfflinePunches`, an error classifier, and one more guard) — every one of them trusts
+  this same single, browser-documented-as-unreliable property, with no cross-check against an
+  actual request's real success or failure. **Needs a probe-based real-connectivity check**
+  (an actual request/response, not the browser property) **before Phase 2 is built** — Phase
+  2's provisional offline PIN lookup would otherwise inherit the same unreliable signal.
+
+## offline-punch-v2 — Phase 1 status, 2026-09-03 (evening session)
+Two bug fixes landed on branch `offline-punch-v2` tonight. **Not merged to main.**
+- `146e104` — the post-queue auto-clear timer (`offlineClearTimer`) disabled every punch
+  button and nulled `offlinePin` mid-session if more than 4s passed after tapping Confirm,
+  regardless of what the worker did next (retyping a PIN, or sitting on a second confirm
+  screen). Fixed with a cancellable timer handle, cancelled by every action that means the
+  worker is still active.
+- (this session) — `employee_suspensions` poll had no `navigator.onLine` gate and no
+  backoff; a genuinely offline tablet logged one identical failed request every 45s,
+  forever (211 in one 2.6-hour session). Fixed with an online-gated, doubling-then-capped
+  retry.
+
+**The Phase 1 localhost walkthrough for offline-punch-v2 is NOT complete.** The
+duplicate-block test result was inconclusive tonight, because the `navigator.onLine`
+unreliability above made it impossible to tell whether a "No connection" result meant the
+dedupe logic actually ran, or the tablet had been falsely detected as offline. The four
+Supabase/admin/Telegram verification steps were not yet run. Do not merge to main until
+the walkthrough actually completes.
+
+## offline-punch-v2 — Phase 1 status, 2026-09-04 (walkthrough continued)
+**Still not merged to main.**
+- Confirmed real Airplane Mode reproduces true offline state and `navigator.onLine`
+  correctly reads `false` on real hardware — closes the open question from the 2026-09-03
+  session (whether the earlier "false online" report was a DevTools artifact; it wasn't, but
+  genuine Airplane Mode behaves correctly).
+- Found and fixed: the duplicate-block message (`#punch-msg`) rendered below all six punch
+  buttons, off-screen without scrolling on a typical device viewport — a worker could be
+  correctly refused by the dedupe check and never see why. Fixed in `1237099` (pure DOM
+  reorder, right after `#emp-preview`; no JS changed).
+- Confirmed via Supabase: an offline punch preserves its real tap time (`client_ts`) through
+  an online/offline interruption mid-session — no data corruption observed.
+
+**Still open, not yet checked this session:**
+- Reject+photo verification in `kiosk_offline_rejects` — whether the `photo` column actually
+  gets written on a real reject.
+- Admin dashboard rejects-card thumbnail display — whether the photo actually renders there.
+- Telegram caption timing — whether the "offline, synced HH:MM" caption carries the correct
+  tap time and sync time on a real device, not just in the mocked test suite.
+
+Do not merge to main until these are checked and the walkthrough is actually complete.
