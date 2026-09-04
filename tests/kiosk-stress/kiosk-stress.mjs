@@ -3059,6 +3059,73 @@ await scenario('L10 - updateSyncBadge(): a stale/empty cache falls back to raw n
 });
 
 // ==============================================================================
+//  M - REAL-CLICK verification of the dedupe path (owner report, 2026-09-04)
+// ==============================================================================
+// J1 covers the same scenario but drives BOTH attempts through doPunch()/doPunchNoConfirm(), which
+// call punch(t) directly - never a real DOM .click(). That is the exact blind spot that hid the
+// original offlineClearTimer bug: a disabled <button> never dispatches a click event at all, so a
+// direct function call can't tell "the tap silently did nothing" from "the tap worked". J12/J13 were
+// rewritten to use real clicks for that reason; J1 never was. This section closes that gap for the
+// dedupe path specifically, using the owner's exact repro: re-enter the SAME PIN with NO gap, then
+// tap the SAME button again as a genuine click.
+const clickOfflineConfirmBtn = (page) => page.evaluate(() => {
+  const btns = document.querySelectorAll('#offline-confirm-modal button');
+  if (btns[1]) btns[1].click();   // second button = "Confirm" (first is "I-type Pag-usab" / Retype)
+});
+const msgState = (page) => page.evaluate(() => ({
+  shown: document.getElementById('punch-msg').className.includes('show'),
+  title: document.getElementById('pm-title').textContent,
+  sub: document.getElementById('pm-sub').textContent,
+}));
+
+await scenario('M1 - REAL CLICK: a second tap of the same button after an immediate PIN re-entry reaches the dedupe check', manila(2026,7,15,8,0), async (page) => {
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await clickPunchBtn(page, 'lunch_in');
+  await clickOfflineConfirmBtn(page);          // real click on "Confirm"
+  const afterFirst = (await offq(page) || []).length;
+
+  // Re-enter the SAME PIN with NO gap, then tap the SAME button again - the owner's exact repro.
+  await enterPin(page, pinOf('RSR0100'));
+  const enabledBeforeSecondTap = await btnEnabled(page, 'lunch_in');
+  await clickPunchBtn(page, 'lunch_in');       // REAL DOM click - punch() is never called directly
+  const confirmShown = (await offlineConfirmState(page)).show;
+  const msg = await msgState(page);
+  const q = await offq(page);
+
+  report('M1 - the second real tap shows the duplicate-block message, not a silent no-op',
+    afterFirst === 1
+      && enabledBeforeSecondTap
+      && !confirmShown
+      && msg.shown && /Lunch In already saved/.test(msg.title)
+      && (q || []).length === 1,
+    `afterFirst=${afterFirst} enabledBeforeSecondTap=${enabledBeforeSecondTap} confirmShown=${confirmShown} ` +
+    `msgShown=${msg.shown} msgTitle="${msg.title}" queueLen=${(q || []).length}`);
+});
+
+await scenario('M2 - REAL CLICK: every OTHER punch button stays usable after the blocked duplicate tap', manila(2026,7,15,8,0), async (page) => {
+  // Directly answers the owner's report that ALL SIX buttons appeared stuck, not just the duplicate
+  // one - if the bug were real, a DIFFERENT button should also fail to respond right after it.
+  await goOffline(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await clickPunchBtn(page, 'lunch_in');
+  await clickOfflineConfirmBtn(page);
+  await enterPin(page, pinOf('RSR0100'));
+  await clickPunchBtn(page, 'lunch_in');       // the blocked duplicate tap
+  // Immediately after the block, tap a DIFFERENT button - no PIN retype.
+  const enabledForOther = await btnEnabled(page, 'pm_out');
+  await clickPunchBtn(page, 'pm_out');
+  const confirmShownForOther = (await offlineConfirmState(page)).show;
+  if (confirmShownForOther) await confirmOffline(page);
+  const q = await offq(page);
+  const types = (q || []).map(j => j.punch_type);
+  report('M2 - a distinct button tapped right after the blocked duplicate still reaches the confirm screen and queues',
+    enabledForOther && confirmShownForOther && types.length === 2
+      && types.includes('lunch_in') && types.includes('pm_out'),
+    `enabledForOther=${enabledForOther} confirmShownForOther=${confirmShownForOther} types=${JSON.stringify(types)}`);
+});
+
+// ==============================================================================
 //  SAFETY ASSERTIONS
 // ==============================================================================
 console.log('\n── SAFETY GUARD ──────────────────────────────────────────────');
